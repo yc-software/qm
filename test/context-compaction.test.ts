@@ -104,6 +104,7 @@ function buildOrchestrator(
   teams?: TeamStore,
   runs?: RunStore,
 ) {
+  if (maxContextTokens !== undefined) agent.contextTokenBudget = () => maxContextTokens;
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
@@ -134,7 +135,6 @@ function buildOrchestrator(
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
-    maxContextTokens,
     ...(defaultTurnWallClockMs !== undefined ? { defaultTurnWallClockMs } : {}),
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-sonnet-5" },

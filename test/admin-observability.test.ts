@@ -1329,9 +1329,9 @@ test("admin governance: compaction keep percent round-trips, validates, and is o
     for (const bad of [0, 70, 2.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
     assert.equal((await put("org:default-org", "25", ALICE)).status, 200);
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, 25);
-    assert.equal(await built.config.getCompactionKeepPercentDurable(), 25);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, 25);
     assert.equal((await put("org:default-org", "", ALICE)).status, 200);
-    assert.equal(await built.config.getCompactionKeepPercentDurable(), null);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -1356,13 +1356,12 @@ test("admin governance: history budget round-trips, validates, and is org-scoped
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, null);
     assert.equal((await put("org:default-org", 60_000, { "x-admin-actor": "nobody@default-org" })).status, 403);
     assert.equal((await put("channel:C1", 60_000, ALICE)).status, 400);
-    for (const bad of [9_999, 1_000_001, 20_000.5, "abc"])
-      assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    for (const bad of [0, -5, 20_000.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
     assert.equal((await put("org:default-org", "60000", ALICE)).status, 200);
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, 60_000);
-    assert.equal(await built.config.getHistoryBudgetTokensDurable(), 60_000);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, 60_000);
     assert.equal((await put("org:default-org", "", ALICE)).status, 200);
-    assert.equal(await built.config.getHistoryBudgetTokensDurable(), null);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

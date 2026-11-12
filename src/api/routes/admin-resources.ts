@@ -18,7 +18,7 @@ import {
   thinkingLevelsFor,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
-  HISTORY_BUDGET_TOKENS,
+  HISTORY_BUDGET_DEFAULT_TOKENS,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
 import { APP_EDIT_DEFAULT_RUNTIME } from "../runtime-config.ts";
@@ -668,7 +668,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     label: `Percent of the history budget compaction keeps verbatim, ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
     readKey: "compactionKeepPercent",
-    get: (deps) => deps.config!.getCompactionKeepPercentDurable(),
+    get: async (deps) => (await deps.config!.getCompactionSettingsDurable()).keepPercent,
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the compaction keep percent is org-wide") ??
@@ -686,17 +686,17 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "string",
     target: "org",
     clearable: true,
-    label: `Ceiling on the conversation history budget in tokens, ${HISTORY_BUDGET_TOKENS.min}-${HISTORY_BUDGET_TOKENS.max} (empty restores the default of ${HISTORY_BUDGET_TOKENS.default}). The budget still never exceeds half of a model's usable context window. Applies to every model. Lower makes long conversations cheaper on per-token providers but keeps less history verbatim.`,
+    label: `Ceiling on the conversation history budget in tokens, a positive integer (empty restores the default of ${HISTORY_BUDGET_DEFAULT_TOKENS}). The budget still never exceeds half of a model's usable context window. Applies to every model. Lower makes long conversations cheaper on per-token providers but keeps less history verbatim.`,
     readKey: "historyBudgetTokens",
-    get: (deps) => deps.config!.getHistoryBudgetTokensDurable(),
+    get: async (deps) => (await deps.config!.getCompactionSettingsDurable()).historyBudgetTokens,
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the history budget is org-wide") ??
         clearableInt(
           (body as { tokens?: unknown }).tokens,
-          HISTORY_BUDGET_TOKENS.min,
-          HISTORY_BUDGET_TOKENS.max,
-          `history-budget-tokens requires { tokens: integer ${HISTORY_BUDGET_TOKENS.min}-${HISTORY_BUDGET_TOKENS.max} } (empty clears to the default of ${HISTORY_BUDGET_TOKENS.default})`,
+          1,
+          Number.MAX_SAFE_INTEGER,
+          `history-budget-tokens requires { tokens: positive integer } (empty clears to the default of ${HISTORY_BUDGET_DEFAULT_TOKENS})`,
         ),
       (deps, _scope, tokens) => deps.config!.setHistoryBudgetTokens(tokens),
     ),

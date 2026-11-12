@@ -288,8 +288,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const securitySteersInFlight = new Set<string>();
-  const { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction, documentTokenBudget } =
-    createCompaction(deps);
+  const {
+    compactContextIfNeeded,
+    compactRecent,
+    scheduleBackgroundCompaction,
+    compactionSettings,
+    documentTokenBudget,
+  } = createCompaction(deps);
   const originOf = async (session: Session | null) => {
     if (!session) return undefined;
     if (!session.parentSessionId && session.origin) return session.origin;
@@ -1406,6 +1411,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           rosterMembers,
           scopeAskList,
         }));
+        const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
           deps,
           input,
@@ -1417,7 +1423,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           swarmBinding,
           swarmGoalTurn,
           onboardingBlock,
-          documentTokenBudget,
+          documentTokenBudget: (model) => documentTokenBudget(model, turnCompactionSettings),
         });
         systemPrompt = finished.systemPrompt;
         const { sideDiscussions } = finished;
@@ -1838,7 +1844,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
         compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
-        const documentBudget = await documentTokenBudget(sessionModel);
+        const documentBudget = documentTokenBudget(sessionModel, turnCompactionSettings);
         const history = !preTurnRoute
           ? visibleHistory
           : await withManagedRosterVersion(() =>
@@ -1851,6 +1857,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 scopeId,
                 actorId: actor.id,
                 route: preTurnRoute,
+                settings: turnCompactionSettings,
                 reservedTokens:
                   countTokens(sideDiscussions) +
                   (strictReadOnly

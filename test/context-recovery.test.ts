@@ -26,6 +26,7 @@ async function fixture(keepPercent: number | null = null) {
       text: `old message ${i} `.repeat(100),
     });
   const agent = {
+    contextTokenBudget: () => 500,
     compactHistory: async (): Promise<string> => {
       throw new Error("summary unavailable");
     },
@@ -34,8 +35,7 @@ async function fixture(keepPercent: number | null = null) {
     sessions,
     errors: createPostgresErrorLog(testDatabaseUrl()),
     agent,
-    maxContextTokens: 500,
-    config: { getCompactionKeepPercentDurable: async () => keepPercent },
+    config: { getCompactionSettingsDurable: async () => ({ keepPercent, historyBudgetTokens: null }) },
   } as unknown as OrchestratorDeps);
   const input = {
     tenant,

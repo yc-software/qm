@@ -38,6 +38,8 @@ interface Summarized {
   savedSummary?: string;
 }
 
+export type CompactionSettings = Awaited<ReturnType<OrchestratorDeps["config"]["getCompactionSettingsDurable"]>>;
+
 interface CompactionInput {
   tenant: Tenant;
   session: Session;
@@ -48,6 +50,7 @@ interface CompactionInput {
   route?: SessionRoute;
   cancel?: AbortSignal;
   reservedTokens?: number;
+  settings?: CompactionSettings;
 }
 
 export interface CompactionContext {
@@ -61,22 +64,28 @@ export interface CompactionContext {
     actorId: string;
     route?: SessionRoute;
   }): void;
-  documentTokenBudget(model?: string): Promise<number>;
+  compactionSettings(): Promise<CompactionSettings>;
+  documentTokenBudget(model: string | undefined, settings: CompactionSettings): number;
 }
 
 export function createCompaction(deps: OrchestratorDeps): CompactionContext {
-  const tokenBudgetFor = async (model?: string): Promise<number> => {
-    if (deps.maxContextTokens !== undefined) return deps.maxContextTokens;
-    const cap = (await deps.config.getHistoryBudgetTokensDurable()) ?? undefined;
+  const compactionSettings = (): Promise<CompactionSettings> => deps.config.getCompactionSettingsDurable();
+  const tokenBudgetFor = (model: string | undefined, settings: CompactionSettings): number => {
+    const cap = settings.historyBudgetTokens ?? undefined;
     return deps.agent.contextTokenBudget?.(model, cap) ?? Math.min(cap ?? MAX_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS);
   };
-  const documentTokenBudget = async (model?: string): Promise<number> =>
-    Math.floor((await tokenBudgetFor(model)) * DOCUMENT_TOKEN_FRACTION);
-  const historyBudgetFor = async (input: { route?: SessionRoute; reservedTokens?: number }): Promise<number> => {
-    const total = await tokenBudgetFor(input.route?.runtime?.modelId);
-    const reserved = Math.min(Math.max(0, input.reservedTokens ?? 0), Math.floor(total * DOCUMENT_TOKEN_FRACTION));
-    return Math.max(1, total - reserved);
+  const documentShare = (total: number): number => Math.floor(total * DOCUMENT_TOKEN_FRACTION);
+  const documentTokenBudget = (model: string | undefined, settings: CompactionSettings): number =>
+    documentShare(tokenBudgetFor(model, settings));
+  const historyBudgetFor = (
+    input: { route?: SessionRoute; reservedTokens?: number },
+    settings: CompactionSettings,
+  ): number => {
+    const total = tokenBudgetFor(input.route?.runtime?.modelId, settings);
+    return Math.max(1, total - Math.min(Math.max(0, input.reservedTokens ?? 0), documentShare(total)));
   };
+  const keepRecentTokenFraction = (settings: CompactionSettings): number =>
+    (settings.keepPercent ?? COMPACT_KEEP_PERCENT.default) / 100;
 
   const boundRecent = (items: Item[], maxContextTokens: number): Item[] => {
     const summary = items.find((e) => contextSummary(e));
@@ -91,17 +100,15 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return parsed.kind === "group" && deps.managedGroups?.recognizes(parsed.ref) === true;
   };
 
-  const keepRecentTokenFraction = async (): Promise<number> =>
-    ((await deps.config.getCompactionKeepPercentDurable()) ?? COMPACT_KEEP_PERCENT.default) / 100;
-
   async function summarizeForCompaction(
     input: Omit<CompactionInput, "writer">,
+    settings: CompactionSettings,
     onFailure?: (reason: string) => void,
   ): Promise<Summarized | null> {
     if (isManagedGroupScope(input.scopeId)) return null;
     if (!deps.agent.compactHistory) return null;
-    const maxContextTokens = await historyBudgetFor(input);
-    const keepFraction = await keepRecentTokenFraction();
+    const maxContextTokens = historyBudgetFor(input, settings);
+    const keepFraction = keepRecentTokenFraction(settings);
     const reuseBudgetTokens = Math.floor(maxContextTokens * keepFraction);
     const plan = planCompaction(input.visibleHistory, maxContextTokens, keepFraction, reuseBudgetTokens);
     if (!plan || !plan.toSummarize.length) return null;
@@ -159,12 +166,13 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   }
 
   async function compactContextIfNeeded(input: CompactionInput): Promise<Item[]> {
-    const maxContextTokens = await historyBudgetFor(input);
+    const settings = input.settings ?? (await compactionSettings());
+    const maxContextTokens = historyBudgetFor(input, settings);
     if (!overBudgetFraction(input.visibleHistory, maxContextTokens, COMPACT_HARD_FRACTION)) {
       return input.visibleHistory;
     }
     let failure: string | undefined;
-    const summarized = await summarizeForCompaction(input, (reason) => {
+    const summarized = await summarizeForCompaction(input, settings, (reason) => {
       failure = reason;
     });
     if (summarized) {
@@ -176,12 +184,13 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     }
     return !deps.agent.compactHistory || isManagedGroupScope(input.scopeId)
       ? boundRecent(input.visibleHistory, maxContextTokens)
-      : compactRecent(input, failure);
+      : compactRecent({ ...input, settings }, failure);
   }
 
   async function compactRecent(input: CompactionInput, failure?: string): Promise<Item[]> {
     input.cancel?.throwIfAborted();
-    const budget = Math.floor((await historyBudgetFor(input)) * (await keepRecentTokenFraction()));
+    const settings = input.settings ?? (await compactionSettings());
+    const budget = Math.floor(historyBudgetFor(input, settings) * keepRecentTokenFraction(settings));
     const prior = input.visibleHistory.findLast((entry) => contextSummary(entry));
     const rest = input.visibleHistory.filter((entry) => !contextSummary(entry));
     const header = failure ? `${RECENT_NOTICE}\nThe summary call failed: ${failure}` : RECENT_NOTICE;
@@ -262,19 +271,23 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       try {
         const session = await deps.sessions.get(input.sessionId);
         if (!session) return;
-        const maxContextTokens = await tokenBudgetFor(input.route?.runtime?.modelId);
+        const settings = await compactionSettings();
+        const maxContextTokens = tokenBudgetFor(input.route?.runtime?.modelId, settings);
         const items = (await deps.sessions.getContextWindow(input.sessionId)).items;
         const history = forModelContext(items);
         if (!overBudgetFraction(history, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
         const snapshotSeq = items.at(-1)?.seq ?? -1;
-        const summarized = await summarizeForCompaction({
-          tenant: input.tenant,
-          session,
-          visibleHistory: history,
-          scopeId: input.scopeId,
-          actorId: input.actorId,
-          ...(input.route ? { route: input.route } : {}),
-        });
+        const summarized = await summarizeForCompaction(
+          {
+            tenant: input.tenant,
+            session,
+            visibleHistory: history,
+            scopeId: input.scopeId,
+            actorId: input.actorId,
+            ...(input.route ? { route: input.route } : {}),
+          },
+          settings,
+        );
         if (!summarized) return;
         if (deps.runs && !(await waitForNoRunningRun(deps.runs, session.threadRef, WRITE_WAIT_MS, input.runLeaseToken)))
           return;
@@ -290,5 +303,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     });
   }
 
-  return { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction, documentTokenBudget };
+  return {
+    compactContextIfNeeded,
+    compactRecent,
+    scheduleBackgroundCompaction,
+    compactionSettings,
+    documentTokenBudget,
+  };
 }

@@ -326,9 +326,9 @@ export function auxiliaryModelFor(baseModelId: string): string {
 }
 
 const CONTEXT_BUDGET_FRACTION = 0.5;
-export const HISTORY_BUDGET_TOKENS = { min: 10_000, default: 150_000, max: 1_000_000 };
+export const HISTORY_BUDGET_DEFAULT_TOKENS = 150_000;
 
-export function contextTokenBudgetForModel(id: string, cap = HISTORY_BUDGET_TOKENS.default): number | undefined {
+export function contextTokenBudgetForModel(id: string, cap = HISTORY_BUDGET_DEFAULT_TOKENS): number | undefined {
   const model = resolveModel(id);
   const window = model?.contextWindow;
   const output = model?.maxTokens;

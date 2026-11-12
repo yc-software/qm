@@ -179,9 +179,8 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
-  getCompactionKeepPercentDurable(): Promise<number | null>;
+  getCompactionSettingsDurable(): Promise<{ keepPercent: number | null; historyBudgetTokens: number | null }>;
   setCompactionKeepPercent(percent: number | null): Promise<void>;
-  getHistoryBudgetTokensDurable(): Promise<number | null>;
   setHistoryBudgetTokens(tokens: number | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
@@ -746,9 +745,11 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
-    getCompactionKeepPercentDurable: async () => (await baseModelStore.get(org))?.compactionKeepPercent ?? null,
+    getCompactionSettingsDurable: async () => {
+      const row = await baseModelStore.get(org);
+      return { keepPercent: row?.compactionKeepPercent ?? null, historyBudgetTokens: row?.historyBudgetTokens ?? null };
+    },
     setCompactionKeepPercent: (percent) => setOrgModelField("compactionKeepPercent", percent),
-    getHistoryBudgetTokensDurable: async () => (await baseModelStore.get(org))?.historyBudgetTokens ?? null,
     setHistoryBudgetTokens: (tokens) => setOrgModelField("historyBudgetTokens", tokens),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
     setEmbeddingModel: (modelId) => setOrgModelField("embeddingModelId", modelId),

@@ -10,7 +10,7 @@ import {
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
-  HISTORY_BUDGET_TOKENS,
+  HISTORY_BUDGET_DEFAULT_TOKENS,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -389,7 +389,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     memoryEmbeddingOptions: embeddingModelCatalog(),
     compactionKeepPercentDefault: COMPACT_KEEP_PERCENT.default,
-    historyBudgetTokensDefault: HISTORY_BUDGET_TOKENS.default,
+    historyBudgetTokensDefault: HISTORY_BUDGET_DEFAULT_TOKENS,
   };
 }
 
