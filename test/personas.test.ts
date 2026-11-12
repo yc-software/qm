@@ -507,7 +507,7 @@ test("a persona pinned in a channel is worn by every conversation there until it
   const channel = { scopeId: "channel:C_PIN", role: "read" as const };
   const thread = (n: number) => ({ kind: "channel" as const, channelRef: "C_PIN", threadRef: `channel:C_PIN:t${n}` });
 
-  assert.match((await sysprompt(CAROL, thread(1))).reply, /## Persona\nNo persona is pinned/);
+  assert.equal((await sysprompt(CAROL, thread(1))).reply.includes("## Persona"), false);
   assert.equal(
     (await personas.setAccess(ALICE, ada.id, [{ ...owner, pinned: true }])).status,
     "invalid",
@@ -527,7 +527,7 @@ test("a persona pinned in a channel is worn by every conversation there until it
   ok(await personas.setAccess(ALICE, bea.id, [owner, channel]));
 
   ok(await personas.setAccess(ALICE, ada.id, [owner, channel]));
-  assert.doesNotMatch((await sysprompt(CAROL, thread(3))).reply, /## Persona:/, "unpinned");
+  assert.equal((await sysprompt(CAROL, thread(3))).reply.includes("## Persona"), false, "unpinned");
   ok(await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]));
   assert.match((await sysprompt(CAROL, thread(4))).reply, /## Persona: Bea/);
 

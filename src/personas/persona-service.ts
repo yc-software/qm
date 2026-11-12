@@ -284,8 +284,6 @@ export function createPersonaService(deps: {
       if (!personaId && isSharedScope(contextScope) && (await enabledFor(actorId))) {
         personaId = (await store.pinnedIn(contextScope)) ?? undefined;
         pinned = Boolean(personaId);
-        if (!personaId)
-          return "No persona is pinned in this conversation's channel or group, so you speak in your default voice. A persona's owner can share it here and pin it (personas in /v1/apis), so every conversation here takes its name, icon and instructions; one conversation can also pick a persona of its own.";
       }
       if (!personaId) return null;
       if (!(await enabledFor(actorId)))

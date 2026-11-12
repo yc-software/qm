@@ -6,6 +6,7 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
+import { memoryRecallLabels } from "../../memory/recall-labels.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -81,6 +82,10 @@ async function granteeLabel(ctx: ApiCtx, scopeId: string): Promise<string | unde
   const ref = rest.join(":");
   if (kind === "channel")
     return ctx.app.channelName(ref).catch(swallowAs(`persona grantee label ${scopeId}`, undefined));
+  if (kind === "group") {
+    const label = (await memoryRecallLabels([scopeId], ctx.deps.directory)).get(scopeId);
+    return label === scopeId ? undefined : label;
+  }
   if (kind === "personal")
     return (
       (await ctx.app.directoryMember(ref).catch(swallowAs(`persona grantee label ${scopeId}`, null)))?.displayName ||
