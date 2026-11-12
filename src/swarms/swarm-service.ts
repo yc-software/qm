@@ -559,6 +559,8 @@ export function createSwarmService(deps: {
                   ? await provision("Swarm board", member.forumSandboxId)
                   : await step(() => deps.sandboxes.access(swarm!.ownerId, member.forumSandboxId!));
               if (forum.ownerScopeId !== swarm.scopeId) throw new Error("forum scope mismatch");
+              if (forum.id !== swarm.board?.sandboxId)
+                await step(async () => notePersonUse(await deps.sandboxes.notePersonUse(forum.id)));
             }
             await provision("Swarm worker", member.id);
             const session = await step(() =>
@@ -726,7 +728,6 @@ export function createSwarmService(deps: {
         const forum = await deps.sandboxes.access(auth.actorId, input.forumSandboxId);
         const session = await sessions.get(auth.sessionId);
         if (forum.ownerScopeId !== session?.scopeId) throw new Error("forum scope mismatch");
-        await notePersonUse(await deps.sandboxes.notePersonUse(forum.id));
       }
       const reserve = (swarm: Swarm): void => {
         const previous = swarm.spawnRequests[key];
