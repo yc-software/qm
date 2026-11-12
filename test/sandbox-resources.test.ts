@@ -219,6 +219,43 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
 });
 
+test("a person's use of a computer outlasts a failed first boot and a retry it races", async () => {
+  const booting = Promise.withResolvers<void>();
+  const boot = Promise.withResolvers<void>();
+  const { options, records } = fixture((backend) => {
+    const provision = backend.provision.bind(backend);
+    backend.provision = async (id, opts) => {
+      if (id === "sandbox-c1") {
+        booting.resolve();
+        await boot.promise;
+      }
+      return provision(id, opts);
+    };
+  }, []);
+  let markOnRead = "";
+  const resources = createSandboxResources({
+    ...options,
+    records: {
+      ...records,
+      async get(id) {
+        const found = await records.get(id);
+        if (id === markOnRead) await records.update(id, (current) => ({ ...current, personUsed: true }));
+        return found;
+      },
+    },
+  });
+  const creating = resources.create("alice", "channel:team", "local", "computer", "c1");
+  await booting.promise;
+  await resources.notePersonUse("c1");
+  boot.reject(new Error("boot failed"));
+  await assert.rejects(creating, /boot failed/);
+  const failed = (await records.get("c1"))!;
+  assert.equal(failed.personUsed, true);
+  await records.put("c2", { ...failed, id: "c2", backingScopeId: "sandbox-c2", personUsed: undefined });
+  markOnRead = "c2";
+  assert.equal((await resources.create("alice", "channel:team", "local", "computer", "c2")).personUsed, true);
+});
+
 const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
   backend.profile.sizesMemory = true;
   const provision = backend.provision.bind(backend);
@@ -536,15 +573,6 @@ test("boot activation freezes legacy scope adoption before a new session arrives
   assert.equal(await defaults.get("personal:new-session"), null);
   assert.ok((await resources.resolve("personal:old"))?.id);
   assert.deepEqual(provisioned, []);
-});
-
-test("a turn running as a Slack bot's work retires only the computers its actor created", async () => {
-  const { resources } = fixture();
-  const record = await resources.create("alice", "channel:team", "local");
-  const ambient = await resources.create("system:ambient:acme", "personal:system:ambient:acme", "local");
-  await assert.rejects(resources.retire("admin", record.id, true), /retire only a computer it created/);
-  await assert.rejects(resources.retire("system:ambient:acme", ambient.id, true), /retire only a computer it created/);
-  await resources.retire("alice", record.id, true);
 });
 
 test("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {

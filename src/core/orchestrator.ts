@@ -54,7 +54,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
@@ -177,6 +177,7 @@ import {
   renderSandboxProviders,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
+  webSurfaceLabel,
   type SystemContextBlocks,
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
@@ -287,8 +288,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const securitySteersInFlight = new Set<string>();
-  const { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction, documentTokenBudget } =
-    createCompaction(deps);
+  const {
+    compactContextIfNeeded,
+    compactRecent,
+    scheduleBackgroundCompaction,
+    compactionSettings,
+    documentTokenBudget,
+  } = createCompaction(deps);
   const originOf = async (session: Session | null) => {
     if (!session) return undefined;
     if (!session.parentSessionId && session.origin) return session.origin;
@@ -821,7 +827,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botName,
         orgName,
         surfaceTool,
-        surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
+        surfaceLabel: isWeb ? webSurfaceLabel(botName, Boolean(boundWebhook(input))) : (toolSurface?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -1405,6 +1411,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           rosterMembers,
           scopeAskList,
         }));
+        const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
           deps,
           input,
@@ -1416,7 +1423,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           swarmBinding,
           swarmGoalTurn,
           onboardingBlock,
-          documentTokenBudget,
+          documentTokenBudget: (model) => documentTokenBudget(model, turnCompactionSettings),
         });
         systemPrompt = finished.systemPrompt;
         const { sideDiscussions } = finished;
@@ -1433,6 +1440,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const detectHistory = filterHistory((await turnWindow()).items.slice(-DETECT_HISTORY_TAIL));
           const decision = await deps.agent
             .shouldRespond({
+              ...sessionRoute,
+              scopeLabel: scopeId,
               session,
               message: input.text,
               recentContext: input.detectContext ?? "",
@@ -1835,7 +1844,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
         compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
-        const documentBudget = documentTokenBudget(sessionModel);
+        const documentBudget = documentTokenBudget(sessionModel, turnCompactionSettings);
         const history = !preTurnRoute
           ? visibleHistory
           : await withManagedRosterVersion(() =>
@@ -1848,6 +1857,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 scopeId,
                 actorId: actor.id,
                 route: preTurnRoute,
+                settings: turnCompactionSettings,
                 reservedTokens:
                   countTokens(sideDiscussions) +
                   (strictReadOnly

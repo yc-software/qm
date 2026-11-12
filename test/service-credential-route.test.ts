@@ -1077,7 +1077,8 @@ test("orchestrator vends a capability for only the requested org credential", as
     permission: "read",
     grantedBy: "admin",
   });
-  await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
+  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "B-LEGACY", "channel:C1");
   await built.app.turn(dm("!run echo hi"));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
   const res = await built.app.turn(
