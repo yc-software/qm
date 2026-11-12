@@ -152,7 +152,13 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
 
 async function loadItem(
   ctx: ApiCtx,
-): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string; unattended?: true } | null> {
+): Promise<{
+  deps: LoopServiceDeps;
+  loop: Loop;
+  item: LoopItem;
+  actorId: string;
+  liveHuman: () => Promise<boolean>;
+} | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.loop)) return null;
@@ -166,7 +172,7 @@ async function loadItem(
     loop: loaded.loop,
     item,
     actorId: loaded.acting.actorId,
-    ...((await loaded.acting.liveHuman()) ? {} : { unattended: true as const }),
+    liveHuman: loaded.acting.liveHuman,
   };
 }
 
@@ -393,7 +399,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     kind,
     args,
     loaded.actorId,
-    loaded.unattended ? { unattended: true } : undefined,
+    (await loaded.liveHuman()) ? undefined : { unattended: true },
   );
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
@@ -454,7 +460,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   try {
     const next = await deps.fire.followUp(loop, item, message || "Please review the attached files.", loaded.actorId, {
       ...options,
-      ...(loaded.unattended ? { unattended: true as const } : {}),
+      ...((await loaded.liveHuman()) ? {} : { unattended: true as const }),
     });
     sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
   } catch (e) {
