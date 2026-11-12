@@ -30,7 +30,7 @@ existing swarms once at startup. Drain an older release's cores and workers befo
 upgrading from it, because a computer the older release provisions after that migration
 stays unmarked. A computer a person's swarm takes as its forum counts as used by a person;
 `durable-map/swarms/0041-mark-forums-person-used` marks the forums of existing
-swarms the same way once at startup.
+swarms the same way once at startup and needs the same drain first.
 
 ## Agent API
 
