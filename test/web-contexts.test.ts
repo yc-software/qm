@@ -101,7 +101,7 @@ test("web turns into a shared scope are membership-checked; sessions then count 
     const c2 = alice.find((c) => c.scopeId === "channel:C2")!;
     assert.equal(c2.sessionCount, 1);
     assert.ok((c2.lastActivityAt ?? 0) > 0);
-    const aliceSessions = await s.built.app.listSessions("alice");
+    const aliceSessions = await s.built.app.listSessions({ actorId: "alice" });
     const expected = Math.max(
       ...aliceSessions.filter((x) => x.scopeId === "channel:C2").map((x) => x.lastActivityAt ?? x.createdAt),
     );

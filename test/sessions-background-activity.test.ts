@@ -105,7 +105,7 @@ test("listSessions counts detached work per conversation — live jobs and armed
   await processes!.register(registryRow("p-unowned", undefined));
   await monitors.create(watchInput(busy, { expiresAt: Date.now() - 1 }));
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions({ actorId: "U1" });
   const busyRow = list.find((s) => s.threadRef === busy);
   const idleRow = list.find((s) => s.threadRef === idle);
   assert.equal(busyRow?.backgroundJobs, 2, "live background jobs, this conversation's only");
@@ -179,7 +179,7 @@ test("listSessions counts session-targeted crons — enabled and unarchived only
   await crons.create(cronInput(undefined, "cron with no destination"));
   await crons.create(cronInput("slack:C123", "cron aimed elsewhere"));
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions({ actorId: "U1" });
   const hereRow = list.find((s) => s.threadRef === here);
   const plainRow = list.find((s) => s.threadRef === elsewhere);
   assert.equal(hereRow?.crons, 2, "enabled, unarchived crons aimed at this conversation");

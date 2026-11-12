@@ -14,6 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
+const RUN = { runId: "consent-run", runAttempt: 1, runLeaseToken: "consent-lease", threadRef: "dm:consent" };
 
 async function start(
   fetchImpl: FetchLike = async () => {
@@ -40,7 +41,10 @@ async function start(
       { channelId: "C9", principalId: "U1" },
     ],
   );
-  const server = createServer(built.app, { ...serverDeps(config, built), oauthFetch: fetchImpl });
+  const run = { status: "running", leaseToken: RUN.runLeaseToken, attempts: 1, sessionId: RUN.threadRef };
+  const live = { ...run, leaseExpiresAt: Infinity, request: { actor: { id: "U1" } } } as never;
+  const runs = { ...built.runs, get: async (id: string) => (id === RUN.runId ? live : built.runs.get(id)) };
+  const server = createServer(built.app, { ...serverDeps(config, built), runs, oauthFetch: fetchImpl });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -53,6 +57,7 @@ const consentTok = async (actorId: string, opts: { scopeId?: string } = {}) => {
       scopeId: opts.scopeId ?? `personal:${actorId}`,
       aud: OAUTH_CONSENT_AUD,
       liveActor: true,
+      ...RUN,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
@@ -252,15 +257,21 @@ test("on an API-only host (no PUBLIC_WEB_URL) the callback does NOT default to t
   }
 });
 
-test("the consent-mint route takes only the oauth-consent token of a turn with a person at the keyboard", async () => {
+test("the consent-mint route takes only the oauth-consent token of a running turn with a person at the keyboard", async () => {
   const srv = await start();
   try {
     await selectDefaultSandbox(srv.built, "U1", "channel:C1");
     await selectDefaultSandbox(srv.built, "release-bot", "personal:release-bot");
+    const outcome = async (cap: string) => {
+      const res = await mint(srv.base, cap, { provider: "google" });
+      return `${res.status} ${((await res.json()) as { error?: string }).error ?? "minted"}`;
+    };
     const envs: Record<string, string>[] = [];
+    const outcomes: string[] = [];
     const provision = srv.built.sandbox.provision.bind(srv.built.sandbox);
-    srv.built.sandbox.provision = (owner, options) => {
+    srv.built.sandbox.provision = async (owner, options) => {
       envs.push(options?.env ?? {});
+      outcomes.push(await outcome(options?.env?.AGENT_OAUTH_CONSENT_TOKEN ?? ""));
       return provision(owner, options);
     };
     const members = [{ externalId: "U1" }];
@@ -296,20 +307,18 @@ test("the consent-mint route takes only the oauth-consent token of a turn with a
       { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
-    const outcomes = [];
-    for (const cap of [envs[0]!.AGENT_API_TOKEN, audless, "", ...envs.map((e) => e.AGENT_OAUTH_CONSENT_TOKEN)]) {
-      const res = await mint(srv.base, cap!, { provider: "google" });
-      outcomes.push(`${res.status} ${((await res.json()) as { error?: string }).error ?? "minted"}`);
-    }
+    for (const cap of [envs[0]!.AGENT_API_TOKEN, audless, "", envs[0]!.AGENT_OAUTH_CONSENT_TOKEN])
+      outcomes.push(await outcome(cap!));
     assert.deepEqual(outcomes, [
+      "200 minted",
+      "200 minted",
+      "403 human_consent_required",
+      "403 human_consent_required",
+      "403 human_consent_required",
       "403 forbidden",
       "403 forbidden",
       "401 unauthorized",
-      "200 minted",
-      "200 minted",
-      "403 human_consent_required",
-      "403 human_consent_required",
-      "403 human_consent_required",
+      "403 inactive_run",
     ]);
   } finally {
     await srv.close();
