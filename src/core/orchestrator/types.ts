@@ -125,7 +125,6 @@ export interface OrchestratorDeps {
   advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   budget?: BudgetTracker;
-  maxContextTokens?: number;
   execTimeoutMs: number;
   execTimeoutCeilingMs: number;
   approvalSummaryTimeoutMs?: number;

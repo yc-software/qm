@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { ownerUrl } from "./support/test-tenant.ts";
+import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the app login migration tests";
 
@@ -27,18 +27,27 @@ test("a migrated database already has every configured store's tables", { skip }
   }
 });
 
-test("the app login refuses to create a table a migration never made", { skip }, async () => {
-  const databaseUrl = testMigratedDatabaseUrl();
-  const app = createPgPool(databaseUrl);
-  const owner = createPgPool(ownerUrl(databaseUrl).toString());
-  try {
-    await assert.rejects(
-      createPostgresMap<{ v: number }>(app, "unmigrated_probe").get("x"),
-      /misconfiguration: migration durable-map\/unmigrated_probe\/0001 has not been applied/,
-    );
-    assert.deepEqual(await owner.q("SELECT to_regclass('unmigrated_probe') AS t"), [{ t: null }]);
-  } finally {
-    await app.close();
-    await owner.close();
-  }
-});
+for (const access of ["app", "ledger-owner", "bootstrap"]) {
+  test(`pending migrations with ${access} authority`, { skip }, async () => {
+    const databaseUrl = appUrl(access === "bootstrap" ? testBareDatabaseUrl() : testMigratedDatabaseUrl());
+    const app = createPgPool(databaseUrl);
+    const owner = createPgPool(ownerUrl(databaseUrl).toString());
+    try {
+      if (access !== "app") await owner.q("GRANT CREATE ON SCHEMA public TO qm_app");
+      if (access === "ledger-owner") await owner.q("ALTER TABLE qm_schema_migrations OWNER TO qm_app");
+      const read = createPostgresMap<{ v: number }>(app, "unmigrated_probe").get("x");
+      if (access === "app")
+        await assert.rejects(
+          read,
+          /misconfiguration: migration durable-map\/unmigrated_probe\/0001 has not been applied/,
+        );
+      else assert.equal(await read, null);
+      assert.deepEqual(await owner.q("SELECT to_regclass('unmigrated_probe') AS t"), [
+        { t: access === "app" ? null : "unmigrated_probe" },
+      ]);
+    } finally {
+      await app.close();
+      await owner.close();
+    }
+  });
+}

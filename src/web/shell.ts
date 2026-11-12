@@ -238,7 +238,7 @@ export function createWebShell(
       if (req.method !== "GET" || path.startsWith("/api/")) return json(res, 404, { error: "not found" });
       if (path === "/manifest.webmanifest") return manifest(res);
       const slug = (url.searchParams.get("slug") ?? "").toLowerCase();
-      if (path === "/app-edit" && appsDomain && /^[a-z0-9-]{1,63}$/.test(slug))
+      if ((path === "/app-edit" || path === "/app-share") && appsDomain && /^[a-z0-9-]{1,63}$/.test(slug))
         return document(res, spaCsp(env, `'self' ${slug}.${appsDomain}`));
       return serveStatic(res, path === "/" ? "/index.html" : path);
     },

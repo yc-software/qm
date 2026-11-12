@@ -79,7 +79,6 @@ test("a steered queued message shows in the transcript as waiting until model in
       chat: {
         state: { agent, host, threadRef, sessionId: "s", scopeId: "personal:tester", resolvingApprovals: new Set() },
         isStopping: () => false,
-        hasUnresolvedApproval: () => false,
         hasLiveRun: () => live,
         signalLiveRun: async (_kind: string, _text: string, queuedRunId: string) => {
           signalled.push(queuedRunId);

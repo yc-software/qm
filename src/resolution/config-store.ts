@@ -54,6 +54,8 @@ export type PersistedScopedFlag = ScopedRow<"on", boolean>;
 export interface PersistedBaseModel {
   scopeId: ScopeId;
   embeddingModelId?: string;
+  compactionKeepPercent?: number;
+  historyBudgetTokens?: number;
   modelId?: string;
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
@@ -65,6 +67,15 @@ export interface PersistedBaseModel {
   fastMode?: boolean;
 }
 type RuntimePurpose = "cron" | "subagent" | "fallback" | "appEdit";
+const ORG_MODEL_FIELDS = [
+  "embeddingModelId",
+  "compactionKeepPercent",
+  "historyBudgetTokens",
+  "cronRuntime",
+  "subagentRuntime",
+  "fallbackRuntime",
+  "appEditRuntime",
+] as const satisfies readonly (keyof PersistedBaseModel)[];
 export type TurnRuntimePurpose = RuntimePurpose | "infrequentCron";
 
 interface RuntimeSelection {
@@ -92,6 +103,13 @@ export interface OrgBranding {
 export interface PersistedDeploymentIdentity {
   orgId: string;
 }
+export type CompactionSettings = { keepPercent: number | null; historyBudgetTokens: number | null };
+
+const compactionSettingsOf = (row: PersistedBaseModel | null | undefined): CompactionSettings => ({
+  keepPercent: row?.compactionKeepPercent ?? null,
+  historyBudgetTokens: row?.historyBudgetTokens ?? null,
+});
+
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getSoul(id: ScopeId): string | null;
@@ -168,6 +186,10 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
+  getCompactionSettings(): CompactionSettings;
+  getCompactionSettingsDurable(): Promise<CompactionSettings>;
+  setCompactionKeepPercent(percent: number | null): Promise<void>;
+  setHistoryBudgetTokens(tokens: number | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -333,15 +355,9 @@ export function createConfigStore(
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 
   const org = scopeId("org", orgId);
-  const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
-    id === org
-      ? {
-          ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
-          ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
-          ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
-          ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
-          ...(row?.appEditRuntime ? { appEditRuntime: row.appEditRuntime } : {}),
-        }
+  const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null): Partial<PersistedBaseModel> =>
+    id === org && row
+      ? Object.fromEntries(ORG_MODEL_FIELDS.filter((key) => row[key]).map((key) => [key, row[key]]))
       : {};
   const withoutRuntime = (id: ScopeId, row: PersistedBaseModel | null): PersistedBaseModel => ({
     scopeId: id,
@@ -378,18 +394,22 @@ export function createConfigStore(
     if (row) tenantState().baseModels.set(id, row);
     else tenantState().baseModels.delete(id);
   };
-  const setPurposeRuntime = async (purpose: RuntimePurpose, selection?: RuntimeSelection) => {
+  const setOrgModelField = async <K extends (typeof ORG_MODEL_FIELDS)[number]>(
+    key: K,
+    value: PersistedBaseModel[K] | null,
+  ) => {
     await writeQueue(`model:${org}`, async () => {
-      const key = `${purpose}Runtime` as const;
       const saved = await updateBaseModelRow(org, (current) => {
         const row: PersistedBaseModel = { ...current, scopeId: org };
-        if (selection) row[key] = { ...selection };
+        if (value) row[key] = value;
         else delete row[key];
         return row;
       });
       cacheBaseModel(org, saved);
     });
   };
+  const setPurposeRuntime = (purpose: RuntimePurpose, selection?: RuntimeSelection) =>
+    setOrgModelField(`${purpose}Runtime`, selection ? { ...selection } : null);
   const defaultSecurityPosture = opts.defaultSecurityPosture ?? "auto";
   const defaultSharingPosture = opts.defaultSharingPosture ?? "isolated";
   const orgDefaultPolicy = defaultOrgPolicy();
@@ -733,18 +753,12 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
+    getCompactionSettings: () => compactionSettingsOf(tenantState().baseModels.get(org)),
+    getCompactionSettingsDurable: async () => compactionSettingsOf(await baseModelStore.get(org)),
+    setCompactionKeepPercent: (percent) => setOrgModelField("compactionKeepPercent", percent),
+    setHistoryBudgetTokens: (tokens) => setOrgModelField("historyBudgetTokens", tokens),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
-    setEmbeddingModel: async (modelId) => {
-      await writeQueue(`model:${org}`, async () => {
-        const saved = await updateBaseModelRow(org, (current) => {
-          const row: PersistedBaseModel = { ...current, scopeId: org };
-          if (modelId) row.embeddingModelId = modelId;
-          else delete row.embeddingModelId;
-          return row;
-        });
-        cacheBaseModel(org, saved);
-      });
-    },
+    setEmbeddingModel: (modelId) => setOrgModelField("embeddingModelId", modelId),
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
         scopeId: id,

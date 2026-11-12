@@ -157,7 +157,6 @@ test("authenticated swarm API binds agent operations to the token and human oper
 
 test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
   const fixture = await swarmFixture();
-  assert.equal(fixture.caller.kind, "agent");
   if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
   const first = (await fixture.runs.get(fixture.caller.claims.runId!))!;
   const claims = {

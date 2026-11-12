@@ -153,7 +153,6 @@ test("every helper call keeps its work's context and names its own purpose", asy
   const requests = recordRequests(t);
   const harness = createAgent({
     routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }),
-    detectModelId: "claude-haiku-4-5",
     titleModelId: "claude-haiku-4-5",
     judgeModelId: "claude-haiku-4-5",
   });
@@ -247,7 +246,6 @@ async function gatewayApp(
   const config = testConfig({
     modelId: "claude-haiku-4-5",
     titleModelId: "claude-haiku-4-5",
-    detectModelId: "claude-haiku-4-5",
     judgeModelId: "claude-haiku-4-5",
     ...overrides,
     modelGateway: { ...(overrides.modelGateway ?? gateway), url },
