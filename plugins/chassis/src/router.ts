@@ -53,10 +53,3 @@ export function findRoute<R extends RouteShape>(
   }
   return null;
 }
-
-export function allowedMethods<R extends RouteShape>(routes: ReadonlyArray<R>, pathname: string): string[] {
-  const methods = routes.flatMap((route) =>
-    "path" in route && matcherFor(route)(route.method, pathname, {}) ? [route.method] : [],
-  );
-  return [...new Set(methods)];
-}

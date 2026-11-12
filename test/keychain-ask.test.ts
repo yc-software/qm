@@ -1017,7 +1017,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       ["/v1/keychain/asks/anything/decline", {}],
     ] as const) {
       const res = await post(path, body, liveOwner);
-      assert.ok([404, 405].includes(res.status), `${path} answered ${res.status}`);
+      assert.equal(res.status, 404, path);
     }
     const send = await post(
       "/v1/keychain/asks",

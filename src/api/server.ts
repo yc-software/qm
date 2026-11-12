@@ -34,7 +34,6 @@ import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts"
 import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import {
-  allowedMethods,
   findRoute,
   run,
   usesBrowserSession,
@@ -400,20 +399,6 @@ function paramsSchema(path: string): object {
   };
 }
 
-function noSuchRoute(res: ServerResponse, method: string, pathname: string): void {
-  const allowed = allowedMethods(apiRoutes, pathname);
-  const catalog = "GET /v1/apis lists the available calls";
-  if (allowed.length) {
-    res.setHeader("allow", allowed.join(", "));
-    sendJson(res, 405, {
-      error: "method_not_allowed",
-      message: `${pathname} takes ${allowed.join(" or ")}, not ${method}; ${catalog}`,
-    });
-    return;
-  }
-  sendJson(res, 404, { error: "not_found", message: `no route ${method} ${pathname}; ${catalog}` });
-}
-
 function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
   const matchRoutes = apiRoutes.filter(
     (route): route is Route<ApiCtx> & { match: (m: string, p: string) => boolean } => !("path" in route),
@@ -450,7 +435,10 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         await run(found.route, found.params, ctx);
         return;
       }
-      noSuchRoute(res, base.method, base.pathname);
+      sendJson(res, 404, {
+        error: "not_found",
+        message: `no route ${base.method} ${base.pathname}; GET /v1/apis lists the available calls`,
+      });
     } catch (err) {
       respondError(req, res, err);
     }
