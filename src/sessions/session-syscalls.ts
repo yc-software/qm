@@ -24,7 +24,7 @@ import { childIsolation } from "./child-isolation.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import { isTerminal, type Run, type RunStore } from "../runs/run-store.ts";
+import type { Run, RunStore } from "../runs/run-store.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
@@ -68,6 +68,7 @@ export async function delegatedAuthorization(
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
 ): Promise<{ origin: OrchestratorInput["origin"]; attended: boolean } | undefined> {
   const seen = new Set<string>();
+  const startedAt = request.runStartedAt ?? Date.now();
   let attended = true;
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
@@ -100,7 +101,7 @@ export async function delegatedAuthorization(
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
     if (!delegated && !continued && !started) return;
-    attended &&= !isTerminal(source.status);
+    attended &&= source.finishedAt === null || source.finishedAt > startedAt;
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (

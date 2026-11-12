@@ -2845,6 +2845,10 @@ test("delegated human origin retains live authority boundaries", async () => {
   const r = await delegatedHumanRig();
   assert.equal(r.run.request.origin.kind, "human");
   assert.equal((await delegatedAuthorization(r.run.request, r))?.origin.kind, "human");
+  const parentClaim = await r.runs.claimById(r.parent.id, "parent", 60_000);
+  await r.runs.complete(r.parent.id, parentClaim!.leaseToken!, { status: "ok", reply: "done" });
+  assert.equal((await delegatedAuthorization({ ...r.run.request, runStartedAt: 0 }, r))?.attended, true);
+  assert.equal((await delegatedAuthorization(r.run.request, r))?.attended, false);
   for (const patch of [
     { actor: { ...actor, id: "other" } },
     { delegatingRunId: "missing" },
