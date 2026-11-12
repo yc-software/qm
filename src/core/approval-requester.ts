@@ -94,7 +94,7 @@ export async function expireStaleApprovals(
       id,
       record,
       APPROVAL_EXPIRED_DECIDER,
-      { declined: "expired", lifetimeMs: APPROVAL_LIFETIME_MS },
+      { declined: "expired" },
       expiredApprovalNote(),
     );
     deps.audit.record(tenant, {
