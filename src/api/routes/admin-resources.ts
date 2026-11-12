@@ -665,7 +665,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "string",
     target: "org",
     clearable: true,
-    label: `Percent of the history budget compaction keeps verbatim, 1-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
+    label: `Percent of the history budget compaction keeps verbatim, ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
     readKey: "compactionKeepPercent",
     get: (deps) => deps.config!.getCompactionKeepPercent(),
     apply: generic<number | null>(
@@ -673,9 +673,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         orgOnly(scope, "the compaction keep percent is org-wide") ??
         clearableInt(
           (body as { percent?: unknown }).percent,
-          1,
+          COMPACT_KEEP_PERCENT.min,
           COMPACT_KEEP_PERCENT.max,
-          `compaction-keep-percent requires { percent: integer 1-${COMPACT_KEEP_PERCENT.max} } (empty clears to the default of ${COMPACT_KEEP_PERCENT.default})`,
+          `compaction-keep-percent requires { percent: integer ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} } (empty clears to the default of ${COMPACT_KEEP_PERCENT.default})`,
         ),
       (deps, _scope, percent) => deps.config!.setCompactionKeepPercent(percent),
     ),

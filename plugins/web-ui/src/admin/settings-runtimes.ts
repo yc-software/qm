@@ -126,7 +126,6 @@ function compactionRow() {
       <span class="runtime-label">Compaction keeps</span>
       <input
         type="number"
-        min="1"
         step="1"
         placeholder=${fallback}
         aria-label="Compaction keeps (percent)"
