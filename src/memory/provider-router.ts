@@ -35,6 +35,13 @@ function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit
   return policy === "explicit" && mode === "explicit";
 }
 
+function settleChange(added: unknown, envelope: McpEnvelope): Pick<MemoryProviderOutcome, "outcome" | "added"> {
+  return {
+    outcome: envelope.status === "pending" ? "pending" : "committed",
+    ...(typeof added === "number" ? { added } : {}),
+  };
+}
+
 export function createRoutedMemoryService(opts: {
   providers: Readonly<Record<string, MemoryService>>;
   routes: readonly MemoryProviderRoute[];
@@ -144,7 +151,7 @@ export function createRoutedMemoryService(opts: {
               "capture",
               context,
               () => provider.capture(scopeId, facts, at, by, context),
-              (added, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed", added }),
+              settleChange,
               0,
             );
           }),
@@ -230,7 +237,7 @@ export function createRoutedMemoryService(opts: {
             },
           },
           () => provider.delete!(scopeId, [ref.slice(brain.length + 1)], by, context),
-          (_, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed" }),
+          settleChange,
           undefined,
         );
         if (error) opts.onError?.(error, brain, "forget");
