@@ -134,7 +134,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
     });
   } catch (error) {
     if (!(error instanceof GmailApiError)) throw error;
-    return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
+    return { ok: false, reason: "upstream", message: `${error.message}: ${error.detail}` };
   }
   return { ok: true, result: draft.body };
 }

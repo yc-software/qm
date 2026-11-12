@@ -161,7 +161,7 @@ test("a Gmail send refusal reports the upstream status and response excerpt", as
   assert.deepEqual(result, {
     ok: false,
     reason: "upstream",
-    message: "Gmail refused the send (400): Recipient address rejected",
+    message: "Gmail messages/send returned 400: Recipient address rejected",
   });
 });
 
