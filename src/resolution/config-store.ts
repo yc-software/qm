@@ -103,6 +103,13 @@ export interface OrgBranding {
 export interface PersistedDeploymentIdentity {
   orgId: string;
 }
+export type CompactionSettings = { keepPercent: number | null; historyBudgetTokens: number | null };
+
+const compactionSettingsOf = (row: PersistedBaseModel | null | undefined): CompactionSettings => ({
+  keepPercent: row?.compactionKeepPercent ?? null,
+  historyBudgetTokens: row?.historyBudgetTokens ?? null,
+});
+
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getSoul(id: ScopeId): string | null;
@@ -179,7 +186,8 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
-  getCompactionSettingsDurable(): Promise<{ keepPercent: number | null; historyBudgetTokens: number | null }>;
+  getCompactionSettings(): CompactionSettings;
+  getCompactionSettingsDurable(): Promise<CompactionSettings>;
   setCompactionKeepPercent(percent: number | null): Promise<void>;
   setHistoryBudgetTokens(tokens: number | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
@@ -745,10 +753,8 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
-    getCompactionSettingsDurable: async () => {
-      const row = await baseModelStore.get(org);
-      return { keepPercent: row?.compactionKeepPercent ?? null, historyBudgetTokens: row?.historyBudgetTokens ?? null };
-    },
+    getCompactionSettings: () => compactionSettingsOf(tenantState().baseModels.get(org)),
+    getCompactionSettingsDurable: async () => compactionSettingsOf(await baseModelStore.get(org)),
     setCompactionKeepPercent: (percent) => setOrgModelField("compactionKeepPercent", percent),
     setHistoryBudgetTokens: (tokens) => setOrgModelField("historyBudgetTokens", tokens),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,

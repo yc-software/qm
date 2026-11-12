@@ -20,6 +20,7 @@ import { errMessage } from "../../util/errors.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import { waitForNoRunningRun } from "../../runs/run-store.ts";
 import type { OrchestratorDeps } from "./types.ts";
+import type { CompactionSettings } from "../../resolution/config-store.ts";
 import type { Item } from "../../sessions/items.ts";
 import { countTokens } from "../../util/tokens.ts";
 import type { SessionRoute } from "../../agent/agent.ts";
@@ -37,8 +38,6 @@ interface Summarized {
   mode?: "recent";
   savedSummary?: string;
 }
-
-type CompactionSettings = Awaited<ReturnType<OrchestratorDeps["config"]["getCompactionSettingsDurable"]>>;
 
 interface CompactionInput {
   tenant: Tenant;

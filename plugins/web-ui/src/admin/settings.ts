@@ -41,9 +41,9 @@ export class SettingsState extends SettingState {
       const { inherit: _inherit, ...selection } = this.draft;
       return structuredClone(selection);
     }
-    if (this.key === "memory-embedding-model") return { modelId: this.draft.modelId || null };
-    if (this.key === "compaction-keep-percent") return { percent: this.draft.value || null };
-    if (this.key === "history-budget-tokens") return { tokens: this.draft.value || null };
+    if (this.key === RECALL) return { modelId: this.draft.modelId || null };
+    if (this.key === COMPACTION) return { percent: this.draft.value || null };
+    if (this.key === BUDGET) return { tokens: this.draft.value || null };
     if (this.key === "app-handle") {
       const handle = String(this.draft.handle || "").trim();
       const error = _validate ? appHandleError(handle) : undefined;
@@ -112,13 +112,13 @@ export function load(data: Data, scope: string, only?: string) {
     } else if (key === "app-handle") {
       s.draft = { handle: data.appHandle || "" };
       s.available = scope.startsWith("org:") && "appHandle" in data;
-    } else if (key === "memory-embedding-model") {
+    } else if (key === RECALL) {
       s.draft = { modelId: data.memoryEmbeddingModel || "" };
       s.available = scope.startsWith("org:") && "memoryEmbeddingModel" in data;
-    } else if (key === "compaction-keep-percent") {
+    } else if (key === COMPACTION) {
       s.draft = { value: data.compactionKeepPercent ? String(data.compactionKeepPercent) : "" };
       s.available = scope.startsWith("org:") && "compactionKeepPercent" in data;
-    } else if (key === "history-budget-tokens") {
+    } else if (key === BUDGET) {
       s.draft = { value: data.historyBudgetTokens ? String(data.historyBudgetTokens) : "" };
       s.available = scope.startsWith("org:") && "historyBudgetTokens" in data;
     } else if (key === "soul") {

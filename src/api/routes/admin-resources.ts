@@ -668,7 +668,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     label: `Percent of the history budget compaction keeps verbatim, ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
     readKey: "compactionKeepPercent",
-    get: async (deps) => (await deps.config!.getCompactionSettingsDurable()).keepPercent,
+    get: (deps) => deps.config!.getCompactionSettings().keepPercent,
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the compaction keep percent is org-wide") ??
@@ -688,7 +688,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     label: `Ceiling on the conversation history budget in tokens, a positive integer (empty restores the default of ${HISTORY_BUDGET_DEFAULT_TOKENS}). The budget still never exceeds half of a model's usable context window. Applies to every model. Lower makes long conversations cheaper on per-token providers but keeps less history verbatim.`,
     readKey: "historyBudgetTokens",
-    get: async (deps) => (await deps.config!.getCompactionSettingsDurable()).historyBudgetTokens,
+    get: (deps) => deps.config!.getCompactionSettings().historyBudgetTokens,
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the history budget is org-wide") ??
