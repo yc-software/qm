@@ -6,10 +6,6 @@ import {
 } from "../../plugins/chassis/src/app-access.ts";
 import { parseScopeId, personalScope, type ScopeKind } from "../types.ts";
 
-export function canEditAppPermissions(ownerScopeId: string, principalId: string): boolean {
-  return ownerScopeId === personalScope(principalId);
-}
-
 export type AppAccess = {
   level: "private" | "shared" | "org" | "public";
   label: string;
@@ -33,7 +29,7 @@ export function appAccess(opts: {
   viewer: string;
   orgName?: string | undefined;
 }): AppAccess {
-  const canEdit = canEditAppPermissions(opts.ownerScopeId, opts.viewer);
+  const canEdit = opts.ownerScopeId === personalScope(opts.viewer);
   const general = generalAccessOf(opts);
   if (general === "public") return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
   if (general === "org") {
@@ -46,7 +42,7 @@ export function appAccess(opts: {
   if (!kinds.length)
     return {
       level: "private",
-      label: "Private",
+      label: "Restricted",
       detail: canEdit ? "Only you can open" : "Only the owner can open",
       canEdit,
     };

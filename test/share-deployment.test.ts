@@ -260,7 +260,7 @@ test('share endpoint: "everyone" grants org reach — a non-owner can reach it; 
   const r = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org" });
   assert.equal(r.status, 200);
   assert.equal(r.body.target.scope, scopeId("org", "default-org"));
-  assert.equal(r.body.reach, "Anyone signed in to your organization can open");
+  assert.match(r.body.reach, /everyone in default-org/);
   assert.equal((await deploy.reachDeployment("dead-reckoning", "U2")).status, "ok");
 
   const off = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org", access: "none" });

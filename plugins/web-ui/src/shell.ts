@@ -1053,6 +1053,10 @@ async function openAppEditChat(slug: string): Promise<void> {
 
 async function bootAppShare(params: URLSearchParams): Promise<void> {
   document.documentElement.classList.add("app-share-embed");
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.querySelector("dialog[open]"))
+      tellEmbedder({ type: "qm:app-share-closed" });
+  });
   try {
     const slug = params.get("slug");
     if (!slug) throw new Error("app-share opened without an app slug");

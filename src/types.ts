@@ -1,4 +1,7 @@
 import type { ClientSurface } from "../plugins/chassis/src/client-surface.ts";
+import { parseScopeId, type ScopeKind } from "../plugins/chassis/src/scope-id.ts";
+
+export { SCOPE_KINDS, parseScopeId, type ScopeKind } from "../plugins/chassis/src/scope-id.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
@@ -20,14 +23,7 @@ export interface Principal {
   displayName?: string;
 }
 
-export const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
-export type ScopeKind = (typeof SCOPE_KINDS)[number];
-
 export type ScopeId = string;
-
-function isScopeKind(s: string): s is ScopeKind {
-  return (SCOPE_KINDS as readonly string[]).includes(s);
-}
 
 export function scopeId(kind: ScopeKind, ref: string): ScopeId {
   return `${kind}:${ref}`;
@@ -53,13 +49,6 @@ export function actsAsScope(principalId: string, scope: ScopeId): boolean {
 
 export function isSystemActor(actorId: string | undefined): boolean {
   return !!actorId?.startsWith("system:");
-}
-
-export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
-  const sep = id.indexOf(":");
-  if (sep < 0) return { kind: null, ref: "" };
-  const raw = id.slice(0, sep);
-  return { kind: isScopeKind(raw) ? raw : null, ref: id.slice(sep + 1) };
 }
 
 export function isManageableCreationScope(id: ScopeId | undefined): boolean {

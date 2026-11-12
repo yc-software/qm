@@ -491,7 +491,7 @@ test("app shell: the version poll tells the top bar who can open the app", async
 test("app shell: access summary wording", async () => {
   const { appAccess } = await import("../src/deploy/app-access.ts");
   const base = { ownerScopeId: "personal:U1", public: false, grantees: [], viewer: "U1" };
-  assert.equal(appAccess(base).label, "Private");
+  assert.equal(appAccess(base).label, "Restricted");
   assert.equal(appAccess(base).detail, "Only you can open");
   assert.equal(appAccess({ ...base, public: true, grantees: [{ scope: "org:acme" }] }).level, "public");
   const people = appAccess({ ...base, grantees: [{ scope: "personal:a" }, { scope: "personal:b" }] });
