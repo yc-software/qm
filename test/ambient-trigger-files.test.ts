@@ -23,7 +23,7 @@ test("an ambient turn sees the screenshot on the message that woke it, even with
       for (const r of await built.app.pendingContextRequests("slack")) {
         const { blobId, sizeBytes } = await built.blobTransfer.put(PNG);
         await built.app.fulfillContextRequest(r.id, {
-          result: { messages: [], file: { blobId, sizeBytes, name: r.query.file!.name!, mimetype: "image/png" } },
+          result: { messages: [], attachments: [{ blobId, sizeBytes, name: "deploy.png", mimetype: "image/png" }] },
         });
       }
       await sleep(20);

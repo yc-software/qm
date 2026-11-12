@@ -9,10 +9,9 @@ import {
   buildContextWindow,
   downloadSlackFile,
   isExternallyShared,
-  isOversize,
   openConversationFor,
-  oversizeMsg,
   parseDeliveryTarget,
+  processInboundFiles,
 } from "./lib.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
@@ -155,34 +154,43 @@ export function createSurfaceContextFulfiller(deps: {
         error: `that message carries ${files.length} files — pass a name: ${files.map(slackFileName).join(", ")}`,
       };
     }
-    if (isOversize(file)) return { error: oversizeMsg(slackFileName(file)) };
-    let bytes: Uint8Array;
-    let blobId: string;
-    try {
-      bytes = await downloadSlackFile(file, {
-        token: botToken,
-        ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
-      });
-      ({ blobId } = await core.stageBlob(bytes));
-    } catch (err) {
-      swallow("slack: surface-file fetch", err);
-      return { error: `I couldn't read "${slackFileName(file)}" — it may be restricted, deleted, or too large for me` };
-    }
-    const author = file.user
-      ? await directory.classifyUserCached(client, file.user).then(
-          (c) => c.actor.displayName,
-          () => undefined,
-        )
-      : undefined;
-    return {
-      file: {
-        blobId,
-        name: slackFileName(file),
-        sizeBytes: bytes.length,
-        ...(file.mimetype ? { mimetype: file.mimetype } : {}),
-        ...(author ? { author } : {}),
-      },
-    };
+    const {
+      attachments: [staged],
+      issues,
+    } = await stageFiles(client, [file]);
+    if (!staged) return { error: issues.join("; ") };
+    const { blobId, name, sizeBytes, mimetype, author } = staged;
+    return { file: { blobId, name, sizeBytes, mimetype, ...(author ? { author } : {}) } };
+  }
+
+  async function fetchMessageFiles(
+    client: any,
+    channel: string,
+    conversationThreadTs: string | undefined,
+    ref: { ts: string; threadTs?: string },
+  ): Promise<Record<string, unknown>> {
+    const msg = await findMessageAt(client, channel, ref.ts, ref.threadTs || conversationThreadTs);
+    if (!msg) return { error: "I couldn't find that message" };
+    const { attachments, issues } = await stageFiles(
+      client,
+      (msg.files ?? []).filter((f) => f?.id),
+    );
+    return { attachments, issues };
+  }
+
+  function stageFiles(client: any, files: SlackFile[]) {
+    return processInboundFiles(
+      files,
+      (f) => downloadSlackFile(f, { token: botToken, ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}) }),
+      (bytes) => core.stageBlob(bytes),
+      (userId) =>
+        userId
+          ? directory.classifyUserCached(client, userId).then(
+              (c) => c.actor.displayName,
+              () => undefined,
+            )
+          : undefined,
+    );
   }
 
   async function openGroupDm(client: any, participants: readonly string[]): Promise<Record<string, unknown>> {
@@ -245,6 +253,7 @@ export function createSurfaceContextFulfiller(deps: {
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }
+      if (q.messageFiles?.ts) return await post(await fetchMessageFiles(client, channel, threadTs, q.messageFiles));
       const count = Math.max(
         1,
         Math.min(

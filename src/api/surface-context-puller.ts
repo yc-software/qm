@@ -1,7 +1,8 @@
 import type { SurfaceContextQuery, SurfaceContextResult } from "../reach/reach.ts";
 import type { SurfaceContextPuller } from "../core/orchestrator.ts";
+import type { TurnRequest } from "../types.ts";
 import { sleep } from "../util/async.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 
 const FULFILL_WAIT_MS = 25_000;
 export const SURFACE_FILE_WAIT_MS = 120_000;
@@ -63,4 +64,32 @@ export function createSurfaceContextPuller(
       return parkAndWait(source, token ? { ...query, viewerToken: token } : query);
     },
   };
+}
+
+export async function pullMessageFiles(
+  app: SurfaceContextApp,
+  source: string,
+  conversationTarget: string,
+  messages: ReadonlyArray<{ ts: string; sub?: string }>,
+): Promise<Pick<TurnRequest, "attachments" | "inboundNotes">> {
+  const puller = createSurfaceContextPuller(app, { waitMs: SURFACE_FILE_WAIT_MS });
+  const pulled = await Promise.all(
+    messages.map(async ({ ts, sub }) => {
+      const result = await puller
+        .pull(source, { conversationTarget, count: 1, messageFiles: { ts, ...(sub ? { threadTs: sub } : {}) } })
+        .catch((e: unknown): SurfaceContextResult => {
+          swallow("surface-context: message files", e);
+          return { messages: [], note: errMessage(e) };
+        });
+      if (result?.attachments || result?.issues)
+        return { attachments: result.attachments ?? [], notes: result.issues ?? [] };
+      const why =
+        result?.note ??
+        (result ? `the ${source} surface can't fetch files` : `the ${source} surface didn't answer in time`);
+      return { attachments: [], notes: [`I couldn't fetch the files on message ${ts}: ${why}`] };
+    }),
+  );
+  const attachments = pulled.flatMap((p) => p.attachments);
+  const notes = pulled.flatMap((p) => p.notes);
+  return { ...(attachments.length ? { attachments } : {}), ...(notes.length ? { inboundNotes: notes } : {}) };
 }

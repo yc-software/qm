@@ -84,8 +84,6 @@ export function ambientWindow(
   return missing.length ? [...missing, ...window].sort((x, y) => (x.ts < y.ts ? -1 : 1)) : window;
 }
 
-export const cachedFileName = (f: NonNullable<CachedMessage["files"]>[number]): string => f.name || f.title || f.fileId;
-
 export const hasContent = (m: CachedMessage): boolean => Boolean(m.text.trim() || m.files?.length);
 
 export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
@@ -100,7 +98,7 @@ export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
     ...(m.authorName ? { authorName: m.authorName } : {}),
     ...(m.authorId ? { authorId: m.authorId } : {}),
     text: resolveMentions(m.text, new Map(Object.entries(m.mentions ?? {}).filter(([id]) => id !== self))),
-    ...(m.files?.length ? { files: m.files.map(cachedFileName) } : {}),
+    ...(m.files?.length ? { files: m.files.map((f) => f.name || f.title || f.fileId) } : {}),
     ...(m.mentions ? { mentions: m.mentions } : {}),
     ...(triggers.has(m.ts) ? { trigger: true } : {}),
   }));
