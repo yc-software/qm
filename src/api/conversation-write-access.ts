@@ -71,7 +71,10 @@ export async function conversationWriteAccess(
     if (existing.scopeId !== claimed) return { ok: false, reason: "that conversation lives in a different context" };
     if (!(await h.mayWriteSession(actor.id, existing)))
       return { ok: false, reason: "you can't continue that conversation from the web" };
-  } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
+  } else if (
+    threadRef.startsWith("web:") &&
+    ![actor.id, req.actor.externalId].some((owner) => threadRef.startsWith(`web:${owner}:`))
+  ) {
     return { ok: false, reason: "you can only start a new conversation on your own thread" };
   }
   return access;

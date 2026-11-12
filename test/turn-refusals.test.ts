@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -47,4 +48,16 @@ test("a web turn refuses another person's new thread, an unknown subagent thread
     webTurn("alice", { conversation: { kind: "channel", channelRef: "C-NOT-JOINED", threadRef: "web:alice:channel" } }),
   );
   assert.deepEqual([channel.status, channel.reason], ["refused", "you're not a member of that context"]);
+});
+
+test("a web turn starts a thread named for the sign-in ID that QM links to an existing person", async (t) => {
+  const built = buildApp(testConfig({}));
+  installPrincipalLinks({
+    canonical: (key) => (key === "oidc:bookface:alice" ? "alice" : undefined),
+    aliases: () => [],
+  });
+  t.after(() => installPrincipalLinks(null));
+  const result = await built.app.turn(webTurn("oidc:bookface:alice"));
+  assert.notEqual(result.reason, "you can only start a new conversation on your own thread");
+  assert.notEqual(result.status, "refused");
 });
