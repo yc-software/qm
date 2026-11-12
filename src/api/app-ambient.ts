@@ -29,6 +29,7 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
+import { ambientActorId } from "../resolution/ambient-wake.ts";
 
 export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
@@ -354,7 +355,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
-          actor: { externalId: `system:ambient:${orgIdOf()}` },
+          actor: { externalId: ambientActorId() },
           ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
