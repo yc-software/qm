@@ -47,7 +47,7 @@ test("replies quote the original the way Gmail's composer does", () => {
       part("text/plain", "Caf\u00e9\r\n\r\n> older"),
       part(
         "text/html",
-        '<html><head><style>p{}</style></head><body><!-- c --><STYLE>a{}</STYLE><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a></body></html>',
+        '<html><head><style>p{}</style></head><body><!-- c --><STYLE>a{}</STYLE><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a><img src="cid:logo"><img src="https://x.test/i.png"></body></html>',
       ),
     ],
   );
@@ -59,7 +59,7 @@ test("replies quote the original the way Gmail's composer does", () => {
   assert.ok(html.includes('Ann Lee &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:<br></div>'));
   assert.ok(
     html.endsWith(
-      'padding-left:1ex"><!-- c --><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a></blockquote></div>',
+      'padding-left:1ex"><!-- c --><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a><img src="https://x.test/i.png"></blockquote></div>',
     ),
   );
   const bare = gmailBodyParts("Ok", message([{ name: "From", value: "a@b.test" }], []));

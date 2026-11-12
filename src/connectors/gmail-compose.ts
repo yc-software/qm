@@ -35,12 +35,26 @@ function withoutStyles(html: string): string {
   }
 }
 
+function withoutInlineImages(html: string): string {
+  const lower = html.toLowerCase();
+  let kept = "";
+  let at = 0;
+  for (;;) {
+    const open = lower.indexOf("<img", at);
+    const close = open === -1 ? -1 : lower.indexOf(">", open);
+    if (close === -1) return kept + html.slice(at);
+    const tag = lower.slice(open, close);
+    kept += html.slice(at, open) + (tag.includes('src="cid:') ? "" : html.slice(open, close + 1));
+    at = close + 1;
+  }
+}
+
 function bodyOf(html: string): string {
   const lower = html.toLowerCase();
   const open = lower.indexOf("<body");
   const close = lower.lastIndexOf("</body>");
   const body = open === -1 ? html : html.slice(lower.indexOf(">", open) + 1, close === -1 ? html.length : close);
-  return withoutStyles(body);
+  return withoutInlineImages(withoutStyles(body));
 }
 
 const isOffset = (token: string): boolean =>
