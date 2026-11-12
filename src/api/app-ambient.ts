@@ -5,7 +5,7 @@ import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { fitsScreenInput } from "../security/security-posture.ts";
+import { fittingEntryCount } from "../security/security-posture.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
@@ -319,9 +319,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const judgeReason = decision.reason ?? null;
     const screenDataOf = (messages: ReturnType<typeof screened>[]) => JSON.stringify({ messages, judgeReason });
     const sizes = recent.map((m) => JSON.stringify(screened(m)).length + 1);
-    let size = screenDataOf([]).length + sizes.reduce((total, n) => total + n, 0);
-    let omitted = 0;
-    while (omitted < recent.length && !fitsScreenInput(size)) size -= sizes[omitted++]!;
+    const omitted = recent.length - fittingEntryCount(sizes.toReversed(), screenDataOf([]).length);
     const shown = recent.slice(omitted);
     if (omitted)
       console.error(
