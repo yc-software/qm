@@ -80,6 +80,10 @@ export function personIds(id: string): string[] {
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
+export function ownsWebThread(threadRef: string, id: string): boolean {
+  return personIds(id).some((owner) => threadRef.startsWith(`web:${owner}:`));
+}
+
 export function rosterIds(id: string): string[] {
   const ids = [id.trim(), ...personIds(id)].filter(Boolean);
   return [...new Set(ids.flatMap((x) => [x, foldPrincipalId(x)]))];

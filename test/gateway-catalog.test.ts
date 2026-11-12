@@ -100,7 +100,7 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.equal(modelGatewayRequest(f.catalog.transport, model)?.target, "vendor/new-model");
   assert.ok(builtInModelCatalog().some((m) => m.id === id));
   const availability = { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) };
-  assert.equal(validateWebTurnModelOptions({ model: id }, null, availability), null);
+  assert.equal(validateWebTurnModelOptions({ model: id }, [id], availability), null);
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
   assert.equal(modelSupported(id), true);
@@ -155,6 +155,7 @@ test("output limits at or above the context window fall back to a safe limit ins
   assert.deepEqual(limits("vendor/honest-output"), [1_000_000, 128_000]);
   assert.equal(contextTokenBudgetForModel("gateway/vendor/equal-limits"), 150_000);
   assert.equal(contextTokenBudgetForModel("gateway/vendor/small-context"), 8_000);
+  assert.equal(contextTokenBudgetForModel("gateway/vendor/small-context", 50_000), 8_000);
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {
@@ -298,7 +299,7 @@ test("gateway aliases hide duplicate picker options while preserving saved route
   for (const id of ["claude-opus-5", `gateway/${target}`]) {
     assert.equal(modelGatewayRequest(f.catalog.transport, resolveModel(id)!)?.target, target);
     assert.equal(
-      validateWebTurnModelOptions({ model: id }, null, {
+      validateWebTurnModelOptions({ model: id }, [id], {
         anthropic: false,
         openai: false,
         openrouter: false,

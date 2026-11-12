@@ -24,5 +24,11 @@ async function partnerChatEvents(ctx: BaseCtx): Promise<void> {
 }
 
 export const partnerChatEventRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/surfaces/partner-chat/events", auth: "public", handle: partnerChatEvents },
+  {
+    method: "POST",
+    path: "/v1/surfaces/partner-chat/events",
+    auth: "public",
+    tenant: "none",
+    handle: partnerChatEvents,
+  },
 ];

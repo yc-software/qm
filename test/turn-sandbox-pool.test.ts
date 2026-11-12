@@ -1,11 +1,13 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
 
 const OWN = "personal:alice";
 
-function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[] } = {}) {
+function fixture(
+  over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[]; botActor?: true } = {},
+) {
   const provisions: Array<ProvisionOptions | undefined> = [];
   const teardowns: Array<[string, TeardownOptions]> = [];
   const tornDown: SandboxHandle[] = [];
@@ -62,6 +64,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
       return resource(id);
     },
     get: async (id: string) => resource(id),
+    notePersonUse: mock.fn(async (id: string) => resource(id)),
     resolve: async () => undefined,
     hold: async (id: string) => {
       if (holdFailures.delete(id)) throw new Error(`hold failed: ${id}`);
@@ -92,7 +95,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
       isCurrentSharedScopeMember: async () => true,
       errors: { record: (_t: unknown, event: { code: string; message: string }) => errors.push(event) },
     },
-    input: { origin: { kind: "user" }, runId: "run-1" },
+    input: { origin: { kind: "user" }, runId: "run-1", botActor: over.botActor },
     actor: { id: "alice", type: "internal" },
     session: { id: "s" },
     resolution: { writableScopeId: OWN, readOnlyScopeIds: ["org:global"], orgScopeId: "org:global" },
@@ -110,6 +113,8 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
   const clearedTurnFiles = () => removed.filter(([, dir]) => dir === "turn/s/t").map(([id]) => id);
   return {
     turn,
+    resource,
+    notePersonUse: sandboxResources.notePersonUse,
     provisions,
     teardowns,
     tornDown,
@@ -129,6 +134,7 @@ test("each computer a turn touched is released exactly once, the default box wit
   const scoped = await f.turn.provision();
   await f.turn.provisionResource(scoped.id);
   await f.turn.provisionResource("other");
+  assert.ok(f.notePersonUse.mock.calls.some((call) => call.arguments[0] === "other"));
   await f.turn.reclaimBox();
   assert.deepEqual(f.teardowns.map(([id]) => id).sort(), [scoped.id, "other"].sort());
   assert.ok(f.teardowns.every(([, opts]) => !opts.keepWarm && !opts.homeUnchanged));
@@ -138,9 +144,20 @@ test("each computer a turn touched is released exactly once, the default box wit
 
 test("an eagerly warmed default box the turn never used is released as unchanged", async () => {
   const f = fixture();
+  f.notePersonUse.mock.mockImplementation(async (id: string) => {
+    assert.deepEqual(f.clearedTurnFiles(), []);
+    return f.resource(id);
+  });
   const box = await f.turn.provision(true);
   await f.turn.reclaimBox();
   assert.deepEqual(f.released(), { [box.id]: { homeUnchanged: true } });
+  assert.equal(f.notePersonUse.mock.callCount(), 1);
+});
+
+test("overlapping opens of one computer record a person's use once", async () => {
+  const f = fixture();
+  await Promise.all([f.turn.provision(), f.turn.provision()]);
+  assert.equal(f.notePersonUse.mock.callCount(), 1);
 });
 
 test("an eagerly warmed default box the turn opened by its id is released as used", async () => {
@@ -327,6 +344,12 @@ test("reopening a computer under a different egress policy releases it once", as
   await f.turn.reclaimBox();
   assert.equal(f.tornDown.length, 1);
   assert.equal(f.tornDown[0], narrowed);
+});
+
+test("a Slack bot's turn cannot open a background job's computer it didn't make", async () => {
+  const f = fixture({ botActor: true });
+  await assert.rejects(f.turn.provisionJobSandbox("job-only-1"), /can use only a computer it made/);
+  assert.equal(f.provisions.length, 0);
 });
 
 test("concurrent opens of a background job's own computer share one provision", async () => {
