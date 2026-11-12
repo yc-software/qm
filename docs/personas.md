@@ -40,14 +40,14 @@ notebook, and keychain grants to `persona:<id>`.
 | write | edit name, description, instructions and icon; add or edit its skills; chat |
 | read  | chat; see its instructions, access list and attached credential names       |
 
-Holders are people (`personal:`), teams (`team:`), the org (`org:`) or Slack channels
-(`channel:`). A channel can only hold read, and its grant only applies to conversations in
-that channel. A person's
+Holders are people (`personal:`), teams (`team:`), the org (`org:`), Slack channels
+(`channel:`) or groups such as Slack group DMs (`group:`). A channel or group can only hold
+read, and its grant only applies to conversations in it. A person's
 role is the highest one reaching them. Every persona keeps at least one owner.
 
-An owner can also **pin** a persona in a channel it's shared with (`pinned: true` on that
+An owner can also **pin** a persona in a channel or group it's shared with (`pinned: true` on that
 channel's access entry, column `persona_access.pinned`, migration
-`users/v2/0006-persona-channel-pins`). A channel pins at most one persona; pinning a second
+`users/v2/0006-persona-channel-pins`). A channel or group pins at most one persona; pinning a second
 one is refused until the first is unpinned. Removing the channel's grant unpins it.
 
 Checks sit where every path already flows: turn resolution (below) and the scope checks
@@ -65,9 +65,11 @@ reactivating them restores their role.
 ## Turns
 
 A session's `persona_id` is set from the Personas page ("Chat") or by the agent
-(`PUT /v1/sessions/:id/persona`). A conversation in a channel with a pinned persona and no
-persona of its own wears the pinned one; the `## Persona` block then says the channel pinned
-it and how to change that. There is no lock: the channel's own instructions and skills
+(`PUT /v1/sessions/:id/persona`). A conversation in a channel or group with a pinned persona
+and no persona of its own wears the pinned one; the `## Persona` block then says it was pinned
+and how to change that.
+A turn without a persona, from a person with personas enabled, gets a short `## Personas`
+context block saying what personas do and where the API is, so the agent can offer one. There is no lock: the channel's own instructions and skills
 still apply, and anyone may still pick another persona for one conversation. On each turn,
 if the sender holds a role on the persona (counting the conversation's channel), the turn:
 
