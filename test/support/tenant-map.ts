@@ -68,6 +68,9 @@ export function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
     async delete(id) {
       own().delete(id);
     },
+    async deleteMany(ids) {
+      for (const id of ids) own().delete(id);
+    },
     async take(id) {
       const existing = own().get(id) ?? null;
       own().delete(id);

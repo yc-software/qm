@@ -118,6 +118,7 @@ export interface LoopItemLedger {
   park(id: string, reason: string, claimToken?: string): Promise<LoopItem | null>;
   skip(id: string, reason: string): Promise<LoopItem | null>;
   stats(loopId: string, now: number, held?: ReadonlySet<string>): Promise<LoopQueueStats>;
+  remove(ids: readonly string[]): Promise<void>;
   deleteByLoop(loopId: string): Promise<void>;
 }
 
@@ -248,7 +249,9 @@ export function createLoopItemLedger(
   };
 
   const forLoop = async (loopId: string): Promise<LoopItem[]> =>
-    (await backing.all()).filter((item) => item.loopId === loopId);
+    (await backing.select({ where: { field: "loopId", anyOfFold: [loopId] } })).filter(
+      (item) => item.loopId === loopId,
+    );
 
   const ledger: LoopItemLedger = {
     async enqueue(input) {
@@ -527,7 +530,7 @@ export function createLoopItemLedger(
           .sort((a, b) => (a.actedAt ?? a.updatedAt) - (b.actedAt ?? b.updatedAt));
         for (const item of resolvedOldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
       }
-      for (const id of doomed.keys()) await backing.delete(id);
+      await backing.deleteMany([...doomed.keys()]);
       return doomed.size;
     },
     get: (id) => backing.get(id),
@@ -682,8 +685,9 @@ export function createLoopItemLedger(
         ...(oldest !== undefined ? { oldestQueuedAgeMs: Math.max(0, now - oldest) } : {}),
       };
     },
+    remove: (ids) => backing.deleteMany(ids),
     async deleteByLoop(loopId) {
-      for (const item of await forLoop(loopId)) await backing.delete(item.id);
+      await ledger.remove((await forLoop(loopId)).map((item) => item.id));
     },
   };
   if (!coordination) return ledger;

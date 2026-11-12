@@ -314,7 +314,7 @@ export function createLoopOutputStore(
       return expired;
     },
     async deleteByLoop(loopId) {
-      for (const output of await forLoop(loopId)) await backing.delete(output.id);
+      await backing.deleteMany((await forLoop(loopId)).map((output) => output.id));
     },
   };
 }

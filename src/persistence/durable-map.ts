@@ -35,6 +35,7 @@ export interface DurableMap<T> {
   mutateMany(updates: readonly { id: string; apply: (value: T | null) => T }[]): Promise<T[]>;
   deleteIf(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
+  deleteMany(ids: readonly string[]): Promise<void>;
   take(id: string): Promise<T | null>;
   claimIds(): Promise<ClaimedRow[]>;
   claimTenants(): Promise<ClaimedRow[]>;
@@ -402,6 +403,10 @@ export function createPostgresMap<T>(
     },
     async delete(id) {
       await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
+    },
+    async deleteMany(ids) {
+      if (!ids.length) return;
+      await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = ANY($1::text[])`, [[...ids]]));
     },
     async take(id) {
       const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]));

@@ -8,14 +8,20 @@ import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
-import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
+import {
+  destinationVisible,
+  runTrigger,
+  type TriggerDeps,
+  type TriggerOutcome,
+  type TriggerSpec,
+} from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { fencedCodeBlocks, type FencedCodeBlock } from "../util/markdown.ts";
 import { errMessage } from "../util/errors.ts";
 import { promptText } from "../util/text.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { isRunnable, type LoopStore } from "./loop-store.ts";
+import { isRunnable, isSystemLoop, type LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
 import type { ShipGrantStore } from "./ship-grant-store.ts";
@@ -50,6 +56,11 @@ import { adapterForItem } from "./sources/index.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { InboxPass, InboxPassSummary } from "./verdict/pass.ts";
 
+export interface SystemLoopPass {
+  prompt(loop: Loop): Promise<string>;
+  ingest(loop: Loop, reply: string, at: number): Promise<string>;
+}
+
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
   lock?: import("../persistence/advisory-lock.ts").AdvisoryLock;
@@ -62,6 +73,7 @@ export interface LoopFireDeps {
   files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
   inboxPass?: InboxPass;
+  systemPasses?: Record<string, SystemLoopPass>;
 }
 
 interface LoopFireResult {
@@ -82,7 +94,7 @@ type LoopFollowUpOptions = Pick<TurnRequest, "model" | "thinkingLevel" | "fastMo
 
 type ItemTurnOptions = LoopFollowUpOptions & { unattended?: true };
 
-type StageOptions = ItemTurnOptions & Pick<TurnRequest, "readOnly">;
+type StageOptions = ItemTurnOptions & Pick<TurnRequest, "readOnly"> & Pick<TriggerSpec, "onReply">;
 
 export interface LoopFireService {
   fire(loopId: string, fireKey: string, cronId?: string, options?: { enumerate?: boolean }): Promise<LoopFireResult>;
@@ -566,6 +578,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
       ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
       ...(options?.readOnly ? { readOnly: true } : {}),
+      ...(options?.onReply ? { onReply: options.onReply } : {}),
     });
   }
 
@@ -688,9 +701,29 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
   }
 
-  async function recordFailedFire(loopId: string, failure: unknown): Promise<LoopFireResult> {
+  async function intakeReply(
+    loop: Loop,
+    fireKey: string,
+    threadRef: string,
+    stage: string,
+    prompt: string,
+    onReply?: (reply: string) => Promise<void>,
+  ): Promise<string> {
+    const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, prompt, undefined, onReply && { onReply });
+    if (!outcome.ran && !outcome.authzFailed) throw new DuplicateLoopFireError("duplicate fire key");
+    const failure = stageFailure(stage, outcome);
+    if (failure) throw failure.error;
+    return outcome.reply ?? "";
+  }
+
+  async function recordFailedOutcome(loopId: string, failure: unknown): Promise<boolean> {
     const transient = isTransientFailure(failure);
     await deps.loops.recordFireOutcome(loopId, transient ? "transient" : "failed");
+    return transient;
+  }
+
+  async function recordFailedFire(loopId: string, failure: unknown): Promise<LoopFireResult> {
+    const transient = await recordFailedOutcome(loopId, failure);
     await applyGovernor(loopId, transient ? { transientFailure: errMessage(failure) } : undefined);
     return { status: "failed", note: errMessage(failure) };
   }
@@ -729,6 +762,26 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     const threadRef = loopFireThreadRef(loopId, fireKey);
     let profile: Promise<string | undefined> | undefined;
     const voiceProfile = () => (profile ??= loadInboxVoiceProfile(deps.files, loop));
+    if (isSystemLoop(loop)) {
+      const systemPass = deps.systemPasses?.[loop.surface!];
+      if (!systemPass) return { status: "failed", note: `no system pass is registered for ${loop.surface}` };
+      if (!isRunnable(loop)) return notRunnable(loop);
+      const firedAt = Date.now();
+      let note = "";
+      try {
+        await intakeReply(loop, fireKey, threadRef, loop.surface!, await systemPass.prompt(loop), async (reply) => {
+          note = await systemPass.ingest(loop, reply, firedAt);
+        });
+        await deps.loops.recordFireOutcome(loopId, "ok");
+        return { status: "silent", note };
+      } catch (error) {
+        if (error instanceof DuplicateLoopFireError) return { status: "silent", note: error.message };
+        await recordFailedOutcome(loopId, error).catch((recordError: unknown) => {
+          throw new AggregateError([error, recordError], `system loop fire failed: ${errMessage(error)}`);
+        });
+        return { status: "failed", note: errMessage(error) };
+      }
+    }
     if (inboxSource(loop)) {
       if (!isRunnable(loop)) return notRunnable(loop);
       if (!deps.inboxPass) return { status: "failed", note: "inbox pass is not wired" };
@@ -767,11 +820,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         {
           enumerate: async () => {
             if (options?.enumerate === false) return [];
-            const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, intakePrompt(loop));
-            if (!outcome.ran && !outcome.authzFailed) throw new DuplicateLoopFireError("duplicate fire key");
-            const failure = stageFailure("intake", outcome);
-            if (failure) throw failure.error;
-            return parseIntake(outcome.reply ?? "");
+            return parseIntake(await intakeReply(loop, fireKey, threadRef, "intake", intakePrompt(loop)));
           },
           triage: () => triage(loop, fireKey, threadRef),
           work: async ({ item, guidance }) => {

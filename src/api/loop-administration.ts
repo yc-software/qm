@@ -7,14 +7,18 @@ import {
   createCanManageScope,
   scopeMembershipSnapshot,
 } from "../resolution/scope-membership.ts";
-import type { TriggerBase } from "../triggers/types.ts";
+import type { Loop } from "../loops/types.ts";
+import { isSystemLoop } from "../loops/loop-store.ts";
+
+export type AdministeredLoop = Pick<Loop, "owner" | "ownerScopeId" | "botActor" | "surface">;
 
 export async function canAdministerLoop(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  loop: Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">,
+  loop: AdministeredLoop,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
   const { actorId } = actor;
+  if (isSystemLoop(loop)) return false;
   if (!(await personOrOwningBot(actor, async () => app.samePerson(loop.owner, actorId), loop))) return false;
   if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actorId, loop.ownerScopeId);
   if (await app.samePerson(loop.owner, actorId)) return true;
@@ -24,10 +28,11 @@ export async function canAdministerLoop(
 export async function loopAdministration(
   deps: AppDeps,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-  loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
+  loops: readonly AdministeredLoop[],
 ) {
   if (!loops.length) return [];
   const { actorId } = actor;
+  const administrable = loops.filter((loop) => !isSystemLoop(loop));
   const snapshot = await scopeMembershipSnapshot(
     {
       directory: deps.directory,
@@ -36,8 +41,8 @@ export async function loopAdministration(
       ...(deps.personas ? { personas: deps.personas } : {}),
     },
     actorId,
-    loops.map((loop) => loop.ownerScopeId),
-    loops.map((loop) => loop.owner),
+    administrable.map((loop) => loop.ownerScopeId),
+    administrable.map((loop) => loop.owner),
   );
   const manages = createCanManageScope(snapshot);
   const policy = {
