@@ -43,6 +43,16 @@ const PIN_TENANCY: PgMigrationDefinition[] = [
   },
 ];
 
+const GROUP_GRANTEES: PgMigrationDefinition = {
+  id: "users/v2/0009-persona-group-grantees",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE persona_access DROP CONSTRAINT persona_access_grantee_scope_id_check`,
+    `ALTER TABLE persona_access ADD CONSTRAINT persona_access_grantee_scope_id_check
+       CHECK (split_part(grantee_scope_id, ':', 1) IN ('personal', 'team', 'org', 'channel', 'group'))`,
+  ],
+};
+
 const statements = (sql: readonly string[]): string => sql.map((statement) => `${statement};`).join("\n  ");
 
 function catchUp(): PgMigrationDefinition {
@@ -119,4 +129,5 @@ export const PERSONA_TENANCY: PgMigrationDefinition[] = [
   catchUp(),
   ...PERSONA_VERSION_TENANCY,
   ...PIN_TENANCY,
+  GROUP_GRANTEES,
 ];

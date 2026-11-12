@@ -6,7 +6,7 @@ import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { sleep } from "../../util/async.ts";
-import { awaitContextOutcome } from "../surface-context-puller.ts";
+import { awaitContextOutcome, SURFACE_FILE_WAIT_MS } from "../surface-context-puller.ts";
 
 const SURFACE_CONTEXT_MAX_MESSAGES = 200;
 const SURFACE_CONTEXT_DEFAULT_MESSAGES = 100;
@@ -162,15 +162,15 @@ function awaitFulfillment(ctx: ApiCtx, requestId: string, channelName: string | 
 }
 
 const FILE_DOWNLOAD_TTL_MS = 5 * 60_000;
-const FILE_FULFILL_WAIT_MS = 120_000;
 function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
-  return awaitOutcome(ctx, requestId, FILE_FULFILL_WAIT_MS, async (result) => {
+  return awaitOutcome(ctx, requestId, SURFACE_FILE_WAIT_MS, async (result) => {
     const { res, capability, secret } = ctx;
-    const file = result.file;
+    const file = result.attachments?.[0];
     if (!file) {
       return sendJson(res, 502, {
         error: "surface_error",
         message:
+          [...(result.issues ?? []), ...(result.note ? [result.note] : [])].join("; ") ||
           "the surface can't fetch files yet (it may be mid-deploy) — tell the person plainly rather than retrying",
       });
     }
@@ -190,7 +190,8 @@ function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
       (ctx.deps.capabilitySecret ?? secret)!,
       ctx.deps.capabilityTokenCompression,
     );
-    const { blobId, ...meta } = file;
+    const { blobId, name, sizeBytes, mimetype, author } = file;
+    const meta = { name, sizeBytes, mimetype, ...(author ? { author } : {}) };
     return sendJson(res, 200, {
       file: meta,
       download: {
@@ -221,17 +222,20 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const b = isObj(body) ? body : {};
-  const f = isObj(b.file) ? b.file : undefined;
-  const file =
-    f && typeof f.blobId === "string" && typeof f.name === "string" && typeof f.sizeBytes === "number"
-      ? {
-          blobId: f.blobId,
-          name: f.name,
-          sizeBytes: f.sizeBytes,
-          ...(typeof f.mimetype === "string" ? { mimetype: f.mimetype } : {}),
-          ...(typeof f.author === "string" ? { author: f.author } : {}),
-        }
-      : undefined;
+  const sent: unknown[] = Array.isArray(b.attachments) ? b.attachments : [];
+  const readable = (a: unknown): a is { blobId: string; name: string; sizeBytes: number } & Record<string, unknown> =>
+    isObj(a) && typeof a.blobId === "string" && typeof a.name === "string" && typeof a.sizeBytes === "number";
+  const attachments = Array.isArray(b.attachments)
+    ? sent.filter(readable).map((a) => ({
+        blobId: a.blobId,
+        name: a.name,
+        sizeBytes: a.sizeBytes,
+        mimetype: typeof a.mimetype === "string" ? a.mimetype : "application/octet-stream",
+        ...(typeof a.sourceId === "string" ? { sourceId: a.sourceId } : {}),
+        ...(typeof a.author === "string" ? { author: a.author } : {}),
+      }))
+    : undefined;
+  const rejected = sent.filter((a) => !readable(a));
   const g = isObj(b.group) ? b.group : undefined;
   const group = g && typeof g.groupId === "string" && g.groupId ? { groupId: g.groupId } : undefined;
   const outcome =
@@ -245,7 +249,15 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(typeof b.note === "string" ? { note: b.note } : {}),
             ...(Array.isArray(b.selfTs) ? { selfTs: b.selfTs.filter((ts) => typeof ts === "string") } : {}),
             ...(b.liveSearch === "unconfigured" || b.liveSearch === "unconnected" ? { liveSearch: b.liveSearch } : {}),
-            ...(file ? { file } : {}),
+            ...(attachments ? { attachments } : {}),
+            ...(Array.isArray(b.issues) || rejected.length
+              ? {
+                  issues: [
+                    ...(Array.isArray(b.issues) ? b.issues.filter((i) => typeof i === "string") : []),
+                    ...rejected.map((a) => `the surface sent an unreadable attachment: ${JSON.stringify(a)}`),
+                  ],
+                }
+              : {}),
             ...(group ? { group } : {}),
           } satisfies SurfaceContextResult,
         };

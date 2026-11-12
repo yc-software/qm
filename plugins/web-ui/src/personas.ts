@@ -17,12 +17,12 @@ import {
   Trash2,
   X,
 } from "lucide";
-import { api, ApiError, type CoreSession, type ProjectIcon } from "./core-bridge";
+import { api, ApiError, isSharedScopeId, type CoreSession, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState } from "./shell-state";
-import { ensureContexts, personalScopeId } from "./contexts";
+import { ensureContexts, personalScopeId, scopeGlyph, scopeTitle } from "./contexts";
 import { openSession, renderList, replacePendingSession, sessionsState, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
@@ -378,7 +378,6 @@ function granteeLabel(scopeId: string): string {
   if (kind === "personal") return ref === appState.me?.user ? "You" : ref;
   if (kind === "org") return `Everyone at ${orgName()}`;
   if (kind === "team") return `Team ${ref}`;
-  if (kind === "channel") return `#${ref}`;
   return scopeId;
 }
 
@@ -386,6 +385,7 @@ const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId ==
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
+  if (isSharedScopeId(grant.scopeId)) return scopeTitle(grant.scopeId, grant.label ?? null);
   return grant.label ?? granteeLabel(grant.scopeId);
 }
 
@@ -549,14 +549,16 @@ function credentialsSection(persona: PersonaDetail, reload: (flash: string) => v
 
 function channelsSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
-  const channels = persona.access.filter((grant) => grant.scopeId.startsWith("channel:"));
+  const channels = persona.access.filter((grant) => isSharedScopeId(grant.scopeId));
   const flagNotes = new Set(channels.filter((grant) => !grant.personasEnabled).map(flagOffNote));
   const flagNote = [...flagNotes].map((note) => html`<p class="permission-note">${note}</p>`);
   const list = channels.length
     ? html`<div class="persona-skill-list">
         ${channels.map((grant) =>
           removableRow(
-            html`<span class="persona-channel-glyph">${icon(Hash, 14)}</span>`,
+            html`<span class="persona-channel-glyph"
+              >${icon(scopeGlyph(grant.scopeId, grant.label ?? null), 14)}</span
+            >`,
             grantLabel(grant),
             grant.pinned ? `Pinned: QM answers as ${persona.name} here` : "",
             owner ? `Remove ${grantLabel(grant)}` : null,
@@ -575,18 +577,18 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
           ),
         )}
       </div>`
-    : emptyTpl("No channels.");
+    : emptyTpl("No channels or groups.");
   return sectionTpl(
-    "Slack channels",
+    "Channels and groups",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in a channel to make every conversation there ${persona.name}, posting under its name and icon.`,
+    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}; in Slack it posts under its name and icon.`,
   );
 }
 
 function accessSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
-  const people = persona.access.filter((grant) => !grant.scopeId.startsWith("channel:"));
+  const people = persona.access.filter((grant) => !isSharedScopeId(grant.scopeId));
   const owners = persona.access.filter((grant) => grant.role === "owner");
   return sectionTpl(
     "Who has access",
@@ -683,7 +685,7 @@ async function changeRole(persona: PersonaDetail, grant: PersonaGrant, value: st
 }
 
 async function togglePin(persona: PersonaDetail, grant: PersonaGrant): Promise<void> {
-  const label = `#${grantLabel(grant).replace(/^#/, "")}`;
+  const label = grantLabel(grant);
   const pinned = !grant.pinned;
   const saved = await saveAccess(persona, (access) =>
     access.map((g) => (g.scopeId === grant.scopeId ? { ...g, pinned } : g)),
