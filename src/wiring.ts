@@ -2956,9 +2956,28 @@ export function buildApp(
   );
   const approvalExpirySweeper = createSweeper(
     () =>
-      claimThenBind(approvals.claimTenants, () =>
-        approvals.deleteBefore("createdAt", Date.now() - APPROVAL_LIFETIME_MS),
-      ),
+      claimThenBind(approvals.claimTenants, async () => {
+        const cutoff = Date.now() - APPROVAL_LIFETIME_MS;
+        for (const [id, record] of await approvals.entries()) {
+          if (record.createdAt === undefined || record.createdAt >= cutoff) continue;
+          if (!(await approvals.deleteIf(id, (r) => r.createdAt === record.createdAt))) continue;
+          auditLog.record(ambientTenant(), {
+            at: Date.now(),
+            principalId: "system",
+            action: "command_approval.expire",
+            resource: id,
+            scopeLabel: orgScope,
+            status: "ok",
+            detail: JSON.stringify({
+              lifetimeMs: APPROVAL_LIFETIME_MS,
+              kind: record.kind ?? "approval",
+              command: record.summary ?? record.command,
+              sessionId: record.sessionId,
+              requester: record.request?.actor.externalId,
+            }),
+          });
+        }
+      }),
     60_000,
     { label: "approval expiry", immediate: true },
   );
