@@ -268,17 +268,27 @@ export interface InboundScreenTurn {
 export function screenedFields(
   request: Pick<
     TurnRequest,
-    "text" | "gatewayContext" | "conversationHeader" | "overheard" | "attachments" | "inboundNotes"
+    | "text"
+    | "gatewayContext"
+    | "conversationHeader"
+    | "overheard"
+    | "attachments"
+    | "inboundNotes"
+    | "deliveryCandidates"
   > & {
     surface?: string;
     conversation: { kind: string };
   },
 ) {
   const dm = request.conversation.kind === "dm";
+  const destinations = (request.deliveryCandidates ?? []).map((c) => c.label);
   return {
     text: request.text,
     conversationHeader: request.conversationHeader ?? "",
-    place: shownPlace(request.surface, request.gatewayContext, dm),
+    place: {
+      ...shownPlace(request.surface, request.gatewayContext, dm),
+      ...(destinations.length ? { destinations } : {}),
+    },
     overheard: request.overheard ?? [],
     attachments: request.attachments ?? [],
     inboundNotes: request.inboundNotes ?? [],
