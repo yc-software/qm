@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { MARK_SWARM_FORUMS_PERSON_USED_MIGRATION, STAMP_SWARM_COMPUTERS_MIGRATION } from "../src/swarms/swarm-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -33,10 +32,22 @@ test("the swarm computer migration marks each swarm's board and worker computers
     template: { actor: { id: "release-bot" } },
     members: [{ id: "S7" }, { id: "worker-7", forumSandboxId: "legacy-forum" }],
   });
-  const users = createPostgresUserStore(url);
-  await users.record({ id: "release-bot", source: "turn", at: Date.now() });
-  await users.markApps(["release-bot"]);
-  for (const id of ["board-1", "worker-1", "worker-2", "shared-1", "other-1", "bot-forum", "legacy-forum"])
+  await swarms.put("S8", {
+    id: "S8",
+    template: { botActor: true, actor: { id: "release-bot" } },
+    members: [{ id: "S8" }, { id: "worker-8", forumSandboxId: "taken-forum" }],
+    messages: [{ actorId: "alice", audience: ["worker-8"] }],
+  });
+  for (const id of [
+    "board-1",
+    "worker-1",
+    "worker-2",
+    "shared-1",
+    "other-1",
+    "bot-forum",
+    "legacy-forum",
+    "taken-forum",
+  ])
     await records.put(id, { id });
   await records.put("worker-3", { id: "worker-3", swarmId: "S3" });
   await records.put("worker-5", { id: "worker-5", swarmId: "S5" });
@@ -49,6 +60,7 @@ test("the swarm computer migration marks each swarm's board and worker computers
       "legacy-forum": null,
       "other-1": null,
       "shared-1": null,
+      "taken-forum": null,
       "worker-1": "S1",
       "worker-2": "S2",
       "worker-3": "S3",
@@ -56,7 +68,7 @@ test("the swarm computer migration marks each swarm's board and worker computers
     });
     await pg.migrate(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
     const used = (await records.all()).flatMap((record) => (record.personUsed ? [record.id] : []));
-    assert.deepEqual(used.sort(), ["shared-1", "worker-5"]);
+    assert.deepEqual(used.sort(), ["legacy-forum", "shared-1", "taken-forum", "worker-5"]);
     const cut = (await swarms.all()).flatMap((swarm) => (swarm.personUsedComputers ? [swarm.id] : []));
     assert.deepEqual(cut, ["S5"]);
   } finally {

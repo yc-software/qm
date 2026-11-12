@@ -7,7 +7,6 @@ import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { claimThenBind } from "../tenants/claim.ts";
-import { fold } from "../identity/user-tenancy.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
@@ -47,18 +46,19 @@ export const MARK_SWARM_FORUMS_PERSON_USED_MIGRATION = {
   statements: [
     `DO $$
     BEGIN
-      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL
-        AND to_regclass('users') IS NOT NULL AND to_regclass('user_links') IS NOT NULL THEN
+      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
         UPDATE durable_map_versions SET v = v + 1 WHERE tbl IN ('sandbox_resources', 'swarms');
         WITH forums AS (
           SELECT s.tenant_id, member ->> 'forumSandboxId' AS sandbox_id
           FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
           WHERE member ->> 'forumSandboxId' IS DISTINCT FROM s.json #>> '{board,sandboxId}'
-            AND s.json #>> '{template,botActor}' IS DISTINCT FROM 'true'
-            AND NOT EXISTS (
-              SELECT 1 FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
-              WHERE u.kind = 'app' AND l.tenant_id = s.tenant_id
-                AND l.alias_id = ${fold("s.json #>> '{template,actor,id}'")}
+            AND (
+              s.json #>> '{template,botActor}' IS DISTINCT FROM 'true'
+              OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(s.json -> 'messages') AS message
+                WHERE message -> 'audience' ? (member ->> 'id')
+                  AND message ->> 'actorId' IS DISTINCT FROM s.json #>> '{template,actor,id}'
+              )
             )
         ), marked AS (
           UPDATE sandbox_resources r SET json = r.json || '{"personUsed": true}'::jsonb
