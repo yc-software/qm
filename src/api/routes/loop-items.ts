@@ -480,7 +480,7 @@ export function cronSummary(cron: Cron | null): {
 async function getInboxLoop(ctx: ApiCtx): Promise<void> {
   const deps = loopDeps(ctx);
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
-  const acting = actingPrincipal(ctx);
+  const acting = await actingPrincipal(ctx);
   if (!acting) return;
   const loop =
     (await deps.store.list()).find(
@@ -548,7 +548,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   const deps = loopDeps(ctx);
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
-  const acting = actingPrincipal(ctx);
+  const acting = await actingPrincipal(ctx);
   if (!acting) return;
   if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId)))
     return sendJson(ctx.res, 403, { error: "feature_disabled" });
