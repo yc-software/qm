@@ -382,18 +382,22 @@ export function createConfigStore(
     if (row) tenantState().baseModels.set(id, row);
     else tenantState().baseModels.delete(id);
   };
-  const setPurposeRuntime = async (purpose: RuntimePurpose, selection?: RuntimeSelection) => {
+  const setOrgModelField = async <K extends "embeddingModelId" | "compactionKeepPercent" | `${RuntimePurpose}Runtime`>(
+    key: K,
+    value: PersistedBaseModel[K] | null,
+  ) => {
     await writeQueue(`model:${org}`, async () => {
-      const key = `${purpose}Runtime` as const;
       const saved = await updateBaseModelRow(org, (current) => {
         const row: PersistedBaseModel = { ...current, scopeId: org };
-        if (selection) row[key] = { ...selection };
+        if (value) row[key] = value;
         else delete row[key];
         return row;
       });
       cacheBaseModel(org, saved);
     });
   };
+  const setPurposeRuntime = (purpose: RuntimePurpose, selection?: RuntimeSelection) =>
+    setOrgModelField(`${purpose}Runtime`, selection ? { ...selection } : null);
   const defaultSecurityPosture = opts.defaultSecurityPosture ?? "auto";
   const defaultSharingPosture = opts.defaultSharingPosture ?? "isolated";
   const orgDefaultPolicy = defaultOrgPolicy();
@@ -738,29 +742,9 @@ export function createConfigStore(
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
     getCompactionKeepPercent: () => tenantState().baseModels.get(org)?.compactionKeepPercent ?? null,
-    setCompactionKeepPercent: async (percent) => {
-      await writeQueue(`model:${org}`, async () => {
-        const saved = await updateBaseModelRow(org, (current) => {
-          const row: PersistedBaseModel = { ...current, scopeId: org };
-          if (percent) row.compactionKeepPercent = percent;
-          else delete row.compactionKeepPercent;
-          return row;
-        });
-        cacheBaseModel(org, saved);
-      });
-    },
+    setCompactionKeepPercent: (percent) => setOrgModelField("compactionKeepPercent", percent),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
-    setEmbeddingModel: async (modelId) => {
-      await writeQueue(`model:${org}`, async () => {
-        const saved = await updateBaseModelRow(org, (current) => {
-          const row: PersistedBaseModel = { ...current, scopeId: org };
-          if (modelId) row.embeddingModelId = modelId;
-          else delete row.embeddingModelId;
-          return row;
-        });
-        cacheBaseModel(org, saved);
-      });
-    },
+    setEmbeddingModel: (modelId) => setOrgModelField("embeddingModelId", modelId),
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
         scopeId: id,
