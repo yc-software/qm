@@ -80,7 +80,7 @@ export function buildWakeEnvelope(o: WakeEnvelopeOpts): string {
       ...recentMessagesBlock(o.recentMessages),
       ...(hasAddressed
         ? [
-            `  <addressed-messages note="directed at you — a real request from the humans below; act on it">`,
+            `  <addressed-messages note="directed at you — a real request from the senders below; act on it">`,
             addressedXml || "    <none/>",
             `  </addressed-messages>`,
           ]
