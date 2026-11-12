@@ -9,7 +9,7 @@ import {
   modelUnavailableReason,
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
-import type { Agent, AgentTurnInput, CompactInput, DetectInput, RuntimeChoice, SessionRoute } from "./agent.ts";
+import type { Agent, AgentTurnInput, RuntimeChoice, SessionRoute } from "./agent.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { governGoal, type GoalGovernorInput } from "./goal.ts";
 import { infrequentCronTurn, turnRuntimePurpose } from "../core/turn-options.ts";
@@ -121,24 +121,14 @@ export function withResolvedRuntime(
   resolve: (input: AgentTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
   resolveSession: (route: SessionRoute) => Promise<RuntimeChoice>,
 ): Agent {
-  const compactHistory = agent.compactHistory?.bind(agent);
-  const shouldRespond = agent.shouldRespond?.bind(agent);
+  const resolved = <I extends SessionRoute, R>(call: ((input: I) => Promise<R>) | undefined) =>
+    call && (async (input: I) => call({ ...input, runtime: await resolveSession(input) }));
+  const compactHistory = resolved(agent.compactHistory?.bind(agent));
+  const shouldRespond = resolved(agent.shouldRespond?.bind(agent));
   return {
     ...agent,
-    ...(shouldRespond
-      ? {
-          async shouldRespond(input: DetectInput) {
-            return shouldRespond({ ...input, runtime: await resolveSession(input) });
-          },
-        }
-      : {}),
-    ...(compactHistory
-      ? {
-          async compactHistory(input: CompactInput) {
-            return compactHistory({ ...input, runtime: await resolveSession(input) });
-          },
-        }
-      : {}),
+    ...(compactHistory ? { compactHistory } : {}),
+    ...(shouldRespond ? { shouldRespond } : {}),
     async runTurn(input) {
       let routedBy: string | undefined;
       const choice = await resolve(input, (ruleId) => {
