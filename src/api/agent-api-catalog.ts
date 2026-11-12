@@ -793,7 +793,7 @@ export function renderAgentApis(
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = query.toLowerCase().split(" ").filter(Boolean);
   const visible = [...FAMILIES, WHOAMI_FOR_ALL]
     .filter((f) => f.when?.(view) ?? true)
     .filter((f) => terms.every((t) => JSON.stringify(f).toLowerCase().includes(t)));
