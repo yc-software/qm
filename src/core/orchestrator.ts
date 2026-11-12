@@ -662,7 +662,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         approvalRecord?.sessionId === approvalSession.id &&
         approvalRecord.kind === "input" &&
         approvalReplaysFlaggedRequest;
-      const screenInbound = securityPolicy.screening !== "off" && !replaysHeldInput;
+      const screenInbound =
+        securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: TurnLlmRequestRecord[] = [];
       const recordScreenRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
