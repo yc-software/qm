@@ -44,6 +44,11 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
       scopeId,
       input.backend,
       typeof input.name === "string" ? input.name : undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
     );
     audit(ctx, { principalId: actor.id, action: "sandbox.create", resource: record.id, scopeLabel: scopeId });
     return sendJson(ctx.res, 201, record);
