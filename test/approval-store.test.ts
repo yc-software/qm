@@ -5,6 +5,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import { APPROVAL_LIFETIME_MS, type PendingApprovalRecord } from "../src/types.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
+import { ambientTenant } from "../src/tenants/context.ts";
 import { testMap } from "./support/test-database.ts";
 
 function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
@@ -145,7 +146,7 @@ test("cards older than the approval lifetime are removed and each removal is aud
   await backing.put("old", record("dm:D1", Date.now() - APPROVAL_LIFETIME_MS - 1_000));
   await backing.put("fresh", record("dm:D2", Date.now()));
   const events: AuditEvent[] = [];
-  await approvals.expireStale({ record: (_tenant, e) => events.push(e) }, "t1", "org:acme");
+  await approvals.expireStale({ record: (_tenant, e) => events.push(e) }, ambientTenant(), "org:acme");
   assert.equal(await backing.get("old"), null);
   assert.ok(await backing.get("fresh"));
   assert.deepEqual(
