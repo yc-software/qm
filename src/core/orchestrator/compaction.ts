@@ -38,7 +38,7 @@ interface Summarized {
   savedSummary?: string;
 }
 
-export type CompactionSettings = Awaited<ReturnType<OrchestratorDeps["config"]["getCompactionSettingsDurable"]>>;
+type CompactionSettings = Awaited<ReturnType<OrchestratorDeps["config"]["getCompactionSettingsDurable"]>>;
 
 interface CompactionInput {
   tenant: Tenant;
