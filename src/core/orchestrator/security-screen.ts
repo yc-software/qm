@@ -281,7 +281,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
       attachmentPromptData.push({
         source: "attachment-metadata",
         content: JSON.stringify({
-          name: attachment.name,
+          name: safeAttachmentName(attachment.name),
           mimetype: attachment.mimetype,
           author: attachment.author,
         }),
@@ -307,7 +307,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         continue;
       }
       attachmentPromptData.push({
-        source: `attachment:${safeAttachmentName(attachment.name)}`,
+        source: "attachment",
         content: data.toString("utf8"),
       });
     }

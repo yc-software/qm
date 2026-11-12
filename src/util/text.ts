@@ -17,6 +17,15 @@ export function tailSlice(s: string, n: number): string {
   return /^[\uDC00-\uDFFF]/.test(cut) ? cut.slice(1) : cut;
 }
 
+export function clampUtf8(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const encoded = Buffer.from(text, "utf8");
+  if (encoded.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (encoded[end]! & 0xc0) === 0x80) end -= 1;
+  return encoded.subarray(0, end).toString("utf8");
+}
+
 export function pgTextSafe(s: string): string {
   return s.replaceAll("\u0000", "").toWellFormed();
 }
