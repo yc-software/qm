@@ -335,7 +335,11 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
-    runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
+    runDelivers =
+      (spec.destination?.type === "webhook" || spec.onQueued === "handoff") &&
+      deliverable &&
+      !spec.shadow &&
+      Boolean(res.runId);
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {

@@ -362,6 +362,14 @@ test(
   },
 );
 
+test("a handed-off wake whose run already failed leaves its notice to the run", async () => {
+  const h = await agent({ respond: async () => ({ status: "failed", runId: "r1", reason: "boom" }) });
+  await h.arm();
+  h.append("p-1", "line\n");
+  await h.poller.tick();
+  assert.deepEqual(await h.deliveries.pending("slack"), []);
+});
+
 test("a non-leader instance does not poll", async () => {
   const lease: LeaderLease = {
     async hold() {
