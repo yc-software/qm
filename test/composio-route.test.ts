@@ -653,6 +653,44 @@ test("cron discovery accepts a current capability with distinct thread and sessi
   assert.equal(f.calls.length, 1);
 });
 
+test("unknown tools and connections are caller errors that are answered without reporting a failure", async (t) => {
+  const logged: string[] = [];
+  const warned: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  t.mock.method(console, "warn", (...args: unknown[]) => warned.push(args.map(String).join(" ")));
+  const notFound = () => new Response(JSON.stringify({ slug: "Tool_ToolNotFound" }), { status: 404 });
+
+  const f = fixture();
+  await f.own();
+  f.replies.push(aliceAccount, notFound());
+  const unknownTool = await f.invoke(
+    "/v1/composio/execute",
+    { ...execution, tool: "GMAIL_AUTH_TEST" },
+    null,
+    privateCap,
+  );
+  assert.equal(unknownTool.status, 404);
+  assert.equal(unknownTool.data.error, "tool_not_found");
+  assert.equal(f.calls.length, 2);
+  assert.match(warned.join("\n"), /tool ca_alice\/GMAIL_AUTH_TEST@20260901_00 not found.*http 404.*Tool_ToolNotFound/);
+
+  const g = fixture();
+  await g.own();
+  g.replies.push(notFound());
+  const unknownAccount = await g.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.deepEqual([unknownAccount.status, unknownAccount.data], [403, { error: "connection_not_authorized" }]);
+  assert.equal(g.calls.length, 1);
+  assert.equal(logged.length, 0, logged.join("\n"));
+
+  const h = fixture();
+  await h.own();
+  h.replies.push(aliceAccount, gmailTool, notFound());
+  const failed = await h.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.equal(failed.status, 502);
+  assert.equal(failed.data.error, "composio_execution_failed");
+  assert.ok(logged.some((line) => line.includes("composio: execute")));
+});
+
 test("execution never retries a provider failure", async () => {
   const f = fixture();
   await f.own();

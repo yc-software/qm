@@ -310,6 +310,17 @@ test("the agent cannot supply credentials or extra fields", async () => {
   }
 });
 
+test("an explicit account Composio does not know is refused without reporting a failure", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  const f = await fixture();
+  f.replies.push(new Response("not found", { status: 404 }));
+  const result = await f.send({ url: "https://gmail.googleapis.com/gmail/v1/users/me/profile", accountId: "ca_gone" });
+  assert.deepEqual([result.status, result.data], [403, { error: "connection_not_authorized" }]);
+  assert.equal(f.calls.length, 1);
+  assert.equal(logged.length, 0, logged.join("\n"));
+});
+
 test("Composio failures surface cause and provider status without retry advice for writes", async () => {
   const f = await fixture();
   f.replies.push(accounts(gmail), new Response("Request Entity Too Large", { status: 413 }));
