@@ -7,6 +7,7 @@ import {
   type ModelGatewayTransportConfig,
 } from "../../model/provider-endpoints.ts";
 import type { ModelRoute } from "../../model/model-route.ts";
+import { resolveModel } from "../../model/pi-models.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { reportFailure } from "../../util/errors.ts";
@@ -54,28 +55,30 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
 }
 
 async function listModels(ctx: ApiCtx, gateway: ModelGatewayTransportConfig | undefined): Promise<void> {
-  const { modelCatalog } = await runtimeConfigBody(ctx, ctx.capability!.scopeId);
-  const data: Array<{ id: string; object: "model"; owned_by: string; endpoints?: string[] }> = [];
-  for (const id of Object.keys(gateway?.models ?? {}))
-    if (modelCatalog[id]?.billing !== "org_key") data.push({ id, object: "model", owned_by: "gateway" });
-  for (const [id, meta] of Object.entries(modelCatalog))
-    if (!data.some((model) => model.id === id))
-      data.push({
+  const { models } = await runtimeConfigBody(ctx, ctx.capability!.scopeId);
+  const ids = [...new Set([...Object.keys(gateway?.models ?? {}), ...models])];
+  const routes = await Promise.all(ids.map((id) => companyRoute(ctx, id)));
+  const data = ids.flatMap((id, i) => {
+    const route = routes[i];
+    if (gateway && Object.hasOwn(gateway.models, id) && route?.billing !== "org_key")
+      return [{ id, object: "model", owned_by: "gateway" }];
+    if (!route) return [];
+    return [
+      {
         id,
         object: "model",
-        owned_by: meta.billing === "org_key" ? "organization" : "gateway",
+        owned_by: route.billing === "org_key" ? "organization" : "gateway",
         endpoints: ["/v1/chat/completions"],
-      });
+      },
+    ];
+  });
   sendJson(ctx.res, 200, { object: "list", data });
 }
 
 async function companyRoute(ctx: ApiCtx, modelId: string): Promise<ModelRoute | undefined> {
-  try {
-    const routes = ctx.deps.modelRoutes;
-    return routes?.servable(await routes.route(modelId));
-  } catch {
-    return undefined;
-  }
+  const routes = ctx.deps.modelRoutes;
+  if (!routes || !resolveModel(modelId)) return undefined;
+  return routes.servable(await routes.route(modelId));
 }
 
 async function complete(ctx: ApiCtx, route: ModelRoute, input: Record<string, unknown>): Promise<void> {

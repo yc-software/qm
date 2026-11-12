@@ -125,7 +125,7 @@ export async function completeChatRequest(
     model: route.modelId,
     choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: {
-      prompt_tokens: result.usage.input,
+      prompt_tokens: result.usage.input + result.usage.cacheRead + result.usage.cacheWrite,
       completion_tokens: result.usage.output,
       total_tokens: result.usage.totalTokens,
     },
