@@ -16,7 +16,7 @@ import { testTenant as tenant } from "./support/test-tenant.ts";
 const modelContext = async (sessions: SessionStore, sessionId: string) =>
   forModelContext((await sessions.getContextWindow(sessionId)).items);
 
-async function fixture() {
+async function fixture(keepPercent: number | null = null) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("recovery", "dm", "personal:test");
   const writer = { sessionId: session.id };
@@ -35,6 +35,7 @@ async function fixture() {
     errors: createPostgresErrorLog(testDatabaseUrl()),
     agent,
     maxContextTokens: 500,
+    config: { getCompactionKeepPercent: () => keepPercent },
   } as unknown as OrchestratorDeps);
   const input = {
     tenant,
@@ -59,6 +60,19 @@ test("mandatory summarizer failure recovers instead of wedging the pending turn"
 async function refresh(f: Awaited<ReturnType<typeof fixture>>) {
   f.input.visibleHistory = await modelContext(f.sessions, f.input.session.id);
 }
+
+test("the org compaction keep percent sets how much recent history recovery keeps", async () => {
+  const kept = async (percent: number | null) => {
+    const f = await fixture(percent);
+    for (let i = 0; i < 30; i++)
+      await f.sessions.append(f.input.writer, { kind: "UserMessage", text: `note ${i} `.repeat(5) });
+    await refresh(f);
+    return estimateHistoryTokens((await f.compaction.compactRecent(f.input)).slice(1));
+  };
+  const [low, standard, high] = [await kept(20), await kept(null), await kept(60)];
+  assert.ok(low < standard && standard < high);
+  assert.ok(standard <= 200 && high <= 300 && low <= 100);
+});
 
 test("recent recovery preserves a fitting saved summary without a model call", async () => {
   const f = await fixture();

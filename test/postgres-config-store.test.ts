@@ -27,6 +27,7 @@ const TABLES = [
   "base_model_configs",
   "browse_provider_configs",
   "browse_max_steps_configs",
+  "compaction_keep_percent_configs",
   "deployment_identity",
 ];
 

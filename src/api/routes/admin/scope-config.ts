@@ -261,6 +261,7 @@ const SETTINGS_RESOURCES = {
     "individualModelAuth",
     "memoryEmbeddingModel",
     "browseMaxSteps",
+    "compactionKeepPercent",
   ],
   credentials: [],
   connectors: ["connectors"],

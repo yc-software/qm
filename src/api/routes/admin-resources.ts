@@ -654,6 +654,34 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "compaction-keep-percent",
+    kind: "string",
+    target: "org",
+    clearable: true,
+    label:
+      "Percent of the history budget compaction keeps verbatim, 10-60 (empty restores the default of 40). Lower keeps less recent history verbatim but compacts less often and costs less.",
+    readKey: "compactionKeepPercent",
+    get: (deps, scope) => deps.config!.getCompactionKeepPercent(scope),
+    apply: generic<number | null>(
+      (body, { scope }) => {
+        const bad = orgOnly(scope, "the compaction keep percent is org-wide");
+        if (bad) return bad;
+        const raw = (body as { percent?: unknown }).percent;
+        if (raw === undefined || raw === null || raw === "") return { value: null };
+        let percent = NaN;
+        if (typeof raw === "number") percent = raw;
+        else if (typeof raw === "string") percent = Number(raw.trim());
+        if (!Number.isInteger(percent) || percent < 10 || percent > 60) {
+          return {
+            error: "compaction-keep-percent requires { percent: integer 10-60 } (empty clears to the default of 40)",
+          };
+        }
+        return { value: percent };
+      },
+      (deps, scope, percent) => deps.config!.setCompactionKeepPercent(scope, percent),
+    ),
+  },
+  {
     id: "spend-limit",
     kind: "custom",
     target: "any",

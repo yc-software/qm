@@ -1,5 +1,6 @@
 import type { ScopeId, Session } from "../../types.ts";
-import { parseScopeId } from "../../types.ts";
+import { parseScopeId, scopeId } from "../../types.ts";
+import { orgId } from "../../config.ts";
 import type { SessionWriter } from "../../sessions/session-store.ts";
 import { contextSummary } from "../../sessions/session-store.ts";
 import {
@@ -88,7 +89,10 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return parsed.kind === "group" && deps.managedGroups?.recognizes(parsed.ref) === true;
   };
 
-  const keepRecentTokenFraction = COMPACT_SOFT_FRACTION - COMPACTION_HEADROOM_FRACTION;
+  const keepRecentTokenFraction = (): number => {
+    const percent = deps.config.getCompactionKeepPercent(scopeId("org", orgId()));
+    return percent === null ? COMPACT_SOFT_FRACTION - COMPACTION_HEADROOM_FRACTION : percent / 100;
+  };
 
   async function summarizeForCompaction(
     input: Omit<CompactionInput, "writer">,
@@ -97,8 +101,9 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     if (isManagedGroupScope(input.scopeId)) return null;
     if (!deps.agent.compactHistory) return null;
     const maxContextTokens = historyBudgetFor(input);
-    const reuseBudgetTokens = Math.floor(maxContextTokens * keepRecentTokenFraction);
-    const plan = planCompaction(input.visibleHistory, maxContextTokens, keepRecentTokenFraction, reuseBudgetTokens);
+    const keepFraction = keepRecentTokenFraction();
+    const reuseBudgetTokens = Math.floor(maxContextTokens * keepFraction);
+    const plan = planCompaction(input.visibleHistory, maxContextTokens, keepFraction, reuseBudgetTokens);
     if (!plan || !plan.toSummarize.length) return null;
 
     input.cancel?.throwIfAborted();
@@ -176,7 +181,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
 
   async function compactRecent(input: CompactionInput, failure?: string): Promise<Item[]> {
     input.cancel?.throwIfAborted();
-    const budget = Math.floor(historyBudgetFor(input) * keepRecentTokenFraction);
+    const budget = Math.floor(historyBudgetFor(input) * keepRecentTokenFraction());
     const prior = input.visibleHistory.findLast((entry) => contextSummary(entry));
     const rest = input.visibleHistory.filter((entry) => !contextSummary(entry));
     const header = failure ? `${RECENT_NOTICE}\nThe summary call failed: ${failure}` : RECENT_NOTICE;

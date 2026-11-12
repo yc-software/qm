@@ -28,6 +28,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
     sessions,
     errors: createPostgresErrorLog(testDatabaseUrl()),
     maxContextTokens: 400,
+    config: { getCompactionKeepPercent: () => null },
     agent: { compactHistory: async () => "Earlier work." },
   } as unknown as OrchestratorDeps);
   for (let round = 0; round < 2; round++) {
@@ -64,6 +65,7 @@ test("background compaction cannot revive an older goal over one closed while it
     sessions,
     errors: createPostgresErrorLog(testDatabaseUrl()),
     maxContextTokens: 400,
+    config: { getCompactionKeepPercent: () => null },
     agent: {
       compactHistory: async () => {
         started.resolve();
