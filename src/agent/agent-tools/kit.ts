@@ -10,8 +10,7 @@ import type { ToolContextRef, AgentToolsOptions } from "../agent-tools.ts";
 import { createRecorder } from "./record.ts";
 
 export function blockedForApprovalText(reason: string): string {
-  const expires = new Date(Date.now() + APPROVAL_LIFETIME_MS).toISOString().slice(0, 16);
-  return `[blocked: needs human approval] ${reason}. If nobody answers the card by ${expires} UTC, it expires and can no longer be approved.`;
+  return `[blocked: needs human approval] ${reason}. If nobody answers the card within ${APPROVAL_LIFETIME_MS / 60_000} minutes, it expires and can no longer be approved.`;
 }
 
 export function text(s: string) {
