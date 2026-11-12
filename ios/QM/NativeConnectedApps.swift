@@ -228,7 +228,7 @@ struct NativeConnectedApps: View {
     QMList {
       if model.connecting {
         VStack(alignment: .leading, spacing: 10) {
-          NativeActionLabel(title: "Connect app", busyTitle: "Connecting app...", busy: true)
+          NativeActionLabel(title: "Connect app", busyTitle: "Connecting app…", busy: true)
           NativeLoadingRail()
         }
       }
@@ -254,7 +254,7 @@ struct NativeConnectedApps: View {
                 removing = account
               } label: {
                 NativeActionLabel(
-                  title: "Disconnect", busyTitle: "Disconnecting...",
+                  title: "Disconnect", busyTitle: "Disconnecting…",
                   busy: model.disconnecting == account.id)
               }
             }
@@ -278,8 +278,8 @@ struct NativeConnectedApps: View {
         if model.loading {
           NativeCatalogLoading(
             label: !model.query.isEmpty
-              ? "Searching apps..."
-              : model.loadingMore ? "Loading more apps..." : "Loading apps...")
+              ? "Searching apps…"
+              : model.loadingMore ? "Loading more apps…" : "Loading apps…")
         } else if model.nextCursor != nil && model.query.isEmpty {
           Button("Load more apps") { Task { await model.load(more: true) } }.disabled(model.busy)
         }

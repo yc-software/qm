@@ -89,7 +89,7 @@ struct NativeAppsView: View {
         }
       }
       if loading && apps.isEmpty {
-        NativeAppCollectionLoading(label: "Loading apps...")
+        NativeAppCollectionLoading(label: "Loading apps…")
       } else if filtered.isEmpty && !loading && error == nil {
         if !query.isEmpty {
           ContentUnavailableView.search(text: query)
@@ -161,7 +161,7 @@ struct NativeAppDetail: View {
             editingName = true
           } label: {
             NativeActionLabel(
-              title: "Edit display name", busyTitle: "Saving...",
+              title: "Edit display name", busyTitle: "Saving…",
               busy: busy && mutationAction == "display-name")
           }
           Button {
@@ -169,7 +169,7 @@ struct NativeAppDetail: View {
             editingSlug = true
           } label: {
             NativeActionLabel(
-              title: "Change app URL", busyTitle: "Saving...",
+              title: "Change app URL", busyTitle: "Saving…",
               busy: busy && mutationAction == "name")
           }
           if app.ownerScopeId == "personal:\(user)" {
@@ -180,7 +180,7 @@ struct NativeAppDetail: View {
           } label: {
             VStack(alignment: .leading, spacing: 4) {
               NativeActionLabel(
-                title: "Allowed embedding sites", busyTitle: "Saving...",
+                title: "Allowed embedding sites", busyTitle: "Saving…",
                 busy: busy && mutationAction == "embed-ancestors")
               Text(
                 (app.embedAncestors ?? []).isEmpty
@@ -195,7 +195,7 @@ struct NativeAppDetail: View {
           } label: {
             NativeActionLabel(
               title: app.status == "archived" ? "Restore deployment" : "Archive deployment",
-              busyTitle: mutationAction == "restore" ? "Restoring..." : "Archiving...",
+              busyTitle: mutationAction == "restore" ? "Restoring…" : "Archiving…",
               busy: busy && (mutationAction == "restore" || mutationAction == "archive"))
           }
         }.disabled(busy)
@@ -213,7 +213,7 @@ struct NativeAppDetail: View {
         }
         if app.versions?.isEmpty != false && error == nil {
           if loader.loading || current == nil {
-            NativeAppCollectionLoading(label: "Loading version history...")
+            NativeAppCollectionLoading(label: "Loading version history…")
           } else {
             Text("No version history available.").foregroundStyle(.secondary)
           }
@@ -423,7 +423,7 @@ struct NativeAppPermissions: View {
       }
       Section("People with access") {
         if model.loading && model.grants.isEmpty {
-          NativePeopleSearchLoading(label: "Loading access...")
+          NativePeopleSearchLoading(label: "Loading access…")
         } else if model.loaded && model.grants.isEmpty && model.error == nil {
           Text("No one else has access.").foregroundStyle(.secondary)
         }
@@ -432,7 +432,7 @@ struct NativeAppPermissions: View {
             Text(grant.scope)
             Spacer()
             if model.savingScope == grant.scope {
-              NativeActionLabel(title: "Access", busyTitle: "Saving...", busy: true)
+              NativeActionLabel(title: "Access", busyTitle: "Saving…", busy: true)
             } else {
               Menu(grant.permission == "write" ? "Can manage" : "Can view") {
                 Button("Can view") { pending = (grant.scope, "view") }
@@ -468,7 +468,7 @@ struct NativeAppPermissions: View {
             pending = ("personal:\(selected.id)", access)
           } label: {
             NativeActionLabel(
-              title: "Grant access", busyTitle: "Saving...",
+              title: "Grant access", busyTitle: "Saving…",
               busy: model.savingScope == "personal:\(selected.id)")
           }.disabled(!model.loaded)
         }
@@ -540,7 +540,7 @@ struct NativeAppEmbedSites: View {
               if error == nil { dismiss() }
             }
           } label: {
-            NativeActionLabel(title: "Save", busyTitle: "Saving...", busy: busy, compact: true)
+            NativeActionLabel(title: "Save", busyTitle: "Saving…", busy: busy, compact: true)
           }.disabled(busy)
         }
       }.interactiveDismissDisabled(busy)

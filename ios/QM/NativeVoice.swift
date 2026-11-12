@@ -532,7 +532,9 @@ final class NativeVoiceModel: NSObject {
           flushEvents()
         }
       }
-    } catch {}
+    } catch {
+      Log.background.failure("Following voice hand-off events", error)
+    }
     var failures = 0
     while current == revision && !Task.isCancelled && failures < 3
       && latest.map({ $0.result == nil && $0.status != "done" && $0.status != "failed" }) ?? true

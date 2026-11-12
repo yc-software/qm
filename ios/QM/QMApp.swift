@@ -349,7 +349,7 @@ struct RootView: View {
         Button {
           Task { await model.restore() }
         } label: {
-          NativeActionLabel(title: "Try again", busyTitle: "Connecting...", busy: model.loading)
+          NativeActionLabel(title: "Try again", busyTitle: "Connecting…", busy: model.loading)
         }.disabled(model.loading)
         Button("Change workspace") { choosingWorkspace = true }
       }
@@ -374,7 +374,7 @@ struct RootView: View {
           Button {
             Task { await model.load() }
           } label: {
-            NativeActionLabel(title: "Try again", busyTitle: "Loading...", busy: model.loading)
+            NativeActionLabel(title: "Try again", busyTitle: "Loading…", busy: model.loading)
           }.disabled(model.loading)
         }
         .accessibilityIdentifier("conversationLoadError")
@@ -468,7 +468,7 @@ struct RootView: View {
       Button {
         Task { await model.loadMore() }
       } label: {
-        NativeActionLabel(title: "Load more", busyTitle: "Loading...", busy: model.loadingMore)
+        NativeActionLabel(title: "Load more", busyTitle: "Loading…", busy: model.loadingMore)
           .frame(maxWidth: .infinity, minHeight: 44)
       }
       .disabled(model.loadingMore)
@@ -625,7 +625,7 @@ private struct ConversationErrorBanner: View {
           Button {
             Task { await model.restore() }
           } label: {
-            NativeActionLabel(title: "Reload", busyTitle: "Loading...", busy: model.loading)
+            NativeActionLabel(title: "Reload", busyTitle: "Loading…", busy: model.loading)
           }.disabled(model.loading)
         }
         .padding().frame(maxWidth: .infinity).background(.regularMaterial)

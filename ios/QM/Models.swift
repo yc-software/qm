@@ -117,7 +117,8 @@ struct Conversation: Codable, Identifiable, Hashable {
     if let channelName, !channelName.isEmpty {
       return ScopeKind(scopeId: scopeId) == .channel ? "#\(channelName)" : channelName
     }
-    return surface == "web" ? "Web chat" : "Direct message"
+    if surface == "web" { return "Web chat" }
+    return surface == "slack" ? "Direct message" : "Untitled chat"
   }
   var needsInput: Bool { awaitingInput == true || (subagents?.waiting ?? 0) > 0 }
   var isSubagent: Bool { parentSessionId?.isEmpty == false }

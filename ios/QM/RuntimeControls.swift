@@ -140,7 +140,7 @@ struct RuntimeControlsView: View {
         }
       } else if busy {
         VStack(alignment: .leading, spacing: 22) {
-          Text("Loading models...").font(.subheadline).foregroundStyle(.secondary)
+          Text("Loading models…").font(.subheadline).foregroundStyle(.secondary)
           ForEach(0..<3) { row in
             VStack(alignment: .leading, spacing: 10) {
               NativeSkeletonLine(fraction: 0.45, height: 14)

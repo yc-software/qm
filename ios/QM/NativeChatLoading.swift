@@ -9,7 +9,7 @@ struct NativeChatHistoryPlaceholder: View {
         .modifier(NativeLoadingPulse(phaseOffset: 0.45))
       NativeChatMessagePlaceholder(isUser: true)
         .modifier(NativeLoadingPulse(phaseOffset: 0.9))
-      Text("Loading conversation...")
+      Text("Loading conversation…")
         .font(.footnote).foregroundStyle(.secondary)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -56,7 +56,7 @@ struct NativeChatUploadStatus: View {
         VStack(alignment: .leading, spacing: 4) {
           Text(filename).font(.footnote.weight(.medium))
             .lineLimit(1).truncationMode(.middle)
-          Text("Uploading...").font(.caption).foregroundStyle(.secondary)
+          Text("Uploading…").font(.caption).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

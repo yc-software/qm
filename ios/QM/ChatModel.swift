@@ -277,7 +277,9 @@ final class ChatModel {
         "api/runtime-config", query: [.init(name: "scopeId", value: conversation.scopeId)])
       guard !Task.isCancelled else { return }
       runtimeConfiguration = configuration
-    } catch {}
+    } catch {
+      Log.background.failure("Loading runtime settings", error)
+    }
   }
 
   func selectRuntime(_ selection: RuntimeSelection?) {

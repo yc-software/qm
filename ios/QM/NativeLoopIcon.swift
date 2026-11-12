@@ -85,7 +85,7 @@ struct NativeLoopIconPicker: View {
     NavigationStack {
       QMList {
         if model.busy {
-          NativeActionLabel(title: "", busyTitle: "Saving icon...", busy: true)
+          NativeActionLabel(title: "", busyTitle: "Saving icon…", busy: true)
         }
         ForEach(NativeLoopIcon.choices) { choice in
           Button {

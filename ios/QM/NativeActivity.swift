@@ -170,7 +170,7 @@ struct NativeActivityDetails: View {
           loading = true
         } label: {
           NativeActionLabel(
-            title: "Load full output", busyTitle: "Loading output...", busy: loading)
+            title: "Load full output", busyTitle: "Loading output…", busy: loading)
         }
         .font(.footnote).disabled(loading)
         if let error { Text(error).font(.caption).foregroundStyle(.red) }
@@ -181,9 +181,8 @@ struct NativeActivityDetails: View {
       let generation = client.generation
       defer { loading = false }
       do {
-        let collection = entry.itemKind == nil ? "entries" : "items"
         let response: TranscriptEntryResponse = try await client.fetch(
-          "api/sessions/\(sessionID.apiComponent)/\(collection)/\(seq)")
+          "api/sessions/\(sessionID.apiComponent)/items/\(seq)")
         try Task.checkCancellation()
         guard client.generation == generation else { return }
         fullEntry = response.entry

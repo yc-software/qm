@@ -393,7 +393,7 @@ struct ChatView: View {
           HStack {
             NativeActionLabel(
               title: inheritedExpanded ? "Hide earlier history" : "Show earlier history",
-              busyTitle: "Loading earlier history...", busy: model.loadingInherited)
+              busyTitle: "Loading earlier history…", busy: model.loadingInherited)
             Spacer()
             if !model.loadingInherited {
               Image(systemName: inheritedExpanded ? "chevron.up" : "chevron.down")
@@ -423,7 +423,7 @@ struct ChatView: View {
           Task { await decide(approval, approved: false) }
         } label: {
           NativeActionLabel(
-            title: "Deny", busyTitle: "Denying...",
+            title: "Deny", busyTitle: "Denying…",
             busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == false)
         }
         Spacer()
@@ -431,7 +431,7 @@ struct ChatView: View {
           approvalToConfirm = approval
         } label: {
           NativeActionLabel(
-            title: "Approve once", busyTitle: "Approving...",
+            title: "Approve once", busyTitle: "Approving…",
             busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == true)
         }.buttonStyle(.borderedProminent)
       }.disabled(model.sending)
@@ -512,7 +512,7 @@ struct ChatView: View {
             NativeActionLabel(
               title: "Load earlier messages",
               busyTitle: targetSequence != nil
-                ? "Loading selected message..." : "Loading earlier messages...",
+                ? "Loading selected message…" : "Loading earlier messages…",
               busy: model.loadingEarlier)
           }.disabled(model.loadingEarlier)
         }
@@ -678,7 +678,7 @@ struct ChatView: View {
             Button {
               Task { await retryHistory() }
             } label: {
-              NativeActionLabel(title: "Retry", busyTitle: "Retrying...", busy: retryingHistory)
+              NativeActionLabel(title: "Retry", busyTitle: "Retrying…", busy: retryingHistory)
             }.disabled(retryingHistory)
           }
         }
@@ -697,7 +697,7 @@ struct ChatView: View {
             Task { await model.cancelGoal() }
           } label: {
             NativeActionLabel(
-              title: "Cancel goal", busyTitle: "Cancelling...", busy: model.cancellingGoal
+              title: "Cancel goal", busyTitle: "Cancelling…", busy: model.cancellingGoal
             ).font(.footnote)
           }
           .disabled(model.cancellingGoal)

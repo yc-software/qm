@@ -98,12 +98,13 @@ export function appReturnPath(body: Record<string, unknown>, returnTo: string): 
   return `/api/app-return?${new URLSearchParams({ state: body.state, returnTo })}`;
 }
 
-function appReturn(ctx: ApiCtx): void {
+function appReturn(ctx: BaseCtx): void {
   ctx.res.setHeader("Cache-Control", "no-store");
   ctx.res.setHeader("Referrer-Policy", "no-referrer");
   const state = ctx.url.searchParams.get("state");
   const returnTo = safeReturnTo(ctx.url.searchParams.get("returnTo"));
-  if (!state || !returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_url" });
+  if (!state) return sendJson(ctx.res, 400, { error: "invalid_return_state" });
+  if (!returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_url" });
   const target = new URL(returnTo, "http://x");
   const kept = [
     ...[...target.searchParams].filter(([key]) => APP_RETURN_CONTEXT.includes(key)),
@@ -407,7 +408,7 @@ async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
   const provider = ctx.params.provider!;
   const body = isObj(ctx.body) ? ctx.body : {};
   const returnTo = appReturnPath(body, safeReturnTo(body.returnTo) ?? "/keychain");
-  if (!returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_url" });
+  if (!returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_state" });
   return startOAuth(ctx, {
     provider,
     principalId: ctx.actor.p,
@@ -642,7 +643,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: browserOAuthStart,
   },
-  { method: "GET", path: "/v1/app-return", browser: true, actor: "person", auth: "source", handle: appReturn },
+  { method: "GET", path: "/v1/app-return", auth: "public", tenant: "none", handle: appReturn },
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
     actor: "query.principalId",

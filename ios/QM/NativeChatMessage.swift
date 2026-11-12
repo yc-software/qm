@@ -72,7 +72,7 @@ struct NativeChatMessageView: View {
         }
         if forking {
           NativeActionLabel(
-            title: "Fork from here", busyTitle: "Forking conversation...", busy: true
+            title: "Fork from here", busyTitle: "Forking conversation…", busy: true
           )
           .font(.footnote).foregroundStyle(.secondary)
         }

@@ -142,8 +142,8 @@ final class WorkspacePickerTests: XCTestCase {
       AppModel.workspaceURL("qm.example.com")?.absoluteString, "https://qm.example.com")
     #if DEBUG
       XCTAssertEqual(
-        AppModel.workspaceURL("10.16.80.90:8113")?.absoluteString,
-        "http://10.16.80.90:8113")
+        AppModel.workspaceURL("10.0.0.2:8113")?.absoluteString,
+        "http://10.0.0.2:8113")
       XCTAssertEqual(
         AppModel.workspaceURL("http://192.168.1.20:8113/")?.absoluteString,
         "http://192.168.1.20:8113")

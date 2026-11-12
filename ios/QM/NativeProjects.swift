@@ -441,7 +441,7 @@ struct ProjectDetailView: View {
           Task { await model.loadConversations(context.scopeId, more: true) }
         } label: {
           NativeActionLabel(
-            title: "Load more", busyTitle: "Loading...",
+            title: "Load more", busyTitle: "Loading…",
             busy: model.loadingMore == context.scopeId
           )
           .frame(maxWidth: .infinity, minHeight: 44)

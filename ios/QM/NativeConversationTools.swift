@@ -24,7 +24,7 @@ struct NativeConversationTools: View {
             Task { await model.loadEarlier() }
           } label: {
             NativeActionLabel(
-              title: "Load earlier fork points", busyTitle: "Loading earlier fork points...",
+              title: "Load earlier fork points", busyTitle: "Loading earlier fork points…",
               busy: model.loadingEarlier)
           }.disabled(model.loadingEarlier)
         }
@@ -33,7 +33,7 @@ struct NativeConversationTools: View {
         } label: {
           if model.forking {
             NativeActionLabel(
-              title: "Fork conversation", busyTitle: "Forking conversation...", busy: true)
+              title: "Fork conversation", busyTitle: "Forking conversation…", busy: true)
           } else {
             Label("Fork conversation", systemImage: "arrow.triangle.branch")
           }
@@ -129,7 +129,7 @@ struct NativeConversationShare: View {
                 .modifier(NativeLoadingPulse())
                 .accessibilityHidden(true)
             }
-            Text(busy ? "Creating link..." : result == nil ? "Create link" : "Create new snapshot")
+            Text(busy ? "Creating link…" : result == nil ? "Create link" : "Create new snapshot")
               .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
           }
@@ -186,7 +186,7 @@ struct NativeActivityView: View {
           Task { await model.loadEarlier() }
         } label: {
           NativeActionLabel(
-            title: "Load earlier activity", busyTitle: "Loading earlier activity...",
+            title: "Load earlier activity", busyTitle: "Loading earlier activity…",
             busy: model.loadingEarlier)
         }.disabled(model.loadingEarlier)
       }
@@ -237,7 +237,7 @@ struct NativeBackgroundView: View {
     QMList {
       if loading, work == nil {
         NativeActionLabel(
-          title: "Background work", busyTitle: "Loading background work...", busy: true
+          title: "Background work", busyTitle: "Loading background work…", busy: true
         )
         .listRowSeparator(.hidden)
       }
@@ -324,7 +324,7 @@ struct NativeProcessOutput: View {
         } label: {
           NativeActionLabel(
             title: "Refresh output",
-            busyTitle: state.isEmpty ? "Loading output..." : "Refreshing output...", busy: busy)
+            busyTitle: state.isEmpty ? "Loading output…" : "Refreshing output…", busy: busy)
         }.disabled(busy)
       }.padding()
     }
@@ -615,7 +615,7 @@ struct NativeSideChatsView: View {
   var body: some View {
     QMList {
       if model.loading, model.chats == nil {
-        NativeActionLabel(title: "Side chats", busyTitle: "Loading side chats...", busy: true)
+        NativeActionLabel(title: "Side chats", busyTitle: "Loading side chats…", busy: true)
           .listRowSeparator(.hidden)
       }
       if let error = model.error { Text(error).foregroundStyle(.red) }
