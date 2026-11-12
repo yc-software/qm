@@ -280,6 +280,7 @@ export function screenedFields(
     surface?: string;
     conversation: { kind: string };
   },
+  homeChannel: string | undefined,
 ) {
   const dm = request.conversation.kind === "dm";
   const destinations = (request.deliveryCandidates ?? []).map((c) => c.label);
@@ -289,6 +290,7 @@ export function screenedFields(
     place: {
       ...shownPlace(request.surface, request.gatewayContext, dm),
       ...(destinations.length ? { destinations } : {}),
+      ...(homeChannel ? { homeChannel } : {}),
     },
     overheard: request.overheard ?? [],
     attachments: request.attachments ?? [],
@@ -298,8 +300,7 @@ export function screenedFields(
 
 async function buildInboundScreen(turn: InboundScreenTurn) {
   const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
-  const screened = screenedFields(input);
-  const place = { ...screened.place, ...(turn.homeChannelName ? { homeChannel: turn.homeChannelName } : {}) };
+  const screened = screenedFields(input, turn.homeChannelName);
   const blobTransfer = deps.blobTransfer;
   let overheard: OverheardEntryPayload[] = [];
   if (screenInbound) {
@@ -353,7 +354,9 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(screened.conversationHeader.trim()
           ? [{ source: "conversation-header", content: screened.conversationHeader }]
           : []),
-        ...(Object.keys(place).length ? [{ source: "conversation-metadata", content: JSON.stringify(place) }] : []),
+        ...(Object.keys(screened.place).length
+          ? [{ source: "conversation-metadata", content: JSON.stringify(screened.place) }]
+          : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,
         ...screened.inboundNotes.map((note) => ({ source: "inbound-file-note", content: note })),

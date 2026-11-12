@@ -645,11 +645,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         thread: conversation.threadRef,
         ...(input.runId ? { runId: input.runId } : {}),
       } as const;
+      const homeChannel =
+        conversation.kind === "group" && conversation.channelRef
+          ? await deps.managedGroups
+              ?.slackChannel?.(conversation.channelRef)
+              .catch(swallowAs("orchestrator: project home channel read", undefined))
+          : undefined;
       const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        canonicalJson(screenedFields(approvalRecord.request)) === canonicalJson(screenedFields(input));
+        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
+          canonicalJson(screenedFields(input, homeChannel?.channelName));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
@@ -680,12 +687,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             origin: input.origin.kind,
             ...context,
           });
-      const homeChannel =
-        conversation.kind === "group" && conversation.channelRef
-          ? await deps.managedGroups
-              ?.slackChannel?.(conversation.channelRef)
-              .catch(swallowAs("orchestrator: project home channel read", undefined))
-          : undefined;
       const { flaggedScreenedInput, inputUnscreened } = await screenInboundInput({
         deps,
         input,
@@ -733,6 +734,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               sessionId: session.id,
               command: "security-screen",
               reason: heldReason,
+              homeChannel: homeChannel?.channelName,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
