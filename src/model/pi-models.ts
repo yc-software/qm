@@ -283,9 +283,13 @@ export function resolveDeploymentModel(id: string): PiModel | undefined {
 }
 
 function customPiModel(custom: CustomRuntimeModel): PiModel {
-  const model = custom as unknown as PiModel;
-  if (model.api !== "anthropic-messages") return model;
   const known = resolveBuiltinModel(custom.upstreamId);
+  const anthropic = custom.api === "anthropic-messages";
+  const model =
+    known && (known.api === "anthropic-messages") === anthropic
+      ? ({ ...custom, input: [...known.input] } as unknown as PiModel)
+      : (custom as unknown as PiModel);
+  if (!anthropic) return model;
   if (known?.api !== "anthropic-messages" || !modelSupportsAdaptiveThinking(known)) return model;
   return {
     ...model,

@@ -1,5 +1,5 @@
 import { loadPersonalModelAuth } from "../../core/individual-auth-routing.ts";
-import { BrowserCompletionError, completeBrowserRequest } from "../../model/browser-completion.ts";
+import { ChatCompletionError, completeChatRequest } from "../../model/chat-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { routeLabel } from "../../model/model-route.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
@@ -70,10 +70,15 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     sendJson(
       res,
       200,
-      await completeBrowserRequest(route, input, AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)])),
+      await completeChatRequest(
+        route,
+        input,
+        AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+        "browser",
+      ),
     );
   } catch (error) {
-    if (error instanceof BrowserCompletionError) return sendJson(res, error.status, { error: error.message });
+    if (error instanceof ChatCompletionError) return sendJson(res, error.status, { error: error.message });
     reportFailure("browser model request", error, capability.scopeId);
     if (!res.destroyed) sendJson(res, 502, { error: `the browser model request failed: ${errMessage(error)}` });
   } finally {

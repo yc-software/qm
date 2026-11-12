@@ -7,7 +7,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-export class BrowserCompletionError extends Error {
+export class ChatCompletionError extends Error {
   readonly status: number;
   constructor(message: string, status = 400) {
     super(message);
@@ -15,19 +15,26 @@ export class BrowserCompletionError extends Error {
   }
 }
 
-export async function completeBrowserRequest(route: ModelRoute, body: Record<string, unknown>, signal: AbortSignal) {
+export async function completeChatRequest(
+  route: ModelRoute,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  purpose: "browser" | "sandbox",
+) {
   const { model } = route;
   if (body.tools || body.tool_choice || body.parallel_tool_calls || !Array.isArray(body.messages))
-    throw new BrowserCompletionError("Unsupported browser completion request");
+    throw new ChatCompletionError(
+      "Only plain chat completions are supported here: no tools or tool_choice, and a messages array",
+    );
   const context: Context = { messages: [] };
   const systems: string[] = [];
   for (const raw of body.messages) {
     const message = object(raw);
     if (!message || !["system", "developer", "user", "assistant"].includes(String(message.role)))
-      throw new BrowserCompletionError("Unsupported browser message");
+      throw new ChatCompletionError("Messages must have role system, developer, user or assistant");
     const content: (TextContent | ImageContent)[] = [];
     const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
-    if (!Array.isArray(parts)) throw new BrowserCompletionError("Invalid browser message content");
+    if (!Array.isArray(parts)) throw new ChatCompletionError("Message content must be a string or an array of parts");
     for (const rawPart of parts) {
       const part = object(rawPart);
       if (part?.type === "text" && typeof part.text === "string") content.push({ type: "text", text: part.text });
@@ -37,9 +44,9 @@ export async function completeBrowserRequest(route: ModelRoute, body: Record<str
           typeof url === "string"
             ? /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/.exec(url)
             : null;
-        if (!match) throw new BrowserCompletionError("Browser screenshots must be inline image data");
+        if (!match) throw new ChatCompletionError("Images must be inline data: URLs (png, jpeg, webp or gif)");
         content.push({ type: "image", mimeType: match[1]!, data: match[2]! });
-      } else throw new BrowserCompletionError("Unsupported browser message content");
+      } else throw new ChatCompletionError("Content parts must be text, or image_url in user messages");
     }
     const text = content
       .filter((part) => part.type === "text")
@@ -62,22 +69,22 @@ export async function completeBrowserRequest(route: ModelRoute, body: Record<str
   const format = object(body.response_format);
   const schema = object(object(format?.json_schema)?.schema);
   if (format && (format.type !== "json_schema" || !schema))
-    throw new BrowserCompletionError("Browser responses require a JSON schema");
+    throw new ChatCompletionError("response_format must be a json_schema with a schema");
   if (schema) {
     context.tools = [
       {
-        name: "browser_result",
-        description: "Return the browser agent's structured result.",
+        name: "structured_result",
+        description: "Return the structured result.",
         parameters: Type.Unsafe(schema),
       },
     ];
-    systems.push("Return your result by calling browser_result exactly once.");
+    systems.push("Return your result by calling structured_result exactly once.");
   }
   context.systemPrompt = systems.join("\n\n");
   const limit = body.max_completion_tokens ?? body.max_tokens ?? 4096;
   if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0)
-    throw new BrowserCompletionError("Invalid browser output token limit");
-  const runtime = await buildModelRuntime(route.keys, route.gateway, "browser");
+    throw new ChatCompletionError("max_tokens must be a positive integer");
+  const runtime = await buildModelRuntime(route.keys, route.gateway, purpose);
   const modelApi = model.api;
   const result = await runtime.completeSimple(model, context, {
     signal,
@@ -86,23 +93,23 @@ export async function completeBrowserRequest(route: ModelRoute, body: Record<str
     onPayload: schema
       ? (raw) => {
           const payload = object(raw);
-          if (!payload) throw new BrowserCompletionError("Invalid model request");
-          let toolChoice: object = { type: "function", name: "browser_result" };
-          if (modelApi === "anthropic-messages") toolChoice = { type: "tool", name: "browser_result" };
+          if (!payload) throw new ChatCompletionError("Invalid model request");
+          let toolChoice: object = { type: "function", name: "structured_result" };
+          if (modelApi === "anthropic-messages") toolChoice = { type: "tool", name: "structured_result" };
           if (modelApi === "openai-completions")
-            toolChoice = { type: "function", function: { name: "browser_result" } };
+            toolChoice = { type: "function", function: { name: "structured_result" } };
           return { ...payload, tool_choice: toolChoice };
         }
       : undefined,
   });
   if (result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "length")
-    throw new BrowserCompletionError(
-      `${routeLabel(route)} could not complete the browser request: ${result.errorMessage ?? result.stopReason}`,
+    throw new ChatCompletionError(
+      `${routeLabel(route)} could not complete the ${purpose} request: ${result.errorMessage ?? result.stopReason}`,
       502,
     );
-  const structured = result.content.find((part) => part.type === "toolCall" && part.name === "browser_result");
+  const structured = result.content.find((part) => part.type === "toolCall" && part.name === "structured_result");
   if (schema && !structured)
-    throw new BrowserCompletionError(`${routeLabel(route)} did not return a structured browser result`, 502);
+    throw new ChatCompletionError(`${routeLabel(route)} did not return a structured result`, 502);
   const text =
     structured?.type === "toolCall"
       ? JSON.stringify(structured.arguments)
@@ -111,7 +118,7 @@ export async function completeBrowserRequest(route: ModelRoute, body: Record<str
           .map((part) => part.text)
           .join("");
   return {
-    id: "browser-completion",
+    id: `${purpose}-completion`,
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model: route.modelId,
