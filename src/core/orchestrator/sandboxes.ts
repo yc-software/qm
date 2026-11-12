@@ -8,10 +8,10 @@ import {
 } from "../../sandbox/sandbox.ts";
 import {
   assertBotMayUseComputer,
+  botMayUseComputers,
   createTurnSandboxAccess,
   preferredBackend,
   type SandboxAccessPlan,
-  type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -89,6 +89,7 @@ interface TurnPool {
   turnAccess: ProvisionOptions;
   scratchKey: () => string;
   holdResource: (handle: SandboxHandle) => Promise<void>;
+  notePersonUse: (handle: SandboxHandle) => Promise<void>;
   prepareTurnFiles: (handle: SandboxHandle) => Promise<void>;
   finishProcess: (handle: SandboxHandle, processId: string) => Promise<void>;
   accessResource: (id: string) => Promise<SandboxAccessPlan>;
@@ -216,6 +217,7 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
     assertDefaultUsable,
     turnAccess,
     holdResource,
+    notePersonUse,
     audit,
     prepareTurnFiles,
     finishProcess,
@@ -239,6 +241,7 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
   });
   slot.handles.push(handle);
   await holdResource(handle);
+  await notePersonUse(handle);
   audit("scoped.provision_ready", handle, { coldStart: handle.coldStart, eager });
   await Promise.all([
     prepareTurnFiles(handle),
@@ -297,7 +300,7 @@ async function openResource(
   authorize?: (access: SandboxAccessPlan) => void,
 ): Promise<SandboxHandle> {
   const { deps, connectorEnv, egressTokenForTurn, egressTokenForPolicy } = t.ctx;
-  const { pool, writableScopeId, accessResource, holdResource, prepareTurnFiles } = t;
+  const { pool, writableScopeId, accessResource, holdResource, notePersonUse, prepareTurnFiles } = t;
   const access = typeof input === "string" ? await accessResource(input) : input;
   const { resource, crossScope, egress, credentialScopeId } = access;
   const key = `sandbox:${resource.id}`;
@@ -322,6 +325,7 @@ async function openResource(
       });
       slot.handles.push(handle);
       await holdResource(handle);
+      await notePersonUse(handle);
       if (!crossScope) await prepareTurnFiles(handle);
       return handle;
     },
@@ -350,19 +354,23 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   const isolation = session.spawnMeta?.isolation;
   const boundSandboxId = swarmSandboxId ?? isolation?.sandboxId;
-  const swarms = input.botActor ? deps.swarms : undefined;
-  const botMayUse =
-    swarms &&
-    ((resource: SandboxResource) =>
-      swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
+  const botMayUse = input.botActor
+    ? botMayUseComputers(deps.swarms, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id })
+    : undefined;
   const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
     assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
-  const personUsed = new Set<string>();
+  const personUsed = new Map<string, Promise<void>>();
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
     const sandboxId = handle.resourceId ?? boundSandboxId;
-    if (input.botActor || !deps.swarms || !deps.sandboxResources || !sandboxId || personUsed.has(sandboxId)) return;
-    await deps.swarms.notePersonUse(await deps.sandboxResources.get(sandboxId));
-    personUsed.add(sandboxId);
+    const resources = deps.sandboxResources;
+    if (input.botActor || !resources || !sandboxId) return;
+    let noted = personUsed.get(sandboxId);
+    if (!noted) {
+      noted = resources.notePersonUse(sandboxId).then((used) => deps.swarms?.notePersonUse(used));
+      personUsed.set(sandboxId, noted);
+      void noted.catch(() => personUsed.delete(sandboxId));
+    }
+    await noted;
   };
   const turnAccess = {
     env: connectorEnv,
@@ -408,7 +416,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)),
         );
     if (opening) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
-    if (!eager) await notePersonUse(handle);
     return handle;
   };
   const writableScopeId = resolution.writableScopeId;
@@ -424,20 +431,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const resources = deps.sandboxResources!;
     const backend = await preferredBackend(resources, memoryScopeId);
     const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
-    return provisionResource(jobComputerPlan(resource));
+    return provisionResource(await jobComputerPlan(resource));
   };
   const provisionJobSandbox = async (id: string): Promise<SandboxHandle> => {
     const resource = await deps.sandboxResources!.get(id);
-    return resource.jobOnly ? provisionResource(jobComputerPlan(resource)) : provisionResource(id);
+    return resource.jobOnly ? provisionResource(await jobComputerPlan(resource)) : provisionResource(id);
   };
-  const provisionResource = async (
+  const provisionResource = (
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
-  ): Promise<SandboxHandle> => {
-    const handle = await openResource(turnPool, input, authorize);
-    await notePersonUse(handle);
-    return handle;
-  };
+  ): Promise<SandboxHandle> => openResource(turnPool, input, authorize);
   const provisionScratch = (): Promise<SandboxHandle> => openScratch(turnPool);
   const turnSkills = createTurnSkills({
     tenant,
@@ -466,6 +469,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     turnAccess,
     scratchKey,
     holdResource,
+    notePersonUse,
     prepareTurnFiles,
     finishProcess,
     accessResource,

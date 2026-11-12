@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DATABASE_URL:?DATABASE_URL must point at an empty, disposable database}"
+: "${DATABASE_URL:?DATABASE_URL must point at an empty, disposable database as a non-bootstrap superuser}"
+: "${QM_UPGRADE_APP_URL:?QM_UPGRADE_APP_URL must point at the same database as a login that does not own its schema}"
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
@@ -25,12 +26,12 @@ for name in CAPABILITY_SECRET CONNECTOR_SECRET_KEY CORE_SIGNING_SECRET PORTAL_ID
 done
 
 migrate() {
-  local label=$1 dir=$2
+  local label=$1 dir=$2 url=$3
   echo "::group::migrate with $label"
   local log
   log=$(mktemp)
   local status=0
-  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" DATABASE_URL="$DATABASE_URL" "${secrets[@]}" node src/migrate-main.ts) >"$log" 2>&1 || status=$?
+  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" DATABASE_URL="$url" "${secrets[@]}" node src/migrate-main.ts) >"$log" 2>&1 || status=$?
   cat "$log"
   echo "::endgroup::"
   if [ "$status" -ne 0 ]; then
@@ -42,8 +43,16 @@ migrate() {
 echo "Installing published release $base"
 (cd "$worktree" && npm ci --ignore-scripts --no-audit --no-fund && npm run build:connector-sdk) >/dev/null
 
-migrate "$base" "$worktree"
+migrate "$base" "$worktree" "$DATABASE_URL"
 DATABASE_URL="$DATABASE_URL" node "$root/scripts/seed-upgrade-rows.mjs"
-migrate "this checkout" "$root"
-migrate "this checkout (restart)" "$root"
+echo "Handing the $base objects to the app login, as an install by that login would leave them"
+node --input-type=module -e '
+  import pg from "pg";
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  const role = decodeURIComponent(new URL(process.env.QM_UPGRADE_APP_URL).username);
+  await client.query(`REASSIGN OWNED BY CURRENT_USER TO ${client.escapeIdentifier(role)}`);
+  await client.end();'
+migrate "this checkout" "$root" "$QM_UPGRADE_APP_URL"
+migrate "this checkout (restart)" "$root" "$QM_UPGRADE_APP_URL"
 echo "Upgrade from $base applied cleanly."

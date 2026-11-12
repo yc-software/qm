@@ -1,4 +1,5 @@
 import { parseScopeId, type Principal } from "../../../types.ts";
+import { COMPACT_KEEP_PERCENT } from "../../../agent/context-compaction.ts";
 import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
@@ -9,6 +10,7 @@ import {
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
+  HISTORY_BUDGET_DEFAULT_TOKENS,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -261,6 +263,8 @@ const SETTINGS_RESOURCES = {
     "individualModelAuth",
     "memoryEmbeddingModel",
     "browseMaxSteps",
+    "compactionKeepPercent",
+    "historyBudgetTokens",
   ],
   credentials: [],
   connectors: ["connectors"],
@@ -384,6 +388,8 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     modelCatalog: modelCatalogFor(baseModelOptions.map((model) => model.id)),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     memoryEmbeddingOptions: embeddingModelCatalog(),
+    compactionKeepPercentDefault: COMPACT_KEEP_PERCENT.default,
+    historyBudgetTokensDefault: HISTORY_BUDGET_DEFAULT_TOKENS,
   };
 }
 
