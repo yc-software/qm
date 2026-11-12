@@ -6,7 +6,7 @@ import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { sleep } from "../../util/async.ts";
-import { awaitContextOutcome } from "../surface-context-puller.ts";
+import { awaitContextOutcome, SURFACE_FILE_WAIT_MS } from "../surface-context-puller.ts";
 
 const SURFACE_CONTEXT_MAX_MESSAGES = 200;
 const SURFACE_CONTEXT_DEFAULT_MESSAGES = 100;
@@ -162,9 +162,8 @@ function awaitFulfillment(ctx: ApiCtx, requestId: string, channelName: string | 
 }
 
 const FILE_DOWNLOAD_TTL_MS = 5 * 60_000;
-const FILE_FULFILL_WAIT_MS = 120_000;
 function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
-  return awaitOutcome(ctx, requestId, FILE_FULFILL_WAIT_MS, async (result) => {
+  return awaitOutcome(ctx, requestId, SURFACE_FILE_WAIT_MS, async (result) => {
     const { res, capability, secret } = ctx;
     const file = result.file;
     if (!file) {

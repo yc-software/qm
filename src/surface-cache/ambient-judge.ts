@@ -24,6 +24,9 @@ the standing orders decide whether it calls for the assistant.
 Messages marked trigger="true" are new since you last looked — judge those. The rest is earlier
 context, shown only to explain the new ones; never act on the earlier context by itself, and don't
 engage just to repeat what the assistant already said.
+A files="…" attribute names files the message carries. You can't see them; the assistant will if it
+engages. A file posted with no words is still a post, and when the standing orders could concern what
+a file shows, engage — the assistant will look and can stay silent if nothing is needed.
 
 Silence is the default — most chatter needs no reply, and you must NOT jump into conversation between
 other people that doesn't call for the assistant. Decide to ENGAGE only when one of these holds:
@@ -81,10 +84,14 @@ export function ambientWindow(
   return missing.length ? [...missing, ...window].sort((x, y) => (x.ts < y.ts ? -1 : 1)) : window;
 }
 
+export const cachedFileName = (f: NonNullable<CachedMessage["files"]>[number]): string => f.name || f.title || f.fileId;
+
+export const hasContent = (m: CachedMessage): boolean => Boolean(m.text.trim() || m.files?.length);
+
 export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
   const triggers = new Set(batch.messages.map((m) => m.ts));
   const self = batch.self?.mentionId;
-  const visible = batch.recent.filter((m) => !m.deleted && m.text.trim());
+  const visible = batch.recent.filter((m) => !m.deleted && hasContent(m));
   return visible.map((m) => ({
     ts: m.ts,
     ...(m.sub ? { thread: m.sub } : {}),
@@ -93,6 +100,7 @@ export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
     ...(m.authorName ? { authorName: m.authorName } : {}),
     ...(m.authorId ? { authorId: m.authorId } : {}),
     text: resolveMentions(m.text, new Map(Object.entries(m.mentions ?? {}).filter(([id]) => id !== self))),
+    ...(m.files?.length ? { files: m.files.map(cachedFileName) } : {}),
     ...(m.mentions ? { mentions: m.mentions } : {}),
     ...(triggers.has(m.ts) ? { trigger: true } : {}),
   }));

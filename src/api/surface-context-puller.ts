@@ -4,6 +4,7 @@ import { sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
 
 const FULFILL_WAIT_MS = 25_000;
+export const SURFACE_FILE_WAIT_MS = 120_000;
 const FULFILL_POLL_MS = 100;
 
 interface SurfaceContextApp {

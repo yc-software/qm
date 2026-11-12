@@ -1,4 +1,7 @@
-import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { scopeId, type ActorAssertion, type IncomingAttachment, type TurnRequest } from "../types.ts";
+import { MAX_INBOUND_FILES, mimeFromName } from "../core/attachments.ts";
+import { createSurfaceContextPuller, SURFACE_FILE_WAIT_MS } from "./surface-context-puller.ts";
+import type { SurfaceContextResult } from "../reach/reach.ts";
 import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
@@ -11,6 +14,8 @@ import type { CachedMessage } from "../surface-cache/surface-cache.ts";
 import { DEFAULT_ROLLUP_HOURS, type BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import {
   ambientWindow,
+  cachedFileName,
+  hasContent,
   judgeAmbientBatch,
   recentWakeMessages,
   renderAmbientPrompt,
@@ -133,7 +138,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
     const unmentioned = delta.filter((m) => !m.mentionsSelf);
-    const forJudge = unmentioned.filter((m) => m.text.trim());
+    const forJudge = unmentioned.filter(hasContent);
     if (unmentioned.length < delta.length)
       recordJudgment({
         surface,
@@ -224,7 +229,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         surface,
         container,
         decision: "ignore",
-        reason: "no readable text in new messages",
+        reason: "no text or files in new messages",
         ...(tsFrom ? { tsFrom } : {}),
         ...(tsTo ? { tsTo } : {}),
         createdAt: Date.now(),
@@ -290,6 +295,46 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     return slackSurfaceOrigin({ accountId: batch.source.account, teamId: batch.source.workspace, userId });
   }
 
+  const surfaceFiles = createSurfaceContextPuller(app, { waitMs: SURFACE_FILE_WAIT_MS });
+
+  async function triggerFiles(batch: AmbientBatch): Promise<Pick<TurnRequest, "attachments" | "inboundNotes">> {
+    const refs = batch.messages.filter((m) => !m.deleted).flatMap((m) => (m.files ?? []).map((file) => ({ m, file })));
+    const fetched = await Promise.all(
+      refs.slice(0, MAX_INBOUND_FILES).map(async ({ m, file }) => {
+        const name = cachedFileName(file);
+        const result = await surfaceFiles
+          .pull(batch.surface, {
+            conversationTarget: batch.container,
+            count: 1,
+            file: { ts: m.ts, ...(m.sub ? { threadTs: m.sub } : {}), name },
+          })
+          .catch((e: unknown): SurfaceContextResult => ({ messages: [], note: errMessage(e) }));
+        if (!result?.file)
+          return {
+            note: `I couldn't read "${name}" (message ${m.ts}): ${result?.note ?? "the surface didn't answer in time"}`,
+          };
+        const { blobId, sizeBytes, mimetype, author } = result.file;
+        return {
+          attachment: {
+            name: result.file.name,
+            mimetype: mimetype ?? mimeFromName(result.file.name),
+            sizeBytes,
+            blobId,
+            ...(author ? { author } : {}),
+          } satisfies IncomingAttachment,
+        };
+      }),
+    );
+    const attachments = fetched.flatMap((f) => (f.attachment ? [f.attachment] : []));
+    const notes = [
+      ...fetched.flatMap((f) => (f.note ? [f.note] : [])),
+      ...refs
+        .slice(MAX_INBOUND_FILES)
+        .map(({ file }) => `skipped "${cachedFileName(file)}" — too many files at once (max ${MAX_INBOUND_FILES})`),
+    ];
+    return { ...(attachments.length ? { attachments } : {}), ...(notes.length ? { inboundNotes: notes } : {}) };
+  }
+
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
@@ -324,6 +369,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] wake left out ${omitted} earlier messages past the content screen's input limit (container=${batch.container})`,
       );
+    const files = await triggerFiles(batch);
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -336,6 +382,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           deliveryTarget: batch.container,
           text: solicited.message.text,
           origin: { kind: "human", ...(solicited.message.ts ? { messageTs: solicited.message.ts } : {}) },
+          ...files,
           surfaceTools: true,
           async: true,
           spawned: true,
@@ -362,6 +409,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             kind: "automation",
             screenData: screenDataOf(shown.map(screened)),
           },
+          ...files,
           surfaceTools: true,
           async: true,
           spawned: true,
@@ -389,7 +437,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         origin: "ambient",
         person: false,
         text: req.text,
-        hasFiles: false,
+        hasFiles: Boolean(req.attachments?.length),
         actorId: req.actor.externalId,
         modelAccount: "company",
         ...(req.botActor ? { bot: true } : {}),
