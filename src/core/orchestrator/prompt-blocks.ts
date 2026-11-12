@@ -130,13 +130,27 @@ export function webSurfaceLabel(botName: string, relayed: boolean): string {
   return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so skills' non-web paths apply, such as an ordinary authorization link`;
 }
 
+function trimmedEntries(record: Record<string, string> | undefined) {
+  return Object.entries(record ?? {})
+    .map(([k, v]) => [k.trim(), String(v).trim()] as const)
+    .filter(([k, v]) => k && v);
+}
+
+export function shownPlace(surface: string | undefined, ctx: GatewayContext | undefined, dm: boolean) {
+  const location = ctx?.location?.trim();
+  const details = trimmedEntries(ctx?.details);
+  return {
+    ...(location && !(dm && (surface ?? "").trim()) ? { location } : {}),
+    ...(details.length ? { details: Object.fromEntries(details) } : {}),
+  };
+}
+
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
   const gateway = (surface ?? "").trim();
-  const location = ctx?.location?.trim();
-  const details = Object.entries({ ...ctx?.hostIds, ...ctx?.details })
-    .map(([k, v]) => [k.trim(), String(v).trim()] as const)
-    .filter(([k, v]) => k && v)
-    .sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
+  const { location } = shownPlace(surface, ctx, Boolean(dmWith));
+  const details = trimmedEntries({ ...ctx?.hostIds, ...ctx?.details }).sort(
+    ([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv),
+  );
   const instructions = ctx?.instructions?.trim();
   if (!gateway && !location && details.length === 0 && !instructions) return "";
 

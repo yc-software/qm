@@ -174,6 +174,7 @@ import {
   defaultSandboxLoadLine,
   environmentNote,
   renderGatewayContext,
+  shownPlace,
   renderSandboxProviders,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
@@ -650,7 +651,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         approvalRecord.request.text === input.text &&
         JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
         JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
-        (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
+        (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "") &&
+        JSON.stringify(shownPlace(input.surface, approvalRecord.request.gatewayContext, conversation.kind === "dm")) ===
+          JSON.stringify(shownPlace(input.surface, input.gatewayContext, conversation.kind === "dm"));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&

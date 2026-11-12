@@ -27,7 +27,7 @@ import {
   type loadDocumentInputs,
   MAX_DOCUMENT_TEXT_CHARS,
 } from "../documents.ts";
-import { senderNote } from "./prompt-blocks.ts";
+import { senderNote, shownPlace } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
@@ -312,12 +312,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
       });
     }
   }
-  const shownPlace = {
-    ...(conversation.kind !== "dm" && input.gatewayContext?.location?.trim()
-      ? { location: input.gatewayContext.location }
-      : {}),
-    ...input.gatewayContext?.details,
-  };
+  const place = shownPlace(input.surface, input.gatewayContext, conversation.kind === "dm");
   const externalPromptData = screenInbound
     ? [
         ...(ambientTurn && actor.displayName?.trim()
@@ -326,9 +321,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(input.conversationHeader?.trim()
           ? [{ source: "conversation-header", content: input.conversationHeader }]
           : []),
-        ...(Object.keys(shownPlace).length
-          ? [{ source: "conversation-metadata", content: JSON.stringify(shownPlace) }]
-          : []),
+        ...(Object.keys(place).length ? [{ source: "conversation-metadata", content: JSON.stringify(place) }] : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,
         ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
