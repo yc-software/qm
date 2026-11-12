@@ -31,6 +31,14 @@ available until the new revision has passed operational checks.
 
 ## Database upgrades and rollback
 
+Run migrations with the schema owner, or with a role that owns
+`qm_schema_migrations` and has `CREATE` on the current schema. This includes
+managed database administrators that own QM's tables but not the provider-owned
+`public` schema. Before the ledger exists, `CREATE` on the schema permits
+bootstrap. A role with only application data grants cannot apply pending
+migrations; granting it schema `CREATE` alone does not grant authority over an
+existing ledger. PostgreSQL still enforces privileges on each migrated object.
+
 Migration identifiers and SQL checksums retain their original meaning. An existing
 checksum mismatch stops the upgrade; do not clear the migration ledger or edit its
 checksums to bypass this check. A previously completed legacy webhook sweep is
