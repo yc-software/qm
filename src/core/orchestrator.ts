@@ -1434,6 +1434,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const decision = await deps.agent
             .shouldRespond({
               ...sessionRoute,
+              scopeLabel: scopeId,
               session,
               message: input.text,
               recentContext: input.detectContext ?? "",

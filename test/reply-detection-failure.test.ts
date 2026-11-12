@@ -12,7 +12,8 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Agent } from "../src/agent/agent.ts";
+import type { Agent, SessionRoute } from "../src/agent/agent.ts";
+import { resolveRuntimeChoice, withResolvedRuntime } from "../src/agent/runtime-choice.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -27,8 +28,7 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
-function orchestratorFor(agent: Agent) {
-  const config = testConfigStore("default-org");
+function orchestratorFor(agent: Agent, config = testConfigStore("default-org")) {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
@@ -94,24 +94,26 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   assert.equal(silent?.detail, "detection failed: 401 invalid x-api-key");
 });
 
-test("ambient reply detection runs on the model the session is using", async () => {
-  const base = createMockAgent();
+test("ambient reply detection runs on the model the conversation's scope has selected", async () => {
+  const config = testConfigStore("default-org");
+  await config.setRuntimeSelection("channel:C1", { modelId: "claude-sonnet-5" });
   let detectModel: string | undefined;
-  const agent: Agent = {
-    ...base,
+  const base: Agent = {
+    ...createMockAgent(),
     shouldRespond: async (detect) => {
       detectModel = detect.runtime?.modelId;
       return { respond: false };
     },
   };
-  const { orch } = orchestratorFor(agent);
+  const resolveScope = (route: SessionRoute) =>
+    resolveRuntimeChoice(config, "org:default-org", route.scopeLabel!, { modelId: "claude-opus-4-8" }, route.runtime);
+  const { orch } = orchestratorFor(withResolvedRuntime(base, resolveScope, resolveScope), config);
 
   const result = await orch.handleTurn({
     surface: "slack",
     actor,
     conversation: { kind: "channel", threadRef: "ch:C1:300.1", channelRef: "C1", audience: [actor] } as Conversation,
     origin: { kind: "ambient" },
-    model: "claude-sonnet-5",
     text: "how's it going?",
   });
 
