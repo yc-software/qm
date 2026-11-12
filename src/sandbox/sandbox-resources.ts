@@ -167,6 +167,22 @@ export async function assertBotMayUseComputer(
   if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
 }
 
+export const MARK_ADMIN_CREATED_COMPUTERS_MIGRATION = {
+  id: "durable-map/sandbox_resources/0040-mark-admin-created",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('sandbox_resources') IS NOT NULL AND to_regclass('audit_log') IS NOT NULL THEN
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
+        UPDATE sandbox_resources r SET json = r.json || '{"personUsed": true}'::jsonb
+        FROM audit_log a
+        WHERE a.action = 'sandbox.create' AND a.tenant_id = r.tenant_id AND a.resource = r.id
+          AND NOT r.json ? 'personUsed';
+      END IF;
+    END $$`,
+  ],
+};
+
 export async function defaultComputer(
   resources: SandboxResources | undefined,
   scopeId: ScopeId,
@@ -420,7 +436,13 @@ export function createSandboxResources(opts: {
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
         }
-        if (existing) await opts.records.update(id, (current) => ({ ...current, ...record, error: undefined }));
+        if (existing)
+          await opts.records.update(id, (current) => ({
+            ...current,
+            ...record,
+            createdBy: current.createdBy,
+            error: undefined,
+          }));
         else await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
