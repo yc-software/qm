@@ -3,8 +3,7 @@ import { errMessage } from "../util/errors.ts";
 import { recentMessagesBlock, type WakeMessage } from "../wake/wake-envelope.ts";
 import type { CachedMessage, SurfaceSource } from "./surface-cache.ts";
 import { resolveMentions } from "../slack/mrkdwn.ts";
-import { hasContent } from "../slack/message-gating.ts";
-import { slackFileName } from "../slack/attachments.ts";
+import { hasContent, slackFileName } from "../slack/message-gating.ts";
 
 const AMBIENT_JUDGE_SYSTEM = `You are the ambient mind for a chat container — a thin, cheap observer that decides whether the
 assistant should engage with what was just said. You are given the ASSISTANT'S IDENTITY (its name and

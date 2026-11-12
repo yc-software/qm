@@ -42,6 +42,7 @@ export {
   channelPrivacyChange,
   createRefreshCoalescer,
   hasContent,
+  slackFileName,
   isThreadReply,
   createThreadTracker,
   channelThreadRef,
@@ -62,7 +63,6 @@ export {
   stageSlackFiles,
   uploadAttachments,
   uploadFailureNote,
-  slackFileName,
 } from "./attachments.ts";
 export {
   type ApprovalActionId,

@@ -15,8 +15,7 @@ import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
-import { isBotAuthored } from "./message-gating.ts";
-import { slackFileName } from "./attachments.ts";
+import { isBotAuthored, slackFileName } from "./message-gating.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;

@@ -2,6 +2,7 @@ import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 import { swallow } from "../util/errors.ts";
+import { slackFileName } from "./message-gating.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -33,9 +34,6 @@ export interface SlackFile {
   mode?: string;
   user?: string;
 }
-
-export const slackFileName = (f: Pick<SlackFile, "name" | "title" | "id">): string =>
-  f.name || f.title || f.id || "file";
 
 async function hydrateSlackFiles(
   files: readonly SlackFile[],
