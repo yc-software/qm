@@ -314,34 +314,30 @@ test("outside a swarm, a Slack bot's background job on its own computer is stopp
     claimOwed: () => claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: f.service }),
   });
   const bots = await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal");
-  const turn = async (actor: Principal, background: boolean) => {
+  const turn = async (actor: Principal, command: string) => {
     const { run } = await f.runs.enqueue({
       sessionId: f.root.threadRef,
       request: channelRequest(f, actor, actor === releaseBot),
       maxAttempts: 1,
     });
-    const params = { command: "tail -f log", sandbox_id: bots.id, background, purpose: "Following the log" };
+    const params = { command, sandbox_id: bots.id, background: true, purpose: "Running a job" };
     await drive(f, run, async (call) => ({ out: await call("execute", params) }), { processes });
     await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
   };
-  await turn(releaseBot, true);
+  await turn(releaseBot, "tail -f log");
   const [botJob] = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
   await reaper.sweepNow();
   assert.deepEqual(stopped, []);
   assert.equal((await processes.get(botJob!.processId))?.botActor, releaseBot.id);
-  const personJob = await processes.register({
-    processId: `alice-${bots.id}`,
-    scopeId: f.root.scopeId,
-    sandboxId: bots.id,
-    kind: "background",
-    command: "npm test",
-    ttlMs: 600_000,
-  });
-  await turn(alice, false);
+  await turn(alice, "npm test");
   await reaper.sweepNow();
   assert.deepEqual(stopped, [botJob!.processId]);
   assert.equal((await processes.get(botJob!.processId))?.status, "reaped");
-  assert.equal((await processes.get(personJob.processId))?.status, "running");
+  const live = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
+  assert.deepEqual(
+    live.map((job) => [job.command, job.botActor]),
+    [["bg: npm test", undefined]],
+  );
 });
 
 test("a Slack bot's channel turn that may not direct a person's swarm cannot list or use the swarm's computers", async (t) => {
