@@ -127,7 +127,7 @@ function guidanceOf(item: Item): GuidanceSnapshot | undefined {
 
 export function webSurfaceLabel(botName: string, relayed: boolean): string {
   if (!relayed) return `the ${botName} web app`;
-  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets`;
+  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so skills' non-web paths apply, such as an ordinary authorization link`;
 }
 
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
