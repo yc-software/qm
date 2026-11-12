@@ -201,6 +201,8 @@ export type ReachNowResult =
 
 export type VisibleCron = Cron & { scopeName?: string };
 
+export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
+
 export type ProjectView = Project & {
   scopeId: ScopeId;
   members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
@@ -498,15 +500,15 @@ export interface App {
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
-  updateCron(id: string, patch: CronPatch, trial?: CronScriptTrial): Promise<Cron | null>;
-  deleteCron(id: string): Promise<void>;
+  updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
+  deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
-  setCronFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
+  setCronFireNote(id: string, note: CronFireNote, by: CronEditor): Promise<"applied" | "superseded" | "missing">;
   listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
-  setCronDestination(id: string, destination: Destination | undefined): Promise<Cron | null>;
+  setCronDestination(id: string, destination: Destination | undefined, by: CronEditor): Promise<Cron | null>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
