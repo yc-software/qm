@@ -52,6 +52,7 @@ import {
 import {
   returnSubagentRun,
   settleTreeWakes,
+  sweepPendingReturns,
   sweepUnreadMailWakes,
   wakeForUnreadMail,
 } from "./sessions/subagent-mail.ts";
@@ -2379,6 +2380,7 @@ export function buildApp(
     signals: runSignals,
     advisoryLock,
     awaitingApproval,
+    blockingApprovalSessions,
   };
   const app = createApp({
     errors,
@@ -2556,14 +2558,9 @@ export function buildApp(
     void wakeForUnreadMail(subagentMail, run).catch(swallowAs("sessions: unread mail wake", undefined));
   });
   const sweepSessionReturns = async () => {
-    let afterId: string | undefined;
-    for (;;) {
-      const batch = await runs.pendingReturns(100, afterId);
-      if (!batch.length) return sweepUnreadMailWakes(subagentMail);
-      const recover = swallowAs("sessions: recover return", undefined);
-      for (const run of batch) await withTenant(run.tenantId, () => returnSessionRun(run)).catch(recover);
-      afterId = batch.at(-1)!.id;
-    }
+    const recover = swallowAs("sessions: recover return", undefined);
+    await sweepPendingReturns(subagentMail, withTenant, (run) => returnSessionRun(run).catch(recover));
+    return sweepUnreadMailWakes(subagentMail);
   };
   const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
   const partnerChatInbound =

@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls, sessionContextOf, type SessionSyscallDeps } from "../src/sessions/session-syscalls.ts";
-import { returnSubagentRun, wakeForUnreadMail } from "../src/sessions/subagent-mail.ts";
+import {
+  returnSubagentRun,
+  sweepPendingReturns,
+  sweepUnreadMailWakes,
+  wakeForUnreadMail,
+} from "../src/sessions/subagent-mail.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
@@ -28,7 +33,24 @@ async function rig(awaiting = new Set<string>()) {
     sent: await signals.send(run.id, signal),
   });
   const awaitingApproval = async (sessionId: string) => awaiting.has(sessionId);
-  const deps = { mailbox, sessions, runs, signals, steerRun, advisoryLock, maxAttempts: 3, awaitingApproval };
+  const blockingApprovalSessions = async (ids: readonly string[]) => new Set(ids.filter((id) => awaiting.has(id)));
+  const prepared: string[] = [];
+  const prepareRequest = async <T extends { conversation: Conversation }>(request: T) => {
+    prepared.push(request.conversation.threadRef);
+    return request;
+  };
+  const deps = {
+    mailbox,
+    sessions,
+    runs,
+    signals,
+    steerRun,
+    advisoryLock,
+    maxAttempts: 3,
+    awaitingApproval,
+    blockingApprovalSessions,
+    prepareRequest,
+  };
   const factory = createSessionSyscalls(deps);
   const base = await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack");
   const room = await sessions.getOrCreateByThread(
@@ -50,7 +72,7 @@ async function rig(awaiting = new Set<string>()) {
     },
   );
   await sessions.addParticipant(room.id, actor.id);
-  return { ...deps, factory, room };
+  return { ...deps, factory, room, prepared };
 }
 type Rig = Awaited<ReturnType<typeof rig>>;
 
@@ -310,7 +332,16 @@ test("helper mail held by an approval pause yields exactly one follow-up once th
   await parent.step("files", "c2", { action: "read", path: "a.txt" });
   awaiting.add(r.room.id);
   const paused = await parent.finish({ status: "ok", reply: "" });
-  for (let i = 0; i < 3; i++) await sweep(r, helper.run, paused);
+  r.prepared.length = 0;
+  for (let i = 0; i < 3; i++) {
+    await sweepPendingReturns(
+      r,
+      (_tenant, work) => work(),
+      (run) => returnSubagentRun(r, run),
+    );
+    await sweepUnreadMailWakes(r);
+  }
+  assert.deepEqual(r.prepared, [], "the sweeps skip the held parent before preparing a wake");
   assert.deepEqual(await followUps(r), [], "mail kept unread by the pausing result does not wake the paused turn");
   awaiting.delete(r.room.id);
   await oneFollowUpCarriesTheAnswer(r, helper.run, paused);
