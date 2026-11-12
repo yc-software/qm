@@ -89,7 +89,7 @@ import type {
 import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
   securityScreenChunks,
-  securityScreenPayload,
+  securityScreenPayloads,
   UNSCREENED_REASON,
   unscreenedNotice,
 } from "../security/security-posture.ts";
@@ -354,7 +354,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId: scopeLabel,
         origin: sessionId ? await originOf(session) : sessionOrigin(conversation.threadRef),
       });
-      const bounded = securityScreenPayload({
+      const payloads = securityScreenPayloads({
         surface: "external",
         text: "",
         origin: { kind: "automation", screenData: payload },
@@ -368,11 +368,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(sessionId ? { sessionId } : {}),
       } as const;
       if (screening === "observe") {
-        if (bounded && !bounded.truncated)
-          await classifySecurityData(tenant, bounded.content, actor.id, scopeLabel, undefined, {
-            ...steerContext,
-            mode: "observe",
-          });
+        if (!payloads) return "allow";
+        await screenChunks(
+          payloads,
+          (chunk) =>
+            classifySecurityData(tenant, chunk, actor.id, scopeLabel, undefined, { ...steerContext, mode: "observe" }),
+          { batch: 4 },
+        );
         return "allow";
       }
       const block = (cause: string, reason?: string): "block" => {
@@ -390,19 +392,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
       if (deps.budget && !(await deps.budget.check(tenant, actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
-      if (!bounded || bounded.truncated) return block("oversize-input");
+      if (!payloads) return block("oversize-input");
+      if (!payloads.length) return block("empty-input");
       securitySteersInFlight.add(conversation.threadRef);
-      const verdict = await classifySecurityData(
-        tenant,
-        bounded.content,
-        actor.id,
-        scopeLabel,
-        sessionId
-          ? async (rec) => {
-              await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
-            }
-          : undefined,
-        { ...steerContext, mode: "enforce" },
+      const verdict = await screenChunks(
+        payloads,
+        (chunk) =>
+          classifySecurityData(
+            tenant,
+            chunk,
+            actor.id,
+            scopeLabel,
+            sessionId
+              ? async (rec) => {
+                  await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
+                }
+              : undefined,
+            { ...steerContext, mode: "enforce" },
+          ),
+        { batch: 4 },
       ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
       if (verdict?.decision === "auto") {
         if (!verdict.unscreened) return "allow";

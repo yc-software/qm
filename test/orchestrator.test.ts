@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../src/core/documents.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3813,9 +3814,9 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   );
 });
 
-test("Auto fails open when bounded screening omits oversize content, flagging it unscreened to the model", async () => {
+test("Auto fails open on input too long to screen, flagging it unscreened to the model", async () => {
   const built = freshApp();
-  const padded = `please note ${"x".repeat(9_000)} and also ${"y".repeat(9_000)} thanks`;
+  const padded = `please note ${"x".repeat(MAX_DOCUMENT_TEXT_CHARS)} thanks`;
 
   const result = await built.app.turn(dm(padded, { surface: "monitor", origin: { kind: "automation" } }));
   assert.equal(result.status, "ok");

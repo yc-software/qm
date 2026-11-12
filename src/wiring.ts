@@ -1236,7 +1236,7 @@ export function buildApp(
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,
     beforeRetire: async (record) => {
-      if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
+      if ((await processes?.listLive())?.some((process) => process.sandboxId === record.id))
         throw new Error("stop this sandbox's background jobs before retiring it");
     },
     provisionOptions: async (scopeId) => {
@@ -2775,7 +2775,7 @@ export function buildApp(
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
-    deleteCron: (id) => app.deleteCron(id),
+    deleteCron: (id) => app.deleteCron(id, { actorId: "system" }),
     advisoryLock,
     crons,
     deliveries,
