@@ -334,20 +334,17 @@ export function createTurnHandler(deps: {
       inc.kind === "dm"
         ? {
             location: "a direct message with the user",
-            details: { channel: inc.channel, ...(inc.threadTs ? { thread_ts: inc.threadTs } : {}) },
+            hostIds: { channel: inc.channel, ...(inc.threadTs ? { thread_ts: inc.threadTs } : {}) },
             instructions: REACTION_INSTRUCTION,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           }
         : {
             location: channelLocation(conversationKind, channelName, inc.channel),
-            details: {
-              channel: inc.channel,
-              ...(channelName
-                ? { channel_name: conversationPlaceLabel(conversationKind, channelName, inc.channel) }
-                : {}),
-              ...(replyThreadTs ? { thread_ts: replyThreadTs } : {}),
-            },
+            hostIds: { channel: inc.channel, ...(replyThreadTs ? { thread_ts: replyThreadTs } : {}) },
+            ...(channelName
+              ? { details: { channel_name: conversationPlaceLabel(conversationKind, channelName, inc.channel) } }
+              : {}),
             instructions: `${REACTION_INSTRUCTION}\n\n${HANDOFF_INSTRUCTION}`,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),

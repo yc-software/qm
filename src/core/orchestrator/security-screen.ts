@@ -312,6 +312,12 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
       });
     }
   }
+  const shownPlace = {
+    ...(conversation.kind !== "dm" && input.gatewayContext?.location?.trim()
+      ? { location: input.gatewayContext.location }
+      : {}),
+    ...input.gatewayContext?.details,
+  };
   const externalPromptData = screenInbound
     ? [
         ...(ambientTurn && actor.displayName?.trim()
@@ -320,13 +326,8 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(input.conversationHeader?.trim()
           ? [{ source: "conversation-header", content: input.conversationHeader }]
           : []),
-        ...(input.gatewayContext?.details?.channel_name
-          ? [
-              {
-                source: "conversation-metadata",
-                content: JSON.stringify({ channel: input.gatewayContext.details.channel_name }),
-              },
-            ]
+        ...(Object.keys(shownPlace).length
+          ? [{ source: "conversation-metadata", content: JSON.stringify(shownPlace) }]
           : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,

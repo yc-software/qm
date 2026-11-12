@@ -133,7 +133,7 @@ export function webSurfaceLabel(botName: string, relayed: boolean): string {
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
   const gateway = (surface ?? "").trim();
   const location = ctx?.location?.trim();
-  const details = Object.entries(ctx?.details ?? {})
+  const details = Object.entries({ ...ctx?.hostIds, ...ctx?.details })
     .map(([k, v]) => [k.trim(), String(v).trim()] as const)
     .filter(([k, v]) => k && v)
     .sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));

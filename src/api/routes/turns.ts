@@ -154,6 +154,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
+  const { hostIds: _hostIds, ...callerGateway } = rest.gatewayContext ?? {};
   let conversationHeader = rest.conversationHeader;
   if (rawSurfaceBriefing !== undefined) {
     const parsed = surfaceBriefingSchema.safeParse(rawSurfaceBriefing);
@@ -163,6 +164,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   return {
     request: {
       ...rest,
+      ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(origin ? { origin } : {}),
       ...(clientTools?.length ? { clientTools } : {}),
