@@ -1,5 +1,6 @@
 import { isAgentReply, type Item, proseText } from "./items.ts";
-import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
+import { isSessionTurn, keepingUnattended, sessionTurnOrigin, unattendedAmbient } from "../core/turn-origin.ts";
+import { proactiveScopeWork, turnOriginClaim } from "../auth/capability-token.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
@@ -179,7 +180,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(input.botActor ? { botActor: true } : {}),
-    ...(input.unprompted ? { unprompted: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -299,7 +299,6 @@ export interface SessionSyscallBinding {
     | "readOnly"
     | "memoryNotebookOnly"
     | "botActor"
-    | "unprompted"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -444,7 +443,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.readOnly ? { readOnly: true } : {}),
     ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(meta.botActor ? { botActor: true } : {}),
-    ...(meta.unprompted ? { unprompted: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -924,7 +922,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
                 return { ok: false, message: "you are not a participant in that session." };
-              if (binding.request.unprompted && !target.spawnMeta?.unprompted)
+              if (
+                proactiveScopeWork({
+                  actorId: binding.request.actor.id,
+                  scopeId: binding.scopeId,
+                  ...(binding.request.origin ? { turnOrigin: turnOriginClaim(binding.request.origin) } : {}),
+                  ...(binding.liveTurn ? { liveActor: true } : {}),
+                }) &&
+                !unattendedAmbient(target.spawnMeta?.origin)
+              )
                 return { ok: false, message: UNPROMPTED_REACH_REFUSAL };
               if (target.spawnMeta?.retired && target.parentSessionId === binding.session.id)
                 return {
@@ -954,11 +960,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     : {}),
                   surface: meta.surface ?? target.surface ?? "web",
                   actor: caller.actor,
-                  origin: caller.origin,
+                  origin: keepingUnattended(caller.origin, meta.origin),
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
                   memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
                   botActor: caller.botActor,
-                  unprompted: caller.unprompted || meta.unprompted,
                 },
                 "",
                 "",
@@ -1017,7 +1022,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   senderId: binding.session.id,
                   actor: caller.actor,
                   ...(caller.botActor ? { botActor: true } : {}),
-                  ...(caller.unprompted ? { unprompted: true } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });

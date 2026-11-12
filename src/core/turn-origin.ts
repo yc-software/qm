@@ -9,6 +9,15 @@ export function spokenByPerson(origin: TurnOrigin): boolean {
   return origin.kind === "human" || (origin.kind === "ambient" && origin.live === true);
 }
 
+export function unattendedAmbient(origin: { kind: string; live?: boolean } | undefined): boolean {
+  return origin?.kind === "ambient" && origin.live !== true;
+}
+
+export function keepingUnattended(origin: TurnOrigin, ...others: Array<TurnOrigin | undefined>): TurnOrigin {
+  if (unattendedAmbient(origin) || !others.some(unattendedAmbient)) return origin;
+  return { kind: "ambient" };
+}
+
 export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId">): boolean {
   return !!input.sessionSenderId || !!input.delegatingRunId;
 }
@@ -21,7 +30,8 @@ export function midTurnSessionMessage(message: string, fromParent: boolean): str
 export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string): TurnOrigin {
   if (!origin || origin.kind === "automation") return { ...origin, kind: "automation", screenData: text };
   if (origin.kind === "human") return { kind: "human" };
-  if (origin.kind === "ambient") return { kind: "ambient", ...(origin.live ? { live: true } : {}) };
+  if (origin.kind === "ambient")
+    return origin.live ? { kind: "ambient", live: true } : { kind: "ambient", ...(text ? { screenData: text } : {}) };
   return origin;
 }
 

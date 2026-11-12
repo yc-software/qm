@@ -1,3 +1,4 @@
+import type { ScopeWorkClaims } from "../../auth/capability-token.ts";
 import { createBackgroundBroker } from "../../connectors/background-exec-broker.ts";
 import type { FileArtifact } from "../../files/file-artifact-store.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../../monitors/monitor-broker.ts";
@@ -28,8 +29,10 @@ export function createTurnBrokers(turn: {
   provisionJobSandbox: TurnSandboxes["provisionJobSandbox"];
   finishProcess: TurnSandboxes["finishProcess"];
   assertDefaultUsable: TurnSandboxes["assertDefaultUsable"];
+  scopeWork: ScopeWorkClaims;
 }) {
   const {
+    scopeWork,
     deps,
     input,
     actor,
@@ -87,7 +90,7 @@ export function createTurnBrokers(turn: {
           owner: actor.id,
           ownerScopeId: scopeId,
           ...(input.botActor ? { botActor: true } : {}),
-          ...(input.unprompted ? { unprompted: true } : {}),
+          scopeWork,
           threadRef: conversation.threadRef,
           ...(defaultDestination ? { destination: defaultDestination } : {}),
           returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),

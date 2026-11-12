@@ -130,7 +130,6 @@ export interface SpawnMeta {
   readOnly?: boolean;
   memoryNotebookOnly?: boolean;
   botActor?: boolean;
-  unprompted?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
@@ -354,7 +353,7 @@ export interface OverheardMessage {
 
 export type TurnOrigin =
   | { kind: "human"; messageTs?: string; entryTs?: string }
-  | { kind: "ambient"; entryTs?: string; live?: boolean }
+  | { kind: "ambient"; entryTs?: string; live?: boolean; screenData?: string }
   | {
       kind: "automation";
       screenData?: string;
@@ -410,7 +409,6 @@ export interface TurnRequest {
   infrequentCron?: boolean;
   personaId?: string;
   botActor?: boolean;
-  unprompted?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardMessage[];

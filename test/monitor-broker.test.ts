@@ -280,7 +280,7 @@ test("in a shared conversation, only whoever armed a watch can remove it, but an
       scopeId: SCOPE,
       owner: scopeActor(channel),
       ownerScopeId: channel,
-      unprompted: true,
+      scopeWork: { scopeId: channel, turnOrigin: { kind: "ambient" } },
       threadRef,
       graceMs: 1000,
     });

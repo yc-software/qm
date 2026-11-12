@@ -42,7 +42,7 @@ export function senderLine(
   speaker: Speaker,
   nameOf: (id: string) => string | undefined,
 ): string {
-  if (speaker.origin.kind === "automation" || speaker.fromSession) return "";
+  if (screenedSource(speaker.origin) || speaker.fromSession) return "";
   if (turn.conversationKind === "dm" && samePerson(speaker.id, turn.ownerId)) return "";
   return senderNote(speakerName(speaker, nameOf));
 }
@@ -51,10 +51,14 @@ function speakerName(speaker: Speaker, nameOf: (id: string) => string | undefine
   return ([speaker.name, nameOf(speaker.id)].find((name) => name?.trim()) ?? speaker.id).trim();
 }
 
+function screenedSource(origin: TurnOrigin): origin is Extract<TurnOrigin, { screenData?: string }> {
+  return origin.kind === "automation" || (origin.kind === "ambient" && origin.screenData !== undefined);
+}
+
 export function wordsToScreen(said: string, speaker: Speaker, ownerId: string): string | undefined {
   let words: string | undefined;
   if (speaker.fromSession) words = said;
-  else if (speaker.origin.kind === "automation") words = speaker.origin.screenData;
+  else if (screenedSource(speaker.origin)) words = speaker.origin.screenData;
   else if (!samePerson(speaker.id, ownerId)) words = said;
   return words?.trim() ? words : undefined;
 }

@@ -1,6 +1,11 @@
 import { isSystemActor, type Destination, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
-import { personOrOwningBot } from "../auth/capability-token.ts";
+import {
+  personOrOwningBot,
+  proactiveScopeWork,
+  scopeWorkClaims,
+  type ScopeWorkClaims,
+} from "../auth/capability-token.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 
@@ -103,7 +108,7 @@ export interface MonitorBrokerDeps {
   owner: string;
   ownerScopeId: ScopeId;
   botActor?: boolean;
-  unprompted?: boolean;
+  scopeWork?: ScopeWorkClaims;
   threadRef: string;
   destination?: Destination;
   returnsToParent?: boolean;
@@ -177,7 +182,8 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       const owns = async () => samePerson(m.owner, deps.owner);
       const caller = { actorId: deps.owner, botActor: deps.botActor };
       if (
-        (deps.unprompted && m.threadRef !== deps.threadRef) ||
+        (proactiveScopeWork({ actorId: deps.owner, ...scopeWorkClaims(deps.scopeWork) }) &&
+          m.threadRef !== deps.threadRef) ||
         !(await personOrOwningBot(caller, owns, m)) ||
         !(isSystemActor(m.owner) || (await owns()))
       )

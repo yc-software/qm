@@ -230,10 +230,8 @@ for (const wake of ["message", "scheduled"] as const)
     assert.equal(personResult.status, "ok");
 
     const legacy = { ...parent };
-    delete legacy.triggered;
     delete legacy.liveActor;
-    delete legacy.origin;
-    delete legacy.unprompted;
+    delete legacy.turnOrigin;
 
     const control = createControlService(built.app, built.scheduler);
     const manages = async (c: CapabilityClaims) => ({
@@ -250,9 +248,8 @@ for (const wake of ["message", "scheduled"] as const)
             ownerScopeId: here,
             createdBy: c.actorId,
             scopeId: c.scopeId,
-            triggered: c.triggered,
             liveActor: c.liveActor,
-            origin: c.origin,
+            turnOrigin: c.turnOrigin,
             createdInScope: here,
             name: "deal-board",
             entrypoint: "node server.js",
@@ -275,7 +272,7 @@ for (const wake of ["message", "scheduled"] as const)
         : [res.status, body.message ?? null];
     };
     const legacyToken = await mintCapabilityToken(legacy, TEST_CAPABILITY_SECRET);
-    const markers = (c: CapabilityClaims) => [c.actorId, c.scopeId, c.triggered, c.liveActor, c.origin, c.unprompted];
+    const markers = (c: CapabilityClaims) => [c.actorId, c.scopeId, c.liveActor, c.turnOrigin];
     const observed = {
       othersOpen: [
         await openAs("system:ambient:default-org"),

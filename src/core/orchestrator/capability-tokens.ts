@@ -8,7 +8,7 @@ import {
   SANDBOX_CAPABILITY_TTL_MS,
   SANDBOX_MODEL_AUD,
   mintCapabilityToken,
-  proactiveScopeWork,
+  turnOriginClaim,
   type CapabilityClaims,
   type ScopeWorkClaims,
 } from "../../auth/capability-token.ts";
@@ -83,15 +83,10 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(input.botActor ? { botActor: true } : {}),
     ...(actAsActor ? { actAsActor: true } : {}),
   };
-  const markers: ScopeWorkClaims = {
+  const scopeWork: ScopeWorkClaims = {
     scopeId,
     ...(liveTurn ? { liveActor: true } : {}),
-    ...(turn.automatedTurn ? { triggered: true } : {}),
-    origin: turn.origin,
-  };
-  const scopeWork: ScopeWorkClaims = {
-    ...markers,
-    ...(input.unprompted || proactiveScopeWork({ actorId: actor.id, ...markers }) ? { unprompted: true } : {}),
+    turnOrigin: turnOriginClaim(input.origin),
   };
   const tenant = ambientTenant();
   const { actorIsOrgAdmin, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
@@ -201,8 +196,10 @@ async function mintControlPlaneTokens(
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
       ...(liveAuthorTurn ? { liveAuthor: true } : {}),
+      ...(automatedTurn ? { triggered: true } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
       sessionId: session.id,
+      origin,
       runAttempt: input.attempt,
       runLeaseToken: input.runLeaseToken,
       threadRef: conversation.threadRef,

@@ -1,10 +1,10 @@
-import { sessionTurnOrigin } from "../core/turn-origin.ts";
+import { keepingUnattended, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Principal, Session, SpawnMeta, StopScope } from "../types.ts";
+import type { Principal, Session, SpawnMeta, StopScope, TurnOrigin } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
@@ -95,7 +95,7 @@ type ParentMailDeps = Pick<
 interface ParentSource {
   actor: Principal;
   botActor?: boolean;
-  unprompted?: boolean;
+  origin?: TurnOrigin;
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
@@ -196,7 +196,6 @@ async function parentTurn(
             : {}),
         },
         botActor: source.botActor,
-        unprompted: source.unprompted || currentContext!.unprompted,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
@@ -208,7 +207,7 @@ async function parentTurn(
         : {}),
       threadRef: parent.threadRef,
     },
-    origin: sessionTurnOrigin(meta.origin, text),
+    origin: keepingUnattended(sessionTurnOrigin(meta.origin, text), source.origin, currentContext?.origin),
     text,
     displayText,
     envelopeWrapped: true,
@@ -295,7 +294,6 @@ async function mailParent(
     senderId: child.id,
     actor: turn.prepared.actor,
     ...(turn.prepared.botActor ? { botActor: true } : {}),
-    ...(turn.prepared.unprompted ? { unprompted: true } : {}),
     audience: turn.prepared.conversation.audience,
     createdAt: Date.now(),
   });
@@ -431,7 +429,7 @@ async function wakeParentForMail(
             const source = {
               actor: message.actor,
               ...(message.botActor ? { botActor: true } : {}),
-              ...(message.unprompted ? { unprompted: true } : {}),
+              ...(child.spawnMeta?.origin ? { origin: child.spawnMeta.origin } : {}),
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
               ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),
