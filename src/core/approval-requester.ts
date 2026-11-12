@@ -35,6 +35,9 @@ export const APPROVAL_EXPIRED_DECIDER = "system:approval-expired";
 export const expiredApprovalNote = (): string =>
   `Nobody answered the approval card for this step within ${APPROVAL_LIFETIME_MS / 60_000} minutes, so it expired and the step did not run. If it's still wanted, try the step again to raise a new card.`;
 
+const stepOf = (record: PendingApprovalRecord): string =>
+  record.screenedOutput ? record.command : (record.summary ?? record.command);
+
 async function recordDeclined(
   sessions: Pick<SessionStore, "append">,
   requestId: string,
@@ -51,12 +54,12 @@ async function recordDeclined(
     author,
     body: { command: record.command, ...body },
   });
-  if (record.kind !== "input" && !record.screenedOutput)
-    await sessions.append(writer, {
-      kind: "UserMessage",
-      hidden: true,
-      text: `${note}\nThe step: ${record.summary ?? record.command}`,
-    });
+  if (record.kind === "input") return;
+  await sessions.append(writer, {
+    kind: "UserMessage",
+    hidden: true,
+    text: `${note}\nThe step: ${stepOf(record)}`,
+  });
 }
 
 export async function declineUnreachableApproval(
@@ -107,7 +110,7 @@ export async function expireStaleApprovals(
       detail: JSON.stringify({
         lifetimeMs: APPROVAL_LIFETIME_MS,
         kind: record.kind ?? "approval",
-        command: record.summary ?? record.command,
+        command: stepOf(record),
         sessionId: record.sessionId,
         requester: record.request?.actor.externalId,
       }),

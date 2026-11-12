@@ -108,3 +108,32 @@ test("a card past the approval lifetime is settled as expired, told to the agent
     [["command_approval.expire", "OLD"]],
   );
 });
+
+test("an expired held-output card tells the agent without repeating the held content", async () => {
+  const approvals = testMap<PendingApprovalRecord>();
+  await approvals.put("HELD", {
+    ...record(),
+    command: "release quarantined execute output",
+    summary: "Blocked content preview: secret payload",
+    screenedOutput: { tool: "execute", text: "secret payload" },
+    createdAt: Date.now() - APPROVAL_LIFETIME_MS - 1_000,
+  });
+  const appended: NewItem[] = [];
+  const sessions = {
+    append: async (_writer: { sessionId: string }, item: NewItem) => {
+      appended.push(item);
+      return { ...item, seq: appended.length } as never;
+    },
+  };
+  const events: AuditEvent[] = [];
+  await expireStaleApprovals(
+    { approvals, sessions, audit: { record: (_tenant, e) => events.push(e) } },
+    ambientTenant(),
+    "org:acme",
+  );
+  assert.equal(
+    (appended[1] as NewItem & { text?: string }).text,
+    `${expiredApprovalNote()}\nThe step: release quarantined execute output`,
+  );
+  assert.ok(!JSON.stringify([appended, events]).includes("secret payload"));
+});
