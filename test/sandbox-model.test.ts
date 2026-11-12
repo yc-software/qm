@@ -142,6 +142,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
 
   assert.equal((await openai({ ...chat, model: "gpt-4o" })).status, 400);
   assert.equal((await openai({ ...chat, model: "constructor" })).status, 400);
+  assert.equal((await openai({ ...chat, model: "__proto__" })).status, 400);
   assert.equal((await openai({ model: 7, messages: [] })).status, 400);
   assert.equal(
     (await openai(chat, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)))
