@@ -19,7 +19,7 @@ import {
   withThread,
   type ReachResolution,
 } from "../reach/reach.ts";
-import { isVisible } from "../directory/visibility.ts";
+import { channelVisibleTo } from "../directory/visibility.ts";
 import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
@@ -479,11 +479,7 @@ export function createMessagingMethods(
       return deps.directory.channelMember(channelId, principalId);
     },
     channelVisibleTo(actorId, channelId, isPrivate) {
-      return isVisible(deps.directory, actorId, {
-        kind: "channel",
-        channelId,
-        ...(isPrivate !== undefined ? { isPrivate } : {}),
-      });
+      return channelVisibleTo(deps.directory, actorId, channelId, isPrivate);
     },
     async resolveRecipient(query) {
       const stored = await deps.directory.resolve(query);

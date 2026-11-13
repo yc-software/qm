@@ -21,7 +21,7 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { type SandboxHandle } from "../sandbox/sandbox.ts";
-import { isVisible } from "../directory/visibility.ts";
+import { channelVisibleTo } from "../directory/visibility.ts";
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
@@ -398,12 +398,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           : await resolveReadChannel(
               {
                 resolveChannel: (q) => deps.directory.resolveChannel(q),
-                channelVisibleTo: (a, c, isPrivate) =>
-                  isVisible(deps.directory, a, {
-                    kind: "channel",
-                    channelId: c,
-                    ...(isPrivate !== undefined ? { isPrivate } : {}),
-                  }),
+                channelVisibleTo: (a, c, isPrivate) => channelVisibleTo(deps.directory, a, c, isPrivate),
                 directoryMember: (p) => deps.directory.get(p),
               },
               actor.id,
