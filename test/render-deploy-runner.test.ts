@@ -29,6 +29,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDeployBackings, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
 const sqliteBackupStop = mock.fn(async () => {});
@@ -133,14 +134,6 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
   return { root, base, d, deployStore, deploy, artifacts, credentials, gitDir, app };
 }
 
-async function port() {
-  const server = createHttpServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
-
 async function runUntilReadyThenExit(input: {
   manifestPath: string;
   appDir: string;
@@ -217,8 +210,8 @@ async function startApp(
   );
   await chmod(manifestPath, 0o600);
   await beforeStart?.(manifestPath);
-  const gatewayPort = await port();
-  const appPort = await port();
+  const gatewayPort = await freePort();
+  const appPort = await freePort();
   const running: Promise<number> = runRenderApp({
     manifestPath,
     appDir: join(f.root, "app"),
@@ -243,22 +236,15 @@ async function startApp(
       headers: { "x-qm-render-app-token": renderGatewayToken("a".repeat(43), Date.now() + 60_000) },
       signal: AbortSignal.timeout(5_000),
     });
-  await Promise.race([
-    running.then((code) => {
-      throw new Error(`Runner exited with ${code}`);
-    }),
-    (async () => {
-      const deadline = Date.now() + 30_000;
-      while (Date.now() < deadline) {
-        const response = await request("/__qm_ready").catch(() => null);
-        await response?.body?.cancel();
-        if (response?.status === 204) return;
-        await delay(25);
-      }
-      throw new Error("Runner did not become ready");
-    })(),
-  ]);
-  return { request, running, appPort, appDir: join(f.root, "app") };
+  const deadline = Date.now() + 30_000;
+  while (!finished && Date.now() < deadline) {
+    const response = await request("/__qm_ready").catch(() => null);
+    await response?.body?.cancel();
+    if (response?.status === 204) return { request, running, appPort, appDir: join(f.root, "app") };
+    await delay(25);
+  }
+  if (finished) throw new Error(`Runner exited with ${await running}`);
+  throw new Error("Runner did not become ready");
 }
 
 test(
@@ -270,8 +256,8 @@ test(
     const manifest = { ...(await f.artifacts.prepare(f.d, v1)), readinessNonce: "n".repeat(43) };
     const manifestPath = join(f.root, "artifact.json");
     const appDir = join(f.root, "app");
-    const gatewayPort = await port();
-    const appPort = await port();
+    const gatewayPort = await freePort();
+    const appPort = await freePort();
     await writeFile(manifestPath, JSON.stringify(manifest));
     await chmod(manifestPath, 0o600);
     await f.deployStore.addVersion(f.d.id, {
@@ -396,8 +382,8 @@ test("Render runner reports both app startup and backup shutdown failures", asyn
     runRenderApp({
       manifestPath,
       appDir: join(f.root, "app"),
-      gatewayPort: await port(),
-      appPort: await port(),
+      gatewayPort: await freePort(),
+      appPort: await freePort(),
       env: { ...process.env, QM_RENDER_APP_TOKEN: "a".repeat(43) },
     }),
     (error: unknown) => {

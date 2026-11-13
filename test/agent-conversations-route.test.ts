@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { createServer as createNetServer, type AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { serverDeps, type BuiltApp } from "../src/wiring.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
@@ -16,6 +16,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import type { Item } from "../src/sessions/items.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const asU1 = { actorId: "U1" };
 
@@ -312,10 +313,7 @@ describe("agent conversations self-API", async () => {
 });
 
 test("bot work in a person's name sees only conversations bot work ran in; the person still sees all of theirs", async (t) => {
-  const probe = createNetServer().listen(0, "127.0.0.1");
-  await once(probe, "listening");
-  const { port } = probe.address() as AddressInfo;
-  probe.close();
+  const port = await freePort();
   const config = testConfig({ signingSecret: SECRET, apiBaseUrl: `http://127.0.0.1:${port}` });
   const mock = createMockAgent();
   const turnTools = new Map<string, ToolContext>();
