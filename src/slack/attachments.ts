@@ -1,6 +1,8 @@
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
+import { swallow } from "../util/errors.ts";
+import { slackFileName } from "./message-gating.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -33,7 +35,7 @@ export interface SlackFile {
   user?: string;
 }
 
-export async function hydrateSlackFiles(
+async function hydrateSlackFiles(
   files: readonly SlackFile[],
   lookup: (fileId: string) => Promise<SlackFile | undefined>,
 ): Promise<SlackFile[]> {
@@ -43,7 +45,8 @@ export async function hydrateSlackFiles(
       try {
         const hydrated = await lookup(file.id);
         return hydrated ? { ...file, ...hydrated, ...(file.user ? { user: file.user } : {}) } : file;
-      } catch {
+      } catch (err) {
+        swallow(`slack: files.info ${file.id}`, err);
         return file;
       }
     }),
@@ -71,7 +74,7 @@ export function attachmentFromBytes(
   blobId: string,
   author?: string,
 ): IncomingAttachment {
-  const name = file.name || file.title || file.id || "file";
+  const name = slackFileName(file);
   const mimetype = file.mimetype || "application/octet-stream";
   return {
     name,
@@ -87,7 +90,7 @@ export const MAX_ATTACHMENTS_PER_TURN = 10;
 
 const CAP_MB = Math.floor(MAX_ATTACHMENT_BYTES / 1_000_000);
 const capLabel = CAP_MB >= 1000 ? `${Math.round(CAP_MB / 1000)} GB` : `${CAP_MB} MB`;
-export const oversizeMsg = (label: string): string => `"${label}" is too large — I can handle files up to ~${capLabel}`;
+const oversizeMsg = (label: string): string => `"${label}" is too large — I can handle files up to ~${capLabel}`;
 
 export interface DownloadOptions {
   token?: string;
@@ -131,7 +134,7 @@ export async function processInboundFiles(
   for (const f of files) {
     const label = f.name || f.title || "that file";
     if (attachments.length >= MAX_ATTACHMENTS_PER_TURN) {
-      issues.push(`skipped "${label}" — too many files in one message (max ${MAX_ATTACHMENTS_PER_TURN})`);
+      issues.push(`skipped "${label}" — too many files at once (max ${MAX_ATTACHMENTS_PER_TURN})`);
       continue;
     }
     if (isOversize(f)) {
@@ -148,6 +151,7 @@ export async function processInboundFiles(
       const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
       attachments.push(attachmentFromBytes(f, bytes, blobId, author));
     } catch (err) {
+      swallow(`slack: inbound file "${label}"`, err);
       const detail =
         err instanceof BlobTooLargeError
           ? "that request was too large — try fewer or smaller files"
@@ -156,6 +160,29 @@ export async function processInboundFiles(
     }
   }
   return { attachments, issues };
+}
+
+export async function stageSlackFiles(
+  client: { files: { info(args: { file: string }): Promise<unknown> } },
+  files: readonly SlackFile[],
+  deps: {
+    token: string;
+    trustedHost?: string;
+    core: { stageBlob(bytes: Uint8Array): Promise<{ blobId: string }> };
+    directory: { classifyUserCached(client: any, userId: string): Promise<{ actor: { displayName?: string } }> };
+  },
+): Promise<ProcessedInbound> {
+  const hydrated = await hydrateSlackFiles(
+    files.slice(0, MAX_ATTACHMENTS_PER_TURN),
+    async (id) => ((await client.files.info({ file: id })) as { file?: SlackFile } | undefined)?.file,
+  );
+  return processInboundFiles(
+    [...hydrated, ...files.slice(MAX_ATTACHMENTS_PER_TURN)],
+    (f) => downloadSlackFile(f, { token: deps.token, ...(deps.trustedHost ? { trustedHost: deps.trustedHost } : {}) }),
+    (bytes) => deps.core.stageBlob(bytes),
+    async (userId) =>
+      userId ? (await deps.directory.classifyUserCached(client, userId)).actor.displayName : undefined,
+  );
 }
 
 export interface UploadClient {

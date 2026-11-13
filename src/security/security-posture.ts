@@ -213,8 +213,15 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
   return boundedPayload(securityScreenParts(input));
 }
 
-export function fitsScreenInput(length: number): boolean {
+function fitsScreenInput(length: number): boolean {
   return length <= MAX_DOCUMENT_TEXT_CHARS;
+}
+
+export function fittingEntryCount(entrySizes: number[], envelope: number): number {
+  let size = envelope;
+  let fit = 0;
+  while (fit < entrySizes.length && fitsScreenInput(size + entrySizes[fit]!)) size += entrySizes[fit++]!;
+  return fit;
 }
 
 export function securityScreenPayloads(input: SecurityScreenInput): string[] | null {

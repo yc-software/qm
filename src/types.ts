@@ -331,6 +331,7 @@ export interface AttachmentMeta {
 export interface GatewayContext {
   location?: string;
   details?: Record<string, string>;
+  hostIds?: Record<string, string>;
   instructions?: string;
   reactionGuidance?: string;
   botHandle?: string;
@@ -481,6 +482,7 @@ export interface PendingApprovalRecord {
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
+  homeChannel?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

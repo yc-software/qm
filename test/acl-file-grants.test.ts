@@ -50,7 +50,7 @@ test("file grants require a real, enabled Files ID owned by the granting scope",
   for (const ref of ["reports/report.md", "report.md", "artifacts/F1/report.md", "missing"]) {
     await assert.rejects(
       acl.grant(tenant, { ...grant, ref }),
-      /put the file in Files first using POST \/v1\/files\/uploads/,
+      /put the file in Files first with the helper from GET \/v1\/files\/upload-client/,
     );
   }
   await assert.rejects(

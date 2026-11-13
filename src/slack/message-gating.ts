@@ -104,6 +104,9 @@ export function createRefreshCoalescer(run: () => Promise<void>): () => Promise<
   };
 }
 
+export const slackFileName = (f: { name?: string; title?: string; id?: string }): string =>
+  f.name || f.title || f.id || "file";
+
 export function hasContent(text: string, files: readonly unknown[]): boolean {
   return text.trim().length > 0 || files.length > 0;
 }

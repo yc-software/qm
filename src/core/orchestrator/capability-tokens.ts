@@ -36,7 +36,7 @@ export interface CapabilityTurn {
   allInternal: boolean;
   liveTurn: boolean;
   liveAuthorTurn: boolean;
-  automatedTurn: boolean;
+  triggeredTurn: boolean;
   actAsActor: boolean;
   useMemory: boolean;
   memoryPolicy: MemoryPolicy;
@@ -132,7 +132,7 @@ async function mintControlPlaneTokens(
     allInternal,
     liveTurn,
     liveAuthorTurn,
-    automatedTurn,
+    triggeredTurn,
     useMemory,
     memoryPolicy,
     memoryScopeId,
@@ -153,7 +153,7 @@ async function mintControlPlaneTokens(
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
-  const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(automatedTurn ? { triggered: true } : {}) };
+  const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(triggeredTurn ? { triggered: true } : {}) };
   const runBinding = {
     ...(input.runId ? { runId: input.runId } : {}),
     runAttempt: input.attempt,
@@ -169,7 +169,7 @@ async function mintControlPlaneTokens(
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }
-      if (actorIsOrgAdmin && liveTurn && !automatedTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
+      if (actorIsOrgAdmin && liveTurn && !triggeredTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
     const memoryClaim = memoryAccess
       ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
