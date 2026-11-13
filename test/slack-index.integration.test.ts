@@ -316,7 +316,10 @@ class FakeCore implements SlackCoreClient {
     this.result = result;
     this.releaseRun?.();
   }
-  async ackRunDelivery(): Promise<void> {}
+  readonly ackedRuns: string[] = [];
+  async ackRunDelivery(runId: string): Promise<void> {
+    this.ackedRuns.push(runId);
+  }
   async reportRunEditRef(): Promise<void> {}
   async getApproval(): Promise<null> {
     return null;
@@ -1203,6 +1206,58 @@ test("a core boundary refusal stays requester-only in a channel", async () => {
     assert.match(f.client.ephemerals[0].text, /fully internal/);
   } finally {
     await f.stop();
+  }
+});
+
+const readOnlyChannel = async (): Promise<never> => {
+  throw Object.assign(new Error("An API error occurred: restricted_action_read_only_channel"), {
+    code: "slack_webapi_platform_error",
+    data: { ok: false, error: "restricted_action_read_only_channel" },
+  });
+};
+
+test("a reply or refusal that cannot be posted to a read-only DM is not an incoming-handler failure", async () => {
+  const results: TurnResult[] = [
+    { status: "refused", reason: "conversation must be fully internal" },
+    { status: "ok", reply: "done" },
+  ];
+  for (const [i, result] of results.entries()) {
+    const f = await fixture();
+    try {
+      const gate: string[] = [];
+      f.client.chat.postMessage = readOnlyChannel;
+      f.core.result = result;
+      await f.app.emitMessage(
+        { channel: "D1", channel_type: "im", user: "U1", text: "ask", ts: `107.${i}` },
+        `Ev-107-${i}`,
+        {
+          ackGate: { persisted: () => gate.push("persisted"), failed: () => gate.push("failed") },
+        },
+      );
+      assert.equal(f.core.turns.length, 1);
+      assert.deepEqual(gate, []);
+    } finally {
+      await f.stop();
+    }
+  }
+});
+
+test("a refusal in a read-only channel tells only the requester and acks any queued run delivery", async () => {
+  for (const [i, runId] of [undefined, "R-RO"].entries()) {
+    const f = await fixture();
+    try {
+      f.client.chat.postMessage = readOnlyChannel;
+      f.core.queuedRunId = runId;
+      f.core.result = { status: "refused", refusalKind: "security_quarantine", reason: "quarantined" };
+      const event = { channel: "C1", channel_type: "channel", user: "U2", text: "<@UBOT> hi", ts: `107.${i + 2}` };
+      f.client.messagesByChannel.set("C1", [event]);
+      await f.app.emitEvent("app_mention", event);
+      assert.equal(f.client.ephemerals.length, 1);
+      assert.equal(f.client.ephemerals[0].user, "U2");
+      assert.deepEqual(f.core.ackedRuns, runId ? [runId] : []);
+    } finally {
+      await f.stop();
+    }
   }
 });
 

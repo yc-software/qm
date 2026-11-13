@@ -70,7 +70,13 @@ import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
 import { reactionTallies } from "./conversation-view.ts";
-import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
+import {
+  SLACK_AUTH_ERRORS,
+  SLACK_PERMANENT_POST_ERRORS,
+  slackErrorCode,
+  type SlackMessageEvent,
+  type SlackReactionEvent,
+} from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
@@ -265,6 +271,13 @@ export function createTurnHandler(deps: {
       return firstTs;
     };
 
+    const unpostable = (err: unknown): boolean => {
+      const code = slackErrorCode(err);
+      if (!code || !SLACK_PERMANENT_POST_ERRORS.has(code) || SLACK_AUTH_ERRORS.has(code)) return false;
+      console.warn(`[slack-plugin] reply not postable ch=${inc.channel} ts=${inc.ts} (${code})`);
+      return true;
+    };
+
     const postEphemeral = async (msg: string, threadTs?: string): Promise<void> => {
       await client.chat
         .postEphemeral({
@@ -275,9 +288,19 @@ export function createTurnHandler(deps: {
         })
         .catch(swallowAs("slack: chat.postEphemeral", undefined));
     };
+
+    const postNote = async (msg: string, idempotencyKey?: string): Promise<void> => {
+      try {
+        await postReply(msg, undefined, idempotencyKey);
+      } catch (err) {
+        if (!unpostable(err)) throw err;
+        if (inc.kind === "channel") await postEphemeral(msg);
+      }
+    };
+
     const ephemeralOrSay = async (msg: string): Promise<void> => {
       if (inc.kind === "channel") await postEphemeral(msg);
-      else await postReply(msg);
+      else await postNote(msg);
     };
 
     if (inc.kind === "dm") {
@@ -583,7 +606,7 @@ export function createTurnHandler(deps: {
       } else {
         console.error(`[slack-plugin] turn errored ch=${inc.channel} ts=${inc.ts}: ${errMessage(err)}`);
         const note = `⚠️ ${slackFailureText(err)}`;
-        if (ack?.postedAck()) await postReply(note);
+        if (ack?.postedAck()) await postNote(note);
         else await ephemeralOrSay(note);
       }
       return;
@@ -646,7 +669,7 @@ export function createTurnHandler(deps: {
         const editNote = replyEditNote(result.retracted);
         const noteBlocks = editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined;
         if (postText) await postReply(postText, noteBlocks, runKey);
-        if (uploadError) await postReply(uploadFailureNote(uploadError));
+        if (uploadError) await postNote(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
         await applyAndLogReactions(client, inc.channel, inc.ts, directives);
@@ -672,7 +695,7 @@ export function createTurnHandler(deps: {
           );
           return;
         }
-        throw err;
+        if (!unpostable(err)) throw err;
       }
     } else if (result.status === "pending_approval") {
       const pendingApprovals = result.pendingApprovals ?? [];
@@ -682,7 +705,7 @@ export function createTurnHandler(deps: {
         if (inc.unprompted) {
           console.error(`[slack-plugin] turn.pending_approval (no card) ch=${inc.channel} ts=${inc.ts}: ${note}`);
         } else if (ack?.postedAck()) {
-          await postReply(note);
+          await postNote(note);
         } else {
           await ephemeralOrSay(note);
         }
@@ -700,14 +723,14 @@ export function createTurnHandler(deps: {
           const text = refusalNote(result, inc.kind);
           await postThenAckRunDelivery({
             post: async () => {
-              await postReply(text, undefined, `run:${runId}`);
+              await postNote(text, `run:${runId}`);
               await finishTaskAck();
             },
             ack: () => ackRunDelivery(runId),
             release: () => inFlightRuns.delete(runId),
           });
         } else {
-          await postReply(refusalNote(result, inc.kind));
+          await postNote(refusalNote(result, inc.kind));
         }
         return;
       }
@@ -722,7 +745,7 @@ export function createTurnHandler(deps: {
       }
       const postFailure = async () => {
         if (inc.kind === "dm" || ack?.postedAck())
-          await postReply(refusalNote(result, inc.kind), undefined, queuedRunId ? `run:${queuedRunId}` : undefined);
+          await postNote(refusalNote(result, inc.kind), queuedRunId ? `run:${queuedRunId}` : undefined);
         else await ephemeralOrSay(refusalNote(result, inc.kind));
         await finishTaskAck();
       };
