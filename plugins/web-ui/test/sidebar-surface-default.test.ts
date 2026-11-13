@@ -46,9 +46,9 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       },
       {
         id: "generic",
-        threadRef: "generic-chat:7001:dm:301",
+        threadRef: "partner-chat:7001:dm:301",
         scopeId: "personal:tester",
-        surface: "generic-chat",
+        surface: "partner-chat",
         title: "Data room checklist",
         createdAt: 1.2,
       },
@@ -84,7 +84,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
         permissions: [],
         chatSurfaces: [
           { kind: "slack", label: "Slack" },
-          { kind: "generic-chat", label: "Community chat" },
+          { kind: "partner-chat", label: "Community chat" },
         ],
       };
       shell.mountShell();

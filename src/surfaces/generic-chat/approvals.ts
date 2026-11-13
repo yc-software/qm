@@ -204,7 +204,7 @@ export function createGenericChatApprovals(deps: {
           ...(decision !== "deny" ? { scope: decision } : {}),
         },
         async: true,
-        idempotencyKey: `generic-chat:action:${click.eventId}`,
+        idempotencyKey: `${GENERIC_CHAT}:action:${click.eventId}`,
       });
       if (!queued.runId && queued.status === "pending_approval")
         return tell(

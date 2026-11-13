@@ -8,8 +8,8 @@ test("a generic-chat conversation opens as a transcript named for its surface, w
     ...SESSION,
     type: "dm" as const,
     createdAt: 1,
-    threadRef: "generic-chat:7001:dm:301",
-    surface: "generic-chat",
+    threadRef: "partner-chat:7001:dm:301",
+    surface: "partner-chat",
     canContinue: false,
   };
   const h = await harness({

@@ -677,12 +677,12 @@ test("sidebar excludes attached subagents including pinned and orphaned children
 });
 
 test("surfaceOf tells web chats, the chat surfaces the server names, and everything else apart", () => {
-  const sessions = [{ surface: "slack" }, { surface: "generic-chat" }, { surface: "web" }, { surface: "swarm" }, {}];
+  const sessions = [{ surface: "slack" }, { surface: "partner-chat" }, { surface: "web" }, { surface: "swarm" }, {}];
   appState.me = { user: "tester", org: "test" };
   assert.deepEqual(sessions.map(surfaceOf), ["core", "core", "web", "core", "core"]);
   appState.me.chatSurfaces = [
     { kind: "slack", label: "Slack" },
-    { kind: "generic-chat", label: "Community chat" },
+    { kind: "partner-chat", label: "Community chat" },
   ];
   assert.deepEqual(sessions.map(surfaceOf), ["chat", "chat", "web", "core", "core"]);
   assert.deepEqual(

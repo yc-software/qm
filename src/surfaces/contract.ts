@@ -67,6 +67,7 @@ export interface SurfacePromptHints {
 export interface Surface<Native = unknown> {
   readonly kind: string;
   readonly label: string;
+  readonly mark?: string;
   readonly capabilities: SurfaceCapabilities;
   readonly promptHints: SurfacePromptHints;
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;

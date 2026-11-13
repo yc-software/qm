@@ -530,7 +530,7 @@ export interface App {
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
   surfaceMirrored(kind: string): boolean;
-  chatSurfaces(): { kind: string; label: string }[];
+  chatSurfaces(): { kind: string; label: string; mark?: string }[];
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,

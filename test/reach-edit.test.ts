@@ -83,13 +83,13 @@ describe("POST /v1/reach with edit", () => {
   });
 
   it("with no target, edits in this conversation on another chat surface only during a live-reply turn", async () => {
-    const here: Destination = { type: "generic-chat", target: "generic-chat:7001:dm:88" };
+    const here: Destination = { type: "partner-chat", target: "partner-chat:7001:dm:88" };
     const body = { edit: { ts: "1793649600.00000000000000001002" }, text: "42 widgets" };
-    assert.equal((await post(body, here, { surface: "generic-chat" })).status, 400);
-    const res = await post(body, here, { surface: "generic-chat", liveReplies: true });
+    assert.equal((await post(body, here, { surface: "partner-chat" })).status, 400);
+    const res = await post(body, here, { surface: "partner-chat", liveReplies: true });
     assert.equal(res.status, 200, await res.clone().text());
     const { deliveryId } = (await res.json()) as { deliveryId: string };
-    const d = (await built.app.pendingDeliveries("generic-chat")).find((x) => x.id === deliveryId);
+    const d = (await built.app.pendingDeliveries("partner-chat")).find((x) => x.id === deliveryId);
     assert.deepEqual(d?.destination.edit, { messageTs: "1793649600.00000000000000001002" });
   });
 

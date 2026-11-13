@@ -308,7 +308,7 @@ export function createMessagingMethods(
       return deps.surfaces.get(kind)?.capabilities.mirrored === true;
     },
     chatSurfaces() {
-      return deps.surfaces.list().map(({ kind, label }) => ({ kind, label }));
+      return deps.surfaces.list().map(({ kind, label, mark }) => ({ kind, label, ...(mark ? { mark } : {}) }));
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };

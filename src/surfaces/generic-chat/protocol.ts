@@ -3,7 +3,7 @@ import { hmacHex } from "../../webhooks/verifiers.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
 import type { CachedMessage, SurfaceCache } from "../../surface-cache/types.ts";
 
-export const GENERIC_CHAT = "generic-chat";
+export const GENERIC_CHAT = "partner-chat";
 
 const MAX_CLOCK_SKEW_S = 300;
 const MESSAGE_ID_WIDTH = 20;

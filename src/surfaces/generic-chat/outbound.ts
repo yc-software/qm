@@ -30,7 +30,7 @@ export function genericChatSender(
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parseGenericChatRef(d.destination.target);
     if (!ref) throw new UnsupportedDelivery(`generic-chat: unroutable target ${d.destination.target}`);
-    if ((await deps.app.tenantFor("generic_chat", ref.account)) !== tenant.id)
+    if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
       throw new UnsupportedDelivery(`generic-chat: account ${ref.account} is not bound to this workspace`);
     const card = await genericChatCard(deps, d);
     if (card === null) return;

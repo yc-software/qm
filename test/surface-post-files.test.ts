@@ -455,7 +455,7 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
       deliveries,
     },
     input: { surfaceTools: true },
-    defaultDestination: { type: "generic-chat", target: "generic-chat:7001:group:88:1002" },
+    defaultDestination: { type: "partner-chat", target: "partner-chat:7001:group:88:1002" },
     strictReadOnly: false,
     postProvenance: () => ({}),
     postKeys: turnPostKeys("run-test"),
@@ -465,7 +465,7 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
   assert.equal((await tools.delete({ ref: "1793649600.00000000000000001002" })).ok, false);
   assert.equal((await tools.post("see attached", undefined, ["a.txt"])).ok, false);
   assert.equal((await createAttachStaging({ textOnly: true } as never).attach(["a.txt"])).ok, false);
-  assert.deepEqual(await deliveries.pending("generic-chat"), []);
+  assert.deepEqual(await deliveries.pending("partner-chat"), []);
 });
 
 test("a post the agent sends to another channel keeps the conversation's persona", async () => {

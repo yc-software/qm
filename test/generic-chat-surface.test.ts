@@ -39,7 +39,7 @@ import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 const SECRET = "generic-chat-test-secret-0123456789abcdef";
 const tenantFor = async () => TEST_TENANT;
 const NO_BLOBS = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
-const PROVENANCE = { trigger: "cron", surface: "generic-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
+const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
 
 interface Received {
   path: string;
@@ -159,7 +159,7 @@ async function genericChatApp() {
     emailAuthDomain: "example.com",
   });
   const owner = createPgPool(ownerUrl(config.databaseUrl!).toString());
-  await owner.q(`UPDATE tenants SET settings = '{"genericChatAccount":"7001"}' WHERE id = $1`, [TEST_TENANT]);
+  await owner.q(`UPDATE tenants SET settings = '{"partnerChatAccount":"7001"}' WHERE id = $1`, [TEST_TENANT]);
   await owner.close();
   const built = buildApp(config);
   built.runtime.start();
@@ -171,7 +171,7 @@ async function genericChatApp() {
   return { built, genericChat: { ...genericChat, close }, deliver };
 }
 
-const CONTAINER = "generic-chat:7001:group:88";
+const CONTAINER = "partner-chat:7001:group:88";
 
 test("generic-chat events are rejected unless signed with the shared secret inside five minutes", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
@@ -182,12 +182,12 @@ test("generic-chat events are rejected unless signed with the shared secret insi
     assert.equal((await deliver(event(), Math.floor(Date.now() / 1000) - 301)).status, 401);
     assert.equal((await deliver({ event_id: "x" })).status, 400);
     assert.deepEqual(await deliver(event()), { status: 200, body: { ok: true } });
-    const rows = await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", noFallback: true });
+    const rows = await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true });
     assert.deepEqual(
       rows.map((m) => [m.ts, m.authorId, m.authorName, m.text, Boolean(m.self)]),
       [["1793649600.00000000000000001001", "ada@example.com", "Ada Lovelace", "hello there", false]],
     );
-    assert.deepEqual(await built.surfaceCache.members(CONTAINER, { surface: "generic-chat" }), [
+    assert.deepEqual(await built.surfaceCache.members(CONTAINER, { surface: "partner-chat" }), [
       "ada@example.com",
       "grace@example.com",
     ]);
@@ -216,7 +216,7 @@ onBothProtocols(MENTIONED, async (version) => {
     );
     assert.ok(genericChat.received.every((r) => r.signed));
     const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
-    assert.equal(session?.surface, "generic-chat");
+    assert.equal(session?.surface, "partner-chat");
   } finally {
     await genericChat.close();
   }
@@ -241,7 +241,7 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
       ),
       [true, true, false],
     );
-    assert.ok(await built.sessions.getByThread(`generic-chat:${CONTAINER}:ambient:1793649600.00000000000000001003`));
+    assert.ok(await built.sessions.getByThread(`partner-chat:${CONTAINER}:ambient:1793649600.00000000000000001003`));
   } finally {
     await genericChat.close();
   }
@@ -256,7 +256,7 @@ onBothProtocols(FOLLOWED, async (version) => {
     const bodies = () => genericChat.shown().map((m) => [m.thread_id, m.body]);
     await deliver(event({ body: "!post first answer", mentions: true, eventId: "ev-m", messageId: "1008" }));
     const own = async () =>
-      (await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", self: true, noFallback: true }))
+      (await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true, noFallback: true }))
         .map((m) => [m.sub, m.text])
         .sort();
     await settle(async () => (await own()).some(([, text]) => text === "first answer"));
@@ -320,7 +320,7 @@ test("a turn in a generic-chat thread may schedule into the thread or the whole 
       owner: "ada@example.com",
       createdBy: "ada@example.com",
       ownerScopeId: scopeId("group", CONTAINER),
-      destination: { type: "generic-chat", target: CONTAINER, audienceScopeId: scopeId("group", CONTAINER) },
+      destination: { type: "partner-chat", target: CONTAINER, audienceScopeId: scopeId("group", CONTAINER) },
     });
     await runNowSettled(built.scheduler, cron.id);
     await settle(async () => genericChat.received.some((r) => r.body.body === "standup time"));
@@ -337,7 +337,7 @@ test("generic-chat conversation reads are answered from the mirror", async () =>
   try {
     await deliver(event({ body: "first", eventId: "e1", messageId: "1020" }));
     await deliver(event({ body: "second", eventId: "e2", messageId: "1021" }));
-    const request = await built.app.createContextRequest("generic-chat", { conversationTarget: CONTAINER, count: 10 });
+    const request = await built.app.createContextRequest("partner-chat", { conversationTarget: CONTAINER, count: 10 });
     let result: unknown;
     await settle(async () => {
       const r = await built.app.getContextRequest(request.id);
@@ -375,7 +375,7 @@ async function relayUntil(
   send: ReturnType<typeof genericChatSender>,
   until: () => Promise<boolean>,
 ): Promise<void> {
-  const relay = createDeliveryRelay(deliveries, { type: "generic-chat", send, claimMs: GENERIC_CHAT_CLAIM_MS });
+  const relay = createDeliveryRelay(deliveries, { type: "partner-chat", send, claimMs: GENERIC_CHAT_CLAIM_MS });
   withTenant(TEST_TENANT, () => relay.start());
   try {
     await settle(until);
@@ -390,17 +390,17 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
   try {
     const surface = createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
     await surface.post(
-      { surface: "generic-chat", account: "7001", kind: "group", container: "88", thread: "1009" },
+      { surface: "partner-chat", account: "7001", kind: "group", container: "88", thread: "1009" },
       { text: "scheduled hello", provenance: PROVENANCE },
       "cron:fire-1",
     );
     await deliveries.enqueue({
-      destination: { type: "generic-chat", target: CONTAINER },
+      destination: { type: "partner-chat", target: CONTAINER },
       text: "Here is the full answer",
       attachments: [{ name: "chart.png", mimeType: "image/png", blob: { kind: "inline", data: "" } }] as never,
       idempotencyKey: "run:00000000-0000-4000-8000-000000000001",
     });
-    await settled(async () => (await deliveries.pending("generic-chat")).length === 0);
+    await settled(async () => (await deliveries.pending("partner-chat")).length === 0);
     assert.deepEqual(
       genericChat.received.map((r) => [r.path, r.body, r.signed]),
       [
@@ -427,7 +427,7 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
         ["43", null, "Here is the full answer", true],
       ],
     );
-    assert.equal((await deliveries.pending("generic-chat")).length, 0);
+    assert.equal((await deliveries.pending("partner-chat")).length, 0);
   } finally {
     await genericChat.close();
   }
@@ -443,7 +443,7 @@ test("generic-chat rejections fail the delivery with the chat's reason while aut
     const { deliveries, settled } = outboundFor(genericChat.url);
     try {
       const d = await deliveries.enqueue({
-        destination: { type: "generic-chat", target: CONTAINER },
+        destination: { type: "partner-chat", target: CONTAINER },
         text: "hi",
         idempotencyKey: `k-${status}`,
       });
@@ -468,7 +468,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
     displayName: "Ada",
   });
   assert.deepEqual(genericChatPrincipal({ id: "6", name: "Guest" }, true), {
-    externalId: "generic-chat:6",
+    externalId: "partner-chat:6",
     isExternalGuest: true,
     displayName: "Guest",
   });
@@ -477,23 +477,23 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
     deliveries: createDeliveryStore(),
     surfaceCache: {
       readMessages: async (container, opts) =>
-        container === "generic-chat:7001:group:42" && opts?.timestamps?.[0] === reply
+        container === "partner-chat:7001:group:42" && opts?.timestamps?.[0] === reply
           ? [{ container, ts: reply, sub: "1000", text: "", createdAt: 0 }]
           : [],
     },
   });
   const principal = genericChatPrincipal({ id: "5", name: "Ada Lovelace" }, false);
-  assert.equal(surface.mention({ surface: "generic-chat", account: "7001", id: "5", principal }), "@Ada Lovelace");
+  assert.equal(surface.mention({ surface: "partner-chat", account: "7001", id: "5", principal }), "@Ada Lovelace");
   assert.equal(
-    await surface.threadTarget?.("generic-chat:7001:group:42", "1793649600.00000000000000001001"),
-    "generic-chat:7001:group:42:1001",
+    await surface.threadTarget?.("partner-chat:7001:group:42", "1793649600.00000000000000001001"),
+    "partner-chat:7001:group:42:1001",
   );
   assert.equal(
-    await surface.threadTarget?.("generic-chat:7001:group:42:1000", reply),
-    "generic-chat:7001:group:42:1000",
+    await surface.threadTarget?.("partner-chat:7001:group:42:1000", reply),
+    "partner-chat:7001:group:42:1000",
   );
   await assert.rejects(
-    async () => surface.threadTarget?.("generic-chat:7001:group:42", "not-a-message"),
+    async () => surface.threadTarget?.("partner-chat:7001:group:42", "not-a-message"),
     /can't reply under/,
   );
 });
@@ -506,7 +506,7 @@ test("a chat with any member the deployment does not vouch for is neither mirror
     assert.equal((await deliver(withGuest)).status, 200);
     await new Promise((r) => setTimeout(r, 1_500));
     assert.deepEqual(
-      await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", noFallback: true }),
+      await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }),
       [],
     );
     assert.equal(genericChat.received.length, 0);
@@ -515,7 +515,7 @@ test("a chat with any member the deployment does not vouch for is neither mirror
     unlisted.message.user = { id: "8", email: "ada@example.com", name: "Not A Member" };
     assert.equal((await deliver(unlisted)).status, 200);
     assert.deepEqual(
-      await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", noFallback: true }),
+      await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }),
       [],
     );
   } finally {
@@ -530,12 +530,15 @@ test("generic-chat config requires the url and secret together", () => {
       .genericChat,
     { url: "https://chat.example", secret: "s", label: "Acme Chat" },
   );
+  const base = { GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s" };
+  assert.equal(loadConfig({ ...base, GENERIC_CHAT_MARK: "M2 2h20v20H2z" }).genericChat?.mark, "M2 2h20v20H2z");
+  assert.throws(() => loadConfig({ ...base, GENERIC_CHAT_MARK: '<svg onload="x()"/>' }), /SVG path data/);
 });
 
 test("a direct run that ends refused or waiting on an approval, or a message answered without a run, gets one notice in its reply thread", async () => {
   const deliveries = createDeliveryStore();
   const notices = createGenericChatNotices({ deliveries });
-  const destination = { type: "generic-chat", target: `${CONTAINER}:1002` };
+  const destination = { type: "partner-chat", target: `${CONTAINER}:1002` };
   const id = (n: number) => `00000000-0000-4000-8000-00000000001${n}`;
   const run = (n: number, opts: { kind?: string; result?: Record<string, unknown> }) =>
     ({
@@ -543,7 +546,7 @@ test("a direct run that ends refused or waiting on an approval, or a message ans
       sessionId: "s",
       status: "done",
       request: {
-        surface: "generic-chat",
+        surface: "partner-chat",
         deliveryTarget: destination.target,
         origin: { kind: opts.kind ?? "human" },
         addressed: true,
@@ -576,10 +579,10 @@ test("a direct run that ends refused or waiting on an approval, or a message ans
   );
   notices.unanswered({ status: "refused", reason: "empty message" }, destination, "notice:m8");
   notices.unanswered({ status: "silent" }, destination, "notice:m9");
-  await settle(async () => (await deliveries.pending("generic-chat")).length === 5);
+  await settle(async () => (await deliveries.pending("partner-chat")).length === 5);
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(
-    (await deliveries.pending("generic-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]).sort(),
+    (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]).sort(),
     [
       [
         `run:${id(5)}`,
@@ -628,7 +631,7 @@ test("reading a thread starts with the message the thread hangs off, once, on th
     await deliver(event({ body: "second reply", eventId: "r4", messageId: "1083", thread: "1080" }));
     await deliver(event({ body: "third reply", eventId: "r5", messageId: "1084", thread: "1080" }));
     const read = async (count: number, before?: string) => {
-      const request = await built.app.createContextRequest("generic-chat", {
+      const request = await built.app.createContextRequest("partner-chat", {
         conversationTarget: `${CONTAINER}:1080`,
         count,
         ...(before ? { before } : {}),
@@ -668,7 +671,7 @@ test("a generic-chat history read returns a long message whole", async () => {
   try {
     const long = `${"a long design note ".repeat(60)}end`;
     await deliver(event({ body: long, eventId: "l1", messageId: "1096" }));
-    const request = await built.app.createContextRequest("generic-chat", { conversationTarget: CONTAINER, count: 5 });
+    const request = await built.app.createContextRequest("partner-chat", { conversationTarget: CONTAINER, count: 5 });
     let result: { messages: Array<{ text: string }> } | undefined;
     await settle(async () => {
       const r = await built.app.getContextRequest(request.id);
@@ -692,7 +695,7 @@ test("an event for a message the agent posted is dropped even before the post is
     const posted = genericChat.shown().find((m) => m.body === "on the record")!;
     const rows = () =>
       built.surfaceCache
-        .readMessages(CONTAINER, { surface: "generic-chat", noFallback: true })
+        .readMessages(CONTAINER, { surface: "partner-chat", noFallback: true })
         .then((all) => all.filter((m) => m.text === "on the record").map((m) => [Boolean(m.self), Boolean(m.bot)]));
     await settle(async () => (await rows()).length === 1);
     const early = event({ body: "not yet recorded", eventId: "ev-early", messageId: "1199", bot: true, appPost: true });
@@ -707,7 +710,7 @@ test("an event for a message the agent posted is dropped even before the post is
     earlyEdit.type = "message.updated";
     assert.deepEqual(await deliver(earlyEdit), { status: 200, body: { ok: true, ignored: "own_message" } });
     assert.equal(
-      (await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", noFallback: true })).some(
+      (await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true })).some(
         (m) => m.text === "not yet recorded" || m.text === "edited early",
       ),
       false,
@@ -724,7 +727,7 @@ test("an event for a message the agent posted is dropped even before the post is
     assert.deepEqual(await rows(), [[true, true]]);
     const own = () =>
       built.surfaceCache
-        .readMessages(CONTAINER, { surface: "generic-chat", self: true, includeDeleted: true, noFallback: true })
+        .readMessages(CONTAINER, { surface: "partner-chat", self: true, includeDeleted: true, noFallback: true })
         .then((all) =>
           all
             .filter((m) => m.ts.endsWith(`.${posted.id.padStart(20, "0")}`))
@@ -770,7 +773,7 @@ test("an event for a message the agent posted is dropped even before the post is
       [true],
     );
     assert.deepEqual(
-      (await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", noFallback: true }))
+      (await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }))
         .filter((m) => m.ts.endsWith(`.${posted.id.padStart(20, "0")}`))
         .map((m) => m.text),
       [],
@@ -787,7 +790,7 @@ test("another bot's message is mirrored as a bot's, not the agent's, and does no
       status: 200,
       body: { ok: true },
     });
-    const rows = await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", noFallback: true });
+    const rows = await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true });
     assert.deepEqual(
       rows.map((m) => [m.text, Boolean(m.self), Boolean(m.bot)]),
       [["bot says hi", false, true]],
@@ -812,14 +815,14 @@ test("a direct chat is only trusted when its author is its one listed person", a
     await new Promise((r) => setTimeout(r, 1_500));
     assert.equal(genericChat.received.length, 0);
     assert.deepEqual(
-      await built.surfaceCache.readMessages("generic-chat:7001:dm:88", { surface: "generic-chat", noFallback: true }),
+      await built.surfaceCache.readMessages("partner-chat:7001:dm:88", { surface: "partner-chat", noFallback: true }),
       [],
     );
     const direct = event({ body: "!surfacename", eventId: "d2", messageId: "1101" });
     direct.chat.kind = "dm";
     direct.chat.members = direct.chat.members.filter((m) => m.id !== "6");
     assert.deepEqual(await deliver(direct), { status: 200, body: { ok: true } });
-    await settle(async () => genericChat.shown().some((m) => m.body === "surface:generic-chat"));
+    await settle(async () => genericChat.shown().some((m) => m.body === "surface:partner-chat"));
   } finally {
     await genericChat.close();
   }
@@ -855,8 +858,8 @@ test("a protocol 2 turn is answered by the turn driver: once in a direct chat, a
       ",5,post,I hit an error and couldn't finish",
       "1203,,post,[not reacted] Reactions aren't supported in this conversation.",
     ]);
-    await settle(async () => (await built.deliveries.pending("generic-chat")).length === 0);
-    const mirrored = await built.surfaceCache.readMessages(CONTAINER, { surface: "generic-chat", self: true });
+    await settle(async () => (await built.deliveries.pending("partner-chat")).length === 0);
+    const mirrored = await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true });
     assert.deepEqual(
       mirrored.map((m) => m.sub),
       ["1203"],
@@ -871,7 +874,7 @@ test("a thread under one of the agent's older posts is still recognised as engag
   try {
     await built.surfaceCache.ingest(
       Array.from({ length: 600 }, (_, i) => ({
-        surface: "generic-chat",
+        surface: "partner-chat",
         container: CONTAINER,
         ts: `1793649600.${String(2000 + i).padStart(20, "0")}`,
         authorId: "self",
@@ -907,7 +910,7 @@ test("a run-end notice lost before its enqueue is recovered by the run-result sw
     status: "done",
     finishedAt: Date.now() - 120_000,
     request: {
-      surface: "generic-chat",
+      surface: "partner-chat",
       deliveryTarget: `${CONTAINER}:1002`,
       origin: { kind: "human" },
       addressed: true,
@@ -932,7 +935,7 @@ test("a run-end notice lost before its enqueue is recovered by the run-result sw
   assert.equal(await recovery.sweep(), 1);
   assert.equal(await recovery.sweep(), 0);
   assert.deepEqual(
-    (await deliveries.pending("generic-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]),
+    (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]),
     [[`run:${ended.id}`, `${CONTAINER}:1002`, "Waiting on approval to run it."]],
   );
 });
@@ -966,14 +969,14 @@ test("a retryable failure holds back later posts to the same chat target only", 
     ["99", "only in 99"],
   ] as const)
     await deliveries.enqueue({
-      destination: { type: "generic-chat", target: `generic-chat:7001:group:${chat}` },
+      destination: { type: "partner-chat", target: `partner-chat:7001:group:${chat}` },
       text,
       idempotencyKey: text,
     });
   await relayUntil(deliveries, send, async () => sent.length >= 2);
   assert.deepEqual(sent.toSorted(), ["first in 88", "only in 99"]);
   assert.deepEqual(
-    (await deliveries.pending("generic-chat")).map((d) => d.text),
+    (await deliveries.pending("partner-chat")).map((d) => d.text),
     ["first in 88", "second in 88"],
   );
 });
@@ -1055,7 +1058,7 @@ test("a credential request is a card its owner decides from the chat, and a deci
   };
   const deliveries = createDeliveryStore();
   const send = genericChatSender({ client, blobs: NO_BLOBS, app, keychainApprovals });
-  const destination = { type: "generic-chat", target: `${CONTAINER}:1002`, keychainAskId: "ask1" };
+  const destination = { type: "partner-chat", target: `${CONTAINER}:1002`, keychainAskId: "ask1" };
   try {
     await deliveries.enqueue({ destination, text: "notice", idempotencyKey: "ask:ask1:notice" });
     await relayUntil(deliveries, send, async () => genericChat.shown().length === 1);
@@ -1110,16 +1113,16 @@ test("a status post becomes the final reply in place, and the agent can revise o
     withTenant(TEST_TENANT, () => postGenericChatMessage(ops, thread, { text: "On it", idempotencyKey: "status:r1" }));
   const deliver = async (destination: Record<string, unknown>, text: string, idempotencyKey: string) => {
     const d = await deliveries.enqueue({
-      destination: { type: "generic-chat", target: `${CONTAINER}:1009`, ...destination },
+      destination: { type: "partner-chat", target: `${CONTAINER}:1009`, ...destination },
       text,
       idempotencyKey,
     });
-    await relayUntil(deliveries, send, async () => (await deliveries.pending("generic-chat")).length === 0);
+    await relayUntil(deliveries, send, async () => (await deliveries.pending("partner-chat")).length === 0);
     return (await deliveries.get(d.id))?.failedReason ?? null;
   };
   const cached = () =>
     built.surfaceCache
-      .readMessages(CONTAINER, { surface: "generic-chat", self: true, includeDeleted: true, noFallback: true })
+      .readMessages(CONTAINER, { surface: "partner-chat", self: true, includeDeleted: true, noFallback: true })
       .then((all) => all.map((m) => [m.ts, m.sub, m.text, Boolean(m.editedAt), Boolean(m.deleted)]));
   try {
     const ref = (await status())!;
@@ -1179,7 +1182,7 @@ test("a react delivery adds the agent's reaction under the chat's own emoji name
     const react = (emoji: string) =>
       deliveries.enqueue({
         destination: {
-          type: "generic-chat",
+          type: "partner-chat",
           target: `${CONTAINER}:1009`,
           react: { messageTs: "1793649600.00000000000000001021", emoji },
         },
@@ -1189,7 +1192,7 @@ test("a react delivery adds the agent's reaction under the chat's own emoji name
     await react("thumbsup");
     await react("👍🏽");
     const unknown = await react("not_a_real_emoji");
-    await settled(async () => (await deliveries.pending("generic-chat")).length === 0);
+    await settled(async () => (await deliveries.pending("partner-chat")).length === 0);
     await setGenericChatReaction(
       createGenericChatClient({ url: genericChat.url, secret: SECRET }),
       { account: "7001", chat: "88" },

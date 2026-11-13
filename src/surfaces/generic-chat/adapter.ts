@@ -19,8 +19,7 @@ const DEFAULT_PROMPT_HINTS: SurfacePromptHints = {
   mentionSyntax:
     "To @-mention someone here, write `@` followed by their name exactly as it appears in the chat roster, e.g. `@Jane Doe`.",
   linkSyntax: "Use Markdown links: `[label](https://example.com)`.",
-  autonomousStyle:
-    "You're in a group chat: keep each posted message to at most two sentences unless asked for more. You see only a recent window here; use the `generic-chat` tool's read actions (or `POST $AGENT_API_URL/v1/surface-context`) to reach further back.",
+  autonomousStyle: `You're in a group chat: keep each posted message to at most two sentences unless asked for more. You see only a recent window here; use the \`${GENERIC_CHAT}\` tool's read actions (or \`POST $AGENT_API_URL/v1/surface-context\`) to reach further back.`,
   conversationStyle:
     "- This is a group chat: keep each reply to a couple of sentences unless they ask for more.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",
 };
@@ -29,7 +28,7 @@ export function genericChatPrincipal(user: GenericChatUser, internal: boolean): 
   const email = user.email?.trim().toLowerCase();
   const name = user.name?.trim();
   return {
-    externalId: email?.includes("@") ? email : `generic-chat:${user.id}`,
+    externalId: email?.includes("@") ? email : `${GENERIC_CHAT}:${user.id}`,
     ...(internal && email?.includes("@") ? {} : { isExternalGuest: true }),
     ...(user.bot ? { isBot: true } : {}),
     ...(name ? { displayName: name } : {}),
@@ -40,10 +39,12 @@ export function createGenericChatSurface(deps: {
   deliveries: DeliveryStore;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   label?: string;
+  mark?: string;
 }): Surface<null> {
   return {
     kind: GENERIC_CHAT,
     label: deps.label ?? DEFAULT_LABEL,
+    ...(deps.mark ? { mark: deps.mark } : {}),
     capabilities: {
       mirrored: true,
       liveReplies: false,

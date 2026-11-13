@@ -125,7 +125,7 @@ function sending(respond: Parameters<typeof chatHost>[0]) {
         {
           id: "d1",
           idempotencyKey: "k1",
-          destination: { type: "generic-chat", target: "generic-chat:7001:group:88:1001" },
+          destination: { type: "partner-chat", target: "partner-chat:7001:group:88:1001" },
           text,
           attachments,
         } as Delivery,
@@ -227,7 +227,7 @@ test("a live turn shows typing, posts its status, then posts the reply with its 
     },
   };
   await runSurfaceTurn(
-    { flow, label: "generic-chat", reportEditRef: async (runId, ref) => void editRefs.push([runId, ref]) },
+    { flow, label: "partner-chat", reportEditRef: async (runId, ref) => void editRefs.push([runId, ref]) },
     transport,
     {
       kind: "dm",

@@ -104,7 +104,7 @@ export function createGenericChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
-    const tenant = await deps.app.tenantFor("generic_chat", event.account);
+    const tenant = await deps.app.tenantFor("partner_chat", event.account);
     if (!tenant) {
       console.log(`[generic-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };

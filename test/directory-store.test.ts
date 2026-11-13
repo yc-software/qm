@@ -201,14 +201,14 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
 
   it("a full sync keeps a group another surface registered", async () => {
     const d = createPostgresDirectoryStore(testDatabaseUrl());
-    await d.upsertGroup("generic-chat:1:group:9", ["ada@example.com"], "generic-chat");
+    await d.upsertGroup("partner-chat:1:group:9", ["ada@example.com"], "partner-chat");
     await d.replaceGroups([{ groupId: "G-2", principalId: "U-alice" }]);
-    assert.equal(await d.groupMember("generic-chat:1:group:9", "ada@example.com"), true);
+    assert.equal(await d.groupMember("partner-chat:1:group:9", "ada@example.com"), true);
   });
 
   it("matches a participant set only among groups the asking surface owns", async () => {
     const d = createPostgresDirectoryStore(testDatabaseUrl());
-    await d.upsertGroup("generic-chat:1:group:9", ["ada@example.com", "bo@example.com"], "generic-chat");
+    await d.upsertGroup("partner-chat:1:group:9", ["ada@example.com", "bo@example.com"], "partner-chat");
     assert.deepEqual(await d.resolveGroupByParticipants(["bo@example.com", "ada@example.com"], "slack"), {
       kind: "none",
     });

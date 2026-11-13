@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import { MessagesSquare } from "lucide";
 import type { CoreSession } from "./core-bridge.ts";
 import { icon } from "./icons.ts";
@@ -10,6 +10,19 @@ const BRAND_MARKS: Record<string, (size: number) => TemplateResult> = {
   slack: (size) => slackMark(size, true),
 };
 
+function configuredMark(d: string, size: number): TemplateResult {
+  return html`<svg
+    class="slack-mark"
+    width=${size}
+    height=${size}
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+    focusable="false"
+  >
+    ${svg`<path d=${d} fill="currentColor" />`}
+  </svg>`;
+}
+
 export function chatSurfaceMark(
   s: Pick<CoreSession, "surface">,
   size: number,
@@ -17,7 +30,6 @@ export function chatSurfaceMark(
 ): TemplateResult | typeof nothing {
   const surface = chatSurfaceOf(s);
   if (!surface) return nothing;
-  return html`<span class=${className} ${tip(surface.label)}
-    >${BRAND_MARKS[surface.kind]?.(size) ?? icon(MessagesSquare, size)}</span
-  >`;
+  const mark = surface.mark ? configuredMark(surface.mark, size) : BRAND_MARKS[surface.kind]?.(size);
+  return html`<span class=${className} ${tip(surface.label)}>${mark ?? icon(MessagesSquare, size)}</span>`;
 }

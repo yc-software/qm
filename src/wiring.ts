@@ -427,7 +427,6 @@ import { createGenericChatTurns } from "./surfaces/generic-chat/turns.ts";
 import { createGenericChatApprovals, genericChatApprovalCardRoute } from "./surfaces/generic-chat/approvals.ts";
 import { createGenericChatNotices, genericChatRunNotice } from "./surfaces/generic-chat/notices.ts";
 import { GENERIC_CHAT } from "./surfaces/generic-chat/protocol.ts";
-import { GENERIC_CHAT_RENAME } from "./surfaces/generic-chat/migration.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -2197,6 +2196,7 @@ export function buildApp(
               deliveries,
               surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
               ...(config.genericChat.label ? { label: config.genericChat.label } : {}),
+              ...(config.genericChat.mark ? { mark: config.genericChat.mark } : {}),
             }),
           ]
         : []),
@@ -2379,7 +2379,6 @@ export function buildApp(
   const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
-  pgArtifactMap.pool.registerMigration(GENERIC_CHAT_RENAME);
   const providerKeys = directProviderAvailability;
   const subagentMail = {
     sessions,

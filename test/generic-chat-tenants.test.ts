@@ -48,15 +48,15 @@ describeTwoTenants("generic chat on a shared host", (db) => {
   }
 
   function post(account: string) {
-    const delivery = { destination: { type: "generic-chat", target: `generic-chat:${account}:group:88` }, text: "hi" };
+    const delivery = { destination: { type: "partner-chat", target: `partner-chat:${account}:group:88` }, text: "hi" };
     return withTenant(db.tenants[0], (tenant) => send(delivery as Parameters<typeof send>[0], tenant));
   }
 
   it("binds an account to one workspace, handles its events there and posts only for the sender's own", async () => {
     const bind = (tenant: string, account: string) =>
-      db.owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, { genericChatAccount: account }]);
+      db.owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, { partnerChatAccount: account }]);
     for (const [i, tenant] of db.tenants.entries()) await bind(tenant, `700${i}`);
-    await assert.rejects(bind(db.tenants[1], "7000"), /tenants_generic_chat_account/);
+    await assert.rejects(bind(db.tenants[1], "7000"), /tenants_partner_chat_account/);
     assert.deepEqual([await deliver("7000"), await deliver("7001"), await deliver("9999")], [200, 200, 404]);
     assert.deepEqual(handledIn, [...db.tenants]);
     assert.equal(await post("7000"), undefined);

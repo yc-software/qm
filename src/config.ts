@@ -118,7 +118,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  genericChat?: { url: string; secret: string; label?: string };
+  genericChat?: { url: string; secret: string; label?: string; mark?: string };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -240,6 +240,13 @@ export const CONFIG_DEFAULTS = {
   maxClaims: 8,
   processReaperIntervalMs: 30_000,
 } as const;
+
+const SVG_PATH_MAX = 4000;
+const SVG_PATH_CHARS = new Set("MmLlHhVvCcSsQqTtAaZz0123456789.-+eE, \t\n");
+
+function isSvgPathData(value: string): boolean {
+  return value.length <= SVG_PATH_MAX && [...value].every((ch) => SVG_PATH_CHARS.has(ch));
+}
 
 function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   return sanitizeBranding({
@@ -485,6 +492,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
   if (Boolean(env.GENERIC_CHAT_URL?.trim()) !== Boolean(env.GENERIC_CHAT_SECRET?.trim()))
     throw new Error("GENERIC_CHAT_URL and GENERIC_CHAT_SECRET must be set together");
+  const genericChatMark = env.GENERIC_CHAT_MARK?.trim();
+  if (genericChatMark && !isSvgPathData(genericChatMark))
+    throw new Error(`GENERIC_CHAT_MARK must be SVG path data of at most ${SVG_PATH_MAX} characters`);
   if (
     slackEventsPort !== undefined &&
     (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)
@@ -604,6 +614,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
             url: env.GENERIC_CHAT_URL.trim(),
             secret: env.GENERIC_CHAT_SECRET.trim(),
             ...(env.GENERIC_CHAT_LABEL?.trim() ? { label: env.GENERIC_CHAT_LABEL.trim() } : {}),
+            ...(genericChatMark ? { mark: genericChatMark } : {}),
           },
         }
       : {}),

@@ -1,6 +1,7 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { fold } from "../identity/user-tenancy.ts";
+import { servingTenant } from "./claim.ts";
 import { withTenant } from "./context.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
@@ -34,9 +35,9 @@ export function inboundTenancy(table: string): PgMigrationDefinition[] {
   return [...durableMapTenancy(table), inboundIndexes(table)];
 }
 
-export type TenantKey = keyof typeof KEYS | "slack_bridge" | "generic_chat" | "app_host";
+export type TenantKey = keyof typeof KEYS | "slack_bridge" | "partner_chat" | "app_host";
 
-export const tenantKeyFunction = (name: string, returns: string, body: string): string =>
+const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
     AS $lookup$ ${body} $lookup$`;
@@ -46,13 +47,13 @@ export const TENANT_LOOKUPS: PgMigrationDefinition = {
   statements: [
     `SET LOCAL check_function_bodies = off`,
     ...Object.entries(KEYS).map(([key, rows]) =>
-      tenantKeyFunction(
+      definer(
         `qm_tenant_for_${key}`,
         "uuid",
         `SELECT (array_agg(DISTINCT tenant_id))[1] FROM (${rows}) found HAVING count(DISTINCT tenant_id) = 1`,
       ),
     ),
-    tenantKeyFunction(
+    definer(
       "qm_tenants_for_gmail",
       "SETOF uuid",
       `SELECT DISTINCT tenant_id FROM loop_ingress
@@ -147,10 +148,23 @@ export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
   id: "tenancy/lookups/0004-slack-bridge",
   statements: [
     `SET LOCAL check_function_bodies = off`,
-    tenantKeyFunction(
+    definer(
       "qm_tenant_for_slack_bridge",
       "uuid",
       `SELECT (array_agg(id))[1] FROM tenants WHERE settings->>'slackBridgeToken' = $1 HAVING count(*) = 1`,
+    ),
+  ],
+};
+
+export const GENERIC_CHAT_TENANT: PgMigrationDefinition = {
+  id: "tenancy/lookups/0007-partner-chat",
+  statements: [
+    `SET LOCAL check_function_bodies = off`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS tenants_partner_chat_account ON tenants ((settings->>'partnerChatAccount'))`,
+    definer(
+      "qm_tenant_for_partner_chat",
+      "uuid",
+      `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1${servingTenant("id")}`,
     ),
   ],
 };
