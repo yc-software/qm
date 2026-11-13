@@ -93,13 +93,17 @@ test("activities from the app a person just connected are marked new and none of
   assert.deepEqual([...shown.fresh], ["g1"]);
 });
 
-test("/onboard shows the welcome to a person who already has conversations", async () => {
-  const welcome = { activities: [idea("crm", "📇", "Build a tracker for the harbor pilots")], apps: {} };
+test("/onboard shows the welcome to a person who already has conversations, with their linked Slack's ideas", async () => {
+  const welcome = {
+    activities: [idea("crm", "📇", "Build a tracker for the harbor pilots")],
+    apps: { slack: [idea("s1", "💬", "Summarize the channels I missed")] },
+  };
   const h = await harness({
     path: "/onboard",
     listSessions: [{ ...SESSION, createdAt: 1 }],
     api: (path) => {
       if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [], welcome });
+      if (path === "/api/composio/slack") return Response.json({ connected: true, workspaceInstalled: true });
       return path.startsWith("/api/runtime-config") ? Response.json(runtimeConfig) : undefined;
     },
   });
@@ -108,7 +112,10 @@ test("/onboard shows the welcome to a person who already has conversations", asy
     h.releaseSessions();
     await h.boot();
     assert.ok(h.sessionsState.list.length > 0);
+    for (let i = 0; i < 100 && !h.mainText().includes("from Slack"); i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
     assert.match(h.mainText(), /Welcome to QM!\s*What is this\?\s*Where to start/);
+    assert.match(h.mainText(), /Summarize the channels I missed\s*from Slack/);
     assert.equal(location.pathname, "/");
   } finally {
     await h.close();
