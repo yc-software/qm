@@ -2,13 +2,7 @@ import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { Route } from "./route.ts";
-import { companyActivitySeeds, type WebMeConfig } from "./web-me.ts";
-import type { SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
-
-async function seedActivities(config: WebMeConfig | undefined): Promise<SuggestedActivity[]> {
-  if (!config) return [];
-  return (await companyActivitySeeds(config))?.activities ?? config.suggestedActivities;
-}
+import { seedActivities } from "./web-me.ts";
 
 export const suggestedActivityRoutes: Route[] = [
   {
@@ -40,7 +34,7 @@ export const suggestedActivityRoutes: Route[] = [
       return sendJson(
         res,
         200,
-        await deps.suggestedActivities.get(body.principalId, await seedActivities(deps.web?.me), {
+        await deps.suggestedActivities.get(body.principalId, seedActivities(deps), {
           timezone,
           poll: body.poll === true,
           refresh: body.refresh === true,

@@ -20,7 +20,7 @@ test("configured activities preserve order and discard unrelated fields", () => 
   );
 });
 
-test("invalid configuration fails without echoing its contents", () => {
+test("invalid configuration fails naming the setting, without echoing its contents", () => {
   for (const value of [
     "private-invalid-json",
     "{}",
@@ -35,10 +35,11 @@ test("invalid configuration fails without echoing its contents", () => {
     JSON.stringify(Array.from({ length: 13 }, (_, i) => ({ ...activity, id: `item-${i}` }))),
     "x".repeat(20_001),
   ]) {
-    assert.throws(() => parseSuggestedActivities(value), {
-      message:
-        "WEB_UI_SUGGESTED_ACTIVITIES must be a JSON array of up to 12 unique activities with id, title, prompt, and icon",
-    });
+    assert.throws(
+      () => parseSuggestedActivities(value),
+      ({ message }: Error) =>
+        message.startsWith("WEB_UI_SUGGESTED_ACTIVITIES") && !/private|script|aaa|item-/.test(message),
+    );
   }
 });
 
