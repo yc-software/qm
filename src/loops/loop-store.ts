@@ -266,8 +266,9 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
 }
 
 export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
-  id: "triggers/0002-mark-bot-written-loops",
+  id: "users/v2/0010-mark-bot-written-loops",
   statements: [
+    `SET LOCAL statement_timeout = 0`,
     `DO $$
     BEGIN
       IF to_regclass('items') IS NULL OR to_regclass('runs') IS NULL OR to_regclass('loops') IS NULL

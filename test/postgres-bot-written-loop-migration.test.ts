@@ -54,7 +54,7 @@ test("a deploy marks loops bot work created or rewrote and revokes ship grants b
     grants: await Promise.all(["ga", "gc", "pc", "ge", "gr"].map((id) => loops.grants.get(id))),
   });
   const [before, pg] = [await state(), createPgPool(url)];
-  await pg.q("DELETE FROM qm_schema_migrations WHERE id = 'triggers/0002-mark-bot-written-loops'");
+  await pg.q("DELETE FROM qm_schema_migrations WHERE id = 'users/v2/0010-mark-bot-written-loops'");
   await migrateRegisteredPgSchemas(url);
   const after = await state();
   const audit = await pg.q(`SELECT action, resource, scope_label, detail::jsonb FROM audit_log
