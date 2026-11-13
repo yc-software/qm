@@ -105,8 +105,8 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
       maxAttempts: 1,
     }),
     mcp: {
-      toolDefsFor: async (_principalId?: string, _scopeId?: string, actAs?: boolean) => {
-        actAsActor.push(actAs);
+      toolDefsFor: async (_principalId?: string, _scopeId?: string, turn?: { actAsActor?: boolean }) => {
+        actAsActor.push(turn?.actAsActor);
         return [];
       },
     } as unknown as McpToolService,

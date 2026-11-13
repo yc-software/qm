@@ -219,7 +219,7 @@ export async function brokerCredentialCall(opts: {
       rec.injection.audience,
       actor,
       claims.deployment ? claims.scopeId : claims.audienceScopeId,
-      claims.actAsActor,
+      claims,
     )
   ) {
     const refusal = new OutsideAudience("this credential");
