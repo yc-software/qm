@@ -369,7 +369,7 @@ export function createMcpToolService(opts: {
 
   async function load(state: ReturnType<typeof tenantState>): Promise<void> {
     state.catalogs.clear();
-    state.version = await opts.servers.version();
+    const version = await opts.servers.version();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
@@ -378,6 +378,7 @@ export function createMcpToolService(opts: {
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
     state.attestedServers = new Map(servers.filter((s) => s.attestActor).map((s) => [s.id, s]));
+    state.version = version;
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
