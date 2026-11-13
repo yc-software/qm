@@ -254,10 +254,8 @@ test("a running job whose run was a bot's turn is claimed as that bot's job, whi
   const raw = new pg.Pool({ connectionString: url, max: 1 });
   await raw.query("UPDATE runs SET request = $2 WHERE id = $1", [unreadable, '{"text":"\\u0000"}']);
   await raw.end();
-  assert.deepEqual(
-    (await registry.claimLiveBotJobs()).map((row) => row.id),
-    ["bot-job"],
-  );
+  const claimed = (await registry.claimLiveBotJobs()).map((row) => row.id);
+  assert.deepEqual(claimed, ["bot-job"]);
   assert.equal((await registry.get("bot-job"))?.botActor, "release-bot");
   assert.equal((await registry.get("person-job"))?.botActor, undefined);
 });

@@ -345,10 +345,8 @@ test("outside a swarm, a Slack bot's background job on its own computer is stopp
   assert.deepEqual(stopped, [botJob!.processId]);
   assert.equal((await processes.get(botJob!.processId))?.status, "reaped");
   const live = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
-  assert.deepEqual(
-    live.map((job) => [job.command, job.botActor]),
-    [["bg: npm test", undefined]],
-  );
+  const kept = live.map((job) => [job.command, job.botActor]);
+  assert.deepEqual(kept, [["bg: npm test", undefined]]);
 });
 
 test("a Slack bot's channel turn that may not direct a person's swarm cannot list or use the swarm's computers", async (t) => {

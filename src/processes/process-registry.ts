@@ -1,7 +1,7 @@
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
+import { claimFunction, claimRows, servingTenant, type ClaimedRow } from "../tenants/claim.ts";
 import type { Tenant } from "../tenants/context.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
@@ -124,11 +124,11 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       id: "processes/registry/0007-bot-actor",
       statements: [
         "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS bot_actor TEXT",
-        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND pg_input_is_valid(r.request, 'jsonb'); END IF; END $$`,
+        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND pg_input_is_valid(r.request, 'jsonb')${servingTenant("p.tenant_id")}; END IF; END $$`,
         claimFunction(
           "claim_live_bot_process_sessions",
           "bigint",
-          "SELECT fill_process_session_bot_actors(); SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor <> ''",
+          `SELECT fill_process_session_bot_actors(); SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor <> ''${servingTenant("tenant_id")}`,
         ),
       ],
     },
