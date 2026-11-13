@@ -52,14 +52,16 @@ export {
   dedupedRun,
 } from "./message-gating.ts";
 export {
-  type SlackFile,
   MAX_ATTACHMENT_BYTES,
   isOversize,
-  isTrustedSlackHost,
   attachmentFromBytes,
   MAX_ATTACHMENTS_PER_TURN,
-  downloadSlackFile,
   processInboundFiles,
+} from "../surfaces/attachments.ts";
+export {
+  type SlackFile,
+  isTrustedSlackHost,
+  downloadSlackFile,
   stageSlackFiles,
   uploadAttachments,
   uploadFailureNote,
