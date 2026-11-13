@@ -458,6 +458,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
             snippet: String(m.text).slice(0, 200),
           }));
       if (opts?.source === "slack") {
+        if (input.botActor)
+          return {
+            ok: false,
+            message:
+              "live search runs as a person's own Slack login, so a Slack bot's turn cannot use it; search the mirror",
+          };
         if (!deps.surfaceContext?.searchLive)
           return { ok: false, message: "live search isn't available from this turn" };
         if (!dest.target) return { ok: false, message: "this conversation has nothing to search" };

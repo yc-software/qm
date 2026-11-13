@@ -375,7 +375,7 @@ test("edit replaces the proposal and marks it the person's own", async () => {
   assert.equal(view.proposal?.by, "human");
 });
 
-test("send posts through the source adapter, records the outcome, and refuses a resend", async () => {
+test("send posts through the source adapter, records the outcome, and refuses a resend and a Slack bot's turn", async () => {
   const w = world();
   const { loop, item } = await seed(w);
   const sent = await call(w, {
@@ -400,6 +400,14 @@ test("send posts through the source adapter, records the outcome, and refuses a 
   });
   assert.equal(again.status, 409);
   assert.equal(w.sent.length, 1, "a resend never reaches the source");
+  const bot = { ...CAP, botActor: true };
+  await w.loops.store.update(loop.id, { restore: { ...loop, botActor: true } });
+  const ingest = { items: [{ ...ITEM, slack: { ...ITEM.slack, ts: "1.3" } }] };
+  await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: ingest, capability: bot });
+  const botItem = (await w.loops.items.byLoop(loop.id)).find((entry) => entry.id !== item.id)!;
+  const action = `/v1/loops/${loop.id}/items/${botItem.id}/action`;
+  const botSend = await call(w, { method: "POST", path: action, body: { kind: "send" }, capability: bot });
+  assert.deepEqual([botSend.status, w.sent.length], [403, 1]);
 });
 
 test("send takes a final edit in the same call and a refusal leaves the item held", async () => {

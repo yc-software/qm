@@ -1222,12 +1222,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, deps.actAsActor);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, {
+        actAsActor: deps.actAsActor,
+        botActor: deps.botActor,
+      });
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, deps.actAsActor);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, {
+        actAsActor: deps.actAsActor,
+        botActor: deps.botActor,
+      });
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {
