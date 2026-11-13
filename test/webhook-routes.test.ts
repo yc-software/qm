@@ -327,7 +327,7 @@ test("a token webhook accepts its secret as a bearer header or on the URL, and n
     assert.equal(await deliver(3, ""), 401);
     assert.equal(await deliver(4, "?token=wrong"), 401);
     assert.equal(await deliver(5, `?token=${HOOK_SECRET}`, "Bearer wrong"), 401);
-    await new Promise((r) => setTimeout(r, 50));
+    await settle(async () => (await deliver(1, "", `Bearer ${HOOK_SECRET}`)) === 200);
   } finally {
     await srv.close();
   }
@@ -346,7 +346,7 @@ test("a standard-webhooks webhook accepts a sender-signed request once and rejec
     });
     await assert.rejects(
       srv.built.app.createWebhook({ ...webhook, verification: { scheme: "standard-webhooks", secret: "not base64!" } }),
-      /base64 signing secret/,
+      /standard-webhooks cannot use this secret/,
     );
     const sent = new Date();
     const eventBody = JSON.stringify({ type: "invoice.paid" });

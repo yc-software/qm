@@ -10,6 +10,7 @@ import {
   ownedBy,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { errMessage } from "../util/errors.ts";
 import { getVerifier } from "./verifiers.ts";
 
 export interface CreateWebhookInput extends CreateTriggerInput {
@@ -69,8 +70,11 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
       if (!verifier || !input.verification.secret) {
         throw new Error("webhook verification requires a supported scheme and secret");
       }
-      const secretProblem = verifier.secretProblem?.(input.verification.secret);
-      if (secretProblem) throw new Error(secretProblem);
+      try {
+        verifier.verify({ secret: input.verification.secret, headers: {}, rawBody: "" });
+      } catch (e) {
+        throw new Error(`${input.verification.scheme} cannot use this secret: ${errMessage(e)}`, { cause: e });
+      }
       if (
         input.filters?.some(
           (filter) => !filter.path.trim() || filter.in.length === 0 || filter.in.some((value) => !value.trim()),

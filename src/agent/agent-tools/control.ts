@@ -19,8 +19,7 @@ export function controlPlaneTools(kit: ToolKit) {
     description:
       "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
       "create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). " +
-      "For hmac-sha256 and token generate a strong random secret; for every other scheme the user supplies the sender's signing secret. " +
-      "token is for senders that cannot sign: they send the secret as `Authorization: Bearer <secret>`, or as `?token=<secret>` on the URL if they cannot set headers. " +
+      "For hmac-sha256 and token (senders that cannot sign) generate a strong random secret; for every other scheme the user supplies the sender's signing secret. " +
       "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
       "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
     parameters: Type.Object({
@@ -83,11 +82,15 @@ export function controlPlaneTools(kit: ToolKit) {
             return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
 
           const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
+          const tokenUse =
+            r.webhook.verification.scheme === "token"
+              ? "\nThe sender sends the secret as `Authorization: Bearer <secret>`, or adds `?token=<secret>` to the URL if it cannot set headers."
+              : "";
           return recordResult(
             callId,
             { tool: "webhook", id: r.webhook.id, url: r.url, secretShown: !!r.secret },
             text(
-              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}\nIt won't fire until the sender is pointed at this URL.`,
+              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}${tokenUse}\nIt won't fire until the sender is pointed at this URL.`,
             ),
           );
         }

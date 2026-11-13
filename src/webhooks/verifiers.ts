@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import { Webhook as StandardWebhook } from "standardwebhooks";
+import { Webhook as StandardWebhook, WebhookVerificationError } from "standardwebhooks";
 import type { Webhook } from "../triggers/types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
@@ -13,7 +13,6 @@ export interface VerifierInput {
 export interface Verifier {
   verify(input: VerifierInput): boolean;
   deliveryId(input: VerifierInput): string;
-  secretProblem?(secret: string): string | null;
   handshake?(input: VerifierInput, parsedBody: unknown): string | null;
 }
 
@@ -152,27 +151,25 @@ const token: Verifier = {
 const standardWebhooks: Verifier = {
   verify({ secret, headers, rawBody }) {
     if (!secret) return false;
+    const webhook = new StandardWebhook(secret);
     try {
-      new StandardWebhook(secret).verify(rawBody, {
-        "webhook-id": header(headers, "webhook-id") ?? "",
-        "webhook-timestamp": header(headers, "webhook-timestamp") ?? "",
-        "webhook-signature": header(headers, "webhook-signature") ?? "",
-      });
+      webhook.verify(
+        rawBody,
+        {
+          "webhook-id": header(headers, "webhook-id") ?? "",
+          "webhook-timestamp": header(headers, "webhook-timestamp") ?? "",
+          "webhook-signature": header(headers, "webhook-signature") ?? "",
+        },
+        { jsonParse: false },
+      );
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      if (e instanceof WebhookVerificationError) return false;
+      throw e;
     }
   },
   deliveryId({ headers, rawBody }) {
     return header(headers, "webhook-id") ?? bodyHash(rawBody);
-  },
-  secretProblem(secret) {
-    try {
-      new StandardWebhook(secret);
-      return null;
-    } catch {
-      return "a standard-webhooks secret is the sender's base64 signing secret, usually prefixed whsec_";
-    }
   },
 };
 
