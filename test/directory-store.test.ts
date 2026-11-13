@@ -196,6 +196,13 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     assert.equal(await d.groupMembership("G-2", "U-alice"), true);
   });
 
+  it("a full sync keeps a group another surface registered", async () => {
+    const d = createPostgresDirectoryStore(testDatabaseUrl());
+    await d.upsertGroup("partner-chat:1:group:9", ["ada@example.com"]);
+    await d.replaceGroups([{ groupId: "G-2", principalId: "U-alice" }]);
+    assert.equal(await d.groupMember("partner-chat:1:group:9", "ada@example.com"), true);
+  });
+
   it("replaceGroups is a full per-org swap", async () => {
     const d = await dir();
     await d.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);

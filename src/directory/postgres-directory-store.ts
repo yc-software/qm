@@ -173,6 +173,13 @@ END $tenants_for_email$`,
   },
   PRINCIPAL_USER_TENANTS,
   EMAIL_USER_TENANTS,
+  {
+    id: "directory/store/0011-group-sync-ownership",
+    statements: [
+      "ALTER TABLE directory_groups ADD COLUMN from_sync BOOLEAN NOT NULL DEFAULT TRUE",
+      "ALTER TABLE directory_groups ALTER COLUMN from_sync DROP DEFAULT",
+    ],
+  },
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;

@@ -252,19 +252,18 @@ export function createDirectorySync(deps: {
 
       return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
         await client.query(
-          "DELETE FROM directory_group_members WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))",
+          `WITH dropped AS (
+             DELETE FROM directory_groups WHERE org_id = $1 AND from_sync AND NOT (group_id = ANY($2::text[]))
+             RETURNING group_id)
+           DELETE FROM directory_group_members WHERE org_id = $1 AND group_id IN (SELECT group_id FROM dropped)`,
           [orgId, listedIds],
         );
-        await client.query("DELETE FROM directory_groups WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))", [
-          orgId,
-          listedIds,
-        ]);
         if (listedIds.length) {
           await client.query(
-            `INSERT INTO directory_groups (org_id, group_id, roster_known)
-             SELECT $1, * FROM unnest($2::text[], $3::boolean[])
+            `INSERT INTO directory_groups (org_id, group_id, roster_known, from_sync)
+             SELECT $1, *, TRUE FROM unnest($2::text[], $3::boolean[])
              ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET
-               roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
+               roster_known = directory_groups.roster_known OR EXCLUDED.roster_known, from_sync = TRUE`,
             [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
           );
         }
@@ -295,7 +294,7 @@ export function createDirectorySync(deps: {
       await withPgTransaction(await pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query(
-          `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
+          `INSERT INTO directory_groups (org_id, group_id, roster_known, from_sync) VALUES ($1, $2, TRUE, FALSE)
            ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
           [orgId, groupId],
         );
