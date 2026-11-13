@@ -17,6 +17,7 @@ import {
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { msOf } from "../sessions/items.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 
 export interface CreateLoopInput extends CreateTriggerInput {
@@ -263,3 +264,68 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     delete: (id) => backing.delete(id),
   };
 }
+
+export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
+  id: "triggers/0002-mark-bot-written-loops",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('items') IS NULL OR to_regclass('runs') IS NULL OR to_regclass('loops') IS NULL
+         OR to_regclass('crons') IS NULL OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
+        RETURN;
+      END IF;
+      WITH bot_calls AS MATERIALIZED (
+        SELECT c.tenant_id, ${msOf("c.created_at")} AS started, ${msOf("res.created_at")} AS ended,
+               jsonb_build_object('runId', r.id, 'threadRef', r.session_id) AS source,
+               concat_ws(' ', c.body, c.text, res.body, res.text) AS evidence
+          FROM items c
+          JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
+                        AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
+          JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.turn_id::text
+         WHERE c.kind = 'ToolCall'
+           AND CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb ->> 'botActor' = 'true' END
+      ), written AS (
+        SELECT DISTINCT ON (l.tenant_id, l.id) l.tenant_id, l.id, l.json ->> 'ownerScopeId' AS scope,
+               l.json ->> 'cronId' AS cron_id, b.source || '{"botActor": true}'::jsonb AS detail
+          FROM loops l
+          CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'playbookHistory') h
+          JOIN bot_calls b ON b.tenant_id = l.tenant_id AND (h ->> 'at')::bigint BETWEEN b.started AND b.ended
+                          AND strpos(b.evidence, l.id) > 0
+         WHERE h -> 'version' = l.json -> 'playbookVersion' AND l.json ->> 'botActor' IS DISTINCT FROM 'true'
+         ORDER BY l.tenant_id, l.id, b.started DESC
+      ), granted AS (
+        SELECT DISTINCT ON (g.tenant_id, g.id) g.tenant_id, g.id, l.json ->> 'ownerScopeId' AS scope,
+               b.source || jsonb_build_object('loopId', g.json ->> 'loopId') AS detail
+          FROM loop_ship_grants g
+          JOIN bot_calls b ON b.tenant_id = g.tenant_id AND (g.json ->> 'createdAt')::bigint BETWEEN b.started AND b.ended
+                          AND strpos(b.evidence, g.json ->> 'loopId') > 0
+          JOIN loops l ON l.tenant_id = g.tenant_id AND l.id = g.json ->> 'loopId'
+         WHERE NOT g.json ? 'revokedAt'
+         ORDER BY g.tenant_id, g.id, b.started DESC
+      ), marked AS (
+        UPDATE loops l SET json = l.json || '{"botActor": true}'::jsonb
+          FROM written w WHERE l.tenant_id = w.tenant_id AND l.id = w.id
+        RETURNING l.tenant_id
+      ), marked_crons AS (
+        UPDATE crons k SET json = k.json || '{"botActor": true}'::jsonb
+          FROM written w WHERE k.tenant_id = w.tenant_id AND k.id = w.cron_id AND k.json ->> 'botActor' IS DISTINCT FROM 'true'
+        RETURNING k.tenant_id
+      ), revoked AS (
+        UPDATE loop_ship_grants g
+           SET json = g.json || jsonb_build_object('revokedAt', ${msOf("now()")}, 'revokedBy', 'system:migration')
+          FROM granted x WHERE g.tenant_id = x.tenant_id AND g.id = x.id
+        RETURNING g.tenant_id
+      ), versions AS (
+        UPDATE durable_map_versions SET v = v + 1
+         WHERE tbl = 'loops' AND tenant_id IN (SELECT tenant_id FROM marked)
+            OR tbl = 'crons' AND tenant_id IN (SELECT tenant_id FROM marked_crons)
+            OR tbl = 'loop_ship_grants' AND tenant_id IN (SELECT tenant_id FROM revoked)
+      )
+      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
+      SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, id, scope, detail::text
+        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope, detail FROM written
+              UNION ALL
+              SELECT tenant_id, 'ship_grant_revoke', id, scope, detail FROM granted) changes;
+    END $$`,
+  ],
+};
