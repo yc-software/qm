@@ -29,23 +29,19 @@ function server(partial?: Partial<McpServer>): McpServer {
   };
 }
 
-test("mcp client lists every page of tools and calls one over JSON and SSE responses", async (t) => {
-  const tools = ["a", "b", "c"].map((name) => ({
+test("mcp client keeps an oversized page and calls its last tool over JSON and SSE responses", async (t) => {
+  const tools = Array.from({ length: 129 }, (_, i) => `t${i}`).map((name) => ({
     name,
     description: `tool ${name}`,
     inputSchema: { type: "object" as const },
   }));
   for (const json of [true, false]) {
-    const mcp = await startMcpTestServer(t, { tools, pageSize: 1, json });
+    const mcp = await startMcpTestServer(t, { tools, pageSize: 129, json });
     const client = createMcpClient({ fetch: loopbackFetch, url: `${mcp.url}/mcp`, auth: { mode: "none" } });
     assert.deepEqual(await client.listTools(), {
-      tools: [
-        { name: "a", description: "tool a", inputSchema: { type: "object" } },
-        { name: "b", description: "tool b", inputSchema: { type: "object" } },
-        { name: "c", description: "tool c", inputSchema: { type: "object" } },
-      ],
+      tools,
     });
-    assert.equal(mcpResultText(await client.callTool("b", {})), "ran b");
+    assert.equal(mcpResultText(await client.callTool("t128", {})), "ran t128");
     assert.equal(mcp.openSessions(), 0, "each operation ends its session");
   }
 });
@@ -60,13 +56,20 @@ test("mcp client keeps the server's own description, else its instructions", asy
   assert.equal(about, "Call search first.\nThen update.");
 });
 
-test("mcp client caps a server's tool list", async (t) => {
-  const tools = Array.from({ length: 100 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
-  const mcp = await startMcpTestServer(t, { tools, pageSize: 40 });
+test("mcp client discovers tools beyond the former ordinary and catalog limits", async (t) => {
+  const tools = Array.from({ length: 5001 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
+  const mcp = await startMcpTestServer(t, { tools, pageSize: 2000 });
   const listed = (await createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } }).listTools())
     .tools;
-  assert.equal(listed.length, 64);
-  assert.equal(listed.at(-1)?.name, "t63");
+  assert.equal(listed.length, tools.length);
+  assert.equal(listed.at(-1)?.name, "t5000");
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 3);
+});
+
+test("mcp client rejects pagination cycles instead of returning a partial list", async (t) => {
+  const mcp = await startMcpTestServer(t, { pageSize: 0 });
+  const client = createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } });
+  await assert.rejects(client.listTools(), (e: Error) => String(e.cause).includes("repeated cursor"));
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
 });
 

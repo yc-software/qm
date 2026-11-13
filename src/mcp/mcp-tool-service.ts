@@ -14,7 +14,6 @@ import type { ScopeId } from "../types.ts";
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
-const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
 const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
@@ -260,9 +259,7 @@ export function createMcpToolService(opts: {
     const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
     const cached = catalogs.get(key);
     if (cached) return cached;
-    const listing = client
-      .listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })
-      .then((listed) => listed.tools);
+    const listing = client.listTools({ headers: headersFor(server, principalId) }).then((listed) => listed.tools);
     catalogs.set(key, listing);
     listing.catch(() => {
       if (catalogs.peek(key) === listing) catalogs.delete(key);
@@ -484,7 +481,6 @@ export function createMcpToolService(opts: {
     async probe(server, principalId) {
       return createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch }).listTools({
         headers: headersFor(server, principalId),
-        ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
     },
     close() {
