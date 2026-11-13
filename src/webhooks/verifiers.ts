@@ -11,7 +11,7 @@ export interface VerifierInput {
 }
 
 export interface Verifier {
-  verify(input: VerifierInput): boolean;
+  verify(input: VerifierInput): boolean | string;
   deliveryId(input: VerifierInput): string;
   handshake?(input: VerifierInput, parsedBody: unknown): string | null;
 }
@@ -164,7 +164,7 @@ const standardWebhooks: Verifier = {
       );
       return true;
     } catch (e) {
-      if (e instanceof WebhookVerificationError) return false;
+      if (e instanceof WebhookVerificationError) return e.message;
       throw e;
     }
   },

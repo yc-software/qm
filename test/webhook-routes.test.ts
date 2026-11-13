@@ -362,7 +362,11 @@ test("a standard-webhooks webhook accepts a sender-signed request once and rejec
         body,
       });
     assert.equal((await deliver(eventBody)).status, 202);
-    assert.equal((await deliver(JSON.stringify({ type: "invoice.refunded" }))).status, 401);
+    const tampered = await deliver(JSON.stringify({ type: "invoice.refunded" }));
+    assert.deepEqual(
+      [tampered.status, ((await tampered.json()) as { message: string }).message],
+      [401, "verification failed: No matching signature found"],
+    );
     await settle(async () => (await (await deliver(eventBody)).text()) === "duplicate");
   } finally {
     await srv.close();

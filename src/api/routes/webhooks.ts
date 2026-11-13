@@ -67,7 +67,11 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
     return;
   }
   if (out.status === 202) return sendJson(res, 202, { ok: true });
-  if (out.status === 401) return sendJson(res, 401, { error: "unauthorized", message: "verification failed" });
+  if (out.status === 401)
+    return sendJson(res, 401, {
+      error: "unauthorized",
+      message: out.reason ? `verification failed: ${out.reason}` : "verification failed",
+    });
   return sendJson(res, 404, { error: "not_found" });
 }
 
