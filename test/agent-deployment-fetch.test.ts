@@ -8,6 +8,7 @@ import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../sr
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const SECRET = "agent-deployment-fetch-secret".repeat(2);
 
@@ -52,10 +53,7 @@ describe("agent deployment fetch", () => {
     await new Promise<void>((resolve) => upstream.listen(0, resolve));
     upstreamPort = (upstream.address() as AddressInfo).port;
 
-    const closed = createHttpServer();
-    await new Promise<void>((resolve) => closed.listen(0, resolve));
-    downPort = (closed.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    downPort = await freePort();
 
     const app = {
       authorizesCapabilityScope: async () => true,

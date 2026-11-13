@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { startQm } from "../src/start.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
-import { freePort } from "./support/free-port.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 async function statusOf(url: string, init?: RequestInit): Promise<number | string> {
   return fetch(url, init).then(

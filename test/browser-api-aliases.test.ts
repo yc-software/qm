@@ -12,7 +12,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
-import { freePort } from "./support/free-port.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const SIGNING = "browser-alias-signing-secret-0123456789";
 const PORTAL_IDENTITY = "browser-alias-identity-secret-0123456789";

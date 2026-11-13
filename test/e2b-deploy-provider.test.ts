@@ -11,7 +11,7 @@ import { scopeId } from "../src/types.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
-import { freePort } from "./support/free-port.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const SERVER = [
   "const fs = require('fs');",

@@ -157,3 +157,10 @@ export async function portAvailable(port: number): Promise<boolean> {
   }
   return true;
 }
+
+const firstEphemeralPort = 32_768;
+
+export async function freePort(): Promise<number> {
+  const port = 1_024 + Math.floor(Math.random() * (firstEphemeralPort - 1_024));
+  return (await portAvailable(port)) ? port : freePort();
+}

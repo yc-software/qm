@@ -18,7 +18,7 @@ import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
 import { tenantMap } from "./support/tenant-map.ts";
-import { freePort } from "./support/free-port.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const SERVER = [
   "const fs = require('fs');",
