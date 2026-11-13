@@ -372,6 +372,9 @@ test("an attested connector refuses a call outside its person's own conversation
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
     ["U1"],
   );
+  assert.deepEqual(await service.toolDefsFor("U1", "group:G1", true), []);
+  await otherInstance.put({ ...records, attestActor: true, attestAudience: "any", updatedAt: 2 });
+  assert.equal((await service.toolDefsFor("U1", "group:G1", true)).length, 1);
   service.close();
 });
 
