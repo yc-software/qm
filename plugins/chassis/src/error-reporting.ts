@@ -1,7 +1,7 @@
 import type * as Sentry from "@sentry/node";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { parseSampleRate, SPAN_STATUS_ERROR, TIMING_STATUSES } from "./timing.ts";
+import { parseSampleRate, SPAN_STATUS_ERROR } from "./timing.ts";
 import { swallow } from "./errors.ts";
 
 export const FLUSH_MS = 2_000;
@@ -59,7 +59,11 @@ const SQL_VERBS = new Set(
 const POOL_CHECKOUT = "pg-pool.connect";
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
-const STATUS_MESSAGES = new Set<unknown>(TIMING_STATUSES);
+const SPAN_STATUS_NAMES = new Set<unknown>(
+  "cancelled unknown_error invalid_argument deadline_exceeded not_found already_exists permission_denied resource_exhausted failed_precondition aborted out_of_range unimplemented internal_error unavailable data_loss unauthenticated".split(
+    " ",
+  ),
+);
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
 export const REQUEST_ID_HEADERS = ["fly-request-id", "render-request-id", "x-amzn-requestid", "x-request-id"];
 let client: typeof Sentry | undefined;
@@ -112,7 +116,7 @@ function scrubSpan(span: StreamedSpan): StreamedSpan {
   const op = attributes["sentry.op"];
   const statement = attributes["db.statement"] ?? attributes["db.query.text"];
   for (const key of Object.keys(attributes)) if (!KEPT_TRACE_DATA.has(key)) delete attributes[key];
-  if ("sentry.status.message" in attributes && !STATUS_MESSAGES.has(attributes["sentry.status.message"]))
+  if ("sentry.status.message" in attributes && !SPAN_STATUS_NAMES.has(attributes["sentry.status.message"]))
     attributes["sentry.status.message"] = "internal_error";
   if (!span.is_segment) span.name = spanName(op, span.name, statement);
   if (typeof statement === "string") attributes["db.query.text"] = span.name;
@@ -123,21 +127,26 @@ function ownTraceHeader(sdk: typeof Sentry): (envelope: Envelope) => void {
   return (envelope) => {
     const header = envelope[0] as { trace?: Record<string, unknown> };
     if (!header.trace) return;
-    const payload = envelope[1][0]?.[1] as
-      { contexts?: { trace?: { trace_id?: string } }; items?: { trace_id?: string }[] } | undefined;
-    const sentryClient = sdk.getClient();
-    const options = sentryClient?.getOptions();
     const { sampled, sample_rate: sampleRate } = header.trace;
-    header.trace = Object.fromEntries(
-      Object.entries({
-        trace_id: payload?.contexts?.trace?.trace_id ?? payload?.items?.[0]?.trace_id,
-        public_key: sentryClient?.getDsn()?.publicKey,
-        release: options?.release,
-        environment: options?.environment,
-        sampled: sampled === "true" || sampled === "false" ? sampled : undefined,
-        sample_rate: typeof sampleRate === "string" && parseSampleRate(sampleRate) > 0 ? sampleRate : undefined,
-      }).filter(([, value]) => typeof value === "string" && value),
-    );
+    delete header.trace;
+    try {
+      const payload = envelope[1][0]?.[1] as
+        { contexts?: { trace?: { trace_id?: string } }; items?: { trace_id?: string }[] } | undefined;
+      const sentryClient = sdk.getClient();
+      const options = sentryClient?.getOptions();
+      header.trace = Object.fromEntries(
+        Object.entries({
+          trace_id: payload?.contexts?.trace?.trace_id ?? payload?.items?.[0]?.trace_id,
+          public_key: sentryClient?.getDsn()?.publicKey,
+          release: options?.release,
+          environment: options?.environment,
+          sampled: sampled === "true" || sampled === "false" ? sampled : undefined,
+          sample_rate: typeof sampleRate === "string" && parseSampleRate(sampleRate) > 0 ? sampleRate : undefined,
+        }).filter(([, value]) => typeof value === "string" && value),
+      );
+    } catch (error) {
+      swallow("tracing", error);
+    }
   };
 }
 
@@ -371,12 +380,21 @@ export async function tracePoolCheckout<T>(checkout: () => Promise<T>): Promise<
   const sdk = client;
   const started = performance.now();
   const record = (failed: boolean): void => {
-    const seconds = (performance.now() - started) / 1000;
-    if (!failed && seconds < IDLE_CHECKOUT_SECONDS) return;
-    const end = Date.now() / 1000;
-    const span = sdk.startInactiveSpan({ op: "db", name: POOL_CHECKOUT, startTime: end - seconds, onlyIfParent: true });
-    if (failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
-    span.end(end);
+    try {
+      const seconds = (performance.now() - started) / 1000;
+      if (!failed && seconds < IDLE_CHECKOUT_SECONDS) return;
+      const end = Date.now() / 1000;
+      const span = sdk.startInactiveSpan({
+        op: "db",
+        name: POOL_CHECKOUT,
+        startTime: end - seconds,
+        onlyIfParent: true,
+      });
+      if (failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
+      span.end(end);
+    } catch (error) {
+      swallow("tracing", error);
+    }
   };
   try {
     const checkedOut = await checkout();

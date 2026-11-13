@@ -92,14 +92,22 @@ test("a run sends every pooled query as one span, and a checkout only when it wa
   }
 });
 
-test("a failed checkout is a span with an error status", async () => {
-  await traceQueued(undefined, "failed-checkout-run", {}, async () => {
+test("a failed span keeps a Sentry status name and loses any other status text", async () => {
+  await traceQueued(undefined, "failed-spans-run", {}, async () => {
     await assert.rejects(tracePoolCheckout(() => Promise.reject(new Error("private-no-connection"))));
+    for (const message of ["unavailable", "private-driver-text"])
+      Sentry.startInactiveSpan({ name: "GET https://example.com/private", op: "http.client" })
+        .setStatus({ code: 2, message })
+        .end();
   });
-  const run = await sentry.segment((sent) => sent.name === "failed-checkout-run");
+  const run = await sentry.segment((sent) => sent.name === "failed-spans-run");
   assert.deepEqual(
-    run.spans.map((sent) => [sent.name, sent.status]),
-    [["pg-pool.connect", "error"]],
+    run.spans.map((sent) => [sent.name, sent.status, sent.attributes["sentry.status.message"]]),
+    [
+      ["pg-pool.connect", "error", "internal_error"],
+      ["GET https://example.com", "error", "unavailable"],
+      ["GET https://example.com", "error", "internal_error"],
+    ],
   );
 });
 

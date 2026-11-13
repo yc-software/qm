@@ -1,17 +1,15 @@
 import type * as Sentry from "@sentry/node";
 import { swallow } from "./errors.ts";
 
-export const TIMING_STATUSES = [
-  "ok",
-  "cancelled",
-  "unauthenticated",
-  "permission_denied",
-  "not_found",
-  "resource_exhausted",
-  "invalid_argument",
-  "internal_error",
-] as const;
-export type TimingStatus = (typeof TIMING_STATUSES)[number];
+export type TimingStatus =
+  | "ok"
+  | "cancelled"
+  | "unauthenticated"
+  | "permission_denied"
+  | "not_found"
+  | "resource_exhausted"
+  | "invalid_argument"
+  | "internal_error";
 
 export interface TimingResult {
   name?: string;
