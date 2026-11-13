@@ -74,7 +74,7 @@ export function createSessionItems(deps: {
   | "latestItemSeq"
   | "goals"
   | "setGoal"
-  | "hasDeliveryEntry"
+  | "appendDelivery"
   | "getItems"
   | "userItemSeqs"
   | "getContextWindow"
@@ -260,13 +260,28 @@ export function createSessionItems(deps: {
       });
     },
 
-    async hasDeliveryEntry(sessionId, deliveryKey, slackTs) {
-      const rows = await q(
-        `SELECT 1 FROM items WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'UserMessage'
-         AND (body ->> 'deliveryKey' = $2 OR external_id = $3) LIMIT 1`,
-        [sessionId, deliveryKey, slackTs ?? null],
-      );
-      return rows.length > 0;
+    async appendDelivery(writer, item, deliveryKey) {
+      return withSessionLock(writer, async (client) => {
+        const existing = await client.query(
+          `SELECT 1 FROM items WHERE tenant_id = ${TENANT} AND session_id = $1
+           AND ((turn_id = $2 AND kind = $3 AND variant IS NOT DISTINCT FROM $4
+                 AND error_code IS NOT DISTINCT FROM $5)
+                OR (kind = 'UserMessage' AND $3 = 'UserMessage'
+                    AND (body ->> 'deliveryKey' = $6 OR external_id = $7))) LIMIT 1`,
+          [
+            writer.sessionId,
+            writer.turnId,
+            item.kind,
+            item.variant ?? null,
+            item.errorCode ?? null,
+            deliveryKey,
+            item.externalId ?? null,
+          ],
+        );
+        if (existing.rowCount) return false;
+        await insertItems(client, writer.sessionId, [item], writer.turnId);
+        return true;
+      });
     },
 
     async userItemSeqs(ranges) {

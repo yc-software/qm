@@ -127,12 +127,12 @@ test("a failed transcript write converges on retry: one entry", async () => {
   let failNextAppend = true;
   const flaky = {
     ...sessions,
-    appendMany: async (...args: Parameters<SessionStore["appendMany"]>) => {
+    appendDelivery: async (...args: Parameters<SessionStore["appendDelivery"]>) => {
       if (failNextAppend) {
         failNextAppend = false;
         throw new Error("transient append failure");
       }
-      return sessions.appendMany(...args);
+      return sessions.appendDelivery(...args);
     },
   };
   const inner = createDeliveryStore();
@@ -479,4 +479,32 @@ test("Slack send receipts are recorded immediately without a listener and skip a
   assert.equal((await sessions.getItems(session.id)).length, 1);
   await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-2" });
   assert.equal((await sessions.getItems(session.id)).length, 1);
+});
+
+test("concurrent Slack receipt writers record one item and preserve distinct equal messages", async () => {
+  const { sessions, inner, runs } = wired();
+  const session = await webSession(sessions, "dm:D123");
+  const writers = Array.from({ length: 4 }, () => withWebTranscriptDeliveries(inner, sessions, runs));
+  for (const ts of ["123.100", "123.200"]) {
+    await Promise.all(
+      writers.map((writer) =>
+        writer.enqueue({
+          destination: {
+            ...webDestination("dm:D123"),
+            webTranscript: { kind: "slack_reply", sessionId: session.id, ts, name: "Alice" },
+          },
+          text: "App test!",
+          idempotencyKey: `slack-reply:${session.id}:D123:${ts}`,
+        }),
+      ),
+    );
+  }
+  const items = await sessions.getItems(session.id);
+  assert.deepEqual(
+    items.map((item) => [item.kind, item.text, item.externalId]),
+    [
+      ["UserMessage", "App test!", "123.100"],
+      ["UserMessage", "App test!", "123.200"],
+    ],
+  );
 });
