@@ -1283,16 +1283,14 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
   };
   const actorId = ctx.capability?.actorId ?? param("principalId");
   if (!actorId) return null;
-  const requested = param("scopeId");
-  const persona = requested ? parseScopeId(requested) : null;
-  if (persona?.kind === "persona") {
-    const role = await ctx.app.personas?.role(actorId, persona.ref!);
-    return atLeast(role, ctx.method === "GET" ? "read" : "write") ? { actorId, scope: requested as ScopeId } : null;
-  }
-  const scope = ctx.capability?.scopeId ?? (requested || makeScopeId("personal", actorId));
+  const scope = param("scopeId") || ctx.capability?.scopeId || makeScopeId("personal", actorId);
   const parsed = parseScopeId(scope);
   if (parsed.kind === "personal" && parsed.ref === actorId) return { actorId, scope: scope as ScopeId };
-  if (ctx.capability && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
+  if (parsed.kind === "persona") {
+    const role = await ctx.app.personas?.role(actorId, parsed.ref!);
+    return atLeast(role, ctx.method === "GET" ? "read" : "write") ? { actorId, scope: scope as ScopeId } : null;
+  }
+  if (ctx.capability?.scopeId === scope && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
   if (parsed.kind !== "org" && (await ctx.app.belongsToScope(actorId, scope as ScopeId)))
     return { actorId, scope: scope as ScopeId };
   return null;

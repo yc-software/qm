@@ -559,7 +559,7 @@ test("a persona's default model starts its new conversations, unless the turn as
   assert.notEqual((await turn(2, "claude-sonnet-4-6")).runtime?.modelId, "gpt-5.5");
 });
 
-test("an agent turn sets a persona's default model only for writers, without touching its own scope", async () => {
+test("an agent's runtime write lands on the scope it names, only where it may write, never silently on its own", async () => {
   const { built, personas, enable } = setup();
   await enable(ALICE);
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
@@ -570,7 +570,7 @@ test("an agent turn sets a persona's default model only for writers, without tou
   });
   server.listen(0);
   try {
-    const put = async (actorId: string) =>
+    const put = async (actorId: string, scope = `persona:${ada.id}`) =>
       fetch(`http://localhost:${(server.address() as AddressInfo).port}/v1/runtime-config`, {
         method: "PUT",
         headers: {
@@ -580,9 +580,10 @@ test("an agent turn sets a persona's default model only for writers, without tou
             TEST_CAPABILITY_SECRET,
           ),
         },
-        body: JSON.stringify({ scopeId: `persona:${ada.id}`, modelId: "gpt-6.1-sol" }),
+        body: JSON.stringify({ scopeId: scope, modelId: "gpt-6.1-sol" }),
       });
     assert.equal((await put(BOB)).status, 403);
+    assert.equal((await put(ALICE, "channel:C_ELSEWHERE")).status, 403);
     assert.equal((await put(ALICE)).status, 200);
     assert.equal((await built.config.getRuntimeSelectionDurable(scopeId("persona", ada.id)))?.modelId, "gpt-6.1-sol");
     assert.equal(await built.config.getRuntimeSelectionDurable(scopeId("personal", ALICE)), null);
