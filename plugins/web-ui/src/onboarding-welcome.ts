@@ -25,6 +25,7 @@ import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
 import "./onboarding-welcome.css";
 import "./onboarding-slack";
 import "./slack-account";
+import "./welcome-about";
 import {
   connectionPreviewEnabled,
   previewParameters,
@@ -65,6 +66,7 @@ export class OnboardingWelcome extends LitElement {
     workspaceConnected: { state: true },
     slackLinked: { state: true },
     workspaceError: { state: true },
+    about: { state: true },
   };
   declare me: Me | null;
   declare onMoreIdeas: (() => void) | undefined;
@@ -102,6 +104,7 @@ export class OnboardingWelcome extends LitElement {
   private returned: PreviewAttempt | null = null;
   private pickerState: PickerState = { query: "", expanded: false };
   private retryService: PreviewAttempt["service"] | null = null;
+  declare about: boolean;
   declare connectionOutcome: "" | "checking" | "success" | "cancelled" | "failed" | "expired";
   private controller?: AbortController;
   private services: ConnectionService[] = [];
@@ -121,6 +124,7 @@ export class OnboardingWelcome extends LitElement {
     this.authorizing = "";
     this.authorizationError = "";
     this.connectionOutcome = "";
+    this.about = false;
   }
   protected createRenderRoot(): HTMLElement {
     return this;
@@ -446,6 +450,13 @@ export class OnboardingWelcome extends LitElement {
   private get seeded(): ActivitySeeds | undefined {
     return this.setupOnly ? undefined : this.me?.welcome;
   }
+  private async showAbout(about: boolean): Promise<void> {
+    this.about = about;
+    const scroller = this.closest(".chat-scroll");
+    if (scroller) scroller.scrollTop = 0;
+    await this.updateComplete;
+    this.drawPicker();
+  }
   private seededIntro(seeds: ActivitySeeds, name: string | undefined, toolkits: string[]) {
     const names = new Map(this.services.map((service) => [service.id, service.name]));
     const { activities, fresh } = welcomeActivities(
@@ -459,6 +470,9 @@ export class OnboardingWelcome extends LitElement {
     return html`<div class="welcome-hero welcome-beat" style="--welcome-delay:0ms">
         ${name ? html`<p>Hi ${name}!</p>` : nothing}
         <h1>Welcome to QM! <img src=${`${this.base}qm.png`} alt="" /></h1>
+        <p class="welcome-what">
+          <button type="button" @click=${() => void this.showAbout(true)}>What is this?</button>
+        </p>
       </div>
       <div class="welcome-section welcome-beat" style="--welcome-delay:300ms">
         <h2>Where to start</h2>
@@ -503,6 +517,7 @@ export class OnboardingWelcome extends LitElement {
         <a href="?connectionDemo=1">Back to QM</a>
       </section>`;
     }
+    if (this.about) return html`<qm-welcome-about .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
     const name = this.me?.displayName?.trim().split(/\s+/)[0];
     const cohort = this.me?.welcomeCohort;
     const seeds = this.seeded;

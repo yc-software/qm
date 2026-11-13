@@ -55,6 +55,21 @@ test("a new person sees their company's seeded activities, only apps they connec
     assert.ok(!h.requests.includes("/api/turn"));
     assert.match(h.mainText(), /Connect your accounts/);
     assert.doesNotMatch(h.mainText(), /Connect your apps/);
+    assert.ok(!h.requests.includes("/api/suggested-activities"));
+    const link = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(".welcome-what button")].find((button) =>
+        button.textContent!.includes(label),
+      )!;
+    link("What is this?").click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const about = document.querySelector("qm-welcome-about")!.textContent!.replace(/\s+/g, " ");
+    for (const shown of ["What is this?", "@qm make me a CRM", "A virtual employee in Slack", "Agent swarms"])
+      assert.ok(about.includes(shown), shown);
+    assert.equal(rows().length, 0);
+    link("Back to welcome").click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(document.querySelector("qm-welcome-about"), null);
+    assert.equal(rows().length, 2);
   } finally {
     await h.close();
     restoreMotion();
