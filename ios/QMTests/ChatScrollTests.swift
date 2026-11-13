@@ -144,12 +144,8 @@ final class ChatScrollTests: XCTestCase {
       model.draft = "Draft"
       let window = try XCTUnwrap(scroll.window)
       try await self.waitUntil { self.composer(in: window, text: "Draft") != nil }
-      let field = try XCTUnwrap(self.composer(in: window, text: "Draft"))
       window.layoutIfNeeded()
-      let fieldFrame = field.convert(field.bounds, to: window)
-      let viewport = scroll.convert(scroll.bounds, to: window)
-      XCTAssertLessThanOrEqual(
-        fieldFrame.minY - (viewport.maxY - scroll.adjustedContentInset.bottom), 32)
+      XCTAssertLessThanOrEqual(self.composerGap(scroll, "Draft"), 32)
       XCTAssertTrue(scroll.clipsToBounds)
       scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentSize.height / 2), animated: false)
       try await Task.sleep(for: .milliseconds(300))
@@ -437,9 +433,8 @@ final class ChatScrollTests: XCTestCase {
       try await self.waitUntil {
         scroll.contentOffset.y > 500 && self.distanceFromBottom(scroll) > 1_000
       }
-      try await Task.sleep(for: .milliseconds(200))
+      try await self.waitUntil { self.composerGap(scroll, model.draft) > 60 }
       let readingOffset = scroll.contentOffset.y
-      let oldHeight = self.visibleHeight(scroll)
       let newMessage = try JSONDecoder().decode(
         Item.self,
         from: Data(
@@ -447,7 +442,7 @@ final class ChatScrollTests: XCTestCase {
             .utf8))
       model.items.append(newMessage)
       try await self.waitUntil(diagnostics: { self.geometry(scroll) }) {
-        self.visibleHeight(scroll) > oldHeight + 60
+        self.composerGap(scroll, model.draft) <= 32
       }
       XCTAssertEqual(scroll.contentOffset.y, readingOffset, accuracy: 1, self.geometry(scroll))
     }
@@ -456,15 +451,14 @@ final class ChatScrollTests: XCTestCase {
   func testAcceptedSendRetiresCompletedAgentShelf() async throws {
     try await withChat(agents: true) { model, scroll in
       try await self.waitUntil { abs(self.distanceFromBottom(scroll)) < 2 }
-      try await Task.sleep(for: .milliseconds(200))
-      let oldHeight = self.visibleHeight(scroll)
-      XCTAssertEqual(model.latestPromptAt, 60)
       model.draft = "Please check the next thing."
+      try await self.waitUntil { self.composerGap(scroll, model.draft) > 60 }
+      XCTAssertEqual(model.latestPromptAt, 60)
       await model.send()
       XCTAssertTrue(model.draft.isEmpty)
       XCTAssertGreaterThan(try XCTUnwrap(model.latestPromptAt), 1000)
       try await self.waitUntil(diagnostics: { self.geometry(scroll) }) {
-        self.visibleHeight(scroll) > oldHeight + 60
+        self.composerGap(scroll, model.draft) <= 32
       }
       XCTAssertEqual(self.distanceFromBottom(scroll), 0, accuracy: 2, self.geometry(scroll))
     }
@@ -645,6 +639,12 @@ final class ChatScrollTests: XCTestCase {
     descendants(in: root).first {
       ($0 as? UITextField)?.text == text || ($0 as? UITextView)?.text == text
     }
+  }
+
+  private func composerGap(_ scroll: UIScrollView, _ draft: String) -> CGFloat {
+    guard let root = scroll.window, let field = composer(in: root, text: draft) else { return .nan }
+    return field.convert(field.bounds, to: scroll).minY - scroll.bounds.maxY
+      + scroll.adjustedContentInset.bottom
   }
 
   private func waitUntil(
