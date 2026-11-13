@@ -158,6 +158,7 @@ export interface DeployStore {
   drafts(): Promise<DeploymentDraft[]>;
   claimDraftTenants(): Promise<ClaimedRow[]>;
   refOf(id: string, ref: string): Promise<string | null>;
+  setRef(id: string, ref: string, sha: string): Promise<void>;
   repoUrl(id: string): Promise<string>;
 }
 
@@ -170,6 +171,7 @@ export interface DeployStoreBackings {
 }
 
 const CURRENT_REF = "refs/heads/current";
+export const FILES_PUBLISH_REF = "refs/files-publish";
 const versionRef = (version: number): string => `refs/versions/${version}`;
 const TOUCH_DEBOUNCE_MS = 60_000;
 
@@ -309,6 +311,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       };
       await writeNamed(d.name, () => backingMap.put(d.id, d));
       await updateVersionRef(d.id, v);
+      if (v.commit) await git.setRef(d.id, FILES_PUBLISH_REF, v.commit);
       return d;
     },
     async addVersion(id, input) {
@@ -324,6 +327,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         return cur;
       });
       await updateVersionRef(id, v);
+      if (v.commit) await git.setRef(id, FILES_PUBLISH_REF, v.commit);
       return v;
     },
     async addVersionFromCommit(id, commit) {
@@ -457,6 +461,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     drafts: () => backing.drafts.all(),
     claimDraftTenants: () => backing.drafts.claimTenants(),
     refOf: (id, ref) => git.refOf(id, ref),
+    setRef: (id, ref, sha) => git.setRef(id, ref, sha),
     repoUrl: (id) => git.repoUrl(id),
   };
 }

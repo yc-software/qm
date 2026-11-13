@@ -28,10 +28,16 @@ export function previousPublishFailure(edit: LiveEditSaved): string {
     : "";
 }
 
+function overwrittenNote(id: string, edit: LiveEditSaved): string {
+  const o = edit.overwritten;
+  if (!o) return "";
+  return `\nThis folder replaced ${o.paths.length} file(s) that changed in the app after its last publish from a folder, e.g. in the app editor, a git push or another session: ${o.paths.join(", ")}. Those changes are no longer running. If they weren't meant to go, they're still in the app's git history at commit ${o.commit} (clone the app via GET /v1/deployments/${id}/git-url); merge them into your folder and publish again.`;
+}
+
 function describeLiveEdit(r: { name?: string; id: string; version: number; url: string }, edit: LiveEditSaved): string {
   const app = r.name ?? r.id;
   const minutes = LIVE_EDIT_PUBLISH_DELAY_MS / 60_000;
-  const failed = previousPublishFailure(edit);
+  const failed = previousPublishFailure(edit) + overwrittenNote(r.id, edit);
   if (!edit.changed) {
     const pending = edit.publishAt === undefined ? "" : "; the earlier saved edits still publish as a new version";
     return `No changes to save in ${app} (v${r.version}) → ${r.url}${pending}.${failed}`;

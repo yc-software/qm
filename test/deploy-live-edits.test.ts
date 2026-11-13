@@ -310,3 +310,40 @@ test("someone who cannot publish the app cannot save edits to it", async () => {
   assert.equal(h.state.edits.length, 0);
   assert.equal(await h.deployStore.draftOf(d.id), null);
 });
+
+test("a folder publish names the files it replaced that changed since the last folder publish", async () => {
+  const h = harness();
+  const d = await publishApp(h, "live-overwrite");
+
+  const plain = await h.save("live-overwrite", tree(true, "v2", [{ path: "old.css", data: "body{}" }]));
+  assert.equal(plain.liveEdit?.overwritten, undefined);
+  const again = await h.save("live-overwrite", tree(true, "v3", [{ path: "old.css", data: "body{}" }]));
+  assert.equal(again.liveEdit?.overwritten, undefined);
+
+  await h.deploy.editSource(d.id, OWNER, async () => ({
+    files: [
+      { path: "dark.js", data: "dark" },
+      { path: "old.css", data: "body{color:red}" },
+    ],
+    deletedPaths: [],
+  }));
+  const edited = (await h.deployStore.draftOf(d.id))!.commit;
+
+  const keepsStyle = await h.save(
+    "live-overwrite",
+    tree(true, "v4", [
+      { path: "old.css", data: "body{color:red}" },
+      { path: "dark.js", data: "dark" },
+    ]),
+  );
+  assert.equal(keepsStyle.liveEdit?.overwritten, undefined);
+
+  await h.deploy.editSource(d.id, OWNER, async () => ({
+    files: [{ path: "dark.js", data: "darker" }],
+    deletedPaths: [],
+  }));
+  const before = (await h.deployStore.draftOf(d.id))!.commit;
+  assert.notEqual(before, edited);
+  const dropped = await h.save("live-overwrite", tree(true, "v5", [{ path: "old.css", data: "body{color:red}" }]));
+  assert.deepEqual(dropped.liveEdit?.overwritten, { paths: ["dark.js"], commit: before });
+});

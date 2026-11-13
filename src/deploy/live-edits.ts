@@ -8,6 +8,7 @@ import { bytes, normalizeRelPath } from "./deploy-fs.ts";
 import type { DeployProvider } from "./deploy-provider.ts";
 import type { DeployGitTreeFile } from "./deploy-git-store.ts";
 import {
+  FILES_PUBLISH_REF,
   currentVersionOf,
   type DeployEndpoint,
   type DeployStore,
@@ -28,6 +29,7 @@ export interface LiveEditSaved {
   first?: boolean;
   publishAt?: number;
   previousFailure?: string;
+  overwritten?: { paths: string[]; commit: string };
 }
 
 interface LiveEditDeps {
@@ -157,6 +159,18 @@ export function createLiveEdits(deps: LiveEditDeps) {
     };
   }
 
+  async function overwrittenEdits(id: string, change: SourceChange): Promise<LiveEditSaved["overwritten"]> {
+    const last = await store.refOf(id, FILES_PUBLISH_REF);
+    if (!last || last === change.saved.commit) return undefined;
+    const then = new Map((await store.commitTreeOf(id, last)).map((f) => [f.path, f.sha]));
+    const now = new Map(change.saved.tree.map((f) => [f.path, f.sha]));
+    const replaced = new Set([...change.changed.map((f) => f.path), ...change.deletedPaths]);
+    const paths = [...new Set([...then.keys(), ...now.keys()])]
+      .filter((path) => then.get(path) !== now.get(path) && replaced.has(path))
+      .sort();
+    return paths.length ? { paths, commit: change.saved.commit } : undefined;
+  }
+
   async function save(
     before: Deployment,
     actor: string,
@@ -168,16 +182,20 @@ export function createLiveEdits(deps: LiveEditDeps) {
     const base = "next" in source ? source.saved : await savedOf(before);
     if (!base) return null;
     const change = "next" in source ? source : await changeOf(before.id, base, source);
+    const wholeTree = "files" in source;
+    const overwritten = wholeTree ? await overwrittenEdits(before.id, change) : undefined;
     const { next, deletedPaths } = change;
     const { draft } = base;
     const changedPaths = change.changed.map((f) => f.path);
-    if (!changedPaths.length && !deletedPaths.length)
+    if (!changedPaths.length && !deletedPaths.length) {
+      if (wholeTree) await store.setRef(before.id, FILES_PUBLISH_REF, base.commit);
       return {
         changed: 0,
         hot: draft?.hot ?? false,
         ...(draft?.publishAt !== undefined ? { publishAt: draft.publishAt } : {}),
         ...(draft?.failure ? { previousFailure: draft.failure } : {}),
       };
+    }
     const read = await next.read(next.tree.has("package.json") ? [...changedPaths, "package.json"] : changedPaths);
     const changed = read.filter((f) => changedPaths.includes(f.path));
     const dev = devEntrypoint(read);
@@ -198,6 +216,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
             "saving the edit and writing it into the app both failed",
           )
         : committed.reason;
+    if (wholeTree) await store.setRef(before.id, FILES_PUBLISH_REF, committed.value);
     const now = Date.now();
     const publishAt = now + publishDelayMs;
     const saved: DeploymentDraft = {
@@ -231,6 +250,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
       ...(draft ? {} : { first: true }),
       publishAt,
       ...(draft?.failure ? { previousFailure: draft.failure } : {}),
+      ...(overwritten ? { overwritten } : {}),
     };
   }
 
