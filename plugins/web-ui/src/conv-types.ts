@@ -76,7 +76,7 @@ export interface ChatSurface {
   isStopping(): boolean;
   currentTurnOptions(): TurnOptions;
   turnRuntime(): TurnRuntime | null;
-  newChat(context?: { scopeId: string; name: string | null }): string;
+  newChat(context?: { scopeId: string; name: string | null }, threadRef?: string): string;
   teardown(): void;
   resetChatState(): void;
   mountContinuable(

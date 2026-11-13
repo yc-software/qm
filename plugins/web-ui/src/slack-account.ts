@@ -190,11 +190,6 @@ export class SlackAccount extends LitElement {
     }
   }
 
-  protected updated(changed: Map<string, unknown>): void {
-    if (changed.has("connected"))
-      this.dispatchEvent(new CustomEvent("slack-account-status", { detail: { connected: this.connected } }));
-  }
-
   protected render() {
     return html`<section class="slack-account" aria-label="Your Slack account">
       ${

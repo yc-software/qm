@@ -116,7 +116,7 @@ import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
-import { showWelcomeIn } from "./welcome-session";
+import { welcomeThreadRef } from "./welcome-session";
 import { trapDialogFocus } from "./dialog-focus";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
@@ -1097,6 +1097,7 @@ export async function boot(): Promise<void> {
   const prefillRoute = wanted === null || wanted === "new";
   const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
   const onboard = wanted === "onboard" && !wantedSession;
+  const explicitChat = Boolean(wantedSession) || wanted === "app-edit" || prefill !== null || onboard;
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   let transcriptUnavailable = false;
@@ -1165,7 +1166,7 @@ export async function boot(): Promise<void> {
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
   const restoreLast = viewIntent || !(await openNewChatFetch);
   if (restoreLast) loadPersistedSplit();
-  if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null && !onboard) {
+  if (restoreLast && !explicitChat) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {
       if (viewIntent && restoredCanvasNeedsSessionList()) await sessions;
     });
@@ -1176,7 +1177,7 @@ export async function boot(): Promise<void> {
     if (!viewIntent) await restore;
   }
 
-  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider && !onboard;
+  const bareEntry = !viewIntent && !explicitChat && !connectedProvider;
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
@@ -1227,8 +1228,7 @@ export async function boot(): Promise<void> {
   if (onboard) {
     history.replaceState(null, "", deepLinkPath(UI_BASE, "chats", null));
     exitSplitIfActive();
-    showWelcomeIn(mainConversation().newChat());
-    mainConversation().drawActiveChat();
+    mainConversation().newChat(undefined, welcomeThreadRef(appState.me.user));
     return;
   }
 
