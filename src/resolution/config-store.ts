@@ -183,7 +183,7 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
-  getActivitySeeds(id: ScopeId): ActivitySeeds | null;
+  getActivitySeeds(id: ScopeId): Promise<ActivitySeeds | null>;
   setActivitySeeds(id: ScopeId, seeds: ActivitySeeds | null): Promise<void>;
   getSpendLimitDurable(id: ScopeId): Promise<SpendLimit | null>;
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
@@ -755,7 +755,7 @@ export function createConfigStore(
     getBranding: (id) => settings.branding.get(id) ?? null,
     setBranding: (id, value) => settings.branding.set(id, value),
     getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,
-    getActivitySeeds: (id) => settings.activitySeeds.get(id) ?? null,
+    getActivitySeeds: async (id) => (await settings.activitySeeds.durable(id)) ?? null,
     setActivitySeeds: (id, seeds) => settings.activitySeeds.set(id, seeds),
     getSpendLimitDurable: async (id) => (await settings.spendLimits.durable(id)) ?? null,
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),

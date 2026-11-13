@@ -133,11 +133,13 @@ test("/me carries the activity seeds set on the organization, and a rejected wri
   const seeded = await me(cookie);
   assert.deepEqual(seeded.welcome, seeds);
   assert.deepEqual(seeded.suggestedActivities, seeds.activities);
-  assert.deepEqual(
-    await write({ seeds: { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] } }),
-    {
-      error: "seeds: activities[1]: icon must be one emoji or a built-in icon name",
-    },
+  assert.match(
+    (await write({ seeds: { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] } })).error,
+    /^seeds\.activities\.1\.icon: /,
+  );
+  assert.match(
+    (await write({ seeds: { activities: [{ ...idea, replaces: "crm" }] } })).error,
+    /activities\.0: .*replaces/,
   );
   assert.match(JSON.stringify(await write({ seeds }, "personal:bob@example.com")), /org-wide/);
   assert.deepEqual((await me(cookie)).welcome, seeds);

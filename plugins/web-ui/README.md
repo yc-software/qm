@@ -63,31 +63,34 @@ technology; reduced-motion preferences disable the transition. Dark mode uses
 subdued blue-gray suggestion text. Drafts use the normal persistence path.
 
 Each entry requires a unique lowercase alphanumeric/hyphen `id` (up to 64
-characters), `title` (up to 65 characters, the width of a suggestion row), `prompt`, and
+characters), `title` (up to 65 characters), `prompt` (up to 1,200 characters), and
 `icon` (one emoji or `yc` for the orange YC mark; legacy `schedule`, `app`, `deck`,
 `people`, `calendar`, and `book` values also render as emoji). Configuration
-accepts up to 12 entries and 20,000 characters. Invalid configuration fails startup,
-naming the entry and the rule it broke without printing its contents. Restart the web
-service after changing it.
+accepts up to 12 entries and 20,000 characters. Invalid configuration fails startup
+without printing its contents. Restart the web service after changing it.
 
 An organization can instead have its own starters, set with the org-scoped
 `activity-seeds` admin resource (`PUT /v1/admin/scopes/<org scope>/activity-seeds` with
 `{ "seeds": { "activities": [...], "apps": {...} } }`, or `{ "seeds": null }` to clear).
-An organization with seeds gets its `activities` in place of
-`WEB_UI_SUGGESTED_ACTIVITIES`, as the fallback and as the seeds the generator starts
-from. Each activity may carry a `source` shown beside its title. The `apps` lists add
-activities once the signed-in person has connected that app themselves (a Composio
-toolkit id, or `slack` for their own linked Slack account); an app's activity may name
-the organization activity it `replaces`. A rejected write names the entry and the rule
-it broke. Seeds have no entry count limit.
+Seeds reach only people the `company_welcome` feature flag covers (that person's
+personal scope or the whole organization); for them the organization's `activities`
+take the place of `WEB_UI_SUGGESTED_ACTIVITIES`, as the fallback and as the seeds the
+generator starts from. Each entry needs an `id` (up to 64 characters, the longest id a
+dismissal accepts), a `title`, a `prompt` and an `icon`; an organization activity may
+carry a `source` shown beside its title. The `apps` lists add activities once the
+signed-in person has connected that app themselves (a Composio toolkit id, or `slack`
+for their own linked Slack account); an app's activity may name the organization
+activity it `replaces`. Ids are unique across the whole document, and any other field
+is refused. A rejected write names the path and the rule it broke.
 
 The authenticated `/me` response supplies the configured fallback and whether generation is enabled.
 Fixed starters are organization-wide; keep them free of personal activity or credentials.
 
 When enabled, opening a new personal chat enrolls the user in an ordinary personal
-cron named **Refresh my suggested activities**, once they have used QM: any personal
-conversation under one of their linked ids, or any conversation they took part in.
-Before that they see the fallback starters and nothing is generated. The cron receives
+cron named **Refresh my suggested activities**, once they have sent QM a message under
+any of their linked ids, in any conversation. Being added to a channel or receiving a
+delivery does not count. Before that they see the fallback starters and nothing is
+generated. The cron receives
 each seed's id and title, not its prompt. Its first run starts immediately;
 subsequent runs happen around 2am in the browser's timezone, with the minute
 staggered by user. The cron runner uses the normal owner-scoped session, runtime

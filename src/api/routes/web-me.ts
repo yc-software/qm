@@ -1,13 +1,9 @@
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
 import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
-import {
-  parseSuggestedActivities,
-  type ActivitySeeds,
-  type SuggestedActivity,
-} from "../../../plugins/chassis/src/suggested-activities.ts";
+import { parseSuggestedActivities, type SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
 import { orgId } from "../../config.ts";
-import { scopeId } from "../../types.ts";
+import { starterActivities } from "../../suggestions/company-seeds.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
@@ -36,15 +32,6 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
   };
 }
 
-async function companyActivitySeeds(deps: ApiCtx["deps"], person: string): Promise<ActivitySeeds | undefined> {
-  if (!(await deps.featureFlags?.enabled("company_welcome", scopeId("personal", person)))) return undefined;
-  return deps.config?.getActivitySeeds(orgScope(deps)) ?? undefined;
-}
-
-export async function seedActivities(deps: ApiCtx["deps"], person: string): Promise<SuggestedActivity[]> {
-  return (await companyActivitySeeds(deps, person))?.activities ?? deps.web?.me.suggestedActivities ?? [];
-}
-
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
   const [admin, preview] = await Promise.all([
     ctx.actor?.imp
@@ -64,7 +51,7 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, workspaceUrl, auth, branding] = await Promise.all([
+  const [permissions, workspaceUrl, auth, branding, starters] = await Promise.all([
     permissionsOf(ctx, user),
     app
       .directoryMeta()
@@ -72,10 +59,9 @@ async function me(ctx: ApiCtx): Promise<void> {
       .catch(swallowAs("web: /me directory meta", null)),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
+    starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
   ]);
   const generated = Boolean(deps.suggestedActivities);
-  const seeds = await companyActivitySeeds(deps, user);
-  const fallback = seeds?.activities ?? config.suggestedActivities;
   return sendJson(res, 200, {
     user,
     org: orgId(),
@@ -93,8 +79,8 @@ async function me(ctx: ApiCtx): Promise<void> {
     displayName: actor.n?.trim() || null,
     ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
-    ...(seeds ? { welcome: seeds } : {}),
-    ...(fallback.length && !generated ? { suggestedActivities: fallback } : {}),
+    ...(starters.welcome ? { welcome: starters.welcome } : {}),
+    ...(starters.activities.length && !generated ? { suggestedActivities: starters.activities } : {}),
     permissions,
   });
 }
