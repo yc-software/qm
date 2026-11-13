@@ -7,7 +7,6 @@ import {
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import type { SlackIdentityMode } from "./identity.ts";
-import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
 import {
   type ActorAssertion,
@@ -15,23 +14,17 @@ import {
   type ConversationTurn,
   type OverheardMessage,
   type ReactionTally,
-  type GoalNoticeView,
-  type GoalNoticePresenter,
-  createGoalNoticePresenter,
   type SlackFile,
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
   REACTION_INSTRUCTION,
-  botIdentityArgs,
   buildReactionTurnText,
-  createAckPresenter,
   createDeduper,
   createThreadTracker,
   decodeSlackEntities,
   dedupeKey,
   dedupedRun,
   deliveryCandidatesFor,
-  statusPlaceholderKey,
   channelThreadRef,
   dmThreadRef,
   encodeDeliveryTarget,
@@ -40,32 +33,18 @@ import {
   isExternallyShared,
   isMpim,
   type SurfaceHeaderClient,
-  postThenAckRunDelivery,
-  type PostMessageArgs,
-  postWithVerify,
-  safeChunks,
-  SLACK_POST_SPLIT_LIMIT,
-  refusalDelivery,
-  refusalNote,
   renderConversationView,
   resolveMentions,
-  resolveReactionTargets,
   shouldSurfaceReaction,
-  slackReplyArgs,
-  blocksWithContext,
-  plainContext,
   threadHasBotStake,
-  toSlackMrkdwn,
-  uploadAttachments,
-  uploadFailureNote,
   stageSlackFiles,
 } from "./lib.ts";
-import type { GatewayContext, TurnResult } from "../types.ts";
-import { replyEditNote } from "../delivery/run-result-delivery.ts";
+import type { GatewayContext } from "../types.ts";
 import type { AckGate } from "./deferred-ack.ts";
-import type { AckPresenter } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
+import type { TurnFlow } from "../surfaces/turn-flow.ts";
+import { runSurfaceTurn, type SurfaceTurnBody } from "../surfaces/turn-driver.ts";
+import { createSlackTurnTransport } from "./turn-transport.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
@@ -74,13 +53,7 @@ import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
-import {
-  type SlackConversationKind,
-  applyAndLogReactions,
-  HANDOFF_INSTRUCTION,
-  cleanAgentReplyForSlack,
-  conversationPlaceLabel,
-} from "./messaging.ts";
+import { type SlackConversationKind, HANDOFF_INSTRUCTION, conversationPlaceLabel } from "./messaging.ts";
 
 interface Incoming {
   kind: "dm" | "channel";
@@ -174,7 +147,6 @@ export function createTurnHandler(deps: {
     deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
   const { mirrorMessageEvent } = mirror;
-  const { callCore, inFlightRuns, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
 
@@ -243,42 +215,6 @@ export function createTurnHandler(deps: {
     let slackIdsByPrincipal: Map<string, string> | undefined;
     let conversationKind: SlackConversationKind = inc.kind;
     let allowedTs: Set<string> = new Set();
-    const postReply = async (
-      msg: string,
-      blocks?: Array<Record<string, unknown>>,
-      idempotencyKey?: string,
-    ): Promise<string | undefined> => {
-      const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
-        ...slackReplyArgs(inc.channel, text, replyThreadTs, { threadOnly: inc.kind === "channel", unfurlLinks: false }),
-        ...(withBlocks && blocks ? { blocks } : {}),
-      });
-      if (idempotencyKey) {
-        const res = await postWithVerify(client, replyArgs(msg, true) as PostMessageArgs, idempotencyKey);
-        return res.ts;
-      }
-      const parts = blocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
-      let firstTs: string | undefined;
-      for (const [i, part] of parts.entries()) {
-        const ts = (await client.chat.postMessage(replyArgs(part, parts.length === 1))).ts as string | undefined;
-        if (i === 0) firstTs = ts;
-      }
-      return firstTs;
-    };
-
-    const postEphemeral = async (msg: string, threadTs?: string): Promise<void> => {
-      await client.chat
-        .postEphemeral({
-          channel: inc.channel,
-          user: inc.userId,
-          text: msg,
-          ...(threadTs ? { thread_ts: threadTs } : {}),
-        })
-        .catch(swallowAs("slack: chat.postEphemeral", undefined));
-    };
-    const ephemeralOrSay = async (msg: string): Promise<void> => {
-      if (inc.kind === "channel") await postEphemeral(msg);
-      else await postReply(msg);
-    };
 
     if (inc.kind === "dm") {
       threadRef = dmThreadRef(inc.channel, inc.threadTs);
@@ -302,9 +238,18 @@ export function createTurnHandler(deps: {
       replyThreadTs = root;
     }
 
-    let queuedRunId: string | undefined;
-    let accepted = false;
-    let goalNotice: GoalNoticePresenter | undefined;
+    const transport = createSlackTurnTransport({
+      client,
+      blobs: core,
+      kind: inc.kind,
+      channel: inc.channel,
+      userId: inc.userId,
+      triggerTs: inc.ts,
+      threadTs: replyThreadTs,
+      reactable: () => allowedTs,
+      ...(deps.onEngaged ? { onEngaged: deps.onEngaged } : {}),
+      ...(deps.onSettled ? { onSettled: deps.onSettled } : {}),
+    });
 
     if (inc.kind === "channel") {
       const membership = inc.prefetched
@@ -352,390 +297,162 @@ export function createTurnHandler(deps: {
 
     if (audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) {
       if (!inc.unprompted) {
-        await ephemeralOrSay(
+        await transport.postPrivate(
           "I can't respond here — this conversation isn't fully internal. Try a DM or a fully-internal channel.",
         );
       }
       return;
     }
 
-    const taskManaged = !inc.unprompted && !actor.isBot && inc.kind === "dm" && !!core.taskAcknowledgements;
-    const moveTaskAck = async (runId: string, ts: string, pick = false) => {
-      if (!taskManaged) return;
-      await core
-        .taskAcknowledgements!.move(
+    const pickAckEmoji = (): Promise<string | undefined> =>
+      ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), { channel: inc.channel, ts: inc.ts });
+    const taskAcks = !inc.unprompted && !actor.isBot && inc.kind === "dm" ? core.taskAcknowledgements : undefined;
+    const continuePrivate = deps.externalAccess && inc.kind === "channel" ? deps.continuePrivate : undefined;
+
+    const prepare = async (): Promise<SurfaceTurnBody | undefined> => {
+      if (inc.message) {
+        const containerName = inc.kind === "dm" ? actor.displayName?.trim() || undefined : channelName;
+        await mirrorMessageEvent(
+          { ...inc.message, channel: inc.channel, ts: inc.ts, channel_type: channelType(inc.kind, conversationKind) },
           client,
-          runId,
-          inc.channel,
-          ts,
-          pick
-            ? () =>
-                ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), { channel: inc.channel, ts: inc.ts })
-            : undefined,
-        )
-        .catch(swallowAs("slack: task ack move", undefined));
-    };
-    const finishTaskAck = async () => {
-      if (taskManaged && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
-    };
+          { partial: true, kind: conversationKind, handled: true, ...(containerName ? { containerName } : {}) },
+        );
+      }
 
-    let ack: AckPresenter | undefined;
-    const statusKey = (): string | undefined => (queuedRunId ? statusPlaceholderKey(queuedRunId) : undefined);
-    const startAck = (): AckPresenter =>
-      (ack ??= createAckPresenter({
-        taskManaged,
-        postAck: async (text) => {
-          const rendered = toSlackMrkdwn(text);
-          const ts = await postReply(rendered, undefined, statusKey());
-          if (ts && queuedRunId && !inc.unprompted) {
-            try {
-              await core.reportRunEditRef(queuedRunId, ts);
-            } catch (error) {
-              await client.chat
-                .delete({ channel: inc.channel, ts })
-                .catch(swallowAs("slack: delete status message after edit-ref failure", undefined));
-              throw error;
-            }
-          }
-        },
-        addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-        removeReaction: (name) =>
-          client.reactions.remove({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-        emojiCandidates: (() => {
-          const override = deps.ackEmojiCandidates?.();
-          return override?.length ? [...override] : [...DEFAULT_ACK_REACTIONS];
-        })(),
-        emojiPick: taskManaged
-          ? undefined
-          : ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), {
-              channel: inc.channel,
-              ts: inc.ts,
-            }),
-      }));
-    const acknowledges = !inc.unprompted || !inc.synthetic;
-    if (!inc.unprompted) startAck();
-    if (!inc.unprompted) {
-      goalNotice = createGoalNoticePresenter({
-        post: (text, blocks) => postReply(text, blocks),
-        update: (ts, text, blocks) =>
-          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {}),
-        onError: (error) => console.error("[slack-plugin] goal notice update failed:", (error as Error).message),
+      if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
+
+      let conversationHeader: string | undefined;
+      let priorTurns: ConversationTurn[] | undefined;
+      let overheard: OverheardMessage[] | undefined;
+      let detectContext: string | undefined;
+      let detectOpener: string | undefined;
+      if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
+        const serialize = () =>
+          serializer.serializeSlackConversation(client, inc, {
+            audience,
+            ...(isPrivate !== undefined ? { isPrivate } : {}),
+            kind: conversationKind,
+            ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
+          });
+        const serialized = deps.rateLimitNotice
+          ? await deps.rateLimitNotice.run(
+              client,
+              !inc.unprompted && !inc.synthetic && !actor.isBot && inc.userId
+                ? { target: encodeDeliveryTarget(inc.channel, replyThreadTs), user: inc.userId }
+                : undefined,
+              serialize,
+            )
+          : await serialize();
+        const rendered = renderConversationView(serialized.view);
+        if (rendered.header) conversationHeader = rendered.header;
+        if (rendered.priorTurns.length) priorTurns = rendered.priorTurns;
+        if (rendered.overheard.length) overheard = rendered.overheard;
+        if (rendered.detectContext) detectContext = rendered.detectContext;
+        if (rendered.detectOpener) detectOpener = rendered.detectOpener;
+        allowedTs = rendered.allowedTs;
+      }
+
+      const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
+      const { attachments, issues } = await stageSlackFiles(client, ownFiles, {
+        token: deps.botToken,
+        ...(deps.trustedFileHost ? { trustedHost: deps.trustedFileHost } : {}),
+        core,
+        directory,
       });
-    }
-    const settleAck = async (): Promise<void> => {
-      await ack?.settle().catch(swallowAs("slack: ack settle", undefined));
-    };
 
-    if (inc.message) {
-      const containerName = inc.kind === "dm" ? actor.displayName?.trim() || undefined : channelName;
-      await mirrorMessageEvent(
-        { ...inc.message, channel: inc.channel, ts: inc.ts, channel_type: channelType(inc.kind, conversationKind) },
-        client,
-        { partial: true, kind: conversationKind, handled: true, ...(containerName ? { containerName } : {}) },
-      );
-    }
+      if (inc.unprompted && !text.trim() && attachments.length === 0) return;
 
-    if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
-
-    let conversationHeader: string | undefined;
-    let priorTurns: ConversationTurn[] | undefined;
-    let overheard: OverheardMessage[] | undefined;
-    let detectContext: string | undefined;
-    let detectOpener: string | undefined;
-    if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
-      const serialize = () =>
-        serializer.serializeSlackConversation(client, inc, {
+      const turn: SurfaceTurnBody = {
+        actor,
+        ...(inc.userId
+          ? {
+              surfaceOrigin: slackSurfaceOrigin({
+                accountId: deps.accountId ?? "default",
+                teamId: ids.ownTeamId,
+                userId: inc.userId,
+                ...(deps.externalAccess
+                  ? { policyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
+                  : {}),
+                ...(replyThreadTs ? { replyThreadTs } : {}),
+                ...(deps.externalAccess && inc.kind === "channel" ? { external: deps.externalAccess } : {}),
+              }),
+            }
+          : {}),
+        conversation: {
+          kind: conversationKind,
+          threadRef,
+          ...(channelRef ? { channelRef } : {}),
+          ...(channelName ? { channelName } : {}),
           audience,
           ...(isPrivate !== undefined ? { isPrivate } : {}),
-          kind: conversationKind,
-          ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-        });
-      const serialized = deps.rateLimitNotice
-        ? await deps.rateLimitNotice.run(
-            client,
-            !inc.unprompted && !inc.synthetic && !actor.isBot && inc.userId
-              ? { target: encodeDeliveryTarget(inc.channel, replyThreadTs), user: inc.userId }
-              : undefined,
-            serialize,
-          )
-        : await serialize();
-      const rendered = renderConversationView(serialized.view);
-      if (rendered.header) conversationHeader = rendered.header;
-      if (rendered.priorTurns.length) priorTurns = rendered.priorTurns;
-      if (rendered.overheard.length) overheard = rendered.overheard;
-      if (rendered.detectContext) detectContext = rendered.detectContext;
-      if (rendered.detectOpener) detectOpener = rendered.detectOpener;
-      allowedTs = rendered.allowedTs;
-    }
-
-    const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
-    const { attachments, issues } = await stageSlackFiles(client, ownFiles, {
-      token: deps.botToken,
-      ...(deps.trustedFileHost ? { trustedHost: deps.trustedFileHost } : {}),
-      core,
-      directory,
-    });
-
-    if (inc.unprompted && !text.trim() && attachments.length === 0) return;
-
-    const turn: Omit<CoreTurnBody, "approval"> = {
-      actor,
-      ...(inc.userId
-        ? {
-            surfaceOrigin: slackSurfaceOrigin({
-              accountId: deps.accountId ?? "default",
-              teamId: ids.ownTeamId,
-              userId: inc.userId,
-              ...(deps.externalAccess
-                ? { policyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
-                : {}),
-              ...(replyThreadTs ? { replyThreadTs } : {}),
-              ...(deps.externalAccess && inc.kind === "channel" ? { external: deps.externalAccess } : {}),
-            }),
-          }
-        : {}),
-      conversation: {
-        kind: conversationKind,
-        threadRef,
-        ...(channelRef ? { channelRef } : {}),
-        ...(channelName ? { channelName } : {}),
-        audience,
-        ...(isPrivate !== undefined ? { isPrivate } : {}),
-        ...(isMpimChannel !== undefined ? { isMpim: isMpimChannel } : {}),
-        ...(publishMembers ? { publishMembers } : {}),
-      },
-      deliveryTarget: encodeDeliveryTarget(inc.channel, replyThreadTs),
-      ...(() => {
-        const candidates = deliveryCandidatesFor(conversationKind, inc.channel, replyThreadTs, channelName);
-        return candidates ? { deliveryCandidates: candidates } : {};
-      })(),
-      text,
-      gatewayContext,
-      origin: inc.unprompted
-        ? {
-            kind: "ambient",
-            ...(inc.synthetic
-              ? {}
-              : { ...(inc.ts ? { entryTs: inc.ts } : {}), ...(actor.isBot || inc.botAuthored ? {} : { live: true }) }),
-          }
-        : { kind: "human", ...(inc.ts ? { messageTs: inc.ts } : {}) },
-      ...(actor.isBot ? { botActor: true } : {}),
-      ...(conversationHeader ? { conversationHeader } : {}),
-      ...(priorTurns ? { priorTurns } : {}),
-      ...(overheard ? { overheard } : {}),
-      ...(detectContext ? { detectContext } : {}),
-      ...(detectOpener ? { detectOpener } : {}),
-      ...(attachments.length ? { attachments } : {}),
-      ...(issues.length ? { inboundNotes: issues } : {}),
-      ...(timezone ? { timezone } : {}),
-      ...(inc.ts && !inc.synthetic
-        ? { redeliveryKey: `slack:${ids.botUserId || "bot"}:${inc.channel}:${inc.ts}` }
-        : {}),
+          ...(isMpimChannel !== undefined ? { isMpim: isMpimChannel } : {}),
+          ...(publishMembers ? { publishMembers } : {}),
+        },
+        deliveryTarget: encodeDeliveryTarget(inc.channel, replyThreadTs),
+        ...(() => {
+          const candidates = deliveryCandidatesFor(conversationKind, inc.channel, replyThreadTs, channelName);
+          return candidates ? { deliveryCandidates: candidates } : {};
+        })(),
+        text,
+        gatewayContext,
+        ...(actor.isBot ? { botActor: true } : {}),
+        ...(conversationHeader ? { conversationHeader } : {}),
+        ...(priorTurns ? { priorTurns } : {}),
+        ...(overheard ? { overheard } : {}),
+        ...(detectContext ? { detectContext } : {}),
+        ...(detectOpener ? { detectOpener } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        ...(issues.length ? { inboundNotes: issues } : {}),
+        ...(timezone ? { timezone } : {}),
+        ...(inc.ts && !inc.synthetic
+          ? { redeliveryKey: `slack:${ids.botUserId || "bot"}:${inc.channel}:${inc.ts}` }
+          : {}),
+      };
+      return turn;
     };
-    let result: TurnResult;
-    try {
-      result = await callCore(turn, {
-        deferDeliveryAck: true,
-        ...(inc.synthetic
-          ? {}
-          : {
-              onReplying: () => {
-                if (acknowledges) startAck();
-                if (queuedRunId && replyThreadTs)
-                  deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs, ack?.emoji());
-              },
-            }),
-        onQueued: async (runId) => {
-          queuedRunId = runId;
-          accepted = true;
-          inc.ackGate?.persisted();
-          await moveTaskAck(runId, inc.ts, true);
+
+    await runSurfaceTurn(
+      { flow, label: "slack", reportEditRef: (runId, ref) => core.reportRunEditRef(runId, ref) },
+      transport,
+      {
+        kind: inc.kind,
+        trigger: inc.ts,
+        where: `ch=${inc.channel} ts=${inc.ts}`,
+        ...(inc.unprompted ? { unprompted: true } : {}),
+        ...(inc.synthetic ? { synthetic: true } : {}),
+        ...(actor.isBot || inc.botAuthored ? { fromBot: true } : {}),
+        prepare,
+        ackEmoji: {
+          candidates: () => {
+            const override = deps.ackEmojiCandidates?.();
+            return override?.length ? override : DEFAULT_ACK_REACTIONS;
+          },
+          pick: pickAckEmoji,
         },
-        onSteered: async (runId) => {
-          accepted = true;
-          inc.ackGate?.persisted();
-          await moveTaskAck(runId, inc.ts);
-        },
-        ...(acknowledges
+        ...(taskAcks
           ? {
-              onFirstBlock: (blockText: string) => {
-                startAck().onFirstBlock(extractPrivateContinuation(cleanAgentReplyForSlack(blockText).text).text);
-              },
-              onSurfacePosted: () => startAck().onSurfacePosted(),
-            }
-          : {}),
-        ...(goalNotice
-          ? {
-              onGoal: (goal: GoalNoticeView) => {
-                void goalNotice?.onGoal(goal);
+              taskAck: {
+                move: (runId, first) =>
+                  taskAcks
+                    .move(client, runId, inc.channel, inc.ts, first ? pickAckEmoji : undefined)
+                    .catch(swallowAs("slack: task ack move", undefined)),
+                finish: (runId) => taskAcks.finish(client, runId),
               },
             }
           : {}),
-      });
-      await goalNotice?.settle();
-    } catch (err) {
-      await settleAck();
-      if (inc.unprompted) {
-        if (!accepted) inc.ackGate?.failed(errMessage(err));
-        console.error(
-          `[slack-plugin] unprompted turn errored (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${(err as Error).message}`,
-        );
-      } else {
-        console.error(`[slack-plugin] turn errored ch=${inc.channel} ts=${inc.ts}: ${errMessage(err)}`);
-        const note = `⚠️ ${slackFailureText(err)}`;
-        if (ack?.postedAck()) await postReply(note);
-        else await ephemeralOrSay(note);
-      }
-      return;
-    } finally {
-      if (queuedRunId) {
-        deps.onSettled?.();
-      }
-    }
-
-    if (result.steered) {
-      await settleAck();
-      if (result.stopped) await postEphemeral("Stopped.", replyThreadTs);
-      return;
-    }
-
-    if (result.status === "silent") {
-      if (inc.unprompted) console.error(`[slack-plugin] turn.silent (no reply) ch=${inc.channel} ts=${inc.ts}`);
-      await settleAck();
-      await finishTaskAck();
-      return;
-    }
-
-    if (result.status === "react") {
-      await settleAck();
-      const names = result.reactions ?? [];
-      if (names.length) await applyAndLogReactions(client, inc.channel, inc.ts, [{ names }]);
-      await finishTaskAck();
-      console.error(`[slack-plugin] turn.react (acknowledged) ch=${inc.channel} ts=${inc.ts} emoji=${names.join(",")}`);
-      return;
-    }
-
-    if (result.status === "ok") {
-      const continuation = extractPrivateContinuation(result.reply ?? "");
-      if (continuation.task && deps.externalAccess && inc.kind === "channel" && queuedRunId && deps.continuePrivate) {
-        await deps.continuePrivate(queuedRunId, continuation.task);
-        ackRunDelivery(queuedRunId);
-        await settleAck();
-        await finishTaskAck();
-        return;
-      }
-      if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
-      const { text: replyBody, reactions } = cleanAgentReplyForSlack(result.reply ?? "");
-      const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
-      let reply = result.stopped ? "" : "(no response)";
-      if (replyBody) reply = toSlackMrkdwn(replyBody);
-      else if (hasNonText) reply = "";
-      const postText = reply;
-      const runKey = queuedRunId ? `run:${queuedRunId}` : undefined;
-      const deliverReply = async (): Promise<void> => {
-        let uploadError: unknown;
-        if (result.attachments?.length) {
-          try {
-            await uploadAttachments(client, inc.channel, replyThreadTs, result.attachments, core);
-          } catch (err) {
-            uploadError = err;
-            console.error("[slack-plugin] file upload failed:", (err as Error).message);
-          }
-        }
-        await ack?.drain();
-        const editNote = replyEditNote(result.retracted);
-        const noteBlocks = editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined;
-        if (postText) await postReply(postText, noteBlocks, runKey);
-        if (uploadError) await postReply(uploadFailureNote(uploadError));
-        const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
-        if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
-        await applyAndLogReactions(client, inc.channel, inc.ts, directives);
-        await settleAck();
-        await finishTaskAck();
-      };
-      try {
-        if (queuedRunId) {
-          const runId = queuedRunId;
-          await postThenAckRunDelivery({
-            post: deliverReply,
-            ack: () => ackRunDelivery(runId),
-            release: () => inFlightRuns.delete(runId),
-          });
-        } else {
-          await deliverReply();
-        }
-      } catch (err) {
-        await settleAck();
-        if (queuedRunId) {
-          console.error(
-            `[slack-plugin] reply post failed after run ${queuedRunId} finished (ch=${inc.channel} ts=${inc.ts}): ${(err as Error).message} — leaving delivery run:${queuedRunId} for the recovery poller`,
-          );
-          return;
-        }
-        throw err;
-      }
-    } else if (result.status === "pending_approval") {
-      const pendingApprovals = result.pendingApprovals ?? [];
-      if (!pendingApprovals.length) {
-        await settleAck();
-        const note = result.reason ?? "This conversation is waiting on a pending approval.";
-        if (inc.unprompted) {
-          console.error(`[slack-plugin] turn.pending_approval (no card) ch=${inc.channel} ts=${inc.ts}: ${note}`);
-        } else if (ack?.postedAck()) {
-          await postReply(note);
-        } else {
-          await ephemeralOrSay(note);
-        }
-        await finishTaskAck();
-        return;
-      }
-      await settleAck();
-      await finishTaskAck();
-    } else {
-      await settleAck();
-      const delivery = refusalDelivery(result, inc.unprompted === true);
-      if (delivery === "thread") {
-        if (queuedRunId) {
-          const runId = queuedRunId;
-          const text = refusalNote(result, inc.kind);
-          await postThenAckRunDelivery({
-            post: async () => {
-              await postReply(text, undefined, `run:${runId}`);
-              await finishTaskAck();
-            },
-            ack: () => ackRunDelivery(runId),
-            release: () => inFlightRuns.delete(runId),
-          });
-        } else {
-          await postReply(refusalNote(result, inc.kind));
-        }
-        return;
-      }
-      if (delivery === "silent") {
-        await finishTaskAck();
-        if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
-        else if (queuedRunId) ackRunDelivery(queuedRunId);
-        console.error(
-          `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
-        );
-        return;
-      }
-      const postFailure = async () => {
-        if (inc.kind === "dm" || ack?.postedAck())
-          await postReply(refusalNote(result, inc.kind), undefined, queuedRunId ? `run:${queuedRunId}` : undefined);
-        else await ephemeralOrSay(refusalNote(result, inc.kind));
-        await finishTaskAck();
-      };
-      if (queuedRunId) {
-        const runId = queuedRunId;
-        await postThenAckRunDelivery({
-          post: postFailure,
-          ack: () => ackRunDelivery(runId),
-          release: () => inFlightRuns.delete(runId),
-        });
-      } else await postFailure();
-    }
-    await finishTaskAck();
+        ...(continuePrivate
+          ? {
+              handOff: async (runId, reply) => {
+                const task = extractPrivateContinuation(reply).task;
+                if (task) await continuePrivate(runId, task);
+                return !!task;
+              },
+            }
+          : {}),
+        onAccepted: () => inc.ackGate?.persisted(),
+        onRejected: (reason) => inc.ackGate?.failed(reason),
+      },
+    );
   }
 
   async function dispatch(key: string, inc: Incoming, client: any): Promise<void> {

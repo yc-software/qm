@@ -1,61 +1,4 @@
-import { escapeSlackText } from "./mrkdwn.ts";
 import { swallow } from "../util/errors.ts";
-
-export const DEFAULT_ACK_REACTIONS = ["eyes", "mag", "hourglass_flowing_sand", "telescope", "saluting_face"] as const;
-
-export const CURATED_ACK_EMOJI = [
-  "bug",
-  "hammer_and_wrench",
-  "wrench",
-  "gear",
-  "rocket",
-  "package",
-  "robot_face",
-  "test_tube",
-  "computer",
-  "floppy_disk",
-  "bar_chart",
-  "chart_with_upwards_trend",
-  "chart_with_downwards_trend",
-  "lock",
-  "key",
-  "shield",
-  "closed_lock_with_key",
-  "memo",
-  "pencil2",
-  "page_facing_up",
-  "clipboard",
-  "books",
-  "scroll",
-  "bookmark_tabs",
-  "email",
-  "calendar",
-  "speech_balloon",
-  "telephone_receiver",
-  "bell",
-  "brain",
-  "thinking_face",
-  "bulb",
-  "microscope",
-  "sleuth_or_spy",
-  "moneybag",
-  "dollar",
-  "credit_card",
-  "airplane",
-  "world_map",
-  "globe_with_meridians",
-  "compass",
-  "car",
-  "crab",
-  "pirate_flag",
-  "sparkles",
-  "fire",
-  "zap",
-  "sunglasses",
-  "wave",
-  "art",
-  "coffee",
-] as const;
 
 export interface AckPresenter {
   onFirstBlock(text: string): void;
@@ -70,18 +13,18 @@ export function createAckPresenter(deps: {
   postAck(text: string): Promise<void>;
   addReaction(emoji: string): Promise<void>;
   removeReaction(emoji: string): Promise<void>;
-  emojiCandidates?: readonly string[];
+  emojiCandidates: readonly string[];
   emojiPick?: Promise<string | undefined>;
   reactionDelayMs?: number;
   taskManaged?: boolean;
   random?(): number;
 }): AckPresenter {
-  const candidates = deps.emojiCandidates?.length ? deps.emojiCandidates : DEFAULT_ACK_REACTIONS;
+  const candidates = deps.emojiCandidates;
   const random = deps.random ?? Math.random;
   const randomEmoji = (): string =>
     candidates[Math.min(candidates.length - 1, Math.floor(random() * candidates.length))]!;
   let pickResult: string | undefined;
-  void deps.emojiPick?.then((v) => (pickResult = v)).catch((e) => swallow("slack: pick ack emoji", e));
+  void deps.emojiPick?.then((v) => (pickResult = v)).catch((e) => swallow("turn: pick ack emoji", e));
   let emoji = "";
   let reactionApplied = false;
   let reactionCancelled = false;
@@ -90,7 +33,7 @@ export function createAckPresenter(deps: {
   let sawFirstBlock = false;
   let chain: Promise<void> = Promise.resolve();
   const enqueue = (op: () => Promise<void>): void => {
-    chain = chain.then(op).catch((e) => swallow("slack: ack presenter step", e));
+    chain = chain.then(op).catch((e) => swallow("turn: ack presenter step", e));
   };
   const choose = (): string => (emoji ||= pickResult || randomEmoji());
   const delayMs = deps.reactionDelayMs ?? 2_000;
@@ -145,13 +88,13 @@ export interface GoalNoticeView {
   floor?: string;
 }
 
-export function renderGoalNotice(goal: GoalNoticeView): string {
+export function renderGoalNotice(goal: GoalNoticeView, escape: (text: string) => string): string {
   const oneLine = goal.objective
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   const bounded = oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
-  const objective = escapeSlackText(bounded);
+  const objective = escape(bounded);
   if (goal.status === "complete") return `✓ Goal complete: ${objective}`;
   if (goal.status === "cancelled") return `✕ Goal cancelled: ${objective}`;
   if (goal.status === "paused") return `⏸ Goal paused: ${objective}`;
@@ -164,26 +107,24 @@ export interface GoalNoticePresenter {
 }
 
 export function createGoalNoticePresenter(deps: {
-  post(text: string, blocks: Array<Record<string, unknown>>): Promise<string | undefined>;
-  update(ts: string, text: string, blocks: Array<Record<string, unknown>>): Promise<void>;
+  escape(text: string): string;
+  post(text: string): Promise<string | undefined>;
+  update(ref: string, text: string): Promise<void>;
   onError?(error: unknown): void;
 }): GoalNoticePresenter {
   let messageTs: string | undefined;
   let lastText = "";
   let chain = Promise.resolve();
-  const blocksFor = (text: string): Array<Record<string, unknown>> => [
-    { type: "context", elements: [{ type: "mrkdwn", text }] },
-  ];
   return {
     async onGoal(goal) {
       chain = chain.then(async () => {
-        const text = renderGoalNotice(goal);
+        const text = renderGoalNotice(goal, deps.escape);
         if (text === lastText) return;
         try {
           if (messageTs) {
-            await deps.update(messageTs, text, blocksFor(text));
+            await deps.update(messageTs, text);
           } else {
-            messageTs = await deps.post(text, blocksFor(text));
+            messageTs = await deps.post(text);
           }
           if (messageTs) lastText = text;
         } catch (error) {

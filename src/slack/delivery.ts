@@ -481,10 +481,6 @@ export async function findPostedByKey(
   return undefined;
 }
 
-export function statusPlaceholderKey(runId: string): string {
-  return `status:run:${runId}`;
-}
-
 export function recoveryVerifyOldest(createdAt: number | undefined, editRef: string | undefined): string | undefined {
   const bounds: number[] = [];
   if (typeof createdAt === "number") bounds.push(createdAt / 1000 - 60);

@@ -3,6 +3,7 @@ import { sleep } from "./util.ts";
 import { extractDirectives } from "./directives.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { trimTrailing } from "../util/text.ts";
+import type { ReplyReaction } from "../surfaces/turn-driver.ts";
 
 const REACTION_DIRECTIVE = /\[\[react:([^[\]]*)\]\]/gi;
 const TRAILING_OPEN_DIRECTIVE = /\[\[react:[^[\]]*$/i;
@@ -200,11 +201,7 @@ export function buildReactionTurnText(evt: InboundReaction): string {
   return `[Slack reaction] ${evt.reactorName} reacted with :${evt.emoji}: on ${whose} message${quote}${now}.`;
 }
 
-export interface ReactionDirective {
-  names: string[];
-  target?: string;
-  targetId?: string;
-}
+export type ReactionDirective = ReplyReaction;
 
 export function parseReactionGroup(inner: string): ReactionDirective {
   let namesPart = String(inner);

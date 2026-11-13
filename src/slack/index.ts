@@ -23,7 +23,7 @@ import {
   slackAccountConfigsFromEnv,
   slackPluginConfigFromEnv,
 } from "./config.ts";
-import { createTurnFlow } from "./turn-flow.ts";
+import { createTurnFlow } from "../surfaces/turn-flow.ts";
 import { createActorGate, createDenyResponder } from "./allow-from.ts";
 import { createAckEmojiPicker } from "./ack-emoji.ts";
 import { type BotIdentity, createDirectory } from "./directory.ts";
@@ -222,7 +222,7 @@ export async function startSlackPlugin(
   const deduper = createDeduper(1000);
   const threads = createThreadTracker();
 
-  const flow = createTurnFlow(core);
+  const flow = createTurnFlow(core, "slack");
   const ackEmoji = createAckEmojiPicker(core, { candidatesOverride: ackEmojiOverride });
   const directory = createDirectory({
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),

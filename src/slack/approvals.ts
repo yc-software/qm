@@ -1,6 +1,6 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { slackFailureText } from "./turn-flow.ts";
+import { turnFailureText } from "../surfaces/turn-flow.ts";
 import { slackSectionBlocks } from "./mrkdwn.ts";
 import {
   APPROVAL_ACTION_IDS,
@@ -24,7 +24,7 @@ import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
+import type { CoreTurnBody, TurnFlow } from "../surfaces/turn-flow.ts";
 import type { Directory } from "./directory.ts";
 import { applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 
@@ -422,7 +422,7 @@ export function createApprovals(deps: {
       ackConveyedQuarantine(outcome);
     } catch (err) {
       console.error("%s", `[slack] approval ${requestId} action failed:`, errMessage(err));
-      const msg = slackFailureText(err);
+      const msg = turnFailureText(err);
       if (settled) {
         await updateSlackMessage(client, cardChannel, messageTs, `⚠️ ${msg}`).catch(
           swallowAs("slack: update approval message", undefined),
