@@ -13,7 +13,7 @@ test("a company's welcome profile lists its ideas, adds a connected app's ideas,
       gmail: [{ id: "g1", icon: "📥", title: "Find the pilot replies I still owe", replaces: "outreach" }],
     },
   };
-  const me = { displayName: "Maya Lin", welcomeCohort: "Spring", welcomeProfile: profile };
+  const me = { displayName: "Maya Lin", welcomeProfile: profile };
   const h = await harness({
     path: "/",
     listSessions: [],
@@ -35,7 +35,7 @@ test("a company's welcome profile lists its ideas, adds a connected app's ideas,
       ].map((row) => row.textContent!.replace(/\s+/g, " ").trim());
     for (let i = 0; i < 100 && !rows()[0]?.includes("Gmail"); i++)
       await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.match(h.mainText(), /Hi Maya!\s*Welcome to Spring!/);
+    assert.match(h.mainText(), /Hi Maya!\s*Welcome to QM/);
     assert.deepEqual(
       rows().map((row) => row.replace(/^\S+ /, "")),
       [
