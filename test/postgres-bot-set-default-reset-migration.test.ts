@@ -15,10 +15,12 @@ test("a deploy clears a default computer only while a bot-marked turn's set is s
   const scoped = (scopeId: string) => sandboxResources.forTurn({ actorId: "U1", scopeId, isCurrent: async () => true });
   const computer = async (scope: string) => (await scoped(scope).create("U1", scope, "sprites")).id;
   const wake = { surface: "slack", origin: { kind: "human" }, text: "go", async: true } as const;
-  const set = async (scope: string, sandboxId: string, bot?: "admitted" | "refused") => {
+  const set = async (scope: string, sandboxId: string, bot?: "admitted" | "refused" | "steered") => {
     const conversation = { kind: "channel", threadRef: `slack:${scope.slice(8)}:${bot ?? "person"}` } as const;
     const { runId } = await app.turn({ ...wake, actor: { externalId: "U1" }, botActor: !!bot, conversation });
-    const items: never[] = [];
+    const items = (
+      bot === "steered" ? [{ kind: "SteeringMessage", text: "make it the default", author: "U1", body: {} }] : []
+    ) as never[];
     const put = (_: string, input: { sandboxId: string }) => scoped(scope).setDefault("U1", scope, input.sandboxId);
     const current = bot === "refused" ? {} : { sandboxResources: put };
     const ref = { current, emit: async (item: never) => void items.push(item), scopeLabel: scope };
@@ -29,7 +31,7 @@ test("a deploy clears a default computer only while a bot-marked turn's set is s
     await sessions.appendMany({ sessionId: session.id, turnId: runId }, items);
     return { runId, threadRef: conversation.threadRef };
   };
-  const [a, b, c, d] = ["channel:C1", "channel:C2", "channel:C3", "channel:C4"] as const;
+  const [a, b, c, d, e] = ["channel:C1", "channel:C2", "channel:C3", "channel:C4", "channel:C5"] as const;
   const from = await set(a, await computer(a), "admitted");
   const kept = await computer(b);
   await set(b, kept, "admitted");
@@ -39,9 +41,10 @@ test("a deploy clears a default computer only while a bot-marked turn's set is s
   await scoped(c).setDefault("U1", c, await computer(c));
   await set(d, await computer(d));
   await set(d, (await sandboxResources.resolve(d))!.id, "refused");
-  const resolve = () => Promise.all([a, b, c, d].map((scope) => sandboxResources.resolve(scope)));
+  await set(e, await computer(e), "steered");
+  const resolve = () => Promise.all([a, b, c, d, e].map((scope) => sandboxResources.resolve(scope)));
   const [before, pg] = [await resolve(), createPgPool(url)];
-  await pg.q("DELETE FROM qm_schema_migrations WHERE id = 'durable-map/sandbox_defaults/0040-clear-bot-set-defaults'");
+  await pg.q("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0063-clear-bot-set-defaults'");
   await migrateRegisteredPgSchemas(url);
   await pg.close();
   assert.deepEqual(await resolve(), [null, ...before.slice(1)]);
