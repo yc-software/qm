@@ -40,7 +40,8 @@ import { PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
-import { parseActivitySeeds, type ActivitySeeds } from "../../../plugins/chassis/src/suggested-activities.ts";
+import type { ActivitySeeds } from "../../../plugins/chassis/src/suggested-activities.ts";
+import { parseActivitySeeds } from "../../suggestions/company-seeds.ts";
 import { parseSecurityPosture, SECURITY_POSTURES, type SecurityPosture } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
@@ -658,7 +659,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const seeds = (body as { seeds?: unknown } | null)?.seeds;
         if (seeds === undefined || seeds === null) return { value: null };
         try {
-          return { value: parseActivitySeeds(seeds, "seeds") };
+          return { value: parseActivitySeeds(seeds) };
         } catch (error) {
           return { error: errMessage(error) };
         }

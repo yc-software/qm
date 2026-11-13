@@ -1,8 +1,8 @@
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
 import type { Route } from "./route.ts";
-import { seedActivities } from "./web-me.ts";
+import { starterActivities } from "../../suggestions/company-seeds.ts";
+import { isObj, orgScope } from "./shared.ts";
 
 export const suggestedActivityRoutes: Route[] = [
   {
@@ -31,10 +31,15 @@ export const suggestedActivityRoutes: Route[] = [
       } catch {
         return sendJson(res, 400, { error: "bad_request" });
       }
+      const starters = await starterActivities(
+        { ...deps, fallback: deps.web?.me.suggestedActivities ?? [] },
+        orgScope(deps),
+        body.principalId,
+      );
       return sendJson(
         res,
         200,
-        await deps.suggestedActivities.get(body.principalId, await seedActivities(deps, body.principalId), {
+        await deps.suggestedActivities.get(body.principalId, starters.activities, {
           timezone,
           poll: body.poll === true,
           refresh: body.refresh === true,
