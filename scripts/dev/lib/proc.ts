@@ -144,10 +144,12 @@ export async function waitPortFree(port: number, timeoutMs = 10_000): Promise<bo
 
 export async function portAvailable(port: number): Promise<boolean> {
   for (const host of ["127.0.0.1", "0.0.0.0", "::1", "::"]) {
-    const available = await new Promise<boolean>((resolve) => {
+    const available = await new Promise<boolean>((resolve, reject) => {
       const server = createServer();
       server.once("error", (error: NodeJS.ErrnoException) => {
-        resolve(host.includes(":") && ["EAFNOSUPPORT", "EADDRNOTAVAIL"].includes(error.code ?? ""));
+        if (error.code === "EADDRINUSE") resolve(false);
+        else if (host.includes(":") && ["EAFNOSUPPORT", "EADDRNOTAVAIL"].includes(error.code ?? "")) resolve(true);
+        else reject(error);
       });
       server.listen({ port, host, ipv6Only: host.includes(":"), exclusive: true }, () =>
         server.close(() => resolve(true)),
@@ -158,9 +160,11 @@ export async function portAvailable(port: number): Promise<boolean> {
   return true;
 }
 
+const firstPortAboveFetchBlocklist = 10_081;
 const firstEphemeralPort = 32_768;
 
 export async function freePort(): Promise<number> {
-  const port = 1_024 + Math.floor(Math.random() * (firstEphemeralPort - 1_024));
+  const port =
+    firstPortAboveFetchBlocklist + Math.floor(Math.random() * (firstEphemeralPort - firstPortAboveFetchBlocklist));
   return (await portAvailable(port)) ? port : freePort();
 }
