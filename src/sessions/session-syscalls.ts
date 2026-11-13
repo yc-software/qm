@@ -1255,6 +1255,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
             };
           if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
+          if (binding.request.botActor)
+            return { ok: false, message: "a turn doing a Slack bot's work cannot create sessions." };
           const text = input.text?.trim();
           if (!input.fork && !text)
             return { ok: false, message: "new requires `text`: the new session's first message." };
