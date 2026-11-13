@@ -84,9 +84,11 @@ function event(
     thread?: string;
     bot?: boolean;
     appPost?: boolean;
+    protocol?: 2;
   } = {},
 ) {
   return {
+    ...(overrides.protocol ? { protocol: overrides.protocol } : {}),
     event_id: overrides.eventId ?? "ev-1",
     type: "message.created",
     account: "7001",
@@ -165,10 +167,16 @@ test("partner-chat events are rejected unless signed with the shared secret insi
   }
 });
 
-test("an @-mention starts a turn whose reply lands in the chat once, even when the event is redelivered", async () => {
+function onBothProtocols(name: string, run: (version: { protocol?: 2 }) => Promise<void>) {
+  test(name, () => run({}));
+  test(`${name}, on protocol 2 as well`, () => run({ protocol: 2 }));
+}
+
+const MENTIONED = "an @-mention starts a turn whose reply lands in the chat once, even when the event is redelivered";
+onBothProtocols(MENTIONED, async (version) => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
-    const mention = event({ body: "!post on it", mentions: true, eventId: "ev-mention", messageId: "1002" });
+    const mention = event({ body: "!post on it", mentions: true, eventId: "ev-m", messageId: "1002", ...version });
     assert.equal((await deliver(mention)).status, 200);
     assert.equal((await deliver(mention)).status, 200);
     await settle(async () => partnerChat.shown().some((m) => m.body === "on it"));
@@ -202,8 +210,11 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
   }
 });
 
-test("a thread the agent already posted in is followed without a mention, and an aside between people gets no reply", async () => {
-  const { built, partnerChat, deliver } = await partnerChatApp();
+const FOLLOWED =
+  "a thread the agent already posted in is followed without a mention, and an aside between people gets no reply";
+onBothProtocols(FOLLOWED, async (version) => {
+  const { built, partnerChat, deliver: deliverEvent } = await partnerChatApp();
+  const deliver = (payload: ReturnType<typeof event>) => deliverEvent({ ...payload, ...version });
   try {
     const bodies = () => partnerChat.shown().map((m) => [m.thread_id, m.body]);
     await deliver(event({ body: "!post first answer", mentions: true, eventId: "ev-m", messageId: "1008" }));
@@ -784,6 +795,34 @@ test("a direct chat is only trusted when its author is its one listed person", a
     direct.chat.members = direct.chat.members.filter((m) => m.id !== "6");
     assert.deepEqual(await deliver(direct), { status: 200, body: { ok: true } });
     await settle(async () => partnerChat.shown().some((m) => m.body === "surface:partner-chat"));
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("a protocol 2 turn is answered by the turn driver: once in a direct chat, and to the asker alone when a group turn fails", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    const direct = event({ body: "!surfacename", eventId: "v2-d", messageId: "1201", protocol: 2 });
+    direct.chat.kind = "dm";
+    direct.chat.members = direct.chat.members.filter((m) => m.id !== "6");
+    assert.equal((await deliver(direct)).status, 200);
+    assert.equal((await deliver(direct)).status, 200);
+    await deliver(event({ body: "!refuse", mentions: true, eventId: "v2-g", messageId: "1202", protocol: 2 }));
+    await settle(async () => partnerChat.received.length >= 2);
+    await new Promise((r) => setTimeout(r, 1_500));
+    const posts = partnerChat.received.map(({ body }) => [
+      body.thread_id,
+      body.recipient_user_id,
+      String(body.client_message_id).split(":")[0],
+      String(body.body).split(" — ")[0],
+    ]);
+    assert.deepEqual(posts.map(String).sort(), [
+      ",,run,surface:partner-chat",
+      "1202,5,post,I hit an error and couldn't finish",
+    ]);
+    await settle(async () => (await built.deliveries.pending("partner-chat")).length === 0);
+    assert.deepEqual(await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true }), []);
   } finally {
     await partnerChat.close();
   }

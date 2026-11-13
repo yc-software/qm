@@ -578,6 +578,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       if (!(await managedRosterIsCurrent())) return rosterChanged();
       const surface = input.surface ? deps.surfaces.get(input.surface) : undefined;
+      const liveReplies = surface?.capabilities.liveReplies === true || input.liveReplies === true;
       const admissionRefusal = await admitAudienceAndBudget(tenant, deps, conversation, actor, surface, external);
       if (admissionRefusal) return admissionRefusal;
 
@@ -1486,7 +1487,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
-          if ((surface?.capabilities.liveReplies || input.surface === "monitor") && input.runLeaseToken) {
+          if ((liveReplies || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
@@ -1531,12 +1532,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resolution,
         });
         const earlyTaskAck =
-          surface?.capabilities.liveReplies === true &&
-          humanInput &&
-          conversation.kind === "dm" &&
-          !input.approval &&
-          !input.botActor &&
-          !input.swarm;
+          liveReplies && humanInput && conversation.kind === "dm" && !input.approval && !input.botActor && !input.swarm;
         const publishFirstAck = (deliberatePost: boolean) => {
           if (
             !input.runId ||
@@ -2515,7 +2511,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
-          if (!surface?.capabilities.liveReplies || input.surfaceTools || !input.runId) return undefined;
+          if (!liveReplies || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;

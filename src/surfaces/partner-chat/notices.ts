@@ -13,7 +13,13 @@ function noticeText(result: Partial<TurnResult>): string | undefined {
 }
 
 export function partnerChatRunNotice(run: Run): string | undefined {
-  if (run.request.surface !== "partner-chat" || run.request.origin.kind !== "human" || !run.result) return undefined;
+  if (
+    run.request.surface !== "partner-chat" ||
+    run.request.origin.kind !== "human" ||
+    run.request.liveReplies ||
+    !run.result
+  )
+    return undefined;
   return noticeText(run.result);
 }
 

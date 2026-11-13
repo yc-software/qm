@@ -15,6 +15,7 @@ import {
   verifyPartnerChat,
   type PartnerChatEvent,
 } from "./protocol.ts";
+import type { PartnerChatTurns } from "./turns.ts";
 
 const SURFACE = "partner-chat";
 const CONTEXT_SCAN = 500;
@@ -31,6 +32,7 @@ export function createPartnerChatInbound(deps: {
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
+  turns: Pick<PartnerChatTurns, "start">;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -167,6 +169,19 @@ export function createPartnerChatInbound(deps: {
       chat: chat.id,
       ...(replyThread ? { thread: replyThread } : {}),
     });
+    if (event.protocol === 2) {
+      await deps.turns.start({
+        event,
+        author,
+        audience: humans,
+        container,
+        ts,
+        replyTarget,
+        ...(replyThread ? { replyThread } : {}),
+        ...(followed && thread ? { followUp: await threadDetection(container, thread, followed, ts) } : {}),
+      });
+      return { status: 200, body: { ok: true } };
+    }
     const queued = await deps.app.turn({
       surface: SURFACE,
       actor: author,

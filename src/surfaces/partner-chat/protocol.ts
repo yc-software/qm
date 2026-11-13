@@ -16,6 +16,7 @@ const user = z.object({
   bot: z.boolean().optional(),
 });
 const eventSchema = z.object({
+  protocol: z.literal(2).optional(),
   event_id: z.string().min(1),
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
