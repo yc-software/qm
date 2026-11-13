@@ -5,13 +5,16 @@ import { welcomeActivities } from "../src/welcome-ideas.ts";
 
 const idea = (id: string, icon: string, title: string) => ({ id, icon, title, prompt: title });
 
-test("a new person sees their company's seeded activities, a connected app's replace the one they name, a click fills the composer unsent, and nothing is generated yet", async () => {
+test("a new person sees their company's seeded activities, only apps they connected themselves add theirs, and a click fills the composer unsent", async () => {
   const welcome = {
     activities: [
       { ...idea("crm", "📇", "Build a tracker for the harbor pilots we are courting"), source: "from your goals" },
       idea("outreach", "✉️", "Draft notes to last week's demo attendees"),
     ],
-    apps: { gmail: [{ ...idea("g1", "📥", "Find the pilot replies I still owe"), replaces: "outreach" }] },
+    apps: {
+      gmail: [{ ...idea("g1", "📥", "Find the pilot replies I still owe"), replaces: "outreach" }],
+      slack: [idea("s1", "💬", "Summarize the channels I missed")],
+    },
   };
   const me = { displayName: "Maya Lin", welcome, suggestedActivitiesGeneration: true };
   const h = await harness({
@@ -50,14 +53,15 @@ test("a new person sees their company's seeded activities, a connected app's rep
       "Find the pilot replies I still owe",
     );
     assert.ok(!h.requests.includes("/api/turn"));
-    assert.ok(!h.requests.includes("/api/suggested-activities"));
+    assert.match(h.mainText(), /Connect your accounts/);
+    assert.doesNotMatch(h.mainText(), /Connect your apps/);
   } finally {
     await h.close();
     restoreMotion();
   }
 });
 
-test("activities from the app a person just connected are marked new, and the list stays at five", () => {
+test("activities from the app a person just connected are marked new and none of the company's are dropped", () => {
   const activities = ["a", "b", "c", "d", "e"].map((id) => idea(id, "📌", `Idea ${id}`));
   const apps = { gmail: [idea("g1", "📥", "From mail")] };
   const shown = welcomeActivities({ activities, apps }, [{ id: "gmail", name: "Gmail" }], "gmail");
@@ -69,6 +73,7 @@ test("activities from the app a person just connected are marked new, and the li
       ["b", undefined],
       ["c", undefined],
       ["d", undefined],
+      ["e", undefined],
     ],
   );
   assert.deepEqual([...shown.fresh], ["g1"]);

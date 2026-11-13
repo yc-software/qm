@@ -307,7 +307,7 @@ qm-onboarding-welcome {
 }
 .welcome-content .welcome-hero h1 {
   margin: 0;
-  font-size: clamp(30px, 3.3vw, 48px);
+  font-size: clamp(30px, 4.1cqi, 48px);
   font-weight: 600;
   letter-spacing: -0.035em;
   line-height: 1.1;
@@ -321,7 +321,7 @@ qm-onboarding-welcome {
 }
 .welcome-section h2 {
   margin: 0 0 12px;
-  font-size: clamp(19px, 1.75vw, 25px);
+  font-size: clamp(19px, 2.2cqi, 25px);
   font-weight: 600;
   letter-spacing: -0.02em;
 }

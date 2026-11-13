@@ -8,8 +8,6 @@ export const welcomeIdeasPrompt = `Help me explore what I can do with QM. Skip o
 
 Then offer to help come up with more ideas tailored to my goals and our company's current needs. Combine available company context and memory, and prefer my recent statements over old information; if tools or records are unavailable, continue with what you know. If context is missing, ask one or two focused questions. Suggest a few concrete next steps and help me choose one. Only discuss the examples for now; do not set up automations, send outreach, or modify external systems until I choose what to do.`;
 
-const WELCOME_ACTIVITY_COUNT = 5;
-
 export function welcomeActivities(
   seeds: ActivitySeeds,
   connected: ReadonlyArray<{ id: string; name: string }>,
@@ -26,5 +24,5 @@ export function welcomeActivities(
       ...activities.filter((existing) => !replaced.has(existing.id)),
     ];
   }
-  return { activities: activities.slice(0, WELCOME_ACTIVITY_COUNT), fresh };
+  return { activities, fresh };
 }
