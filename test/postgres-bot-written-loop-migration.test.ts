@@ -32,60 +32,70 @@ test("a deploy marks loops bot work created or rewrote and revokes ship grants b
   const [ka, kb, kf] = [await cron("a"), await cron("b"), await cron("f")];
   const gates = { shipActions: ["send_email", "post_slack"].map((action) => ({ action, gate: "auto" as const })) };
   const a = await make("a", { cronId: ka.id, ...gates });
-  const [c, e, d] = [await make("c", gates), await make("e"), await make("d", { botActor: true })];
+  const [c, e] = [await make("c", gates), await make("e", { shipActions: [{ action: "send_email", gate: "hold" }] })];
   const [fromPatch] = await call(true, patch(a.id), () => edit(a.id, "bot a"));
-  const [fromCreate, b] = await call(true, api, () => make("b", { cronId: kb.id }));
+  const [fromCreate, b] = await call(true, api, () => make("b", { cronId: kb.id, ...gates }));
   await call(true, patch(c.id), () => edit(c.id, "bot c"));
   await call(false, patch(c.id), () => edit(c.id, "person c"));
   await call(true, "sleep 30 && ls", () => edit(e.id, "person e").then(() => "listing"));
+  const [fromCreateD, d] = await call(true, api, () => make("d", { botActor: true, ...gates }));
   await call(true, patch(d.id), () => edit(d.id, "bot d"));
   const [fromGrant] = await call(true, `${api}/${c.id}/grants"`, grant("gc", "send_email", c.id));
   await call(false, `${api}/${c.id}/grants"`, grant("pc", "post_slack", c.id));
   const [fromGrantA] = await call(true, `${api}/${a.id}/autopilot"`, grant("ga", "send_email", a.id));
   const [fromCreateF, f] = await call(true, api, () => make("f", { cronId: kf.id }));
   await call(false, patch(f.id), () => edit(f.id, "person f"));
+  const [fromGrantE] = await call(true, `${api}/${e.id}/grants"`, grant("ge", "send_email", e.id));
+  await call(true, `${api}/${c.id}/grants"`, grant("gr", "post_slack", c.id));
+  await loops.grants.revoke("gr", "U1");
   const state = async () => ({
     loops: await Promise.all([a, b, f, c, e, d].map((loop) => loops.store.get(loop.id))),
     crons: await Promise.all([ka, kb, kf].map((k) => crons.get(k.id))),
-    grants: await Promise.all(["ga", "gc", "pc"].map((id) => loops.grants.get(id))),
+    grants: await Promise.all(["ga", "gc", "pc", "ge", "gr"].map((id) => loops.grants.get(id))),
   });
   const [before, pg] = [await state(), createPgPool(url)];
   await pg.q("DELETE FROM qm_schema_migrations WHERE id = 'triggers/0002-mark-bot-written-loops'");
   await migrateRegisteredPgSchemas(url);
   const after = await state();
   const audit = await pg.q(`SELECT action, resource, scope_label, detail::jsonb FROM audit_log
-    WHERE principal_id = 'system:migration' ORDER BY detail::jsonb ->> 'threadRef', action`);
+    WHERE principal_id = 'system:migration' ORDER BY detail::jsonb ->> 'threadRef', action, detail::text`);
   await pg.close();
   const [bot, automation] = [{ botActor: true }, { taskAuthor: "automation" }];
   const revocation = { revokedAt: after.grants[0]?.revokedAt, revokedBy: "system:migration" };
-  const [la, lb, lf, lc, ...rest] = before.loops;
+  const [la, lb, lf, lc, le, ld] = before.loops;
   const held = {
     shipActions: [
       { action: "send_email", gate: "hold" },
       { action: "post_slack", gate: "auto" },
     ],
   };
+  const allHeld = held.shipActions.map((p) => ({ ...p, gate: "hold" }));
   assert.deepEqual(after, {
     loops: [
       { ...la, ...automation, ...held },
-      { ...lb, ...bot, ...automation },
+      { ...lb, ...bot, ...automation, shipActions: allHeld },
       { ...lf, ...bot },
       { ...lc, ...held },
-      ...rest,
+      le,
+      { ...ld, shipActions: allHeld },
     ],
     crons: [before.crons[0], { ...before.crons[1], ...bot }, { ...before.crons[2], ...bot }],
-    grants: [{ ...before.grants[0], ...revocation }, { ...before.grants[1], ...revocation }, before.grants[2]],
+    grants: before.grants.map((g) => (["ga", "gc", "ge"].includes(g!.id) ? { ...g, ...revocation } : g)),
   });
   assert.ok(revocation.revokedAt! >= before.grants[0]!.createdAt);
   assert.deepEqual(audit.map(Object.values), [
     ["loop_update", a.id, scope, { ...fromPatch, ...automation }],
     ["cron_update", kb.id, scope, { ...fromCreate, ...bot }],
-    ["loop_update", b.id, scope, { ...fromCreate, ...bot, ...automation }],
+    ["loop_update", b.id, scope, { ...fromCreate, ...bot }],
+    ["loop_update", b.id, scope, { ...fromCreate, heldShipActions: ["post_slack", "send_email"] }],
+    ["loop_update", b.id, scope, { ...fromCreate, ...automation }],
+    ["loop_update", d.id, scope, { ...fromCreateD, heldShipActions: ["post_slack", "send_email"] }],
     ["loop_update", c.id, scope, { ...fromGrant, heldShipActions: ["send_email"] }],
     ["ship_grant_revoke", "gc", scope, { ...fromGrant, loopId: c.id }],
     ["loop_update", a.id, scope, { ...fromGrantA, heldShipActions: ["send_email"] }],
     ["ship_grant_revoke", "ga", scope, { ...fromGrantA, loopId: a.id }],
     ["cron_update", kf.id, scope, { ...fromCreateF, ...bot }],
     ["loop_update", f.id, scope, { ...fromCreateF, ...bot }],
+    ["ship_grant_revoke", "ge", scope, { ...fromGrantE, loopId: e.id }],
   ]);
 });
