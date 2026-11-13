@@ -218,7 +218,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
-import { surfaceToolPrompt } from "../surfaces/registry.ts";
+import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, botApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -578,7 +578,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       if (!(await managedRosterIsCurrent())) return rosterChanged();
       const surface = input.surface ? deps.surfaces.get(input.surface) : undefined;
-      const liveReplies = surface?.capabilities.liveReplies === true || input.liveReplies === true;
+      const capabilities = turnCapabilities(surface, input);
+      const liveReplies = capabilities?.liveReplies === true;
       const admissionRefusal = await admitAudienceAndBudget(tenant, deps, conversation, actor, surface, external);
       if (admissionRefusal) return admissionRefusal;
 
@@ -1593,7 +1594,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           openStored: openStoredOutbound,
           blobTransfer,
           fileRegistration,
-          ...(surface?.capabilities.textOnly ? { textOnly: true } : {}),
+          ...(capabilities?.textOnly ? { textOnly: true } : {}),
         });
         if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
           console.error(
@@ -2333,7 +2334,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(strictReadOnly ? { readOnly: true } : {}),
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
-            ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),
+            ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface, input) } : {}),
             delegateWork,
             ...((session.clientTools ?? input.clientTools)?.length
               ? { clientTools: session.clientTools ?? input.clientTools }

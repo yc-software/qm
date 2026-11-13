@@ -32,9 +32,6 @@ export async function updateSlackMessage(
   return true;
 }
 
-export const HANDOFF_INSTRUCTION =
-  "When work needs another person's own logins, files or memory, follow the `hand-off` skill.";
-
 export function cleanAgentReplyForSlack(text: string): { text: string; reactions: ReactionDirective[] } {
   const extracted = extractReactions(text);
   return { text: extractPrivateContinuation(extracted.text).text, reactions: extracted.reactions };

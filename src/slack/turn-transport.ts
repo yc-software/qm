@@ -90,10 +90,10 @@ export function createSlackTurnTransport(at: {
     async upload(attachments) {
       try {
         await uploadAttachments(client, channel, threadTs, attachments, at.blobs);
-        return undefined;
+        return {};
       } catch (err) {
         console.error("[slack-plugin] file upload failed:", (err as Error).message);
-        return uploadFailureNote(err);
+        return { failureNote: uploadFailureNote(err) };
       }
     },
     render: toSlackMrkdwn,

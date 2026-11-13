@@ -1,38 +1,91 @@
 import { randomUUID } from "node:crypto";
+import { errMessage, swallowAs } from "../../util/errors.ts";
+import type { AddressFetch } from "../../util/network.ts";
+import type { BlobSource } from "../attachments.ts";
+import { MAX_REACTIONS_PER_TURN, extractReactions } from "../reactions.ts";
 import type { SurfaceTransport } from "../turn-driver.ts";
-import { postPartnerChatMessage, type PartnerChatPoster } from "./post.ts";
-import type { PartnerChatRef } from "./protocol.ts";
+import { UPLOAD_FAILED, uploadPartnerChatFiles } from "./files.ts";
+import {
+  deletePartnerChatMessage,
+  editPartnerChatMessage,
+  postPartnerChatMessage,
+  setPartnerChatTyping,
+  type PartnerChatMessages,
+} from "./messages.ts";
+import { partnerChatMessageId, type PartnerChatRef } from "./protocol.ts";
+import { addPartnerChatReaction, removePartnerChatReaction } from "./reactions.ts";
 
-const unimplemented = async (): Promise<undefined> => undefined;
+const TYPING_REPEAT_MS = 4_000;
+
+export type PartnerChatTransportDeps = PartnerChatMessages & { blobs: BlobSource; storageFetch?: AddressFetch };
 
 export function createPartnerChatTransport(
-  deps: PartnerChatPoster,
-  at: { chat: Omit<PartnerChatRef, "thread">; thread?: string; authorId: string },
+  deps: PartnerChatTransportDeps,
+  at: { where: PartnerChatRef; authorId: string; trigger: string },
 ): SurfaceTransport {
-  const send = (text: string, key: string | undefined, recipientUserId?: string): Promise<string | undefined> =>
-    postPartnerChatMessage(deps, {
-      chat: at.chat,
-      ...(at.thread ? { thread: at.thread } : {}),
-      body: text,
-      key: key ?? `post:${randomUUID()}`,
-      ...(recipientUserId ? { recipientUserId } : {}),
-    });
+  const { where } = at;
+  const message = (ref: string) => ({ account: where.account, chat: where.chat, messageId: partnerChatMessageId(ref) });
+  let typing: ReturnType<typeof setInterval> | undefined;
+  const sendTyping = (on: boolean): Promise<void> =>
+    setPartnerChatTyping(deps.client, where, on).catch(swallowAs("partner-chat: typing", undefined));
+
   return {
     async post(text, opts = {}) {
-      const body = opts.note ? `${text}\n\n_${opts.note}_` : text;
-      return body.trim() ? send(body.trim(), opts.idempotencyKey) : undefined;
+      const body = (opts.note ? `${text}\n\n_${opts.note}_` : text).trim();
+      if (!body && !opts.fileIds?.length) return undefined;
+      return postPartnerChatMessage(deps, where, {
+        text: body,
+        idempotencyKey: opts.idempotencyKey ?? `post:${randomUUID()}`,
+        ...(opts.fileIds?.length ? { fileIds: opts.fileIds } : {}),
+      });
     },
     async postPrivate(text, opts) {
-      await send(text, undefined, at.chat.kind === "dm" && !opts?.transient ? undefined : at.authorId);
+      await postPartnerChatMessage(deps, where, {
+        text,
+        idempotencyKey: `post:${randomUUID()}`,
+        ...(where.kind === "dm" && !opts?.transient ? {} : { recipientUserId: at.authorId }),
+      });
     },
-    edit: unimplemented,
-    remove: unimplemented,
-    react: unimplemented,
-    applyReactions: unimplemented,
-    typing: unimplemented,
-    upload: unimplemented,
+    edit: (ref, text) => editPartnerChatMessage(deps, where, ref, text),
+    remove: (ref) => deletePartnerChatMessage(deps, where, ref),
+    react: (ref, name, on) =>
+      (on ? addPartnerChatReaction : removePartnerChatReaction)(deps.client, message(ref), name),
+    async applyReactions(reactions) {
+      let budget = MAX_REACTIONS_PER_TURN;
+      for (const names of reactions.filter((r) => !r.target && !r.targetId).map((r) => r.names)) {
+        for (const name of names.slice(0, budget)) {
+          budget -= 1;
+          await addPartnerChatReaction(deps.client, message(at.trigger), name).catch((e: unknown) =>
+            console.error(`[partner-chat] couldn't add reaction ${name} in chat ${where.chat}: ${errMessage(e)}`),
+          );
+        }
+      }
+    },
+    async typing(on) {
+      clearInterval(typing);
+      typing = on ? setInterval(() => void sendTyping(true), TYPING_REPEAT_MS) : undefined;
+      typing?.unref();
+      await sendTyping(on);
+    },
+    async upload(attachments) {
+      try {
+        return {
+          fileIds: await uploadPartnerChatFiles(
+            deps.client,
+            where.account,
+            where.chat,
+            attachments,
+            deps.blobs,
+            deps.storageFetch,
+          ),
+        };
+      } catch (e) {
+        console.error(`[partner-chat] file upload failed in chat ${where.chat}: ${errMessage(e)}`);
+        return { failureNote: UPLOAD_FAILED };
+      }
+    },
     render: (markdown) => markdown,
     escape: (text) => text,
-    readReply: (reply) => ({ text: reply, reactions: [] }),
+    readReply: extractReactions,
   };
 }

@@ -43,7 +43,7 @@ import type { GatewayContext } from "../types.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnFlow } from "../surfaces/turn-flow.ts";
-import { runSurfaceTurn, type SurfaceTurnBody } from "../surfaces/turn-driver.ts";
+import { HANDOFF_INSTRUCTION, runSurfaceTurn, type SurfaceTurnBody } from "../surfaces/turn-driver.ts";
 import { createSlackTurnTransport } from "./turn-transport.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
@@ -53,7 +53,7 @@ import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
-import { type SlackConversationKind, HANDOFF_INSTRUCTION, conversationPlaceLabel } from "./messaging.ts";
+import { type SlackConversationKind, conversationPlaceLabel } from "./messaging.ts";
 
 interface Incoming {
   kind: "dm" | "channel";
@@ -582,6 +582,7 @@ export function createTurnHandler(deps: {
             channel,
             userId: reactorId,
             rawText: buildReactionTurnText({
+              surfaceLabel: "Slack",
               reactorName,
               emoji,
               added,

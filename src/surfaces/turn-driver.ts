@@ -1,6 +1,7 @@
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { OutgoingAttachment, TurnResult } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import type { ReplyReaction } from "./reactions.ts";
 import { postThenAckRunDelivery, refusalDelivery, refusalNote } from "./refusals.ts";
 import { turnFailureText, type CoreTurnBody, type TurnFlow } from "./turn-flow.ts";
 import {
@@ -10,21 +11,18 @@ import {
   type GoalNoticeView,
 } from "./turn-presenters.ts";
 
-export interface ReplyReaction {
-  names: string[];
-  target?: string;
-  targetId?: string;
-}
-
 export interface SurfaceTransport {
-  post(text: string, opts?: { idempotencyKey?: string; note?: string; notice?: boolean }): Promise<string | undefined>;
+  post(
+    text: string,
+    opts?: { idempotencyKey?: string; note?: string; notice?: boolean; fileIds?: readonly string[] },
+  ): Promise<string | undefined>;
   postPrivate(text: string, opts?: { transient?: boolean }): Promise<void>;
   edit(ref: string, text: string): Promise<void>;
   remove(ref: string): Promise<void>;
   react(ref: string, name: string, on: boolean): Promise<void>;
   applyReactions(reactions: readonly ReplyReaction[]): Promise<void>;
   typing(on: boolean, run?: { runId: string; emoji(): Promise<string> | undefined }): Promise<void>;
-  upload(attachments: OutgoingAttachment[]): Promise<string | undefined>;
+  upload(attachments: OutgoingAttachment[]): Promise<{ fileIds?: readonly string[]; failureNote?: string }>;
   render(markdown: string): string;
   escape(text: string): string;
   readReply(reply: string): { text: string; reactions: ReplyReaction[] };
@@ -46,6 +44,9 @@ export interface SurfaceTurn {
   onAccepted?(): void;
   onRejected?(reason: string): void;
 }
+
+export const HANDOFF_INSTRUCTION =
+  "When work needs another person's own logins, files or memory, follow the `hand-off` skill.";
 
 export function statusPlaceholderKey(runId: string): string {
   return `status:run:${runId}`;
@@ -211,15 +212,16 @@ export async function runSurfaceTurn(
     if (replyBody) reply = transport.render(replyBody);
     else if (hasNonText) reply = "";
     const deliverReply = async (): Promise<void> => {
-      const uploadNote = result.attachments?.length ? await transport.upload(result.attachments) : undefined;
+      const uploaded = result.attachments?.length ? await transport.upload(result.attachments) : {};
       await ack?.drain();
       const note = replyEditNote(result.retracted);
-      if (reply)
+      if (reply || uploaded.fileIds?.length)
         await transport.post(reply, {
           ...(note ? { note } : {}),
+          ...(uploaded.fileIds?.length ? { fileIds: uploaded.fileIds } : {}),
           ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}` } : {}),
         });
-      if (uploadNote) await transport.post(uploadNote);
+      if (uploaded.failureNote) await transport.post(uploaded.failureNote);
       await transport.applyReactions(reactions);
       await settleAck();
       await finishTaskAck();

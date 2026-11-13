@@ -52,14 +52,16 @@ export {
   dedupedRun,
 } from "./message-gating.ts";
 export {
-  type SlackFile,
   MAX_ATTACHMENT_BYTES,
   isOversize,
-  isTrustedSlackHost,
   attachmentFromBytes,
   MAX_ATTACHMENTS_PER_TURN,
-  downloadSlackFile,
   processInboundFiles,
+} from "../surfaces/attachments.ts";
+export {
+  type SlackFile,
+  isTrustedSlackHost,
+  downloadSlackFile,
   stageSlackFiles,
   uploadAttachments,
   uploadFailureNote,
@@ -80,20 +82,22 @@ export {
   decodeTs,
   REACTION_INSTRUCTION,
   REACTION_DETECT_GUIDANCE,
-  MAX_REACTIONS_PER_TURN,
   normalizeReaction,
   normalizeReactions,
   applyReactions,
+  type ReactionDirective,
+  resolveReactionTargets,
+} from "./reactions.ts";
+export {
+  MAX_REACTIONS_PER_TURN,
+  parseReactionGroup,
+  extractReactions,
+  stripReactionDirectives,
   type ReactionTally,
   summarizeReactions,
   shouldSurfaceReaction,
   buildReactionTurnText,
-  type ReactionDirective,
-  parseReactionGroup,
-  resolveReactionTargets,
-  extractReactions,
-  stripReactionDirectives,
-} from "./reactions.ts";
+} from "../surfaces/reactions.ts";
 export {
   buildContextWindow,
   type RecentMessage,

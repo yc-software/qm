@@ -1,6 +1,7 @@
 import { resolveMentions } from "./mrkdwn.ts";
 export { resolveMentions } from "./mrkdwn.ts";
-import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
+import { encodeTs } from "./reactions.ts";
+import { summarizeReactions, type ReactionTally } from "../surfaces/reactions.ts";
 import {
   buildContextWindow as buildSurfaceContextWindow,
   clipText,

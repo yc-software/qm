@@ -2571,12 +2571,21 @@ export function buildApp(
   const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
   const partnerChatClient = config.partnerChat ? createPartnerChatClient(config.partnerChat) : null;
   const partnerChatTurns = partnerChatClient
-    ? createPartnerChatTurns({ app, client: partnerChatClient, runs, turnStream })
+    ? createPartnerChatTurns({
+        app,
+        client: partnerChatClient,
+        blobs: slackCore,
+        runs,
+        turnStream,
+        pickAckEmoji: slackCore.pickAckEmoji,
+      })
     : null;
   const partnerChatInbound =
-    partnerChatNotices && partnerChatTurns && config.partnerChat
+    partnerChatNotices && partnerChatClient && partnerChatTurns && config.partnerChat
       ? createPartnerChatInbound({
           secret: config.partnerChat.secret,
+          client: partnerChatClient,
+          stageBlob: slackCore.stageBlob,
           app,
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
@@ -2588,7 +2597,7 @@ export function buildApp(
     partnerChatClient && partnerChatTurns
       ? createDeliveryRelay(deliveries, {
           type: "partner-chat",
-          send: partnerChatSender({ client: partnerChatClient, app }),
+          send: partnerChatSender({ client: partnerChatClient, blobs: slackCore, app }),
           claimMs: PARTNER_CHAT_CLAIM_MS,
           held: partnerChatTurns.held,
         })

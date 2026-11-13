@@ -1,38 +1,54 @@
 import type { App } from "../../api/app-types.ts";
 import type { RunStore } from "../../runs/run-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
-import type { ActorAssertion, Delivery } from "../../types.ts";
+import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS } from "../../slack/ack-emoji.ts";
+import type { Delivery, GatewayContext } from "../../types.ts";
 import { reportFailureAs } from "../../util/errors.ts";
+import { reactionDetectGuidance, reactionInstruction } from "../reactions.ts";
 import { createRunWaiter } from "../run-wait.ts";
-import { runSurfaceTurn } from "../turn-driver.ts";
+import { HANDOFF_INSTRUCTION, runSurfaceTurn, type SurfaceTurnBody } from "../turn-driver.ts";
 import { createTurnFlow, liveRunHoldsDelivery, runDeliveryId } from "../turn-flow.ts";
-import type { PartnerChatClient } from "./client.ts";
-import type { PartnerChatEvent } from "./protocol.ts";
-import { createPartnerChatTransport } from "./transport.ts";
+import type { PartnerChatRef } from "./protocol.ts";
+import { createPartnerChatTransport, type PartnerChatTransportDeps } from "./transport.ts";
 
 const SURFACE = "partner-chat";
-const ACK_REACTIONS = ["eyes"];
+const ACK_PICKS = [...CURATED_ACK_EMOJI, ...DEFAULT_ACK_REACTIONS];
 
 export interface PartnerChatTurn {
-  event: PartnerChatEvent;
-  author: ActorAssertion;
-  audience: ActorAssertion[];
-  container: string;
-  ts: string;
-  replyTarget: string;
-  replyThread?: string;
-  followUp?: { detectContext: string; detectOpener?: string };
+  where: PartnerChatRef;
+  authorId: string;
+  trigger: string;
+  body: SurfaceTurnBody;
+  unprompted?: boolean;
+  synthetic?: boolean;
 }
 
 export type PartnerChatTurns = ReturnType<typeof createPartnerChatTurns>;
 
-export function createPartnerChatTurns(deps: {
-  app: Pick<App, "turn" | "ackDeliveryByKey" | "getRun" | "ingestSurfaceEvents">;
-  client: PartnerChatClient;
-  runs: Pick<RunStore, "get" | "watchSession">;
-  turnStream: TurnStream;
-  now?: () => number;
-}) {
+function gatewayContext(where: PartnerChatRef, chatName: string | undefined): GatewayContext {
+  const hostIds = { chat: where.chat, ...(where.thread ? { thread: where.thread } : {}) };
+  const reactions = { instructions: reactionInstruction("", false), reactionGuidance: reactionDetectGuidance("") };
+  if (where.kind === "dm") return { location: "a direct message with the user", hostIds, ...reactions };
+  return {
+    location: chatName ? `the group chat "${chatName}"` : "a group chat",
+    hostIds,
+    ...(chatName ? { details: { chat_name: chatName } } : {}),
+    ...reactions,
+    instructions: `${reactions.instructions}\n\n${HANDOFF_INSTRUCTION}`,
+  };
+}
+
+export function createPartnerChatTurns(
+  deps: PartnerChatTransportDeps & {
+    app: Pick<
+      App,
+      "turn" | "ackDeliveryByKey" | "getRun" | "setRunDeliveryState" | "ingestSurfaceEvents" | "readSurfaceMessages"
+    >;
+    runs: Pick<RunStore, "get" | "watchSession">;
+    turnStream: TurnStream;
+    pickAckEmoji?: (text: string, candidates: readonly string[]) => Promise<string | undefined>;
+  },
+) {
   const flow = createTurnFlow(
     {
       submitTurn: (body) => deps.app.turn({ ...body, surface: SURFACE }),
@@ -41,6 +57,9 @@ export function createPartnerChatTurns(deps: {
     },
     SURFACE,
   );
+  const reportEditRef = async (runId: string, editRef: string): Promise<void> => {
+    if (!(await deps.app.setRunDeliveryState(runId, { editRef }))) throw new Error(`run ${runId} not found`);
+  };
 
   async function held(d: Delivery): Promise<boolean> {
     const runId = runDeliveryId(d);
@@ -49,57 +68,30 @@ export function createPartnerChatTurns(deps: {
   }
 
   function start(turn: PartnerChatTurn): Promise<void> {
-    const { event, container, replyTarget, replyThread } = turn;
-    const { chat, message, account } = event;
-    const transport = createPartnerChatTransport(
-      { client: deps.client, app: deps.app, ...(deps.now ? { now: deps.now } : {}) },
-      {
-        chat: { account, kind: chat.kind, chat: chat.id },
-        ...(replyThread ? { thread: replyThread } : {}),
-        authorId: message.user.id,
-      },
-    );
+    const { where, body } = turn;
+    const label = `chat=${where.chat} at=${turn.trigger}`;
+    const transport = createPartnerChatTransport(deps, turn);
     return new Promise<void>((resolve, reject) => {
-      const done = runSurfaceTurn({ flow, label: SURFACE }, transport, {
-        kind: chat.kind === "dm" ? "dm" : "channel",
-        trigger: turn.ts,
-        where: `chat=${chat.id} message=${message.id}`,
-        ...(turn.followUp ? { unprompted: true } : {}),
-        ackEmoji: { candidates: () => ACK_REACTIONS, pick: async () => undefined },
+      const done = runSurfaceTurn({ flow, label: SURFACE, reportEditRef }, transport, {
+        kind: where.kind === "dm" ? "dm" : "channel",
+        trigger: turn.trigger,
+        where: label,
+        ...(turn.unprompted ? { unprompted: true } : {}),
+        ...(turn.synthetic ? { synthetic: true } : {}),
+        ackEmoji: {
+          candidates: () => DEFAULT_ACK_REACTIONS,
+          pick: async () => deps.pickAckEmoji?.(body.text, ACK_PICKS),
+        },
         prepare: async () => ({
-          actor: turn.author,
-          surfaceOrigin: {
-            author: { surface: SURFACE, account, id: message.user.id },
-            workspace: account,
-            ...(replyThread ? { replyThread } : {}),
-            audience: "internal",
-          },
-          conversation: {
-            kind: chat.kind,
-            threadRef: replyTarget,
-            ...(chat.kind === "group" ? { channelRef: container, isPrivate: true } : {}),
-            ...(chat.name ? { channelName: chat.name } : {}),
-            audience: turn.audience,
-          },
-          deliveryTarget: replyTarget,
-          ...(chat.kind === "group" && replyTarget !== container
-            ? {
-                deliveryCandidates: [
-                  { target: replyTarget, label: "this thread" },
-                  { target: container, label: chat.name ? `${chat.name} (the whole chat)` : "the whole chat" },
-                ],
-              }
-            : {}),
-          text: message.body,
-          ...turn.followUp,
+          ...body,
+          gatewayContext: gatewayContext(where, body.conversation.channelName),
           liveReplies: true,
-          redeliveryKey: `${SURFACE}:${account}:${chat.id}:${message.id}`,
         }),
         onAccepted: resolve,
         onRejected: (reason) => reject(new Error(reason)),
       });
       done.then(resolve, reject);
-      done.catch(reportFailureAs("partner-chat: turn", undefined, `chat=${chat.id} message=${message.id}`));
+      done.catch(reportFailureAs("partner-chat: turn", undefined, label));
     });
   }
 
