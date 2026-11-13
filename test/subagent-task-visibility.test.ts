@@ -20,7 +20,7 @@ async function conversation(built: ReturnType<typeof buildApp>, threadRef: strin
   const run = (await built.runs.list({ threadRef, limit: 1 }).then(([run]) => run))!;
   const session = (await built.sessions.getByThread(threadRef))!;
   const request = { ...run.request, runId: run.id };
-  const bind = (extra: { botActor?: true } = {}) =>
+  const bind = (extra: Partial<typeof request> = {}) =>
     built.sessionSyscalls.forTurn({ session, scopeId: session.scopeId, request: { ...request, ...extra } });
   return { run, session, bind, syscalls: bind() };
 }
@@ -69,10 +69,12 @@ test("a wake runs with a Slack bot's restrictions when either the woken conversa
   const person = await conversation(built, "dm:U1:person");
   const bot = await conversation(built, "dm:U1:bot", { botActor: true });
   const other = await conversation(built, "dm:U1:other");
+  const spare = await conversation(built, "dm:U1:spare");
   const asBot = person.bind({ botActor: true });
   for (const [sender, target] of [
     [person.syscalls, bot],
     [person.syscalls, other],
+    [bot.bind({ botActor: undefined, sessionSenderId: person.session.id }), spare],
   ] as const)
     assert.ok((await sender.write({ wake: true, target: target.session.id, text: "take this over" })).ok);
   const opened = await asBot.open({ task: "summarize the log" });
@@ -86,9 +88,9 @@ test("a wake runs with a Slack bot's restrictions when either the woken conversa
   const claim = await built.runs.claimById(run!.id, "worker", 60_000);
   await built.runs.complete(run!.id, claim!.leaseToken!, { status: "ok", reply: "done" });
   await settle(async () => !!(await built.runs.getByDedupKey(`subagent-return:${run!.id}`)));
-  const wakes = [bot, other, person].map(({ session }) => built.runs.inFlightForThread(session.threadRef));
+  const wakes = [bot, other, spare, person].map(({ session }) => built.runs.inFlightForThread(session.threadRef));
   const marks = (await Promise.all(wakes)).map(([wake]) => wake!.request.botActor);
-  assert.deepEqual(marks, [true, undefined, true]);
+  assert.deepEqual(marks, [true, undefined, undefined, true]);
 });
 
 test("human-origin delegated input is screened before model execution", async (t) => {

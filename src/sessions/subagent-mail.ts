@@ -194,7 +194,7 @@ async function parentTurn(
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
-    ...(meta.botActor || doesBotWork(child, source) ? { botActor: true } : {}),
+    ...(meta.botActor || doesBotWork(peer ? null : child, source) ? { botActor: true } : {}),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,
