@@ -10,7 +10,7 @@ import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
 
 export interface WebhookReceiver {
-  deliver(id: string, req: { headers: VerifierInput["headers"]; rawBody: string }): Promise<DeliverResult>;
+  deliver(id: string, req: Pick<VerifierInput, "headers" | "rawBody" | "urlToken">): Promise<DeliverResult>;
 }
 
 export interface WebhookReceiverDeps extends TriggerDeps {
@@ -91,6 +91,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
 
       const input: VerifierInput = {
         ...(wh.verification.secret ? { secret: wh.verification.secret } : {}),
+        ...(req.urlToken ? { urlToken: req.urlToken } : {}),
         headers: req.headers,
         rawBody: req.rawBody,
       };

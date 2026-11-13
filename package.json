@@ -104,6 +104,7 @@
     "pg-connection-string": "2.14.0",
     "porter-sandbox": "^0.1.41",
     "socks-proxy-agent": "10.1.0",
+    "standardwebhooks": "1.1.1",
     "tar-stream": "^3.2.0",
     "tree-sitter-bash": "^0.25.1",
     "typebox": "^1.1.38",

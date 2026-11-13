@@ -1,9 +1,11 @@
 import { createHash, createHmac } from "node:crypto";
+import { Webhook as StandardWebhook } from "standardwebhooks";
 import type { Webhook } from "../triggers/types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
 export interface VerifierInput {
   secret?: string;
+  urlToken?: string;
   headers: Record<string, string | string[] | undefined>;
   rawBody: string;
 }
@@ -137,7 +139,50 @@ const linear: Verifier = {
   },
 };
 
-const VERIFIERS: Record<WebhookScheme, Verifier> = { github, slack, stripe, linear, "hmac-sha256": hmacSha256 };
+const BEARER_PREFIX = "bearer ";
+
+const token: Verifier = {
+  verify({ secret, headers, urlToken }) {
+    if (!secret) return false;
+    const authorization = header(headers, "authorization");
+    const presented = authorization?.toLowerCase().startsWith(BEARER_PREFIX)
+      ? authorization.slice(BEARER_PREFIX.length)
+      : urlToken;
+    return presented !== undefined && constantTimeEqual(presented, secret);
+  },
+  deliveryId({ rawBody }) {
+    return bodyHash(rawBody);
+  },
+};
+
+const standardWebhooks: Verifier = {
+  verify({ secret, headers, rawBody }) {
+    if (!secret) return false;
+    try {
+      new StandardWebhook(secret).verify(rawBody, {
+        "webhook-id": header(headers, "webhook-id") ?? "",
+        "webhook-timestamp": header(headers, "webhook-timestamp") ?? "",
+        "webhook-signature": header(headers, "webhook-signature") ?? "",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  deliveryId({ headers, rawBody }) {
+    return header(headers, "webhook-id") ?? bodyHash(rawBody);
+  },
+};
+
+const VERIFIERS: Record<WebhookScheme, Verifier> = {
+  github,
+  slack,
+  stripe,
+  linear,
+  "hmac-sha256": hmacSha256,
+  token,
+  "standard-webhooks": standardWebhooks,
+};
 
 export type WebhookScheme = Webhook["verification"]["scheme"];
 

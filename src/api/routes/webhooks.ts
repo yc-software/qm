@@ -9,7 +9,7 @@ import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
 const FILTERS_MESSAGE = "every filter requires a non-empty path and at least one non-empty value";
-const VERIFICATION_MESSAGE = "a supported signature scheme and non-empty signing secret are required";
+const VERIFICATION_MESSAGE = "a supported verification scheme and non-empty secret are required";
 
 function isWebhookVerification(value: Record<string, unknown>): boolean {
   return (
@@ -41,7 +41,7 @@ export function redactWebhook(w: Webhook): Webhook {
 }
 
 async function incomingWebhook(ctx: BaseCtx): Promise<void> {
-  const { req, res, deps, params } = ctx;
+  const { req, res, deps, params, url } = ctx;
   if (!deps.webhookReceiver) {
     req.resume();
     return sendJson(res, 404, { error: "not_found" });
@@ -55,15 +55,19 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
       return sendJson(res, 413, { error: "payload_too_large", message: errMessage(e) });
     throw e;
   }
-  const out = await deps.webhookReceiver.deliver(id, { headers: req.headers, rawBody });
+  const urlToken = url.searchParams.get("token");
+  const out = await deps.webhookReceiver.deliver(id, {
+    headers: req.headers,
+    rawBody,
+    ...(urlToken ? { urlToken } : {}),
+  });
   if (out.status === 200) {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end(out.body);
     return;
   }
   if (out.status === 202) return sendJson(res, 202, { ok: true });
-  if (out.status === 401)
-    return sendJson(res, 401, { error: "unauthorized", message: "signature verification failed" });
+  if (out.status === 401) return sendJson(res, 401, { error: "unauthorized", message: "verification failed" });
   return sendJson(res, 404, { error: "not_found" });
 }
 

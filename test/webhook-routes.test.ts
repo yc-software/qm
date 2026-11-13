@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
+import { Webhook as StandardWebhook } from "standardwebhooks";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -300,6 +301,65 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     assert.match(worklog, /agent message for worklog/);
     const otherPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U2`;
     assert.equal((await fetch(`${srv.base}${otherPath}`, { headers: sign("GET", otherPath, "") })).status, 404);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a token webhook accepts its secret as a bearer header or on the URL, and nothing else", async () => {
+  const srv = start();
+  try {
+    const webhook = await srv.built.app.createWebhook({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      action: "triage",
+      verification: { scheme: "token", secret: HOOK_SECRET },
+    });
+    const deliver = (n: number, query: string, authorization?: string) =>
+      fetch(`${srv.base}/v1/webhooks/incoming/${webhook.id}${query}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(authorization ? { authorization } : {}) },
+        body: JSON.stringify({ alarm: n }),
+      }).then((res) => res.status);
+    assert.equal(await deliver(1, "", `Bearer ${HOOK_SECRET}`), 202);
+    assert.equal(await deliver(2, `?token=${HOOK_SECRET}`), 202);
+    assert.equal(await deliver(3, ""), 401);
+    assert.equal(await deliver(4, "?token=wrong"), 401);
+    assert.equal(await deliver(5, `?token=${HOOK_SECRET}`, "Bearer wrong"), 401);
+    await new Promise((r) => setTimeout(r, 50));
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a standard-webhooks webhook accepts a sender-signed request once and rejects a tampered body", async () => {
+  const srv = start();
+  try {
+    const secret = `whsec_${Buffer.from("standard-webhooks-secret").toString("base64")}`;
+    const webhook = await srv.built.app.createWebhook({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      action: "triage",
+      verification: { scheme: "standard-webhooks", secret },
+    });
+    const sent = new Date();
+    const eventBody = JSON.stringify({ type: "invoice.paid" });
+    const deliver = (body: string) =>
+      fetch(`${srv.base}/v1/webhooks/incoming/${webhook.id}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "webhook-id": "msg_1",
+          "webhook-timestamp": String(Math.floor(sent.getTime() / 1000)),
+          "webhook-signature": new StandardWebhook(secret).sign("msg_1", sent, eventBody),
+        },
+        body,
+      });
+    assert.equal((await deliver(eventBody)).status, 202);
+    assert.equal((await deliver(JSON.stringify({ type: "invoice.refunded" }))).status, 401);
+    await settle(async () => (await (await deliver(eventBody)).text()) === "duplicate");
   } finally {
     await srv.close();
   }
