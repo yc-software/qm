@@ -243,15 +243,22 @@ async function startApp(
       headers: { "x-qm-render-app-token": renderGatewayToken("a".repeat(43), Date.now() + 60_000) },
       signal: AbortSignal.timeout(5_000),
     });
-  const deadline = Date.now() + 30_000;
-  while (!finished && Date.now() < deadline) {
-    const response = await request("/__qm_ready").catch(() => null);
-    await response?.body?.cancel();
-    if (response?.status === 204) return { request, running, appPort, appDir: join(f.root, "app") };
-    await delay(25);
-  }
-  if (finished) throw new Error(`Runner exited with ${await running}`);
-  throw new Error("Runner did not become ready");
+  await Promise.race([
+    running.then((code) => {
+      throw new Error(`Runner exited with ${code}`);
+    }),
+    (async () => {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const response = await request("/__qm_ready").catch(() => null);
+        await response?.body?.cancel();
+        if (response?.status === 204) return;
+        await delay(25);
+      }
+      throw new Error("Runner did not become ready");
+    })(),
+  ]);
+  return { request, running, appPort, appDir: join(f.root, "app") };
 }
 
 test(
