@@ -282,16 +282,18 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
          WHERE NOT g.json ? 'revokedAt'
            AND EXISTS (SELECT 1 FROM user_links k JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
                         WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")})
+      ), locked AS (
+        SELECT l.tenant_id, l.id, l.json FROM loops l
+         WHERE l.json @> '{"botActor": true}' AND l.json -> 'shipActions' @> '[{"gate": "auto"}]'
+           FOR UPDATE
       ), gated AS (
         SELECT l.tenant_id, l.id, any_value(l.json ->> 'ownerScopeId') AS scope,
                jsonb_agg(p ->> 'action' ORDER BY n) FILTER (WHERE p ->> 'gate' = 'auto') AS actions,
                jsonb_agg(CASE WHEN p ->> 'gate' = 'auto' THEN p || '{"gate": "hold"}'::jsonb ELSE p END ORDER BY n)
                  AS ship_actions
-          FROM loops l
+          FROM locked l
           CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'shipActions') WITH ORDINALITY AS a(p, n)
-         WHERE l.json @> '{"botActor": true}'
          GROUP BY l.tenant_id, l.id
-        HAVING bool_or(p ->> 'gate' = 'auto')
       ), held AS (
         UPDATE loops l SET json = l.json || jsonb_build_object('shipActions', g.ship_actions)
           FROM gated g WHERE l.tenant_id = g.tenant_id AND l.id = g.id
