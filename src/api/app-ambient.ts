@@ -399,7 +399,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
     if (!liveRef) return false;
     const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status)) return false;
+    if (!live || isTerminal(live.status) || live.request.origin.kind !== "automation") return false;
     const route = routeIncoming(
       {
         origin: "ambient",

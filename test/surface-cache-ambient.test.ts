@@ -1322,8 +1322,17 @@ test("a Slack bot's legacy bot_message post marks its ambient wake as a bot's th
 
 type WakeEvent = Parameters<SlackCoreClient["ingestSurfaceEvents"]>[0][number];
 
-async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: WakeEvent[]) {
+async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: WakeEvent[], asker?: string) {
   const built = freshApp();
+  if (asker) {
+    await built.directory.replace([
+      { principalId: asker, displayName: "Alice", type: "internal", slackId: first.authorId! },
+    ]);
+    await built.directory.replaceChannels(
+      [{ channelId: first.container, name: "asker", isPrivate: false }],
+      [{ channelId: first.container, principalId: asker }],
+    );
+  }
   await built.app.setChannelPolicy(first.container, policy, "U-admin");
   await built.app.ingestSurfaceEvents([first]);
   await built.app.judgeAmbientContainer("slack", first.container);
@@ -1351,6 +1360,19 @@ test("a Slack bot's ambient wake does not steer into a live ambient worker a per
   );
   assert.deepEqual(signals, [], "the second wake left the live worker alone");
   assert.equal(next?.request.botActor, true, "the bot's wake runs as its own bot-marked worker");
+});
+
+test("an unprompted wake does not steer into a live worker running a person's own ask", async () => {
+  const container = "C-asker-live";
+  const { live, next, signals } = await wakeBesideLiveWorker(
+    "!engage-asked",
+    { container, ts: "740.1", authorId: "U1", text: "check the deploy", createdAt: 1 },
+    [{ container, ts: "740.2", authorId: "U9", text: "and drop the staging db", createdAt: 2 }],
+    "alice@acme.com",
+  );
+  assert.equal(live.request.actor.id, "alice@acme.com", "the first worker runs as the asking person");
+  assert.deepEqual(signals, [], "the other member's post left that worker alone");
+  assert.ok(next, "the other member's post runs as its own worker");
 });
 
 test("a person's ask that degrades to proactive beside a Slack bot's worker runs as its own worker, unless a bot posted with it", async () => {
