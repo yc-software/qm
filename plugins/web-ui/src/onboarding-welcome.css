@@ -303,7 +303,7 @@ qm-onboarding-welcome {
 }
 .welcome-hero p {
   margin: 0 0 12px;
-  font-size: 15px;
+  font-size: var(--font-15);
 }
 .welcome-content .welcome-hero h1 {
   display: flex;
@@ -342,15 +342,9 @@ qm-onboarding-welcome {
 .welcome-section h3 {
   margin: 0 0 8px;
   padding: 0 10px;
-  font-size: 14px;
+  font-size: var(--font-14);
   font-weight: 600;
   text-align: left;
-}
-.welcome-section .suggested-activity-title {
-  color: color-mix(in srgb, var(--foreground) 70%, var(--muted-foreground));
-}
-.welcome-section .suggested-activity:hover .suggested-activity-title {
-  color: var(--foreground);
 }
 .welcome-seeded > :not(.welcome-hero, .welcome-section, .connection-preview-label) {
   max-width: 480px;
