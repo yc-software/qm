@@ -2,7 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { PublishInput, PublishAudienceDescriptor } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
-import { LIVE_EDIT_PUBLISH_DELAY_MS, type LiveEditSaved } from "../../deploy/live-edits.ts";
+import { LIVE_EDIT_PUBLISH_DELAY_MS, type LiveEditSaved, type Overwritten } from "../../deploy/live-edits.ts";
 import { isObj } from "../../util/objects.ts";
 import { text, outsideWorkspace, sandboxSelector, type ToolKit } from "./kit.ts";
 
@@ -28,8 +28,7 @@ export function previousPublishFailure(edit: LiveEditSaved): string {
     : "";
 }
 
-function overwrittenNote(id: string, edit: LiveEditSaved): string {
-  const o = edit.overwritten;
+function overwrittenNote(id: string, o: Overwritten | undefined): string {
   if (!o) return "";
   return `\nThis folder replaced ${o.paths.length} file(s) that changed in the app after its last publish from a folder, e.g. in the app editor, a git push or another session: ${o.paths.join(", ")}. Those changes are no longer running. If they weren't meant to go, they're still in the app's git history at commit ${o.commit} (clone the app via GET /v1/deployments/${id}/git-url); merge them into your folder and publish again.`;
 }
@@ -37,7 +36,7 @@ function overwrittenNote(id: string, edit: LiveEditSaved): string {
 function describeLiveEdit(r: { name?: string; id: string; version: number; url: string }, edit: LiveEditSaved): string {
   const app = r.name ?? r.id;
   const minutes = LIVE_EDIT_PUBLISH_DELAY_MS / 60_000;
-  const failed = previousPublishFailure(edit) + overwrittenNote(r.id, edit);
+  const failed = previousPublishFailure(edit);
   if (!edit.changed) {
     const pending = edit.publishAt === undefined ? "" : "; the earlier saved edits still publish as a new version";
     return `No changes to save in ${app} (v${r.version}) → ${r.url}${pending}.${failed}`;
@@ -402,9 +401,10 @@ export function workspaceTools(kit: ToolKit) {
             ...(r.audience ? { audience: r.audience } : {}),
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
             ...(r.liveEdit ? { liveEdit: r.liveEdit } : {}),
+            ...(r.overwritten ? { overwritten: r.overwritten } : {}),
           },
           text(
-            `${r.liveEdit ? describeLiveEdit(r, r.liveEdit) : `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}`}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
+            `${r.liveEdit ? describeLiveEdit(r, r.liveEdit) : `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}`}${overwrittenNote(r.id, r.overwritten)}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
           ),
         );
       } catch (e) {

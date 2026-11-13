@@ -57,7 +57,7 @@ import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } fr
 import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
 import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
-import type { LiveEditSaved } from "../deploy/live-edits.ts";
+import type { LiveEditSaved, Overwritten } from "../deploy/live-edits.ts";
 import { createAppFiles, type AppFiles } from "./app-files.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -127,6 +127,7 @@ interface PublishResult {
   embedAncestors?: string[];
   public?: boolean;
   liveEdit?: LiveEditSaved;
+  overwritten?: Overwritten;
 }
 
 export class NeedsApproval extends Error {
@@ -1133,6 +1134,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
         ...(d.public ? { public: true } : {}),
         ...(d.liveEdit ? { liveEdit: d.liveEdit } : {}),
+        ...(d.overwritten ? { overwritten: d.overwritten } : {}),
       };
     },
 

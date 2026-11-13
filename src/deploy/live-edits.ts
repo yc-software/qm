@@ -29,7 +29,11 @@ export interface LiveEditSaved {
   first?: boolean;
   publishAt?: number;
   previousFailure?: string;
-  overwritten?: { paths: string[]; commit: string };
+}
+
+export interface Overwritten {
+  paths: string[];
+  commit: string;
 }
 
 interface LiveEditDeps {
@@ -159,16 +163,21 @@ export function createLiveEdits(deps: LiveEditDeps) {
     };
   }
 
-  async function overwrittenEdits(id: string, change: SourceChange): Promise<LiveEditSaved["overwritten"]> {
-    const last = await store.refOf(id, FILES_PUBLISH_REF);
-    if (!last || last === change.saved.commit) return undefined;
-    const then = new Map((await store.commitTreeOf(id, last)).map((f) => [f.path, f.sha]));
-    const now = new Map(change.saved.tree.map((f) => [f.path, f.sha]));
-    const replaced = new Set([...change.changed.map((f) => f.path), ...change.deletedPaths]);
-    const paths = [...new Set([...then.keys(), ...now.keys()])]
-      .filter((path) => then.get(path) !== now.get(path) && replaced.has(path))
-      .sort();
-    return paths.length ? { paths, commit: change.saved.commit } : undefined;
+  async function overwrittenBy(
+    d: Deployment,
+    files: ReadonlyArray<{ path: string; data: string | Uint8Array }>,
+  ): Promise<Overwritten | undefined> {
+    const [last, head] = await Promise.all([store.refOf(d.id, FILES_PUBLISH_REF), savedHeadOf(d)]);
+    if (!last || !head || last === head.commit) return undefined;
+    const [lastTree, headTree] = await Promise.all([
+      store.commitTreeOf(d.id, last),
+      store.commitTreeOf(d.id, head.commit),
+    ]);
+    const since = await changeOf(d.id, { draft: null, commit: last, tree: lastTree }, { commit: head.commit });
+    const change = await changeOf(d.id, { ...head, tree: headTree }, { files });
+    const editedSince = new Set([...since.changed.map((f) => f.path), ...since.deletedPaths]);
+    const paths = [...change.changed.map((f) => f.path), ...change.deletedPaths].filter((p) => editedSince.has(p));
+    return paths.length ? { paths: paths.sort(), commit: head.commit } : undefined;
   }
 
   async function save(
@@ -182,20 +191,16 @@ export function createLiveEdits(deps: LiveEditDeps) {
     const base = "next" in source ? source.saved : await savedOf(before);
     if (!base) return null;
     const change = "next" in source ? source : await changeOf(before.id, base, source);
-    const wholeTree = "files" in source;
-    const overwritten = wholeTree ? await overwrittenEdits(before.id, change) : undefined;
     const { next, deletedPaths } = change;
     const { draft } = base;
     const changedPaths = change.changed.map((f) => f.path);
-    if (!changedPaths.length && !deletedPaths.length) {
-      if (wholeTree) await store.setRef(before.id, FILES_PUBLISH_REF, base.commit);
+    if (!changedPaths.length && !deletedPaths.length)
       return {
         changed: 0,
         hot: draft?.hot ?? false,
         ...(draft?.publishAt !== undefined ? { publishAt: draft.publishAt } : {}),
         ...(draft?.failure ? { previousFailure: draft.failure } : {}),
       };
-    }
     const read = await next.read(next.tree.has("package.json") ? [...changedPaths, "package.json"] : changedPaths);
     const changed = read.filter((f) => changedPaths.includes(f.path));
     const dev = devEntrypoint(read);
@@ -216,7 +221,6 @@ export function createLiveEdits(deps: LiveEditDeps) {
             "saving the edit and writing it into the app both failed",
           )
         : committed.reason;
-    if (wholeTree) await store.setRef(before.id, FILES_PUBLISH_REF, committed.value);
     const now = Date.now();
     const publishAt = now + publishDelayMs;
     const saved: DeploymentDraft = {
@@ -250,7 +254,6 @@ export function createLiveEdits(deps: LiveEditDeps) {
       ...(draft ? {} : { first: true }),
       publishAt,
       ...(draft?.failure ? { previousFailure: draft.failure } : {}),
-      ...(overwritten ? { overwritten } : {}),
     };
   }
 
@@ -321,5 +324,5 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return published ?? 0;
   }
 
-  return { runningVersion, savedHeadOf, savedOf, changeOf, save, publishDue };
+  return { runningVersion, savedHeadOf, savedOf, changeOf, overwrittenBy, save, publishDue };
 }
