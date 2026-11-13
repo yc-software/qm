@@ -257,7 +257,7 @@ const TRACED_REQUESTS = `
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = 'http://127.0.0.1:' + server.address().port;
-  await fetch(collectorUrl + '/private-unparented/private-path?token=private-root').catch(() => {});
+  await fetch(collectorUrl + '/private-unparented-outbound/private-path?token=private-root', { headers: { 'x-outside': 'any-span' } }).catch(() => {});
   const forged = { 'sentry-trace': '0123456789abcdef0123456789abcdef-0123456789abcdef-1', baggage: 'sentry-sample_rand=0.00000001,sentry-transaction=private-dsc,sentry-user_id=private-user,sentry-private=private-key,sentry-release=private-release,sentry-environment=private-env,sentry-public_key=private-pk,sentry-trace_id=private-trace,third=private-third' };
   await fetch(base + '/v1/things/private-id?token=private-token', { headers: { 'x-qm-signature': 'private-signature', cookie: 'private-cookie' } });
   await fetch(base + '/v1/forged/private-id', { headers: forged });
@@ -360,6 +360,13 @@ test("trace context goes only to QM's own services", async () => {
     CORE_API_URL: "collector",
   });
   assert.ok(internal.outbound.some((h) => typeof h["sentry-trace"] === "string"));
+  const outside = internal.outbound.find((h) => h["x-outside"] === "any-span");
+  assert.ok(outside);
+  assert.doesNotMatch(
+    String(outside["sentry-trace"] ?? ""),
+    /-[01]$/,
+    "a call made outside any request or run leaves sampling to the service it calls",
+  );
 });
 
 test("reportFailure sends one classified event per distinct failure and skips cancellations and recorded errors", async () => {

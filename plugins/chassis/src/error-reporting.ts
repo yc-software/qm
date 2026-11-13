@@ -212,7 +212,7 @@ export function initializeErrorReporting(
                 sdk.getIsolationScope().setTransactionName(name);
               },
             }),
-            sdk.nativeNodeFetchIntegration({ breadcrumbs: false }),
+            sdk.nativeNodeFetchIntegration({ breadcrumbs: false, ignoreOutgoingRequests: () => !sdk.getActiveSpan() }),
             sdk.postgresIntegration({ ignoreConnectSpans: true }),
             sdk.spanStreamingIntegration(),
           ]
