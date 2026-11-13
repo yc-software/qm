@@ -169,17 +169,24 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   });
   for (const person of parent.request.conversation.audience) await b.sessions.addParticipant(child.id, person.id);
   let token: string | undefined;
+  let probe: ((token?: string) => Promise<unknown>) | undefined;
   const provision = b.sandbox.provision.bind(b.sandbox);
   b.sandbox.provision = async (owner, opts) => {
     token = opts?.env?.AGENT_API_TOKEN;
+    await probe?.(token);
     return provision(owner, opts);
   };
   const { run: running } = await b.runs.enqueue({ sessionId: parent.sessionId, request: parent.request });
   assert.ok(await b.runs.claimById(running.id, "parent", 60_000));
   b.runtime.start();
-  const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok", delegatingRunId = parent.id) => {
+  const childTurn = async (
+    text: string,
+    expectedStatus: "ok" | "refused" | "failed" = "ok",
+    delegatingRunId = parent.id,
+  ) => {
     const { run } = await b.runs.enqueue({
       sessionId: child.threadRef,
+      maxAttempts: 1,
       request: {
         ...parent.request,
         conversation: { ...parent.request.conversation, threadRef: child.threadRef },
@@ -213,25 +220,38 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/memory/brain`;
-  const brain = async () => (await fetch(url, { headers: { "x-agent-capability": token ?? "" } })).status;
+  const brain = async (delegatingRunId?: string) => {
+    let status = 0;
+    probe = async (live) => (status = (await fetch(url, { headers: { "x-agent-capability": live ?? "" } })).status);
+    await childTurn("!run true", "ok", delegatingRunId);
+    probe = undefined;
+    return status;
+  };
   assert.equal(await brain(), 403);
-  await childTurn("!run true", "ok", running.id);
-  assert.equal(await brain(), 200);
+  assert.equal(await brain(running.id), 200);
   const credential = await b.keychain!.save({
     ownerId: "U1",
     service: "delegated-test",
     secret: "fixture-secret",
     envKey: "DELEGATED_TEST_TOKEN",
   });
-  assert.equal(
-    await childTurn(
-      `!execute ${JSON.stringify({
-        command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available',
-        credentials: [credentialHandle(credential)],
-      })}`,
-    ),
-    "available",
+  const cred = `!execute ${JSON.stringify({ command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available', credentials: [credentialHandle(credential)] })}`;
+  assert.equal(await childTurn(cred), "available");
+  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
+  assert.equal(await childTurn(own), "(exit 0)");
+  const delegation = (await b.sessions.get(child.id))!.spawnMeta!;
+  const setDelegation = (meta: typeof delegation) =>
+    b.advisoryLock.withLock("session-tree-admission", () => b.sessions.setSpawnMeta(child.id, meta));
+  await setDelegation({ ...delegation, botActor: true });
+  assert.match(await childTurn(read), /no file/);
+  await childTurn(cred, "failed");
+  await childTurn(own, "failed");
+  const refusals = (await b.errors.list(testTenant)).map((e) => e.message).join("\n");
+  assert.match(
+    refusals,
+    /credential handle is not available[\s\S]*sandbox access is no longer authorized|sandbox access is no longer authorized[\s\S]*credential handle is not available/,
   );
+  await setDelegation(delegation);
   assert.deepEqual(await b.keychain!.grantsForScope("channel:C1", { includePersonGrants: true }), []);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);

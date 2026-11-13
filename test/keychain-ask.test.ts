@@ -37,6 +37,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
@@ -595,16 +596,6 @@ test("an ask's resolution is one event line, shown only to the first turn after 
   );
 });
 
-const LIVE = { runId: "live-run", runAttempt: 1, runLeaseToken: "live-lease", threadRef: "dm:U_ALICE-live" };
-const liveRun = {
-  status: "running",
-  leaseToken: LIVE.runLeaseToken,
-  attempts: 1,
-  sessionId: LIVE.threadRef,
-  leaseExpiresAt: Infinity,
-  request: { actor: { id: "U_ALICE" } },
-} as never;
-
 describe("/v1/keychain/asks — card approval end to end", async () => {
   let server: Server;
   let base: string;
@@ -678,10 +669,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       keychain: built.keychain,
       keychainApprovals: approvals,
       deliveries: built.deliveries,
+      admin: built.admin,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
-      runs: { ...built.runs, get: async (id) => (id === LIVE.runId ? liveRun : built.runs.get(id)) },
+      runs: liveRunStore(built.runs),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -1014,6 +1006,16 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(run?.request.botActor, true);
   });
 
+  it("bot work in a person's name can't ask for a person's credential", async () => {
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "deploy-key", secret: "s" }, await capFor("U_ALICE"))
+    ).json()) as any;
+    await built.users.record({ id: "U_BOB", source: "turn", at: Date.now() });
+    const floored = await capFor("U_BOB", "channel:C_INFRA", { botActor: true });
+    const res = await post("/v1/keychain/asks", { credential: credential.id, purpose: "deploy" }, floored);
+    assert.equal(res.status, 403);
+  });
+
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
@@ -1180,7 +1182,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       const threadRef = `dm:U_ALICE-cron-${mode}`;
       const personal = scopeId("personal", "U_ALICE");
       const token = await capFor("U_ALICE", personal, { triggered: true, threadRef });
-      const live = await capFor("U_ALICE", personal, { liveActor: true, ...LIVE });
+      const live = await capFor("U_ALICE", personal, liveRunClaims("U_ALICE"));
       const { credential } = (await (
         await post(
           "/v1/keychain/credentials",

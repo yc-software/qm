@@ -7,7 +7,7 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import type { AppPageViewLog } from "../src/deploy/page-views.ts";
 import { scopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
@@ -25,7 +25,7 @@ const today = Math.floor(Date.now() / DAY) * DAY;
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
-const apps = "/v1/deployments/export?principalId=alice%40example.com";
+const apps = "/v1/apps/export?principalId=alice%40example.com";
 
 function fixture(options: { token?: string | null; sessions?: SessionStore | null; pageViews?: AppPageViewLog } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
@@ -70,7 +70,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
   };
   const s = fixture({ sessions: store });
   try {
-    s.built.app.listDeployments = async () => {
+    s.built.app.listApps = async () => {
       reads++;
       return [];
     };
@@ -96,7 +96,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
   }
 });
 
-test("deployment export: lists the person's live Apps page apps with their addresses", async () => {
+test("app export: lists the person's live Apps page apps with their addresses", async () => {
   const s = fixture({
     pageViews: {
       record: async () => {},
@@ -104,7 +104,7 @@ test("deployment export: lists the person's live Apps page apps with their addre
     },
   });
   try {
-    const app = (id: string, status: Deployment["status"]): Deployment => ({
+    const app = (id: string, status: PublishedApp["status"]): PublishedApp => ({
       id,
       name: id,
       ownerScopeId: scopeId("personal", "bob@example.com"),
@@ -121,14 +121,14 @@ test("deployment export: lists the person's live Apps page apps with their addre
       ownerScopeId: scopeId("personal", "bob@example.com"),
     };
     const fleet = [app("live", "running"), app("gone", "archived"), own, given];
-    s.built.app.listDeployments = async () => fleet;
-    s.built.app.deploymentGitPermissionsFor = async (_tenant, deployments, { actorId }) =>
-      deployments.map(() => (actorId === "alice@example.com" ? "read" : null));
-    assert.equal((await s.get("/v1/deployments/export")).status, 400);
-    const { principalId, deployments }: any = await (await s.get(apps)).json();
+    s.built.app.listApps = async () => fleet;
+    s.built.app.appGitPermissionsFor = async (_tenant, publishedApps, { actorId }) =>
+      publishedApps.map(() => (actorId === "alice@example.com" ? "read" : null));
+    assert.equal((await s.get("/v1/apps/export")).status, 400);
+    const { principalId, apps: publishedApps }: any = await (await s.get(apps)).json();
     assert.equal(principalId, "alice@example.com");
     const shown = { createdBy: "bob@example.com", permission: "read", updatedAt: 1 };
-    assert.deepEqual(deployments, [
+    assert.deepEqual(publishedApps, [
       { id: "live", name: "live", ...shown, url: "https://live.apps.example.com/", owned: false, viewedAt: 7 },
       { id: "own", name: "own", ...shown, url: "https://own.apps.example.com/", owned: true },
       {
@@ -141,7 +141,7 @@ test("deployment export: lists the person's live Apps page apps with their addre
       },
     ]);
     const events = (await s.built.auditLog.events(testTenant)).map((e) => [e.resource, e.detail]);
-    assert.deepEqual(events, [["alice@example.com", "deployments=3"]]);
+    assert.deepEqual(events, [["alice@example.com", "apps=3"]]);
   } finally {
     await s.close();
   }

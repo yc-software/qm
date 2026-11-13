@@ -20,7 +20,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { testSurfaces } from "./support/single-process.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
-import { createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
+import { createGenericChatSurface } from "../src/surfaces/generic-chat/adapter.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {
@@ -450,7 +450,7 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
   const tools = createSurfaceToolDeps({
     deps: {
       surfaces: createSurfaceRegistry({
-        surfaces: [createPartnerChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } })],
+        surfaces: [createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } })],
       }),
       deliveries,
     },

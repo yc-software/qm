@@ -372,6 +372,9 @@ test("an attested connector refuses a call outside its person's own conversation
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
     ["U1"],
   );
+  assert.deepEqual(await service.toolDefsFor("U1", "group:G1", true), []);
+  await otherInstance.put({ ...records, attestActor: true, attestAudience: "any", updatedAt: 2 });
+  assert.equal((await service.toolDefsFor("U1", "group:G1", true)).length, 1);
   service.close();
 });
 
@@ -596,13 +599,12 @@ test("MCP refresh contains registry failures on change and on a stale read, then
   await tick();
   assert.equal(list.mock.callCount(), 0);
   await store.put(server({ url: mcp.url }));
-  await tick();
-  assert.equal(list.mock.callCount(), 1);
+  await settle(async () => list.mock.callCount() === 1);
   assert.deepEqual(await service.toolDefs(), []);
   assert.equal(list.mock.callCount(), 1);
   clock += 100;
   await service.toolDefs();
-  await tick();
+  await settle(async () => errors.mock.callCount() === 2);
   assert.equal(list.mock.callCount(), 2);
   assert.equal(errors.mock.callCount(), 2);
   await assert.rejects(service.refresh(), /registry unavailable/);

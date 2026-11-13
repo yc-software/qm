@@ -112,7 +112,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  it("production implies signed identity on the raw deployment proxy", async () => {
+  it("production implies signed identity on the raw app proxy", async () => {
     const prodServer = createInsecureTestServer(built.app, { production: true, portalIdentitySecret: PID });
     await new Promise<void>((resolve) => prodServer.listen(0, resolve));
     try {
@@ -279,7 +279,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     );
   });
 
-  it("binds webhook, deployment, and approval routes to the verified actor", async () => {
+  it("binds webhook, app, and approval routes to the verified actor", async () => {
     const alice = await token("U1");
     const aliceHeaders = { "content-type": "application/json", "x-portal-identity": alice };
     const webhook = await built.app.createWebhook({
@@ -308,7 +308,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       404,
     );
 
-    const deployment = {
+    const publishedApp = {
       id: "deployment-u2",
       ownerScopeId: scopeId("personal", "U2"),
       createdBy: "U2",
@@ -317,10 +317,10 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       endpoint: null,
       versions: [{ version: 1, createdAt: Date.now(), entrypoint: "node app.js", snapshotDir: "" }],
     };
-    built.app.getDeployment = async (id) => (id === deployment.id ? deployment : null);
-    built.app.listDeploymentsForViewer = async () => [];
-    built.app.canManageDeployment = async (_id, caller) => caller.actorId === "U2";
-    assert.equal((await fetch(`${base}/v1/deployments?principalId=U2`, { headers: aliceHeaders })).status, 403);
+    built.app.getApp = async (id) => (id === publishedApp.id ? publishedApp : null);
+    built.app.listAppsForViewer = async () => [];
+    built.app.canManageApp = async (_id, caller) => caller.actorId === "U2";
+    assert.equal((await fetch(`${base}/v1/apps?principalId=U2`, { headers: aliceHeaders })).status, 403);
     for (const [suffix, body] of [
       ["name", { name: "stolen" }],
       ["display-name", { displayName: "Stolen" }],
@@ -328,12 +328,12 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       ["rollback", { version: 1 }],
       ["redeploy", { entrypoint: "node app.js", files: [] }],
     ] as const) {
-      const response = await fetch(`${base}/v1/deployments/${deployment.id}/${suffix}`, {
+      const response = await fetch(`${base}/v1/apps/${publishedApp.id}/${suffix}`, {
         method: "POST",
         headers: aliceHeaders,
         body: JSON.stringify(body),
       });
-      assert.equal(response.status, 403, `deployment ${suffix}`);
+      assert.equal(response.status, 403, `app ${suffix}`);
     }
 
     await built.config.setCommandPolicy(scopeId("org", "default-org"), {
@@ -380,7 +380,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       ["POST", "/v1/webhooks/w1/enable"],
       ["POST", "/v1/loops/l1/triage/preview"],
       ["GET", "/v1/loops/l1/items/i1/image"],
-      ["GET", "/v1/deployments/d1"],
+      ["GET", "/v1/apps/d1"],
     ];
     for (const [method, path] of queryRoutes) {
       const sep = path.includes("?") ? "&" : "?";
@@ -431,7 +431,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  it("deployment, cron and webhook handlers refuse a missing principal even without enforced identity", async () => {
+  it("app, cron and webhook handlers refuse a missing principal even without enforced identity", async () => {
     const open = createInsecureTestServer(built.app, {});
     await new Promise<void>((resolve) => open.listen(0, resolve));
     try {
@@ -451,8 +451,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
         verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
       });
       for (const [method, path, status] of [
-        ["GET", "/v1/deployments", 400],
-        ["GET", "/v1/deployments/d1", 400],
+        ["GET", "/v1/apps", 400],
+        ["GET", "/v1/apps/d1", 400],
         ["GET", "/v1/crons", 400],
         ["GET", `/v1/crons/${encodeURIComponent(cron.id)}`, 404],
         ["DELETE", `/v1/crons/${encodeURIComponent(cron.id)}`, 404],

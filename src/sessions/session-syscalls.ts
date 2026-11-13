@@ -170,6 +170,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   return {
     origin,
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
+    ...(input.liveReplies ? { liveReplies: true } : {}),
     ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
     ...(input.surfaceOrigin?.audience === "external" ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
@@ -433,6 +434,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
+    ...(meta.liveReplies ? { liveReplies: true } : {}),
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
     ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
@@ -1258,6 +1260,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
             };
           if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
+          if (binding.request.botActor)
+            return { ok: false, message: "a turn doing a Slack bot's work cannot create sessions." };
           const text = input.text?.trim();
           if (!input.fork && !text)
             return { ok: false, message: "new requires `text`: the new session's first message." };

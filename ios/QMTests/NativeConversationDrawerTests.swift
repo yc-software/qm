@@ -201,6 +201,7 @@ final class NativeConversationDrawerTests: XCTestCase {
       search.text = "no match"
       search.sendActions(for: .editingChanged)
       try await settle(window)
+      for _ in 0..<12 where collection.numberOfSections == 0 { try await settle(window) }
       XCTAssertEqual(collection.numberOfItems(inSection: 0), 1)
     }
   }

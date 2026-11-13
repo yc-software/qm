@@ -14,10 +14,10 @@ import {
   type RenderSnapshot,
 } from "../../src/sandbox/render-client.ts";
 import type { RenderApi } from "../../src/deploy/render-api.ts";
-import type { Deployment } from "../../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../../src/deploy/deploy-store.ts";
 import { scopeId } from "../../src/types.ts";
 
-export function fakeDeployment(versions: Deployment["versions"] = []): Deployment {
+export function fakeApp(versions: PublishedApp["versions"] = []): PublishedApp {
   return {
     id: randomUUID(),
     ownerScopeId: scopeId("personal", "U1"),

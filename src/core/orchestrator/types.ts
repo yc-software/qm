@@ -138,7 +138,6 @@ export interface OrchestratorDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
-  sandboxModels?: boolean;
   publicWebUrl?: string;
   webhookPublicUrl?: string;
   deploy: DeployService;

@@ -14,7 +14,7 @@ import { personalScope } from "../src/types.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
-  DEPLOYMENT_CREDENTIAL_TTL_MS,
+  APP_CREDENTIAL_TTL_MS,
   mintCapabilityToken,
 } from "../src/auth/capability-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
@@ -24,6 +24,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -71,6 +72,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SIGNING,
     auditLog,
+    runs: liveRunStore(),
     keychain: {
       connectorAccessToken: async (host: string, principalId: string, accountType?: string) =>
         principalId === PUBLISHER && accountType === "personal" && host !== "api.dropboxapi.com" ? tokenOf(host) : null,
@@ -98,20 +100,21 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
       aud: CREDENTIAL_BROKER_AUD,
       credentials: [],
       deployment: d.id,
-      exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+      exp: Date.now() + APP_CREDENTIAL_TTL_MS,
     },
     SIGNING,
   );
   const broker = (body: Record<string, unknown>) => call("/v1/credentials/broker", appToken, body);
-  const lend = async (actorId: string, connectors: unknown, liveActor = true) =>
+  const lend = async (actorId: string, connectors: unknown, liveActor = true, run: object = liveRunClaims(actorId)) =>
     call(
-      `/v1/deployments/${d.id}/connectors`,
+      `/v1/apps/${d.id}/connectors`,
       await mintCapabilityToken(
         {
           actorId,
           scopeId: personalScope(actorId),
           aud: CONTROL_PLANE_AUD,
-          ...(liveActor ? { liveActor: true } : {}),
+          ...run,
+          liveActor,
           exp: Date.now() + 60_000,
         },
         SIGNING,
@@ -128,13 +131,11 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "nothing is lent by default");
   assert.equal((await h.lend(CO_MANAGER, ["slack.com"])).status, 403, "a co-manager cannot lend the publisher's");
   assert.equal((await h.lend(PUBLISHER, ["slack.com"], false)).status, 403, "an unattended turn cannot lend");
+  assert.equal((await h.lend(PUBLISHER, ["slack.com"], true, { runId: "finished-run" })).json.error, "inactive_run");
   assert.equal((await h.lend(PUBLISHER, ["evil.example.com"])).json.error, "unknown_connector");
 
   const lent = await h.lend(PUBLISHER, ["Slack.com", "gmail.googleapis.com"]);
-  assert.deepEqual((lent.json.deployment as { connectors: string[] }).connectors, [
-    "gmail.googleapis.com",
-    "slack.com",
-  ]);
+  assert.deepEqual((lent.json.app as { connectors: string[] }).connectors, ["gmail.googleapis.com", "slack.com"]);
   assert.equal((await h.broker(get("api.dropboxapi.com"))).json.error, "connector_not_lent", "only the hosts lent");
 
   for (const host of ["gmail.googleapis.com", "slack.com"]) {
@@ -178,11 +179,11 @@ test("only the live publisher can lend, per app and per connected-app host", asy
 
 test("public apps cannot borrow connectors", async (t) => {
   const h = await agent(t);
-  await h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER });
+  await h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER });
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /public app cannot borrow/);
-  await h.app.setDeploymentPublic(h.d.id, false, { createdBy: PUBLISHER });
+  await h.app.setAppPublic(h.d.id, false, { createdBy: PUBLISHER });
   await h.lend(PUBLISHER, ["slack.com"]);
-  await assert.rejects(h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER }), /cannot be public/);
+  await assert.rejects(h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER }), /cannot be public/);
 });
 
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {
@@ -196,6 +197,6 @@ test("a new running version from anyone but the publisher withdraws the loan", a
   assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.principalId === CO_MANAGER));
 
   await h.lend(PUBLISHER, ["slack.com"]);
-  await h.app.rollbackDeployment(h.d.id, 1, CO_MANAGER);
+  await h.app.rollbackApp(h.d.id, 1, CO_MANAGER);
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "a rollback counts too");
 });

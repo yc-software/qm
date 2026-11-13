@@ -23,13 +23,11 @@ import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { activeRun } from "./composio.ts";
-import { audit, isObj } from "./shared.ts";
+import { audit, isObj, livePersonTurn } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { forInboxLoopsPeople } from "./loops.ts";
 
@@ -306,8 +304,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
-  if (!personAtKeyboard(capability)) return sendJson(res, 403, { error: "human_consent_required" });
-  if (!(await activeRun(ctx))) return;
+  if (!(await livePersonTurn(ctx))) return;
   const b = body as {
     provider?: unknown;
     accountType?: unknown;
@@ -487,8 +484,7 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
 
 async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
-  if (capability && !personAtKeyboard(capability)) return sendJson(res, 403, { error: "human_consent_required" });
-  if (!(await activeRun(ctx))) return;
+  if (!(await livePersonTurn(ctx))) return;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;
@@ -640,7 +636,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/connectors/oauth/:provider/start",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "source",
     handle: browserOAuthStart,
@@ -663,7 +659,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/connectors/oauth/revoke",
-    browser: true,
+    browser: "self",
     actor: "body.principalId",
     auth: "either",
     handle: oauthRevoke,
