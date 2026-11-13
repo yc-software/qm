@@ -116,6 +116,7 @@ import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
+import { showWelcomeIn } from "./welcome-session";
 import { trapDialogFocus } from "./dialog-focus";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
@@ -1226,7 +1227,8 @@ export async function boot(): Promise<void> {
   if (onboard) {
     history.replaceState(null, "", deepLinkPath(UI_BASE, "chats", null));
     exitSplitIfActive();
-    mainConversation().newChat(undefined, true);
+    showWelcomeIn(mainConversation().newChat());
+    mainConversation().drawActiveChat();
     return;
   }
 

@@ -43,6 +43,8 @@ import {
 
 const continuedAttempts = new Set<string>();
 
+const HARNESS = "QM, your agent harness.";
+
 export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
@@ -471,7 +473,9 @@ export class OnboardingWelcome extends LitElement {
         ${name ? html`<p>Hi ${name}!</p>` : nothing}
         <h1>Welcome to QM! <img src=${`${this.base}qm.png`} alt="" /></h1>
         <p class="welcome-what">
-          <button type="button" @click=${() => void this.showAbout(true)}>What is this?</button>
+          <button type="button" class="welcome-more-ideas" @click=${() => void this.showAbout(true)}>
+            What is this?
+          </button>
         </p>
       </div>
       <div class="welcome-section welcome-beat" style="--welcome-delay:300ms">
@@ -520,6 +524,7 @@ export class OnboardingWelcome extends LitElement {
     if (this.about) return html`<qm-welcome-about .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
     const name = this.me?.displayName?.trim().split(/\s+/)[0];
     const cohort = this.me?.welcomeCohort;
+    const purpose = `Use it to research customers, build tools, and automate the everyday work of running ${this.me?.companyName?.trim() || "your company"}.`;
     const seeds = this.seeded;
     const paced = Boolean(cohort) && !seeds;
     const serviceName = this.retryService?.name ?? "App";
@@ -579,21 +584,15 @@ export class OnboardingWelcome extends LitElement {
               }
               ${
                 cohort
-                  ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">
-                        And welcome to QM, your agent harness.
-                      </p>
+                  ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">And welcome to ${HARNESS}</p>
                       <p class="welcome-beat" style="--welcome-delay:2600ms">
-                        Use it to research customers, build tools, and automate the everyday work of running
-                        ${this.me?.companyName?.trim() || "your company"}.
+                        ${purpose}
                         ${this.onMoreIdeas ? html`<button type="button" class="welcome-more-ideas" ?disabled=${this.ideasDisabled} @click=${this.onMoreIdeas}>More ideas</button>` : nothing}
                       </p>
                       <p class="welcome-beat" style="--welcome-delay:2800ms">
                         The more you use QM, the more context it has, and the more it can help.
                       </p>`
-                  : html`<p class="welcome-beat" style="--welcome-delay:400ms">
-                        Welcome to QM, your agent harness. Use it to research customers, build tools, and automate the
-                        everyday work of running ${this.me?.companyName?.trim() || "your company"}.
-                      </p>
+                  : html`<p class="welcome-beat" style="--welcome-delay:400ms">Welcome to ${HARNESS} ${purpose}</p>
                       <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
               }`
       }
