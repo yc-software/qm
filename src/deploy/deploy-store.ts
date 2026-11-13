@@ -37,15 +37,26 @@ export interface DeployEndpoint {
   socksProxyPort?: number;
 }
 
+export function appSubdomainUrlOf(
+  d: { id: string; name?: string },
+  appsDomain: string | undefined,
+): string | undefined {
+  const handle = tenantAppHandle();
+  return appsDomain && handle
+    ? `https://${appHostLabel(handle, d.name ?? d.id)}.${appsDomain.toLowerCase()}/`
+    : undefined;
+}
+
 export function appUrlOf(
   d: { id: string; name?: string; endpoint?: DeployEndpoint | null },
   { sharedWebUrl, appsDomain }: { sharedWebUrl: string | undefined; appsDomain: string | undefined },
 ): string | undefined {
-  const ref = d.name ?? d.id;
-  const handle = tenantAppHandle();
-  if (appsDomain && handle) return `https://${appHostLabel(handle, ref)}.${appsDomain.toLowerCase()}/`;
-  const path = `/d/${encodeURIComponent(ref)}/`;
-  return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${trimTrailingSlashes(sharedWebUrl)}${path}` : undefined);
+  const path = `/d/${encodeURIComponent(d.name ?? d.id)}/`;
+  return (
+    appSubdomainUrlOf(d, appsDomain) ??
+    publicUrlOf(d.endpoint) ??
+    (sharedWebUrl ? `${trimTrailingSlashes(sharedWebUrl)}${path}` : undefined)
+  );
 }
 
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {

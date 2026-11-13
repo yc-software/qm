@@ -139,6 +139,7 @@ export interface AppView {
 
 export interface ViewerApp extends AppView {
   permission: Permission;
+  webUrl?: string;
 }
 
 export function appView(d: PublishedApp): AppView {

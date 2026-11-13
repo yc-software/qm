@@ -30,10 +30,10 @@ import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
-import { appHostLabel, appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
+import { appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
-import { appUrlOf } from "../../deploy/deploy-store.ts";
+import { appSubdomainUrlOf, appUrlOf } from "../../deploy/deploy-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
@@ -99,19 +99,12 @@ async function proxyApp(ctx: BaseCtx): Promise<void> {
       }
     }
   }
-  if (
-    deps.deployAppsDomain &&
-    deps.deployGateSecret &&
-    deps.deployAppsSessionSecret &&
-    method === "GET" &&
-    String(req.headers["sec-fetch-dest"] ?? "") === "document"
-  ) {
+  if (method === "GET" && String(req.headers["sec-fetch-dest"] ?? "") === "document") {
     const d = await app.getApp(id).catch(swallowAs("apps: load app", null));
-    const slug = d?.name ?? d?.id;
-    const handle = tenantAppHandle();
-    if (d && slug && handle && isDnsLabel(appHostLabel(handle, slug))) {
+    const subdomainUrl = d && appSubdomainUrlOf(d, deps.deployAppsDomain);
+    if (subdomainUrl) {
       res.writeHead(302, {
-        location: `https://${appHostLabel(handle, slug)}.${deps.deployAppsDomain}${subPath}${url.search}`,
+        location: new URL(`${subPath}${url.search}`, subdomainUrl).href,
         "cache-control": "no-store",
       });
       res.end();
@@ -1345,7 +1338,6 @@ async function listApps(ctx: ApiCtx): Promise<void> {
       const owner = ownerOf(d);
       const named = {
         ...d,
-        ...webUrlOf(ctx, d),
         ...(owner ? { ownerName: names.get(owner)! } : {}),
         ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
       };

@@ -4,15 +4,13 @@ import { appShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
 import { DeployAccessError, type Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
-import { appHostLabel } from "../tenants/app-handle.ts";
-import { tenantAppHandle } from "../tenants/settings.ts";
 
 import type { Tenant } from "../tenants/context.ts";
 import type { App, AppDeps, ViewerApp } from "./app-types.ts";
 import { appView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import type { PublishedApp } from "../deploy/deploy-store.ts";
+import { appSubdomainUrlOf, type PublishedApp } from "../deploy/deploy-store.ts";
 
 export function createAppMethods(
   deps: AppDeps,
@@ -108,11 +106,7 @@ export function createAppMethods(
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
           : await deps.deploy.shareApp(publishedApp.id, grantee, "read", actor, opts);
-        const handle = tenantAppHandle();
-        const appUrl =
-          deps.deployAppsDomain && handle
-            ? `https://${appHostLabel(handle, publishedApp.name ?? publishedApp.id)}.${deps.deployAppsDomain}/`
-            : undefined;
+        const appUrl = appSubdomainUrlOf(publishedApp, deps.deployAppsDomain);
         if (alreadyShared)
           return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
         let emailSent = false;
@@ -153,7 +147,8 @@ export function createAppMethods(
       const permissions = await callerGitPermissions(tenant, publishedApps, viewer);
       return publishedApps.flatMap((d, i): ViewerApp[] => {
         const permission = permissions[i];
-        return permission ? [{ ...appView(d), permission }] : [];
+        const webUrl = deps.deploy.appUrl?.(d);
+        return permission ? [{ ...appView(d), permission, ...(webUrl ? { webUrl } : {}) }] : [];
       });
     },
     effectiveAppPermission(d, principalId) {
