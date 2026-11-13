@@ -638,17 +638,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         thread: conversation.threadRef,
         ...(input.runId ? { runId: input.runId } : {}),
       } as const;
+      const homeChannel =
+        conversation.kind === "group" && conversation.channelRef
+          ? await deps.managedGroups
+              ?.slackChannel?.(conversation.channelRef)
+              .catch(swallowAs("orchestrator: project home channel read", undefined))
+          : undefined;
       const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        canonicalJson(screenedFields(approvalRecord.request)) === canonicalJson(screenedFields(input));
+        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
+          canonicalJson(screenedFields(input, homeChannel?.channelName));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
         approvalRecord.kind === "input" &&
         approvalReplaysFlaggedRequest;
-      const screenInbound = securityPolicy.screening !== "off" && !replaysHeldInput;
+      const screenInbound =
+        securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: TurnLlmRequestRecord[] = [];
       const recordScreenRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
@@ -678,6 +686,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input,
         actor,
         conversation,
+        homeChannelName: homeChannel?.channelName,
         scopeId,
         resolution,
         screenInbound,
@@ -719,6 +728,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               sessionId: session.id,
               command: "security-screen",
               reason: heldReason,
+              homeChannel: homeChannel?.channelName,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
@@ -958,12 +968,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         conversation.kind === "dm" ? (cleanBrandingLabel(actor.displayName, 80) ?? personLabel(actor.id)) : undefined,
       );
       if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
-      const homeChannel =
-        conversation.kind === "group" && conversation.channelRef
-          ? await deps.managedGroups
-              ?.slackChannel?.(conversation.channelRef)
-              .catch(swallowAs("orchestrator: project home channel read", undefined))
-          : undefined;
       if (homeChannel) turnContextBlocks["Project home channel"] = renderProjectHomeChannel(homeChannel.channelName);
       turnContextBlocks["Where scheduled tasks post"] = cronBlock;
       const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);

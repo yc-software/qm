@@ -1660,9 +1660,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          ...(processes && supportsProcessSessions(sandbox)
-            ? { processes, stopProcess: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
-            : {}),
+          ...(processes ? { processes, sweepProcesses: () => processReaper!.sweepNow() } : {}),
           authorize: async (claims) => {
             await identity.refresh();
             return (
@@ -2885,6 +2883,7 @@ export function buildApp(
         ...(supportsProcessSessions(sandbox)
           ? {
               kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
+              claimOwed: swarms?.claimOwedStops,
               afterSweep: createJobComputerSweep({
                 resources: sandboxResources,
                 sandbox,
