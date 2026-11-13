@@ -29,6 +29,7 @@ interface CronLike {
   destination?: { type: string; target: string };
   lastFireNote?: { text: string; at: number; by?: string };
   script?: { command: string };
+  botActor?: boolean;
   taskAuthor?: "automation";
 }
 
@@ -50,10 +51,13 @@ function fmtCronLine(c: CronLike, preview = false): string {
     ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
     : "";
   const script = c.script && !preview ? `\n    script: ${c.script.command}` : "";
-  const authority =
-    c.taskAuthor === "automation" && !preview
-      ? "\n    authority: none — an automated turn wrote this task; its owner restores theirs by rewriting it on a turn they send"
-      : "";
+  let authority = "";
+  if (!preview && c.botActor)
+    authority =
+      "\n    authority: none — bot work made or edited this cron; its owner restores theirs only by recreating it";
+  else if (!preview && c.taskAuthor === "automation")
+    authority =
+      "\n    authority: none — an automated turn wrote this task; its owner restores theirs by rewriting it on a turn they send";
   return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${note}`;
 }
 
