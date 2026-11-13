@@ -284,15 +284,15 @@ export function createDirectorySync(deps: {
     async upsertGroup(groupId, principalIds, surface) {
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
-      const roster = await q(
-        `SELECT m.principal_id FROM directory_group_members m
-           JOIN directory_groups g ON g.org_id = m.org_id AND g.group_id = m.group_id AND g.roster_known
-          WHERE m.org_id = $1 AND m.group_id = $2`,
-        [orgId, groupId],
-      );
-      if (roster.length === ids.length && roster.every((r) => ids.includes(String(r.principal_id)))) return;
       await withPgTransaction(await pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
+        const roster = await client.query(
+          `SELECT m.principal_id FROM directory_group_members m
+             JOIN directory_groups g ON g.org_id = m.org_id AND g.group_id = m.group_id AND g.roster_known
+            WHERE m.org_id = $1 AND m.group_id = $2`,
+          [orgId, groupId],
+        );
+        if (roster.rows.length === ids.length && roster.rows.every((r) => ids.includes(String(r.principal_id)))) return;
         await client.query(
           `INSERT INTO directory_groups (org_id, group_id, roster_known, surface) VALUES ($1, $2, TRUE, $3)
            ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
@@ -304,11 +304,10 @@ export function createDirectorySync(deps: {
            SELECT $1, $2, * FROM unnest($3::text[])`,
           [orgId, groupId, ids],
         );
-        if (surface === "slack")
-          await client.query(
-            "UPDATE directory_sync SET groups_hash = '', updated_at = $2 WHERE org_id = $1 AND groups_hash IS NOT NULL",
-            [orgId, Date.now()],
-          );
+        await client.query(
+          "UPDATE directory_sync SET groups_hash = '', updated_at = $2 WHERE org_id = $1 AND groups_hash IS NOT NULL",
+          [orgId, Date.now()],
+        );
       });
     },
   };
