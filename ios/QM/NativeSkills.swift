@@ -43,6 +43,7 @@ final class SkillsModel {
   let user: String
   var skills: [NativeSkill] = []
   var contexts: [WorkspaceContext] = []
+  var loaded = false
   var busy = false
   var error: String?
   private let loader = LoadGuard()
@@ -62,15 +63,16 @@ final class SkillsModel {
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
     await loader.run {
-      let result: NativeSkillList = try await client.fetch(
+      async let result: NativeSkillList = try await client.fetch(
         "api/skills", query: [.init(name: "includeShadowed", value: "1")])
-      let scopes: WorkspaceContexts = try await client.fetch("api/contexts")
-      return (result, scopes)
+      async let scopes: WorkspaceContexts = try await client.fetch("api/contexts")
+      return try await (result, scopes)
     } apply: { result, scopes in
       skills = result.skills.sorted {
         $0.name.localizedStandardCompare($1.name) == .orderedAscending
       }
       contexts = scopes.contexts
+      loaded = true
       error = nil
     } failed: {
       error = $0.localizedDescription
@@ -128,7 +130,10 @@ struct NativeSkillsView: View {
           ForEach(["All sources", "Native", "Packs"], id: \.self) { Text($0) }
         }
       }
-      if let error = model.error { Text(error).foregroundStyle(.red) }
+      if let error = model.error {
+        Text(error).foregroundStyle(.red)
+        Button("Retry loading") { Task { await model.load() } }.disabled(model.loading)
+      }
       ForEach(skills) { skill in
         NavigationLink {
           NativeSkillDetail(model: model, original: skill)
@@ -142,15 +147,26 @@ struct NativeSkillsView: View {
           }.padding(.vertical, 6)
         }
       }
-      if skills.isEmpty && !model.loading {
-        ContentUnavailableView(
-          "No matching skills", systemImage: "shippingbox",
-          description: Text("Create reusable instructions for QM or change your filters."))
+      if model.loading && !model.loaded && model.error == nil {
+        NativeCollectionLoading(label: "Loading skills", symbol: "text.book.closed")
+      } else if skills.isEmpty && model.loaded && model.error == nil {
+        if !query.isEmpty {
+          ContentUnavailableView.search(text: query)
+        } else {
+          ContentUnavailableView(
+            "No matching skills", systemImage: "shippingbox",
+            description: Text("Create reusable instructions for QM or change your filters."))
+        }
       }
     }
     .navigationTitle("Skills").searchable(text: $query)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .toolbar { Button("Create skill", systemImage: "plus") { creating = true } }
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.loaded || model.error != nil) && !model.busy,
+        label: "Refreshing skills")
+    )
     .task { await model.load() }.refreshable { await model.load() }
     .sheet(isPresented: $creating) {
       NativeSkillEditor(
@@ -176,6 +192,8 @@ struct NativeSkillDetail: View {
       Section("Instructions") {
         if let body = skill.body {
           Text(body).textSelection(.enabled)
+        } else if loader.loading && error == nil {
+          NativeParagraphLoading(label: "Loading instructions")
         } else if error == nil {
           Text("Instructions are not included in this skill listing.").foregroundStyle(.secondary)
         }
@@ -223,6 +241,11 @@ struct NativeSkillDetail: View {
     }
     .navigationTitle("/\(skill.name)").navigationBarTitleDisplayMode(.inline)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modifier(
+      NativeCollectionRefresh(
+        active: loader.loading && (detail != nil || skill.body != nil || error != nil),
+        label: "Refreshing skill")
+    )
     .task { await load() }.refreshable { await load() }
     .sheet(isPresented: $editing, onDismiss: { Task { await load() } }) {
       NativeSkillEditor(
@@ -323,13 +346,21 @@ struct NativeSkillEditor: View {
         if let error = model.error { Text(error).foregroundStyle(.red) }
       }
       .disabled(model.busy).navigationTitle(skill == nil ? "Create skill" : "Edit skill")
+      .modifier(
+        NativeCollectionRefresh(
+          active: skill == nil && model.loading && !model.busy, label: "Loading skill scopes")
+      )
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") { if dirty { discard = true } else { dismiss() } }.disabled(model.busy)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button(shared && !reviewing ? "Review" : "Save") {
+          Button {
             if shared && !reviewing { reviewing = true } else { Task { await save() } }
+          } label: {
+            NativeActionLabel(
+              title: shared && !reviewing ? "Review" : "Save", busyTitle: "Saving…",
+              busy: model.busy, compact: true)
           }.disabled(
             model.busy
               || [name, description, bodyText].contains {
@@ -376,6 +407,9 @@ struct ComposerSkillsView: View {
   var body: some View {
     NavigationStack {
       QMList {
+        if loading && skills.isEmpty && error == nil {
+          NativeCollectionLoading(label: "Loading skills", symbol: "text.book.closed")
+        }
         ForEach(matches) { skill in
           Button {
             onSelect(skill)
@@ -395,9 +429,7 @@ struct ComposerSkillsView: View {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
       }
       .overlay {
-        if loading {
-          ProgressView("Loading skills…")
-        } else if let error {
+        if let error {
           ContentUnavailableView {
             Label("Couldn’t load skills", systemImage: "wifi.exclamationmark")
           } description: {
@@ -405,7 +437,7 @@ struct ComposerSkillsView: View {
           } actions: {
             Button("Try again") { retry += 1 }
           }
-        } else if matches.isEmpty {
+        } else if !loading && matches.isEmpty {
           ContentUnavailableView(
             query.isEmpty ? "No skills available" : "No matching skills",
             systemImage: "text.book.closed",
@@ -474,13 +506,15 @@ struct NativeSkillSuggestions: View {
     VStack(spacing: 0) {
       if query != nil {
         if loader.loading {
-          ProgressView("Loading skills…").font(.footnote)
+          VStack(alignment: .leading, spacing: 10) {
+            NativeCollectionLoading(label: "Loading skills", symbol: "text.book.closed", rows: 1)
+          }.padding(12).padding(.bottom, 10)
         } else if failed {
           HStack {
             Text("Couldn’t load skills").font(.footnote).foregroundStyle(.secondary)
             Spacer()
             Button("Try again") { retry += 1 }.font(.footnote)
-          }.padding(12)
+          }.padding(12).padding(.bottom, 10)
         } else if !matches.isEmpty {
           ScrollView {
             VStack(spacing: 0) {
@@ -506,6 +540,7 @@ struct NativeSkillSuggestions: View {
           .frame(maxHeight: 180)
           .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 16))
           .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(QMTheme.border))
+          .padding(.bottom, 10)
 
         }
       }
@@ -522,7 +557,7 @@ struct NativeSkillSuggestions: View {
     await loader.run {
       try await client.fetch("api/skills") as NativeSkillList
     } apply: { result in
-      skills = result.skills.filter { $0.status != "archived" && $0.shadowed != true }
+      skills = result.skills.filter { $0.status != "archived" }
     } failed: { _ in
       failed = true
     }

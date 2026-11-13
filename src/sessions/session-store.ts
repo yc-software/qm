@@ -465,6 +465,7 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
+  latestVisiblePromptAt(sessionId: string, principalId: string): Promise<number | undefined>;
   visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
 
   searchEntries(principalId: string, query: string, limit?: number, botActor?: boolean): Promise<EntrySearchHit[]>;

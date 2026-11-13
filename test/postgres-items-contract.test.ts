@@ -274,3 +274,31 @@ test("message-only transcript reads filter before pagination and retain visibili
     assert.deepEqual(await store.visibleItems(session.id, "outsider", { messagesOnly: true, limit: 1 }), []);
   });
 });
+
+test("latest visible prompt excludes hidden continuations and automatic wakes", { skip }, async () => {
+  await withSchema("items_prompt", async ({ url }) => {
+    let at = 1000;
+    const store = createPostgresSessionStore(url, { now: () => ++at });
+    const session = await store.getOrCreateByThread("web:prompt", "dm", scopeId("personal", "alice"));
+    await store.addParticipant(session.id, "alice");
+    const writer = { sessionId: session.id };
+    const human = await store.append(writer, { kind: "UserMessage", text: "Start", body: { speakerId: "alice" } });
+    await store.append(writer, { kind: "UserMessage", text: "Continue", hidden: true, body: { speakerId: "alice" } });
+    await store.append(writer, { kind: "UserMessage", text: "Automatic wake", author: "alice" });
+    await store.append(writer, {
+      kind: "UserMessage",
+      text: "Overheard",
+      body: { overheard: true, speakerId: "alice" },
+    });
+    assert.equal(await store.latestVisiblePromptAt(session.id, "alice"), human.createdAt);
+    assert.equal(await store.latestVisiblePromptAt(session.id, "outsider"), undefined);
+    const steering = await store.append(writer, { kind: "SteeringMessage", text: "Next", author: "alice" });
+    assert.equal(await store.latestVisiblePromptAt(session.id, "alice"), steering.createdAt);
+    const receipt = await store.append(writer, {
+      kind: "UserMessage",
+      text: "Slack reply",
+      body: { slackReplyReceipt: true },
+    });
+    assert.equal(await store.latestVisiblePromptAt(session.id, "alice"), receipt.createdAt);
+  });
+});
