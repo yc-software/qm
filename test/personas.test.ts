@@ -16,7 +16,7 @@ import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
+import { CAPABILITY_TTL_MS, mintCapabilityToken, verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
@@ -557,4 +557,36 @@ test("a persona's default model starts its new conversations, unless the turn as
     });
   assert.equal((await turn(1)).runtime?.modelId, "gpt-5.5");
   assert.notEqual((await turn(2, "claude-sonnet-4-6")).runtime?.modelId, "gpt-5.5");
+});
+
+test("an agent turn sets a persona's default model only for writers, without touching its own scope", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(await personas.setAccess(ALICE, ada.id, [{ scopeId: scopeId("personal", ALICE), role: "owner" }]));
+  const server = createInsecureTestServer(built.app, {
+    config: built.config,
+    capabilitySecret: TEST_CAPABILITY_SECRET,
+  });
+  server.listen(0);
+  try {
+    const put = async (actorId: string) =>
+      fetch(`http://localhost:${(server.address() as AddressInfo).port}/v1/runtime-config`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-agent-capability": await mintCapabilityToken(
+            { actorId, scopeId: scopeId("personal", actorId), liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+            TEST_CAPABILITY_SECRET,
+          ),
+        },
+        body: JSON.stringify({ scopeId: `persona:${ada.id}`, modelId: "gpt-6.1-sol" }),
+      });
+    assert.equal((await put(BOB)).status, 403);
+    assert.equal((await put(ALICE)).status, 200);
+    assert.equal((await built.config.getRuntimeSelectionDurable(scopeId("persona", ada.id)))?.modelId, "gpt-6.1-sol");
+    assert.equal(await built.config.getRuntimeSelectionDurable(scopeId("personal", ALICE)), null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
 });
