@@ -1,4 +1,4 @@
-import type { DeploymentInvitation } from "../deploy/email-access.ts";
+import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
@@ -106,7 +106,7 @@ export type ShareArtifactResult =
       id: string;
       target: { scope: ScopeId; label: string };
       permission: Permission;
-      invitation?: DeploymentInvitation;
+      invitation?: AppInvitation;
     }
   | {
       ok: false;

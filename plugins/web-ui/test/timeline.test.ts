@@ -280,7 +280,7 @@ test("toolRowKind: an error result is `failed`, regardless of which tool", () =>
     toolRowKind(
       row(
         item("ToolCall", { seq: 1, createdAt: 1, tool: "publish", body: { name: ":bad" } }),
-        item("ToolResult", { seq: 2, createdAt: 2, tool: "publish", body: { error: "invalid deployment name" } }),
+        item("ToolResult", { seq: 2, createdAt: 2, tool: "publish", body: { error: "invalid app name" } }),
       ),
       "complete",
     ),

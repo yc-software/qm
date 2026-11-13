@@ -11,7 +11,8 @@ import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./slack/approval-store.ts";
+import { createApprovalStore } from "./surfaces/approval-store.ts";
+import { slackApprovalCardRoute } from "./slack/approval-cards.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
@@ -133,13 +134,17 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
+import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
-import { BACKFILL_BOT_MARKER_MIGRATION, DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
+import {
+  BACKFILL_BOT_MARKER_MIGRATION,
+  DROP_RECIPIENT_CONSENT_MIGRATION,
+  MARK_BOT_EDITED_CRONS_MIGRATION,
+} from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
@@ -168,14 +173,9 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import {
-  createDeployStore,
-  deployTouchDebounceMs,
-  type Deployment,
-  type DeploymentDraft,
-} from "./deploy/deploy-store.ts";
+import { createDeployStore, deployTouchDebounceMs, type PublishedApp, type AppDraft } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
+import { appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
@@ -332,7 +332,7 @@ import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
   CREDENTIAL_BROKER_AUD,
-  DEPLOYMENT_CREDENTIAL_TTL_MS,
+  APP_CREDENTIAL_TTL_MS,
   EGRESS_PROXY_AUD,
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
@@ -423,10 +423,14 @@ import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
-import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
-import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
-import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
-import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
+import { createGenericChatSurface } from "./surfaces/generic-chat/adapter.ts";
+import { createGenericChatInbound } from "./surfaces/generic-chat/inbound.ts";
+import { GENERIC_CHAT_CLAIM_MS, createGenericChatClient } from "./surfaces/generic-chat/client.ts";
+import { genericChatSender } from "./surfaces/generic-chat/outbound.ts";
+import { createGenericChatTurns } from "./surfaces/generic-chat/turns.ts";
+import { createGenericChatApprovals, genericChatApprovalCardRoute } from "./surfaces/generic-chat/approvals.ts";
+import { createGenericChatNotices, genericChatRunNotice } from "./surfaces/generic-chat/notices.ts";
+import { GENERIC_CHAT } from "./surfaces/generic-chat/protocol.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -516,7 +520,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
-  partnerChatEvents?: ServerDeps["partnerChatEvents"];
+  genericChatEvents?: ServerDeps["genericChatEvents"];
   loopIngress: LoopIngressService;
   admin: AdminService;
   budget: BudgetTracker | undefined;
@@ -1712,8 +1716,8 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: pgArtifactMap.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
-    drafts: artifactMap<DeploymentDraft>("deployment_drafts"),
+    deployments: pgArtifactMap.map<PublishedApp>("deployments", undefined, APP_TABLES),
+    drafts: artifactMap<AppDraft>("deployment_drafts"),
     pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
@@ -1928,25 +1932,25 @@ export function buildApp(
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
-          deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
+          appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
-            const credentials = await deploymentCredentialSlugs(
+            const credentials = await appCredentialSlugs(
               ambientTenant(),
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,
             );
             return {
-              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
+              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, publishedApp.id),
               AGENT_API_URL: deployGitBase,
               AGENT_CREDENTIAL_TOKEN: await mintCapabilityToken(
                 {
-                  actorId: deployment.createdBy,
-                  scopeId: personalScope(deployment.createdBy),
+                  actorId: publishedApp.createdBy,
+                  scopeId: personalScope(publishedApp.createdBy),
                   aud: CREDENTIAL_BROKER_AUD,
                   credentials,
-                  deployment: deployment.id,
-                  exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+                  deployment: publishedApp.id,
+                  exp: Date.now() + APP_CREDENTIAL_TTL_MS,
                 },
                 config.capabilitySecret ?? deployGitSecret,
                 config.capabilityTokenCompression,
@@ -2013,6 +2017,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
+  pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
   pgArtifactMap.pool.registerMigration({
@@ -2079,7 +2084,10 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
+  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
+    slack: slackApprovalCardRoute,
+    [GENERIC_CHAT]: genericChatApprovalCardRoute,
+  });
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2186,12 +2194,13 @@ export function buildApp(
   const surfaces = createSurfaceRegistry({
     surfaces: [
       createSlackSurface({ deliveries }),
-      ...(config.partnerChat
+      ...(config.genericChat
         ? [
-            createPartnerChatSurface({
+            createGenericChatSurface({
               deliveries,
               surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
-              ...(config.partnerChat.label ? { label: config.partnerChat.label } : {}),
+              ...(config.genericChat.label ? { label: config.genericChat.label } : {}),
+              ...(config.genericChat.mark ? { mark: config.genericChat.mark } : {}),
             }),
           ]
         : []),
@@ -2239,7 +2248,6 @@ export function buildApp(
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(gatewayTransport ? { sandboxModels: true } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom
@@ -2298,7 +2306,7 @@ export function buildApp(
     deliveries,
     recoveryAdminUrlFor,
     sessions,
-    partnerChatRunNotice,
+    genericChatRunNotice,
   );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
@@ -2443,7 +2451,7 @@ export function buildApp(
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
-    ...(renderArtifacts ? { deploymentGitPrincipals: renderArtifacts } : {}),
+    ...(renderArtifacts ? { appGitPrincipals: renderArtifacts } : {}),
     deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
@@ -2570,24 +2578,52 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
-  const partnerChatInbound =
-    partnerChatNotices && config.partnerChat
-      ? createPartnerChatInbound({
-          secret: config.partnerChat.secret,
+  const genericChatNotices = config.genericChat ? createGenericChatNotices({ deliveries }) : null;
+  const genericChatClient = config.genericChat ? createGenericChatClient(config.genericChat) : null;
+  const genericChatTurns = genericChatClient
+    ? createGenericChatTurns({
+        app,
+        client: genericChatClient,
+        blobs: slackCore,
+        runs,
+        turnStream,
+        pickAckEmoji: slackCore.pickAckEmoji,
+      })
+    : null;
+  const genericChatInbound =
+    genericChatNotices && genericChatClient && genericChatTurns && config.genericChat
+      ? createGenericChatInbound({
+          secret: config.genericChat.secret,
+          client: genericChatClient,
+          stageBlob: slackCore.stageBlob,
           app,
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
-          unansweredReply: partnerChatNotices.unanswered,
+          unansweredReply: genericChatNotices.unanswered,
+          turns: genericChatTurns,
+          registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, GENERIC_CHAT),
+          onAction: createGenericChatApprovals({
+            client: genericChatClient,
+            app,
+            ...(keychainApprovals ? { keychainApprovals } : {}),
+          }).invoke,
         })
       : null;
-  const partnerChatDelivery = config.partnerChat
-    ? createDeliveryRelay(deliveries, {
-        type: "partner-chat",
-        send: partnerChatSender({ url: config.partnerChat.url, secret: config.partnerChat.secret, app }),
-        claimMs: PARTNER_CHAT_CLAIM_MS,
-      })
-    : null;
+  const genericChatDelivery =
+    genericChatClient && genericChatTurns
+      ? createDeliveryRelay(deliveries, {
+          type: GENERIC_CHAT,
+          send: genericChatSender({
+            client: genericChatClient,
+            blobs: slackCore,
+            app,
+            ...(keychainApprovals ? { keychainApprovals } : {}),
+          }),
+          fail: (id, reason) => app.failDelivery(id, reason),
+          claimMs: GENERIC_CHAT_CLAIM_MS,
+          held: genericChatTurns.held,
+        })
+      : null;
   const webhookDelivery = createDeliveryRelay(deliveries, {
     type: "webhook",
     send: webhookSender(config.signingSecret),
@@ -2980,10 +3016,10 @@ export function buildApp(
     );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
+      ? createSweeper(() => app.reapIdleApps(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
       : null;
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
+  const deployMaintenanceSweeper = createSweeper(() => app.maintainApps(), DEPLOY_MAINTENANCE_INTERVAL_MS);
   const liveEditPublishSweeper = createSweeper(() => app.publishDueLiveEdits(), 10_000);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
@@ -3041,7 +3077,7 @@ export function buildApp(
       runResultSweeper.start();
       approvalDeliverySweeper.start();
       webTranscriptSweeper.start();
-      partnerChatDelivery?.start();
+      genericChatDelivery?.start();
       webhookDelivery.start();
     };
     if (backgroundStopping)
@@ -3080,7 +3116,7 @@ export function buildApp(
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
       webTranscriptSweeper.stop(),
-      partnerChatDelivery?.stop(),
+      genericChatDelivery?.stop(),
       preemptionSweeper.stop(),
       worker.stopClaims(),
     ];
@@ -3207,7 +3243,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
-    ...(partnerChatInbound ? { partnerChatEvents: partnerChatInbound.handle } : {}),
+    ...(genericChatInbound ? { genericChatEvents: genericChatInbound.handle } : {}),
     loopIngress,
     admin,
     errors,
@@ -3355,7 +3391,7 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
-    ...(built.partnerChatEvents ? { partnerChatEvents: built.partnerChatEvents } : {}),
+    ...(built.genericChatEvents ? { genericChatEvents: built.genericChatEvents } : {}),
     loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,

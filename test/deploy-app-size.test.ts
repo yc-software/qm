@@ -58,7 +58,7 @@ test("a provider's app size cap rejects oversized publishes and redeploys before
   assert.equal(applies(), 1);
 });
 
-test("the cap also blocks an oversized version pushed to the deployment's git repo", async () => {
+test("the cap also blocks an oversized version pushed to the app's git repo", async () => {
   const { deploy, store, applies } = service(10);
   const d = await deploy.deploy({ ...owner, files: [{ path: "a.txt", data: "0123456789" }] });
   const work = mkdtempSync(join(tmpdir(), "deploy-app-size-push-"));

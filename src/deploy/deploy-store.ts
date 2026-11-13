@@ -4,7 +4,7 @@ import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
-import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
+import { APP_TABLES, NAME_INDEX } from "./page-views.ts";
 import { tenantAppHandle } from "../tenants/settings.ts";
 import { appHostLabel } from "../tenants/app-handle.ts";
 import {
@@ -14,7 +14,7 @@ import {
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
 
-export interface DeploymentVersion {
+export interface AppVersion {
   version: number;
   createdAt: number;
   entrypoint: string;
@@ -37,15 +37,26 @@ export interface DeployEndpoint {
   socksProxyPort?: number;
 }
 
+export function appSubdomainUrlOf(
+  d: { id: string; name?: string },
+  appsDomain: string | undefined,
+): string | undefined {
+  const handle = tenantAppHandle();
+  return appsDomain && handle
+    ? `https://${appHostLabel(handle, d.name ?? d.id)}.${appsDomain.toLowerCase()}/`
+    : undefined;
+}
+
 export function appUrlOf(
   d: { id: string; name?: string; endpoint?: DeployEndpoint | null },
   { sharedWebUrl, appsDomain }: { sharedWebUrl: string | undefined; appsDomain: string | undefined },
 ): string | undefined {
-  const ref = d.name ?? d.id;
-  const handle = tenantAppHandle();
-  if (appsDomain && handle) return `https://${appHostLabel(handle, ref)}.${appsDomain.toLowerCase()}/`;
-  const path = `/d/${encodeURIComponent(ref)}/`;
-  return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${trimTrailingSlashes(sharedWebUrl)}${path}` : undefined);
+  const path = `/d/${encodeURIComponent(d.name ?? d.id)}/`;
+  return (
+    appSubdomainUrlOf(d, appsDomain) ??
+    publicUrlOf(d.endpoint) ??
+    (sharedWebUrl ? `${trimTrailingSlashes(sharedWebUrl)}${path}` : undefined)
+  );
 }
 
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {
@@ -60,7 +71,7 @@ export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string
   }
 }
 
-type DeploymentStatus = "running" | "stopped" | "archived";
+type AppStatus = "running" | "stopped" | "archived";
 
 interface DefaultAudienceSnapshot {
   sourceScopeId: ScopeId;
@@ -68,7 +79,7 @@ interface DefaultAudienceSnapshot {
   snapshotAt: number;
 }
 
-export interface Deployment {
+export interface PublishedApp {
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -77,7 +88,7 @@ export interface Deployment {
   name?: string;
   displayName?: string;
   currentVersion: number;
-  status: DeploymentStatus;
+  status: AppStatus;
   endpoint: DeployEndpoint | null;
 
   alwaysOn?: boolean;
@@ -86,10 +97,10 @@ export interface Deployment {
   public?: true;
   lastAccessAt?: number;
   appliedVersion?: number;
-  versions: DeploymentVersion[];
+  versions: AppVersion[];
 }
 
-export interface DeploymentDraft {
+export interface AppDraft {
   deploymentId: string;
   commit: string;
   entrypoint: string;
@@ -101,7 +112,7 @@ export interface DeploymentDraft {
   failure?: string;
 }
 
-export function currentVersionOf(d: Deployment | null): DeploymentVersion | undefined {
+export function currentVersionOf(d: PublishedApp | null): AppVersion | undefined {
   return d?.versions.find((v) => v.version === d.currentVersion);
 }
 
@@ -123,16 +134,16 @@ export interface DeployStore {
       createdInScope?: ScopeId;
       alwaysOn?: boolean;
     } & VersionInput,
-  ): Promise<Deployment>;
-  addVersion(id: string, input: VersionInput): Promise<DeploymentVersion>;
-  addVersionFromCommit(id: string, commit: string): Promise<DeploymentVersion | null>;
-  get(id: string): Promise<Deployment | null>;
-  getByName(name: string): Promise<Deployment | null>;
-  list(): Promise<Deployment[]>;
+  ): Promise<PublishedApp>;
+  addVersion(id: string, input: VersionInput): Promise<AppVersion>;
+  addVersionFromCommit(id: string, commit: string): Promise<AppVersion | null>;
+  get(id: string): Promise<PublishedApp | null>;
+  getByName(name: string): Promise<PublishedApp | null>;
+  list(): Promise<PublishedApp[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
-  setStatus(id: string, status: DeploymentStatus): Promise<void>;
+  setStatus(id: string, status: AppStatus): Promise<void>;
   setEndpoint(id: string, endpoint: DeployEndpoint | null): Promise<void>;
   setName(id: string, name: string): Promise<void>;
   setOwnerScope(id: string, ownerScopeId: ScopeId): Promise<void>;
@@ -144,7 +155,7 @@ export interface DeployStore {
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
   setAppliedVersion(id: string, version: number, placedCommit?: string): Promise<void>;
   touch(id: string, at: number): Promise<void>;
-  versionOf(id: string, version: number): Promise<DeploymentVersion | null>;
+  versionOf(id: string, version: number): Promise<AppVersion | null>;
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
@@ -152,18 +163,18 @@ export interface DeployStore {
   bundleOf(id: string, commit: string): Promise<Uint8Array>;
   commitDraft(id: string, files: DeployGitInputFile[], parent: string, deletedPaths?: string[]): Promise<string>;
   keepCommit(id: string, commit: string): Promise<void>;
-  draftOf(id: string): Promise<DeploymentDraft | null>;
-  putDraft(draft: DeploymentDraft): Promise<void>;
+  draftOf(id: string): Promise<AppDraft | null>;
+  putDraft(draft: AppDraft): Promise<void>;
   deleteDraft(id: string): Promise<void>;
-  drafts(): Promise<DeploymentDraft[]>;
+  drafts(): Promise<AppDraft[]>;
   claimDraftTenants(): Promise<ClaimedRow[]>;
   refOf(id: string, ref: string): Promise<string | null>;
   repoUrl(id: string): Promise<string>;
 }
 
 export interface DeployStoreBackings {
-  deployments: DurableMap<Deployment>;
-  drafts: DurableMap<DeploymentDraft>;
+  deployments: DurableMap<PublishedApp>;
+  drafts: DurableMap<AppDraft>;
   git?: DeployGitStoreOptions;
   pg: PgPool;
   touchDebounceMs?: number;
@@ -177,16 +188,16 @@ interface DeployAccess {
   readOne(id: string): Promise<number | null>;
   readAll(): Promise<Map<string, number>>;
   write(id: string, at: number): Promise<boolean>;
-  findByName?(name: string): Promise<Deployment | null>;
+  findByName?(name: string): Promise<PublishedApp | null>;
 }
 
 function createPgDeployAccess(pg: PgPool): DeployAccess {
-  for (const migration of DEPLOYMENT_TABLES) pg.registerMigration(migration);
+  for (const migration of APP_TABLES) pg.registerMigration(migration);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
       readyP = (async () => {
-        for (const migration of DEPLOYMENT_TABLES) await pg.migrate(migration);
+        for (const migration of APP_TABLES) await pg.migrate(migration);
       })().catch((e) => {
         readyP = null;
         throw e;
@@ -218,7 +229,7 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
     async findByName(name) {
       await ready();
       const rows = await pg.q("SELECT json FROM deployments WHERE json->>'name' = $1 ORDER BY id LIMIT 1", [name]);
-      return rows.length ? (rows[0]!.json as Deployment) : null;
+      return rows.length ? (rows[0]!.json as PublishedApp) : null;
     },
   };
 }
@@ -240,7 +251,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
   const access = createPgDeployAccess(backing.pg);
   const lastTouch = new Map<string, number>();
 
-  function withAccess(d: Deployment, at: number | null | undefined): Deployment {
+  function withAccess(d: PublishedApp, at: number | null | undefined): PublishedApp {
     return at == null ? d : { ...d, lastAccessAt: at };
   }
 
@@ -248,20 +259,20 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     try {
       await write();
     } catch (e) {
-      if (isNameConflict(e)) throw new Error(`deployment name taken: ${name}`, { cause: e });
+      if (isNameConflict(e)) throw new Error(`app name taken: ${name}`, { cause: e });
       throw e;
     }
   }
 
   async function makeVersion(
-    deploymentId: string,
+    appId: string,
     version: number,
     input: VersionInput,
     parentCommit?: string,
-  ): Promise<DeploymentVersion> {
+  ): Promise<AppVersion> {
     const commit = input.files
       ? await git.commit({
-          deploymentId,
+          deploymentId: appId,
           version,
           files: input.files,
           ...(parentCommit ? { parent: parentCommit } : {}),
@@ -280,22 +291,22 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     };
   }
 
-  async function updateVersionRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
+  async function updateVersionRef(appId: string, version: AppVersion): Promise<void> {
     if (!version.commit) return;
-    await git.setRef(deploymentId, versionRef(version.version), version.commit);
-    await git.setRef(deploymentId, `refs/deploy-commits/${version.commit}`, version.commit);
+    await git.setRef(appId, versionRef(version.version), version.commit);
+    await git.setRef(appId, `refs/deploy-commits/${version.commit}`, version.commit);
   }
 
-  async function updateAppliedRef(deploymentId: string, commit: string | undefined): Promise<void> {
-    if (commit) await git.setRef(deploymentId, CURRENT_REF, commit);
-    else await git.deleteRef(deploymentId, CURRENT_REF);
+  async function updateAppliedRef(appId: string, commit: string | undefined): Promise<void> {
+    if (commit) await git.setRef(appId, CURRENT_REF, commit);
+    else await git.deleteRef(appId, CURRENT_REF);
   }
 
   return {
     async create(input) {
       const id = input.id ?? randomUUID();
       const v = await makeVersion(id, 1, input);
-      const d: Deployment = {
+      const d: PublishedApp = {
         id,
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
@@ -313,12 +324,12 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     },
     async addVersion(id, input) {
       const d = await backingMap.get(id);
-      if (!d) throw new Error(`unknown deployment: ${id}`);
+      if (!d) throw new Error(`unknown app: ${id}`);
       const version = d.versions.length + 1;
       const parentCommit = currentVersionOf(d)?.commit;
       const v = await makeVersion(id, version, input, parentCommit);
       await backingMap.update(id, (cur) => {
-        if (cur.versions.length + 1 !== version) throw new Error(`deployment ${id} gained a version concurrently`);
+        if (cur.versions.length + 1 !== version) throw new Error(`app ${id} gained a version concurrently`);
         cur.versions.push(v);
         cur.currentVersion = version;
         return cur;
@@ -327,7 +338,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       return v;
     },
     async addVersionFromCommit(id, commit) {
-      let v: DeploymentVersion | null = null;
+      let v: AppVersion | null = null;
       const d = await backingMap.update(id, (d) => {
         const current = currentVersionOf(d);
         if (current?.commit === commit) return d;
@@ -346,7 +357,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         d.currentVersion = version;
         return d;
       });
-      if (!d) throw new Error(`unknown deployment: ${id}`);
+      if (!d) throw new Error(`unknown app: ${id}`);
       if (!v) return null;
       await updateVersionRef(id, v);
       return v;
@@ -399,10 +410,10 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       await backingMap.merge(id, { displayName: displayName || undefined });
     },
     async setAlwaysOn(id, alwaysOn) {
-      await backingMap.merge(id, { alwaysOn } as Partial<Deployment>);
+      await backingMap.merge(id, { alwaysOn } as Partial<PublishedApp>);
     },
     async setEmbedAncestors(id, embedAncestors) {
-      await backingMap.merge(id, { embedAncestors } as Partial<Deployment>);
+      await backingMap.merge(id, { embedAncestors } as Partial<PublishedApp>);
     },
     async setConnectors(id, connectors) {
       await backingMap.merge(id, { connectors });

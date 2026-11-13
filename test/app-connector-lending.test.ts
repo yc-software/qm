@@ -14,7 +14,7 @@ import { personalScope } from "../src/types.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
-  DEPLOYMENT_CREDENTIAL_TTL_MS,
+  APP_CREDENTIAL_TTL_MS,
   mintCapabilityToken,
 } from "../src/auth/capability-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
@@ -100,14 +100,14 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
       aud: CREDENTIAL_BROKER_AUD,
       credentials: [],
       deployment: d.id,
-      exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+      exp: Date.now() + APP_CREDENTIAL_TTL_MS,
     },
     SIGNING,
   );
   const broker = (body: Record<string, unknown>) => call("/v1/credentials/broker", appToken, body);
   const lend = async (actorId: string, connectors: unknown, liveActor = true, run: object = liveRunClaims(actorId)) =>
     call(
-      `/v1/deployments/${d.id}/connectors`,
+      `/v1/apps/${d.id}/connectors`,
       await mintCapabilityToken(
         {
           actorId,
@@ -135,10 +135,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal((await h.lend(PUBLISHER, ["evil.example.com"])).json.error, "unknown_connector");
 
   const lent = await h.lend(PUBLISHER, ["Slack.com", "gmail.googleapis.com"]);
-  assert.deepEqual((lent.json.deployment as { connectors: string[] }).connectors, [
-    "gmail.googleapis.com",
-    "slack.com",
-  ]);
+  assert.deepEqual((lent.json.app as { connectors: string[] }).connectors, ["gmail.googleapis.com", "slack.com"]);
   assert.equal((await h.broker(get("api.dropboxapi.com"))).json.error, "connector_not_lent", "only the hosts lent");
 
   for (const host of ["gmail.googleapis.com", "slack.com"]) {
@@ -182,11 +179,11 @@ test("only the live publisher can lend, per app and per connected-app host", asy
 
 test("public apps cannot borrow connectors", async (t) => {
   const h = await agent(t);
-  await h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER });
+  await h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER });
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /public app cannot borrow/);
-  await h.app.setDeploymentPublic(h.d.id, false, { createdBy: PUBLISHER });
+  await h.app.setAppPublic(h.d.id, false, { createdBy: PUBLISHER });
   await h.lend(PUBLISHER, ["slack.com"]);
-  await assert.rejects(h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER }), /cannot be public/);
+  await assert.rejects(h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER }), /cannot be public/);
 });
 
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {
@@ -200,6 +197,6 @@ test("a new running version from anyone but the publisher withdraws the loan", a
   assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.principalId === CO_MANAGER));
 
   await h.lend(PUBLISHER, ["slack.com"]);
-  await h.app.rollbackDeployment(h.d.id, 1, CO_MANAGER);
+  await h.app.rollbackApp(h.d.id, 1, CO_MANAGER);
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "a rollback counts too");
 });
