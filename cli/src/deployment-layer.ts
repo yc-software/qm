@@ -16,7 +16,6 @@ export interface DeploymentLayerBundle {
   contract: 1;
   tools: DeploymentLayerFile[];
   skills: DeploymentLayerFile[];
-  activitySeeds?: DeploymentLayerFile[];
 }
 
 export interface DeploymentLayerState {
@@ -98,13 +97,7 @@ export function deploymentLayerBundle(sandboxDir: string): DeploymentLayerBundle
         .flat()
         .sort(pathOrder)
     : [];
-  const activitySeeds = walkText(join(sandboxDir, "activity-seeds"), "activity-seeds");
-  return {
-    contract: 1,
-    tools,
-    skills: walkText(join(sandboxDir, "skills"), "skills"),
-    ...(activitySeeds.length ? { activitySeeds } : {}),
-  };
+  return { contract: 1, tools, skills: walkText(join(sandboxDir, "skills"), "skills") };
 }
 
 function normalizedLayerBody(value: unknown): string {
@@ -114,9 +107,7 @@ function normalizedLayerBody(value: unknown): string {
   if (bundle.contract !== 1 || !Array.isArray(bundle.tools) || !Array.isArray(bundle.skills)) {
     throw new CliError("deployment layer bundle requires contract: 1, tools[], and skills[]");
   }
-  if (bundle.activitySeeds !== undefined && !Array.isArray(bundle.activitySeeds))
-    throw new CliError("deployment layer activitySeeds must be a list of files");
-  const files = (kind: "tools" | "skills" | "activity-seeds", entries: unknown[]): DeploymentLayerFile[] =>
+  const files = (kind: "tools" | "skills", entries: unknown[]): DeploymentLayerFile[] =>
     entries
       .map((entry) => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry))
@@ -128,13 +119,7 @@ function normalizedLayerBody(value: unknown): string {
         return { path: file.path, content: file.content, ...(file.executable === true ? { executable: true } : {}) };
       })
       .sort(pathOrder);
-  const activitySeeds = files("activity-seeds", bundle.activitySeeds ?? []);
-  return JSON.stringify({
-    contract: 1,
-    tools: files("tools", bundle.tools),
-    skills: files("skills", bundle.skills),
-    ...(activitySeeds.length ? { activitySeeds } : {}),
-  });
+  return JSON.stringify({ contract: 1, tools: files("tools", bundle.tools), skills: files("skills", bundle.skills) });
 }
 
 export function deploymentLayerBody(sandboxDir: string): string {

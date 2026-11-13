@@ -983,18 +983,3 @@ test("the bundle carries every file a tool declares under install.files and fail
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-test("activity seed files ride in the bundle, and a directory without them keeps the two-section shape", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-"));
-  try {
-    writeLayer(dir);
-    assert.equal("activitySeeds" in deploymentLayerBundle(join(dir, "sandbox")), false);
-    mkdirSync(join(dir, "sandbox", "activity-seeds"));
-    writeFileSync(join(dir, "sandbox", "activity-seeds", "acme.json"), '{"activities":[]}');
-    assert.deepEqual(deploymentLayerBundle(join(dir, "sandbox")).activitySeeds, [
-      { path: "activity-seeds/acme.json", content: '{"activities":[]}' },
-    ]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});

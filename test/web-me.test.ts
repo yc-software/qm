@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { webMeConfig } from "../src/api/routes/web-me.ts";
+import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 import { orgId, orgScope } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
@@ -111,7 +112,7 @@ test("with suggestion generation on, /me leaves the fallback suggestions to the 
   assert.equal(body.suggestedActivities, undefined);
 });
 
-test("/me carries the company's activity seeds from the uploaded deployment layer, and a rejected upload names the entry", async () => {
+test("/me carries the activity seeds set on the organization, and a rejected write names the entry", async () => {
   const cookie = browserSessionCookie("bob@example.com");
   const before = await me(cookie);
   assert.equal("welcome" in before, false);
@@ -123,19 +124,21 @@ test("/me carries the company's activity seeds from the uploaded deployment laye
       gmail: [{ id: "g1", icon: "📥", title: "Find replies I owe", prompt: "Find replies I owe", replaces: "crm" }],
     },
   };
-  const file = (org: string, content: unknown) => ({
-    path: `activity-seeds/${org}.json`,
-    content: JSON.stringify(content),
-  });
-  const upload = (...activitySeeds: ReturnType<typeof file>[]) =>
-    built.deploymentLayerStore.put({ contract: 1, tools: [], skills: [], activitySeeds }, "test");
-  await upload(file(orgId(), seeds), file("another-company", { activities: [{ ...idea, id: "theirs" }] }));
+  const resource = ADMIN_RESOURCES.find((entry) => entry.id === "activity-seeds")!;
+  const write = (body: unknown, scope: string = orgScope()) =>
+    resource.apply({ body, deps: { config: built.config } } as never, { id: "admin" }, scope);
+  assert.deepEqual(await write({ seeds }), { ok: true });
   const seeded = await me(cookie);
   assert.deepEqual(seeded.welcome, seeds);
   assert.deepEqual(seeded.suggestedActivities, seeds.activities);
-  await assert.rejects(
-    upload(file(orgId(), { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] })),
-    /activity-seeds\/default-org\.json: activities\[1\]: icon must be one emoji or a built-in icon name/,
+  assert.deepEqual(
+    await write({ seeds: { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] } }),
+    {
+      error: "seeds: activities[1]: icon must be one emoji or a built-in icon name",
+    },
   );
+  assert.match(JSON.stringify(await write({ seeds }, "personal:bob@example.com")), /org-wide/);
   assert.deepEqual((await me(cookie)).welcome, seeds);
+  assert.deepEqual(await write({ seeds: null }), { ok: true });
+  assert.equal("welcome" in (await me(cookie)), false);
 });

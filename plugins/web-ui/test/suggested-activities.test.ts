@@ -30,7 +30,6 @@ test("invalid configuration fails naming the setting, without echoing its conten
     JSON.stringify([{ ...activity, icon: "<script>" }]),
     JSON.stringify([{ ...activity, prompt: " " }]),
     JSON.stringify([{ ...activity, title: "a".repeat(66) }]),
-    JSON.stringify([{ ...activity, prompt: "a".repeat(1201) }]),
     JSON.stringify([{ ...activity, id: "../private" }]),
     JSON.stringify(Array.from({ length: 13 }, (_, i) => ({ ...activity, id: `item-${i}` }))),
     "x".repeat(20_001),

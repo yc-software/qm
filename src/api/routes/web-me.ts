@@ -1,5 +1,4 @@
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
-import { externalOrgId } from "../../tenants/external-org.ts";
 import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
 import {
@@ -37,7 +36,7 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
 }
 
 function companyActivitySeeds(deps: ApiCtx["deps"]): ActivitySeeds | undefined {
-  return deps.deploymentLayer?.activitySeeds(externalOrgId());
+  return deps.config?.getActivitySeeds(orgScope(deps)) ?? undefined;
 }
 
 export function seedActivities(deps: ApiCtx["deps"]): SuggestedActivity[] {
