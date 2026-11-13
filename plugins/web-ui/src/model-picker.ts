@@ -403,6 +403,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const fastAvailable = !!choice && (!ultrafastOn || !!ultrafastTarget) && modelSupportsFast;
     const fastOn = fastAvailable && effectiveFastMode();
     const speedLabel = (ultrafastOn && ", Ultrafast") || (fastOn && ", Fast") || "";
+    const speedTip = ultrafastOn ? "Ultrafast" : "";
     const settingLabel = choice ? modelLabel(choice) : (bindings.emptyLabel ?? "Choose model");
     const settingAria = choice
       ? `Model: ${settingLabel}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}`
@@ -437,13 +438,13 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }}
     >
       <button
-        class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
+        class="menu-button loadout-button"
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
         aria-label=${triggerLabel}
         ${tip((target) => {
-          if (!target.closest(".split-canvas:not(.single-pane)")) return routedTip;
-          return target.querySelector(".menu-label")?.getClientRects().length ? "" : routedTip || triggerLabel;
+          if (!target.closest(".split-canvas:not(.single-pane)")) return routedTip || speedTip;
+          return target.querySelector(".menu-label")?.getClientRects().length ? speedTip : routedTip || triggerLabel;
         })}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
@@ -474,7 +475,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       >
         <span class="menu-label">${routed ? routedName : settingLabel}</span>
         ${suffix ? html`<span class="menu-suffix">${suffix}</span>` : nothing}
-        ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 12)} Ultrafast</span>` : nothing}
+        ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 13)}</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>
       ${

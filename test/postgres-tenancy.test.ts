@@ -206,6 +206,9 @@ test("migrating an empty database mints no tenant", { skip }, async () => {
   try {
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
+    await pool.query("SET ROLE qm_app");
+    assert.equal((await pool.query("SELECT qm_boot_tenant() AS id")).rows[0].id, null);
+    assert.deepEqual((await pool.query("SELECT * FROM qm_serving_tenants()")).rows, []);
   } finally {
     await pool.end();
   }

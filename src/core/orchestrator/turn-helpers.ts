@@ -212,6 +212,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.detectContext ? { detectContext: input.detectContext } : {}),
     ...(input.detectOpener ? { detectOpener: input.detectOpener } : {}),
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    ...(input.inboundNotes?.length ? { inboundNotes: input.inboundNotes } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),

@@ -1,7 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import { shq } from "../util/shell.ts";
+import { tempPathBeside } from "./exec-file-ops.ts";
 
 export interface LayerToolInstallIo {
   exec(script: string, timeoutSec: number): Promise<{ code: number; stdout: string; stderr: string }>;
@@ -57,8 +58,7 @@ export function createLayerToolInstaller(files: () => readonly LayerInstallFile[
     if (prep.code !== 0) {
       throw new Error(`layer tool install: mkdir failed (rc=${prep.code}): ${prep.stderr.slice(0, 200)}`);
     }
-    const nonce = randomUUID().slice(0, 8);
-    const plan = wanted.map((file) => ({ ...file, stagedPath: `${file.to}.staged-${nonce}` }));
+    const plan = wanted.map((file) => ({ ...file, stagedPath: tempPathBeside(file.to) }));
     for (const file of plan) await io.writeAbs(file.stagedPath, file.data);
     const commit = plan
       .map((file) => `chmod ${file.mode} ${shq(file.stagedPath)} && mv -f ${shq(file.stagedPath)} ${shq(file.to)}`)

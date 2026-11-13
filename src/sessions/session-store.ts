@@ -431,7 +431,7 @@ export interface SessionStore {
   append(writer: SessionWriter, item: NewItem): Promise<Item>;
   appendMany(writer: SessionWriter, items: readonly NewItem[]): Promise<Item[]>;
   getItems(sessionId: string, opts?: GetItemsOptions): Promise<Item[]>;
-  hasDeliveryEntry(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
+  appendDelivery(writer: SessionWriter, item: NewItem): Promise<boolean>;
   countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
@@ -447,7 +447,7 @@ export interface SessionStore {
 
   addParticipant(sessionId: string, principalId: string, title?: string): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
-  listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
+  listByParticipant(principalId: string, opts?: { limit?: number; botActor?: boolean }): Promise<Session[]>;
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
   listParticipantPage(principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage>;
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
@@ -465,11 +465,12 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
+  latestVisiblePromptAt(sessionId: string, principalId: string): Promise<number | undefined>;
   visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
 
-  searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
+  searchEntries(principalId: string, query: string, limit?: number, botActor?: boolean): Promise<EntrySearchHit[]>;
 
-  searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
+  searchSessionTitles(principalId: string, query: string, limit?: number, botActor?: boolean): Promise<Session[]>;
 
   countSessions(): Promise<number>;
 

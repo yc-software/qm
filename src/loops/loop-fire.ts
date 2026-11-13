@@ -3,7 +3,7 @@ import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority, ownerAuthored } from "../cron/authority.ts";
 import { samePerson } from "../directory/person.ts";
-import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
+import { fittingEntryCount, MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
@@ -394,7 +394,7 @@ function triageSettingText(enabled: boolean, instructions: string | undefined, f
   return enabled ? promptText(instructions?.trim() || fallback) : "";
 }
 
-function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageInput {
+function triagePrompt(loop: Loop, items: LoopItem[], pending: LoopItem[]): { stage: StageInput; pending: LoopItem[] } {
   const pendingIds = new Set(pending.map((item) => item.id));
   const prioritize = triageSettingText(
     prioritizes(loop),
@@ -406,23 +406,26 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageI
     loop.triage?.consolidate?.instructions,
     DEFAULT_CONSOLIDATE_INSTRUCTIONS,
   );
-  const data = JSON.stringify(
-    open.map((item) => {
-      const preview = item.sourcePayload ?? {};
-      return {
-        id: item.id,
-        ...(pendingIds.has(item.id) ? { new: true } : {}),
-        sourceKey: excerpt(item.sourceKey),
-        ...(item.source ? { source: item.source } : {}),
-        ...(item.sourceSummary ? { summary: excerpt(item.sourceSummary) } : {}),
-        ...(typeof preview.title === "string" ? { title: excerpt(preview.title) } : {}),
-        ...(typeof preview.from === "string" ? { from: excerpt(preview.from) } : {}),
-        ...(typeof preview.snippet === "string" ? { snippet: excerpt(preview.snippet) } : {}),
-        ...(item.triage?.priority ? { priority: item.triage.priority } : {}),
-        ...(item.triage?.groupId ? { groupId: item.triage.groupId } : {}),
-      };
-    }),
+  const entries = items.map((item) => {
+    const preview = item.sourcePayload ?? {};
+    return JSON.stringify({
+      id: item.id,
+      ...(pendingIds.has(item.id) ? { new: true } : {}),
+      sourceKey: excerpt(item.sourceKey),
+      ...(item.source ? { source: item.source } : {}),
+      ...(item.sourceSummary ? { summary: excerpt(item.sourceSummary) } : {}),
+      ...(typeof preview.title === "string" ? { title: excerpt(preview.title) } : {}),
+      ...(typeof preview.from === "string" ? { from: excerpt(preview.from) } : {}),
+      ...(typeof preview.snippet === "string" ? { snippet: excerpt(preview.snippet) } : {}),
+      ...(item.triage?.priority ? { priority: item.triage.priority } : {}),
+      ...(item.triage?.groupId ? { groupId: item.triage.groupId } : {}),
+    });
+  });
+  const shown = fittingEntryCount(
+    entries.map((entry) => entry.length + 1),
+    "[]".length,
   );
+  const data = `[${entries.slice(0, shown).join(",")}]`;
   const input = [
     "[Loop triage]",
     `You are the triage stage of the loop "${promptText(loop.name)}". Order and group its open items for the person who reviews them. Do NOT work, answer, or act on any item, and do not modify anything.`,
@@ -443,7 +446,10 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageI
     'Reply with ONLY a fenced json block: {"items": [{"id": "<new item id>", "priority": "urgent" | "high" | "normal" | "low", "reason": "<one line>", "groupWith": "<item id>"}]}.',
     "[End loop triage]",
   ].join("\n");
-  return { input, securityScreenData: promptText(data) };
+  return {
+    stage: { input, securityScreenData: promptText(data) },
+    pending: items.slice(0, shown).filter((item) => pendingIds.has(item.id)),
+  };
 }
 
 function workPrompt(
@@ -575,19 +581,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     fireKey: string,
     threadRef: string,
   ): Promise<Map<string, TriagePatch>> {
-    const outcome = await stageTurn(
-      loop,
-      fireKey,
-      threadRef,
-      triagePrompt(loop, work.context, work.pending),
-      undefined,
-      { readOnly: true },
-    );
+    const prompt = triagePrompt(loop, work.context, work.pending);
+    const outcome = await stageTurn(loop, fireKey, threadRef, prompt.stage, undefined, { readOnly: true });
     const failure = stageFailure("triage", outcome);
     if (failure) throw failure.error;
     const parsed = fencedJson(outcome.reply ?? "");
     if (parsed === undefined) throw new Error("triage: reply was not parseable");
-    return planTriage(loop, work.open, work.pending, parseTriageDecisions(listField(parsed, "items")));
+    return planTriage(loop, work.open, prompt.pending, parseTriageDecisions(listField(parsed, "items")));
   }
 
   async function previewTriage(loop: Loop, triage: Loop["triage"]): Promise<TriagePreview[]> {
@@ -609,15 +609,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function triage(loop: Loop, fireKey: string, threadRef: string): Promise<void> {
-    try {
-      if (!(await deps.triageEnabledFor?.(loop.owner))) return;
-      const work = triageWork(loop, await deps.items.byLoop(loop.id));
-      if (!work) return;
-      const patches = await decideTriage(loop, work, `${fireKey}:triage`, threadRef);
-      for (const [id, patch] of patches) await deps.items.setTriage(id, patch, "agent");
-    } catch (error) {
-      console.error("%s", `[loops] triage for ${loop.id} failed:`, errMessage(error));
-    }
+    if (!(await deps.triageEnabledFor?.(loop.owner))) return;
+    const work = triageWork(loop, await deps.items.byLoop(loop.id));
+    if (!work) return;
+    const patches = await decideTriage(loop, work, `${fireKey}:triage`, threadRef);
+    for (const [id, patch] of patches) await deps.items.setTriage(id, patch, "agent");
   }
 
   function stageFailure(stage: string, outcome: TriggerOutcome): { error: Error; userMessage: string } | null {

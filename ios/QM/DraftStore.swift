@@ -104,8 +104,7 @@ struct DraftStore {
     let threads = Set(sessions.map(\.threadRef))
     let local = conversations(account).filter { !threads.contains($0.threadRef) }
     return (sessions + local).sorted {
-      if ($0.pinned == true) != ($1.pinned == true) { return $0.pinned == true }
-      return ($0.lastActivityAt ?? 0) > ($1.lastActivityAt ?? 0)
+      ($0.lastActivityAt ?? .infinity) > ($1.lastActivityAt ?? .infinity)
     }
   }
 

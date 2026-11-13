@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import {
   createRenderDeployProvider,
   type RenderDeployProviderOptions,
@@ -11,6 +11,8 @@ import { testMap } from "./support/test-database.ts";
 
 const sha = "a".repeat(40);
 const readyProbes = 40;
+const clockStart = Date.UTC(2026, 0, 1) - performance.now();
+mock.method(Date, "now", () => Math.floor(clockStart + performance.now()));
 const writePaths = {
   environment: "/environments",
   create: "/services",
@@ -58,9 +60,7 @@ function fixture(appRegion?: string) {
         entrypoint: v.entrypoint,
       };
     },
-    revoke: async () => {
-      credentialCalls.push("revoke");
-    },
+    revoke: async () => void credentialCalls.push("revoke"),
     authorizes: async () => false,
   };
   const response = (value: unknown, status = 200) =>

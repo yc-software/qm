@@ -344,6 +344,10 @@ export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): 
   return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
 }
 
+export function isSharedScopeId(scopeId: string): boolean {
+  return scopeId.startsWith("channel:") || scopeId.startsWith("group:");
+}
+
 export function sharedContextLabel(scopeId: string | null, name: string | null): string | null {
   if (!scopeId) return null;
   if (scopeId.startsWith("channel:")) return name ? `#${name.replace(/^#/, "")}` : "Shared channel";
@@ -554,10 +558,6 @@ export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
   return approval.executesOnApprove === true && approval.blocksInput === false;
 }
 
-export function approvalBlocksComposer(approval: PendingApproval): boolean {
-  return approval.blocksInput !== false;
-}
-
 export interface ApprovalDecision {
   requestId: string;
   approved: boolean;
@@ -593,6 +593,7 @@ export interface RunPoll {
     reply?: string;
     reason?: string;
     refusalKind?: string;
+    errorCode?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
@@ -1219,7 +1220,8 @@ export async function runApprovalTurn(
   if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
 }
 
-const APPROVAL_GONE_MESSAGE = "This approval is no longer available — it may have expired or already been handled.";
+export const APPROVAL_GONE_MESSAGE =
+  "This approval is no longer available — it may have expired or already been handled.";
 const APPROVAL_NOT_APPLIED_MESSAGE =
   "This approval couldn't be applied right now — the conversation is waiting on a different approval.";
 
@@ -2017,12 +2019,13 @@ export interface HistoryApprovalDecision {
   approved: boolean;
   command: string;
   scope?: string;
+  declined?: string;
   timestamp: number;
 }
 
 function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
   if (item.kind !== "ElicitationResponse") return null;
-  const { command, scope } = item.body;
+  const { command, scope, declined } = item.body;
   if (typeof item.approved !== "boolean" || typeof command !== "string") return null;
   return {
     role: "approval-decision",
@@ -2031,6 +2034,7 @@ function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
     command,
     requestId: item.elicitId,
     ...(typeof scope === "string" ? { scope } : {}),
+    ...(typeof declined === "string" ? { declined } : {}),
     timestamp: item.createdAt,
   };
 }

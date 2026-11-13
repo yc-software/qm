@@ -22,9 +22,9 @@ export async function swarmFixture(
     lock?: AdvisoryLock;
     backend?: Sandbox;
     runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode" | "botActor">;
-    request?: Pick<OrchestratorInput, "memoryNotebookOnly">;
+    request?: Pick<OrchestratorInput, "memoryNotebookOnly" | "scopeVersion">;
     spawnMeta?: Pick<SpawnMeta, "memoryNotebookOnly">;
-    claims?: Pick<CapabilityClaims, "memory">;
+    claims?: Pick<CapabilityClaims, "memory" | "scopeVersion">;
     channel?: string;
   } = {},
 ) {

@@ -27,7 +27,7 @@ function fixture() {
     key: deriveConnectorKey("composio-test"),
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const app = { getSessionForViewer: async (_id: string, _viewer: string): Promise<unknown> => null };
+  const app = { getSessionForViewer: async (_id: string, _viewer: { actorId: string }): Promise<unknown> => null };
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const replies: unknown[] = [];
   const audits: Array<{ action: string; resource?: string }> = [];
@@ -1091,7 +1091,7 @@ async function slackReplyFixture() {
   const f = fixture();
   await f.own();
   f.app.getSessionForViewer = async (id, viewer) =>
-    id === "session" && viewer === "alice" ? { session: { threadRef: "ch:C123:123.456" } } : null;
+    id === "session" && viewer.actorId === "alice" ? { session: { threadRef: "ch:C123:123.456" } } : null;
   f.deps.slackAccounts = testMap();
   await f.deps.slackAccounts.put("alice", {
     principalId: "alice",

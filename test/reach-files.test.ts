@@ -250,7 +250,7 @@ describe("POST /v1/reach with files", () => {
     assert.equal(malformed.status, 400);
   });
 
-  it("refuses a Slack bot's turn a swarm computer it may not use, named by sandbox_id or as the default", async () => {
+  it("refuses a Slack bot's turn a swarm computer it may not use, named by sandbox_id or as the default", async (t) => {
     const scope = scopeId("personal", "U-carol");
     const resources = built.sandboxResources.forTurn({
       actorId: "U-carol",
@@ -289,13 +289,22 @@ describe("POST /v1/reach with files", () => {
       );
     const bot = await send(true, worker.id);
     assert.equal(bot.status, 403);
-    assert.equal(((await bot.json()) as any).error, "forbidden");
+    assert.deepEqual(await bot.json(), {
+      error: "forbidden",
+      message: "a Slack bot's turn can use only a computer it made that no person has used",
+    });
     const person = await send(false, worker.id);
     assert.equal(person.status, 200);
     assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
     const previousDefault = (await resources.resolve(scope))?.id ?? null;
-    await resources.setDefault("U-carol", scope, worker.id);
+    const provision = built.sandbox.provision.bind(built.sandbox);
+    t.mock
+      .method(built.sandbox, "provision")
+      .mock.mockImplementationOnce((...args) =>
+        resources.setDefault("U-carol", scope, worker.id).then(() => provision(...args)),
+      );
     try {
+      assert.match(((await (await send(true)).json()) as any).message, /plan\.md \(not found\)/);
       const botDefault = await send(true);
       assert.equal(botDefault.status, 403);
       assert.equal(((await botDefault.json()) as any).error, "forbidden");

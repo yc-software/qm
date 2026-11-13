@@ -37,6 +37,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
@@ -672,6 +673,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
+      runs: liveRunStore(built.runs),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -1022,15 +1024,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
       assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
-    const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
     for (const [path, body] of [
       ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
       ["/v1/keychain/grants", { ask: "anything", mode: "once", purpose: "x" }],
       ["/v1/keychain/asks/anything/decline", {}],
     ] as const) {
       const res = await post(path, body, liveOwner);
-      assert.equal(res.status, 403, path);
-      assert.deepEqual(await res.json(), unknown, path);
+      assert.equal(res.status, 404, path);
     }
     const send = await post(
       "/v1/keychain/asks",
@@ -1182,7 +1182,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       const threadRef = `dm:U_ALICE-cron-${mode}`;
       const personal = scopeId("personal", "U_ALICE");
       const token = await capFor("U_ALICE", personal, { triggered: true, threadRef });
-      const live = await capFor("U_ALICE", personal, { liveActor: true });
+      const live = await capFor("U_ALICE", personal, liveRunClaims("U_ALICE"));
       const { credential } = (await (
         await post(
           "/v1/keychain/credentials",
@@ -1350,4 +1350,8 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
   const fired = extractToken(mark);
   assert.ok(fired);
   assert.equal(fired!.triggered, true, "a trigger-fired turn's token says so — consent routes refuse it");
+  mark = fakeSprites.execScripts().length;
+  const unproven = { ...turn(false), spawned: true, sessionSenderId: "gone", delegatingRunId: "gone" } as TurnRequest;
+  assert.equal((await built.app.turn(unproven)).status, "ok");
+  assert.equal(extractToken(mark)!.triggered, true, "a session turn whose delegation can't be proven runs unattended");
 });

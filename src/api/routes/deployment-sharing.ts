@@ -1,21 +1,23 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
+import { canEditAppPermissions } from "../../deploy/app-access.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { deploymentView, type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, livePersonTurn } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { personAtKeyboard, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 
 async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability, actor } = ctx;
   const principalId = capability ? capability.actorId : actor?.p;
-  if (!principalId || (capability && !personAtKeyboard(capability)))
+  if (!principalId)
     return sendJson(res, 403, {
       error: "forbidden",
       message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
     });
+  if (!(await livePersonTurn(ctx))) return;
   const connectors = (body as { connectors?: unknown }).connectors;
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
@@ -50,7 +52,7 @@ export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 403, { error: "forbidden" });
   const deployment = await app.getDeployment(params.id!);
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (deployment.ownerScopeId !== `personal:${principalId}`)
+  if (!canEditAppPermissions(deployment.ownerScopeId, principalId))
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
   return sendJson(res, 200, {
