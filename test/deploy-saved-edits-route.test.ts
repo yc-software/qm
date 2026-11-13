@@ -44,6 +44,7 @@ describe("deployment view with saved edits", () => {
       appGitPermissionFor: async (_id: string, who: { actorId: string }) =>
         who.actorId === "owner" ? "write" : "read",
       appGitUrlFor: async () => null,
+      appUrl: () => undefined,
       appLiveEdit: async () => ({
         draft: {
           deploymentId: "d1",
