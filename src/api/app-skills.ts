@@ -275,12 +275,12 @@ export function createSkillMethods(
       );
       return deps.skills.visibleFor(ordered, granted);
     },
-    canManageSkill(skill, principalId, ownScopeBotWork) {
-      return canManageSkill(skill, principalId, ownScopeBotWork);
+    canManageSkill(skill, principalId, botWork) {
+      return canManageSkill(skill, principalId, botWork);
     },
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || !(await canManageSkill(skill, principalId, opts?.ownScopeBotWork === true))) return null;
+      if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -304,11 +304,7 @@ export function createSkillMethods(
     },
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
-      if (
-        !skill ||
-        skill.status !== "archived" ||
-        !(await canManageSkill(skill, principalId, opts?.ownScopeBotWork === true))
-      )
+      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId, opts?.botActor === true)))
         return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
@@ -451,10 +447,10 @@ export function createSkillMethods(
         return published;
       });
     },
-    async deleteOwnedSkill({ principalId, id, liveActor, ownScopeBotWork }) {
+    async deleteOwnedSkill({ principalId, id, liveActor, botActor }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
-      if (!(await canManageSkill(skill, principalId, ownScopeBotWork === true))) return "forbidden";
+      if (!(await canManageSkill(skill, principalId, botActor === true))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);
       h.recordAudit({

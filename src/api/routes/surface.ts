@@ -947,7 +947,7 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
       grantedCapabilities: skill.grantedCapabilities,
       createdAt: skill.createdAt,
       updatedAt: skill.updatedAt,
-      editable: await app.canManageSkill(skill, principalId, ownScopeBotWork),
+      editable: await app.canManageSkill(skill, principalId, capability?.botActor === true),
     },
   });
 }
@@ -963,7 +963,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   const liveActor = ctx.capability ? personAtKeyboard(ctx.capability) : true;
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
     liveActor,
-    ownScopeBotWork: isOwnScopeBotWork(ctx.capability),
+    botActor: ctx.capability?.botActor === true,
   });
   if (restored === "trigger_blocked")
     return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1007,7 +1007,7 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   const liveActor = capability ? personAtKeyboard(capability) : true;
   const updated = await app.updateOwnedSkill(id, principalId, patch, {
     liveActor,
-    ownScopeBotWork: isOwnScopeBotWork(capability),
+    botActor: capability?.botActor === true,
   });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1043,7 +1043,7 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     principalId,
     id,
     liveActor,
-    ownScopeBotWork: isOwnScopeBotWork(capability),
+    botActor: capability?.botActor === true,
   });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
@@ -1095,7 +1095,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
     });
   }
-  if (homeScope && !loadsScopeContext(principalId, homeScope, isOwnScopeBotWork(capability))) {
+  if (homeScope && !loadsScopeContext(principalId, homeScope, capability?.botActor === true)) {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "a Slack bot's work cannot add skills to a person's own library",
@@ -1453,7 +1453,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   try {
     const version = await app.updateSoul(scopeIdVal, content, actorId, {
       ...(allowSharedScope ? { allowSharedScope: true } : {}),
-      ownScopeBotWork: isOwnScopeBotWork(capability),
+      botActor: capability?.botActor === true,
     });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {

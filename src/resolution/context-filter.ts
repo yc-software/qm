@@ -2,8 +2,8 @@ import type { Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { attestableAudience } from "../directory/person.ts";
 
-export function loadsScopeContext(actorId: string, scope: ScopeId, ownScopeBotWork: boolean): boolean {
-  return !ownScopeBotWork || !attestableAudience(actorId, scope);
+export function loadsScopeContext(actorId: string, scope: ScopeId, botWork: boolean): boolean {
+  return !botWork || !attestableAudience(actorId, scope);
 }
 
 export function isOwnScopeBotWork(

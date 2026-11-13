@@ -635,10 +635,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function canManageSkill(
     skill: Pick<Skill, "scopeId" | "createdBy">,
     principalId: string,
-    ownScopeBotWork: boolean,
+    botWork: boolean,
   ): Promise<boolean> {
     return (
-      loadsScopeContext(principalId, skill.scopeId, ownScopeBotWork) &&
+      loadsScopeContext(principalId, skill.scopeId, botWork) &&
       principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)
     );
   }

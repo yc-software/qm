@@ -69,7 +69,8 @@ export function createResolutionService(
         : [orgScope, ...((isDm ? actor.teamIds : conversation.teamIds) ?? []).map((tid) => scopeId("team", tid))];
 
       const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
-      const scopeSoul = external || ownScopeBotWork ? null : config.getSoul(scope);
+      const soulScopeId = external || ownScopeBotWork ? undefined : scope;
+      const scopeSoul = soulScopeId ? config.getSoul(soulScopeId) : null;
       const systemPrompt = composeSoul(orgSoul, scopeSoul);
 
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
@@ -102,6 +103,7 @@ export function createResolutionService(
         orgScopeId: orgScope,
         grantedHandles,
         ...(scopeSoul?.trim() ? { guidance: scopeSoul } : {}),
+        ...(soulScopeId ? { soulScopeId } : {}),
       };
     },
   };

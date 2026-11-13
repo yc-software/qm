@@ -1348,7 +1348,7 @@ export function createSessionMethods(
       const allowedPersonal =
         kind === "personal" &&
         samePerson(ref, actorId) &&
-        loadsScopeContext(actorId, scopeIdValue, opts?.ownScopeBotWork === true);
+        loadsScopeContext(actorId, scopeIdValue, opts?.botActor === true);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();

@@ -169,6 +169,8 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     assert.equal(await b.turn("!read shared/org.txt", false, "U1", bot), "GRANTED_org.txt");
     assert.match(await b.turn("!skill own-helper", false, "U1", bot), /no skill file/);
     assert.match(await b.turn(`!attach file_id:${ownFile}`, false, "U1", bot), /not found/);
+    await b.config.setSoul("personal:U1", `OWN_SOUL_U1\nEDIT_${origin.kind}`);
+    assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", bot), /EDIT_/);
   }
   await b.directory.replace(
     ["U1", "U2", "U3"].map((principalId) => ({ principalId, displayName: principalId, type: "internal" })),

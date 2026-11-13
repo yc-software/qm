@@ -413,16 +413,22 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       [403, 403, 404, 403],
     );
     await built.app.deleteOwnedSkill({ principalId: "U5", id: mySkill });
-    assert.equal((await post(`/v1/skills/${mySkill}/restore`, {}, bot)).status, 404);
+    const room = scopeId("channel", "C");
+    const roomBot = { "x-agent-capability": await capChannel("U5", { botActor: true }) };
+    for (const caller of [bot, roomBot])
+      assert.equal((await post(`/v1/skills/${mySkill}/restore`, {}, caller)).status, 404);
     assert.equal(built.config.getSoul(own), "U5 private instruction.");
-    const shared = async (from: string) => {
+    const shared = async (from: string, to = room, type: "file" | "skill" = "file", id = mine) => {
       const share = await createControlService(built.app).shareArtifact(
-        { type: "file", id: mine, scope: scopeId("channel", "C") },
+        { type, id, scope: to },
         { actorId: "U5", scopeId: from, botActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
       );
       return share.ok ? "shared" : share.code;
     };
-    assert.deepEqual([await shared(own), await shared(scopeId("channel", "C"))], ["forbidden", "shared"]);
+    assert.deepEqual(
+      [await shared(own), await shared(room), await shared(room, own), await shared(room, room, "skill", mySkill)],
+      ["forbidden", "shared", "forbidden", "forbidden"],
+    );
   });
 
   it("rejects an invalid/expired token with 401", async () => {

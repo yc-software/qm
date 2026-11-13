@@ -774,7 +774,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,
-          ownScopeBotWork: isOwnScopeBotWork(capability),
+          botActor: capability.botActor === true,
           expectedVersion,
           sessionId: capability.sessionId,
         });
@@ -801,10 +801,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
               ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
         };
-      if (
-        (req.type === "file" || req.type === "skill") &&
-        !loadsScopeContext(capability.actorId, home.ownerScopeId, isOwnScopeBotWork(capability))
-      )
+      const sourceWithheld =
+        req.type === "skill" ? capability.botActor === true : req.type === "file" && isOwnScopeBotWork(capability);
+      if (!loadsScopeContext(capability.actorId, home.ownerScopeId, sourceWithheld))
         return {
           ok: false,
           code: "forbidden",
@@ -823,6 +822,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           candidates: target.candidates,
         };
       const toScope = target.scope;
+      if (!loadsScopeContext(capability.actorId, toScope, capability.botActor === true))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move anything into a person's own library",
+        };
       const toKind = parseScopeId(toScope).kind;
 
       const isOrg = toKind === "org";

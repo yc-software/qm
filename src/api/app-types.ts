@@ -506,7 +506,7 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean; ownScopeBotWork?: boolean; expectedVersion?: number; sessionId?: string },
+    opts?: { allowSharedScope?: boolean; botActor?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
@@ -621,17 +621,17 @@ export interface App {
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
   listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
-  canManageSkill(skill: Skill, principalId: string, ownScopeBotWork: boolean): Promise<boolean>;
+  canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   updateOwnedSkill(
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean; ownScopeBotWork?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean; ownScopeBotWork?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
@@ -653,7 +653,7 @@ export interface App {
     principalId: string;
     id: string;
     liveActor?: boolean;
-    ownScopeBotWork?: boolean;
+    botActor?: boolean;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackApp(id: string, version: number, actor?: string): Promise<void>;
   archiveApp(id: string): Promise<void>;
