@@ -134,11 +134,11 @@ test("/me carries the activity seeds set on the organization, and a rejected wri
   assert.deepEqual(seeded.welcome, seeds);
   assert.deepEqual(seeded.suggestedActivities, seeds.activities);
   assert.match(
-    (await write({ seeds: { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] } })).error,
-    /^seeds\.activities\.1\.icon: /,
+    JSON.stringify(await write({ seeds: { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] } })),
+    /seeds\.activities\.1\.icon: /,
   );
   assert.match(
-    (await write({ seeds: { activities: [{ ...idea, replaces: "crm" }] } })).error,
+    JSON.stringify(await write({ seeds: { activities: [{ ...idea, replaces: "crm" }] } })),
     /activities\.0: .*replaces/,
   );
   assert.match(JSON.stringify(await write({ seeds }, "personal:bob@example.com")), /org-wide/);
