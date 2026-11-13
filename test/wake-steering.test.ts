@@ -1149,6 +1149,17 @@ test("a refused Steer or a voice remark leaves a bot's turn running", async () =
   assert.deepEqual(await built.signals.takePending(run.id), [], "nothing stopped the bot's turn");
 });
 
+test("a person's Steer stays queued when the bot's turn fails to stop", async () => {
+  const built = freshApp();
+  const { run } = await automationWakeRun(built, "web:U1:bot-stuck", "openai", true);
+  assert.ok(await built.runs.claimById(run.id, "worker", 30_000));
+  built.signals.send = async () => {
+    throw new Error("signal write failed");
+  };
+  const typed = await built.app.turn(web("set Beta as the default", "web:U1:bot-stuck", "steer"));
+  assert.equal((await built.runs.get(typed.runId!))?.status, "pending", "the person's message runs next");
+});
+
 test("signalRun: sending a queued bare stop now stops the live run and spends the queued row", async () => {
   const built = freshApp();
   const threadRef = "web:U1:queued-stop";

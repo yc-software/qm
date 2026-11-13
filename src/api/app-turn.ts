@@ -509,7 +509,10 @@ export function createTurnMethods(
           maxAttempts: deps.maxAttempts,
           ...(dedupKey ? { dedupKey } : {}),
         });
-        if (botTurn) await stopRun(botTurn, false, true);
+        if (botTurn)
+          await stopRun(botTurn, false, true).catch(
+            swallowAs("turn: stop the bot's turn behind a queued Steer", false),
+          );
         return queued;
       });
       if (!enqueued) return { status: "refused", reason: "project membership changed; retry from the current project" };
@@ -793,9 +796,8 @@ export function createTurnMethods(
           midTurn: route.reason === "bot-turn" && !signal.remark ? "steer" : "queue",
           async: true,
         });
-        return own.runId
-          ? { accepted: true, queuedRunId: own.runId }
-          : { accepted: false, reason: own.reason ?? own.status };
+        if (!own.runId) return { accepted: false, reason: own.reason ?? own.status };
+        return own.steered ? { accepted: true } : { accepted: true, queuedRunId: own.runId };
       }
       const outbound = {
         ...signal,
