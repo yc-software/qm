@@ -128,6 +128,8 @@ test("/me carries the activity seeds set on the organization, and a rejected wri
   const write = (body: unknown, scope: string = orgScope()) =>
     resource.apply({ body, deps: { config: built.config } } as never, { id: "admin" }, scope);
   assert.deepEqual(await write({ seeds }), { ok: true });
+  assert.deepEqual(await me(cookie), before);
+  await built.featureFlags.setEnabled("company_welcome", orgScope() as ScopeId, true, "test");
   const seeded = await me(cookie);
   assert.deepEqual(seeded.welcome, seeds);
   assert.deepEqual(seeded.suggestedActivities, seeds.activities);
@@ -141,4 +143,5 @@ test("/me carries the activity seeds set on the organization, and a rejected wri
   assert.deepEqual((await me(cookie)).welcome, seeds);
   assert.deepEqual(await write({ seeds: null }), { ok: true });
   assert.equal("welcome" in (await me(cookie)), false);
+  await built.featureFlags.setEnabled("company_welcome", orgScope() as ScopeId, false, "test");
 });

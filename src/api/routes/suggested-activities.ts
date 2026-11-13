@@ -34,7 +34,7 @@ export const suggestedActivityRoutes: Route[] = [
       return sendJson(
         res,
         200,
-        await deps.suggestedActivities.get(body.principalId, seedActivities(deps), {
+        await deps.suggestedActivities.get(body.principalId, await seedActivities(deps, body.principalId), {
           timezone,
           poll: body.poll === true,
           refresh: body.refresh === true,

@@ -7,6 +7,7 @@ import {
   type SuggestedActivity,
 } from "../../../plugins/chassis/src/suggested-activities.ts";
 import { orgId } from "../../config.ts";
+import { scopeId } from "../../types.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
@@ -35,12 +36,13 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
   };
 }
 
-function companyActivitySeeds(deps: ApiCtx["deps"]): ActivitySeeds | undefined {
+async function companyActivitySeeds(deps: ApiCtx["deps"], person: string): Promise<ActivitySeeds | undefined> {
+  if (!(await deps.featureFlags?.enabled("company_welcome", scopeId("personal", person)))) return undefined;
   return deps.config?.getActivitySeeds(orgScope(deps)) ?? undefined;
 }
 
-export function seedActivities(deps: ApiCtx["deps"]): SuggestedActivity[] {
-  return companyActivitySeeds(deps)?.activities ?? deps.web?.me.suggestedActivities ?? [];
+export async function seedActivities(deps: ApiCtx["deps"], person: string): Promise<SuggestedActivity[]> {
+  return (await companyActivitySeeds(deps, person))?.activities ?? deps.web?.me.suggestedActivities ?? [];
 }
 
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
@@ -72,8 +74,8 @@ async function me(ctx: ApiCtx): Promise<void> {
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
   ]);
   const generated = Boolean(deps.suggestedActivities);
-  const seeds = companyActivitySeeds(deps);
-  const fallback = seedActivities(deps);
+  const seeds = await companyActivitySeeds(deps, user);
+  const fallback = seeds?.activities ?? config.suggestedActivities;
   return sendJson(res, 200, {
     user,
     org: orgId(),
