@@ -11,6 +11,8 @@ import { parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
 import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
+import { activeRun } from "./composio.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
@@ -193,7 +195,10 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
   return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
 }, true);
 
-const deleteCredential = keychainRoute(async ({ res, deps, tenant, params }, kc, { actorId, scopeId }) => {
+const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
+  const { res, deps, tenant, params, capability } = ctx;
+  if (capability && !personAtKeyboard(capability)) return sendJson(res, 403, { error: "human_consent_required" });
+  if (!(await activeRun(ctx))) return;
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
   if (ok)
@@ -208,7 +213,10 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   return sendJson(res, 200, { grants: [...byId.values()] });
 });
 
-const revokeGrant = keychainRoute(async ({ res, deps, tenant, params }, kc, { actorId, scopeId }) => {
+const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
+  const { res, deps, tenant, params, capability } = ctx;
+  if (capability && !personAtKeyboard(capability)) return sendJson(res, 403, { error: "human_consent_required" });
+  if (!(await activeRun(ctx))) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
   if (ok)
