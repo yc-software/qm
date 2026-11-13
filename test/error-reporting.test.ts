@@ -4,27 +4,25 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { traceStatus } from "../plugins/chassis/src/timing.ts";
+import { readEnvelope, segments, type SentSpan } from "./support/sentry-spans.ts";
 
 async function runReporting(body: string, enabled = true, env: Record<string, string> = {}) {
   const events: Record<string, any>[] = [];
-  const transactions: Record<string, any>[] = [];
-  const headers: Record<string, any>[] = [];
+  const spans: SentSpan[] = [];
+  const envelopes: ReturnType<typeof readEnvelope>[] = [];
   const outbound: Record<string, unknown>[] = [];
   const collector = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
-    const lines = Buffer.concat(chunks).toString().split("\n");
     if (req.url?.includes("outbound")) {
       outbound.push(req.headers);
       res.end("{}");
       return;
     }
-    if (lines[0]) headers.push(JSON.parse(lines[0]));
-    for (let i = 1; i + 1 < lines.length; i += 2) {
-      const type = JSON.parse(lines[i]!).type;
-      if (type === "event") events.push(JSON.parse(lines[i + 1]!));
-      if (type === "transaction") transactions.push(JSON.parse(lines[i + 1]!));
-    }
+    const envelope = readEnvelope(Buffer.concat(chunks), req.headers["content-encoding"] === "gzip");
+    if (envelope.header) envelopes.push(envelope);
+    events.push(...envelope.events);
+    spans.push(...envelope.spans);
     res.end("{}");
   });
   collector.listen(0, "127.0.0.1");
@@ -68,7 +66,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
   const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
   try {
     const [code, signal] = await once(child, "exit");
-    return { events, transactions, headers, outbound, code, signal, output, errors };
+    return { events, spans, segments: segments(spans), envelopes, outbound, code, signal, output, errors };
   } finally {
     clearTimeout(timeout);
     collector.closeAllConnections();
@@ -288,12 +286,12 @@ test("tracing is off unless a valid sample rate is configured; errors still repo
   >[]) {
     const run = await runReporting(TRACED_REQUESTS, true, env);
     assert.equal(run.code, 0);
-    assert.equal(run.transactions.length, 0);
+    assert.equal(run.spans.length, 0);
     assert.equal(run.events.length, 3);
   }
 });
 
-test("sampled requests and queued runs become scrubbed, connected transactions", async () => {
+test("sampled requests and queued runs become scrubbed, connected segments", async () => {
   const on = await runReporting(TRACED_REQUESTS, true, { SENTRY_TRACES_SAMPLE_RATE: "1" });
   assert.equal(on.code, 0);
   assert.equal(on.events.length, 3);
@@ -303,10 +301,7 @@ test("sampled requests and queued runs become scrubbed, connected transactions",
     "a run queued by an unsampled request carries the negative decision",
   );
   assert.ok(
-    on.transactions.every(
-      (event) =>
-        event.transaction !== "declined-run" && event.contexts.trace.trace_id !== "fedcba9876543210fedcba9876543210",
-    ),
+    on.spans.every((sent) => sent.name !== "declined-run" && sent.trace_id !== "fedcba9876543210fedcba9876543210"),
     "a run queued by an unsampled request is not resampled",
   );
   const forgedCarrier = /forged-carrier (.*)/.exec(on.output)?.[1];
@@ -314,52 +309,45 @@ test("sampled requests and queued runs become scrubbed, connected transactions",
   assert.doesNotMatch(forgedCarrier, /private/);
   assert.deepEqual(Object.keys(JSON.parse(forgedCarrier)), ["sentryTrace"]);
   assert.match(forgedCarrier, /"sentryTrace":"0123456789abcdef0123456789abcdef-/);
-  assert.doesNotMatch(JSON.stringify(on.transactions), /private/);
-  assert.doesNotMatch(JSON.stringify(on.headers), /private/);
-  const items = new Map([...on.events, ...on.transactions].map((item) => [item.event_id, item]));
-  const traced = on.headers.filter((h) => h.trace);
-  assert.ok(traced.length >= on.events.length + on.transactions.length, "every envelope carries a trace header");
-  for (const header of traced) {
-    const item = items.get(header.event_id);
-    assert.equal(header.trace.trace_id, item?.contexts.trace.trace_id, "the envelope trace header matches its event");
-    assert.equal(header.trace.release, "test-release");
+  assert.doesNotMatch(JSON.stringify(on.spans), /private/);
+  assert.doesNotMatch(JSON.stringify(on.envelopes.map((envelope) => envelope.header)), /private/);
+  const carrying = on.envelopes.filter((envelope) => envelope.events.length || envelope.spans.length);
+  assert.ok(
+    carrying.some((envelope) => envelope.spans.length),
+    "spans arrive in envelopes of their own",
+  );
+  for (const { header, events, spans } of carrying) {
+    const sent = events[0]?.contexts.trace.trace_id ?? spans[0]?.trace_id;
+    assert.equal(header!.trace?.trace_id, sent, "every envelope's trace header matches what it carries");
+    assert.equal(header!.trace.release, "test-release");
   }
   const handlerError = on.events.find((event) => event.exception.values[0].value === "handler-error");
   assert.equal(handlerError?.transaction, "GET /v1/things/:id", "errors inside a request carry the route template");
   assert.deepEqual(
-    on.transactions.filter((event) => ["db", "http.client"].includes(event.contexts.trace.op)),
-    [],
-    "detached and unparented work is not sent as its own transaction",
+    on.segments.map((sent) => sent.name).sort(),
+    ["GET /v1/things/:id", "GET /v1/things/:id", "run", "stopped-run"],
+    "detached and unparented work is never a segment of its own",
   );
-  const names = on.transactions.map((event) => event.transaction);
-  assert.deepEqual(names.sort(), ["GET /v1/things/:id", "GET /v1/things/:id", "run", "stopped-run"].sort());
-  assert.equal(
-    on.transactions.find((event) => event.transaction === "stopped-run")?.contexts.trace.status,
-    "cancelled",
-  );
-  const [request] = on.transactions.filter(
-    (event) => event.transaction === "GET /v1/things/:id" && event.contexts.trace.op === "http.server",
-  );
+  assert.equal(on.segments.find((sent) => sent.name === "stopped-run")?.attributes["qm.cancelled"], true);
+  const [request] = on.segments.filter((sent) => sent.name === "GET /v1/things/:id");
   assert.ok(request, "the routed request is named by its template");
-  assert.equal(request.contexts.trace.data["http.route"], "/v1/things/:id");
-  assert.equal(request.request, undefined);
-  const outbound = request.spans.find((span: { op: string }) => span.op === "http.client");
-  assert.match(outbound.description, /^GET http:\/\/127\.0\.0\.1:\d+$/);
-  const run = on.transactions.find((event) => event.transaction === "run")!;
-  assert.equal(run.contexts.trace.op, "queue.process");
-  assert.equal(run.contexts.trace.trace_id, request.contexts.trace.trace_id, "the run continues the request's trace");
-  assert.equal(run.contexts.trace.data["messaging.message.id"], "run-1");
-  assert.equal(run.contexts.trace.data["qm.surface"], "web");
-  assert.equal(run.measurements.time_to_first_token.unit, "millisecond");
-  assert.ok(run.measurements.time_to_first_token.value >= 15);
-  assert.deepEqual(run.tags, {
+  assert.equal(request.op, "http.server");
+  assert.equal(request.attributes["http.route"], "/v1/things/:id");
+  const outbound = request.spans.find((span) => span.op === "http.client")!;
+  assert.match(outbound.name, /^GET http:\/\/127\.0\.0\.1:\d+$/);
+  const run = on.segments.find((sent) => sent.name === "run")!;
+  assert.equal(run.op, "queue.process");
+  assert.equal(run.trace_id, request.trace_id, "the run continues the request's trace");
+  assert.ok(run.attributes.time_to_first_text >= 15);
+  for (const [key, value] of Object.entries({
     service: "test",
     deployment: "test-deployment",
     "messaging.message.id": "run-1",
     "qm.surface": "web",
-  });
-  assert.equal(run.release, "test-release");
-  assert.equal(run.environment, "verification");
+    "sentry.release": "test-release",
+    "sentry.environment": "verification",
+  }))
+    assert.equal(run.attributes[key], value, key);
 });
 
 test("trace context goes only to QM's own services", async () => {
@@ -444,17 +432,17 @@ test("human turns are always traced while other runs follow the configured rate"
     { SENTRY_TRACES_SAMPLE_RATE: "0.000001" },
   );
   assert.equal(sampled.code, 0);
-  const names = sampled.transactions.map((event) => event.transaction);
+  const names = sampled.segments.map((sent) => sent.name);
   assert.equal(names.filter((name) => name === "human-run").length, 20);
   assert.ok(names.includes("human-after-unsampled-request"));
   assert.deepEqual(
     names.filter((name) => !name.startsWith("human-")),
     [],
-    "automation, direct and request transactions keep the configured rate and inherited decisions",
+    "automation, direct and request segments keep the configured rate and inherited decisions",
   );
-  const human = sampled.transactions.find((event) => event.transaction === "human-run")!;
-  assert.equal(human.contexts.trace.data["sentry.sample_rate"], 1);
-  assert.equal(human.tags["qm.origin"], "human");
-  assert.equal(human.tags["qm.surface"], "slack");
-  assert.match(human.tags["messaging.message.id"], /^run-\d+$/);
+  const human = sampled.segments.find((sent) => sent.name === "human-run")!;
+  assert.equal(human.attributes["sentry.sample_rate"], 1);
+  assert.equal(human.attributes["qm.origin"], "human");
+  assert.equal(human.attributes["qm.surface"], "slack");
+  assert.match(human.attributes["messaging.message.id"], /^run-\d+$/);
 });

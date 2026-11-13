@@ -1,5 +1,6 @@
 import type { PgPool, PoolClient } from "./pg-pool.ts";
 import { swallow } from "../util/errors.ts";
+import { tracePoolCheckout } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface LeaderLease {
   hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
@@ -41,7 +42,8 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
     if (!conn) {
       const entry: Conn = { cp: undefined as unknown as Promise<PoolClient>, onError: () => {}, lost: new Set() };
       entry.cp = (async () => {
-        const c = await (await pg.sessionPool()).connect();
+        const pool = await pg.sessionPool();
+        const c = await tracePoolCheckout(() => pool.connect());
         entry.onError = (e: unknown) => {
           swallow("leader-lease: lock connection died (its locks auto-released)", e);
           drop(entry, c, true);

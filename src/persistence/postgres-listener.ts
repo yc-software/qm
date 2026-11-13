@@ -1,5 +1,6 @@
 import { createPgPool, type PoolClient } from "./pg-pool.ts";
 import { swallow } from "../util/errors.ts";
+import { tracePoolCheckout } from "../../plugins/chassis/src/error-reporting.ts";
 
 type Subscription = { channel: string; receive: (payload: string) => void; resync: () => void };
 const listeners = new Map<string, ReturnType<typeof createListener>>();
@@ -46,7 +47,8 @@ function createListener(connectionString: string) {
       return;
     }
     if (!client) {
-      const acquired = await (await pg.sessionPool()).connect();
+      const pool = await pg.sessionPool();
+      const acquired = await tracePoolCheckout(() => pool.connect());
       if (closed) {
         acquired.release(true);
         return;

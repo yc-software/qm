@@ -6,35 +6,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createServer } from "node:http";
-import { once } from "node:events";
 import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { withTraceCarrier } from "../src/runs/run-store.ts";
+import { collectSpans, segments } from "./support/sentry-spans.ts";
 
-const captured: Record<string, any>[] = [];
-const collector = createServer(async (req, res) => {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const lines = Buffer.concat(chunks).toString().split("\n");
-  for (let i = 1; i + 1 < lines.length; i += 2) {
-    if (JSON.parse(lines[i]!).type === "transaction") captured.push(JSON.parse(lines[i + 1]!));
-  }
-  res.end("{}");
-});
-collector.listen(0, "127.0.0.1");
-await once(collector, "listening");
-initializeErrorReporting(Sentry, "core", {
-  SENTRY_DSN: `http://public@127.0.0.1:${(collector.address() as AddressInfo).port}/1`,
-  SENTRY_TRACES_SAMPLE_RATE: "1",
-});
-after(async () => {
-  collector.closeAllConnections();
-  await new Promise<void>((resolve) => collector.close(() => resolve()));
-});
+const sentry = await collectSpans();
+initializeErrorReporting(Sentry, "core", { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
+after(() => sentry.close());
 
 async function settle(predicate: () => boolean): Promise<void> {
   for (let i = 0; i < 60 && !predicate(); i++) {
@@ -55,21 +37,18 @@ test("core requests are named by route template and carry no URL, query or heade
     });
     await fetch(`${base}/v1/no-such-route/private-segment-9f3a/deep`, { method: "POST" });
     const coreRequests = () =>
-      captured.filter(
-        (event) => event.contexts?.trace?.op === "http.server" && event.contexts.trace.data["http.route"] !== undefined,
-      );
+      segments(sentry.spans).filter((sent) => sent.op === "http.server" && sent.attributes["http.route"] !== undefined);
     await settle(() => coreRequests().length >= 2);
     const requests = coreRequests();
     assert.deepEqual(
-      requests.map((event) => event.transaction),
+      requests.map((sent) => sent.name),
       ["GET /v1/sessions/:id"],
       "health checks and 404s are not traced",
     );
     assert.doesNotMatch(JSON.stringify(requests), /private/);
-    for (const event of requests) {
-      assert.equal(event.tags?.service, "core");
-      assert.equal(event.request, undefined);
-      assert.match(event.contexts.trace.trace_id, /^[a-f0-9]{32}$/);
+    for (const sent of requests) {
+      assert.equal(sent.attributes.service, "core");
+      assert.match(sent.trace_id, /^[a-f0-9]{32}$/);
     }
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
