@@ -1059,8 +1059,11 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
           ariaLabel: "Default model",
           value: state.model,
           options: [
-            html`<option value="">Same as the conversation's default</option>`,
-            ...state.models.map((option) => html`<option value=${option.value}>${option.label}</option>`),
+            html`<option value="" ?selected=${!state.model}>Same as the conversation's default</option>`,
+            ...state.models.map(
+              (option) =>
+                html`<option value=${option.value} ?selected=${option.value === state.model}>${option.label}</option>`,
+            ),
           ],
           onChange: (value) => {
             state.model = value;

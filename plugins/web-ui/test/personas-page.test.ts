@@ -122,9 +122,10 @@ const { vite, dom, close } = await browserEnv({
         session: { id: "s-new", type: "dm", scopeId: "personal:tester", threadRef: "web:tester:new", createdAt: 1 },
         items: [],
       });
-    if (path.startsWith("/api/runtime-config"))
+    if (path.startsWith("/api/runtime-config")) {
+      const scopeId = new URL(path, "http://localhost").searchParams.get("scopeId") ?? "personal:tester";
       return json({
-        scopeId: new URL(path, "http://localhost").searchParams.get("scopeId") ?? "personal:tester",
+        scopeId,
         models: ["alpha"],
         modelCatalog: {
           alpha: {
@@ -143,8 +144,9 @@ const { vite, dom, close } = await browserEnv({
         },
         orgDefault: { modelId: null, revision: 0 },
         effective: {},
-        scopeOverride: null,
+        scopeOverride: scopeId.startsWith("persona:") ? { modelId: "alpha" } : null,
       });
+    }
     return json({});
   },
 });
@@ -581,7 +583,7 @@ test("an owner changes a person's role and removes them from the row, keeping an
   );
 });
 
-test("an editor picks the persona's default model, and Save stores it on the persona's scope", async () => {
+test("the editor opens on the persona's saved default model, and Save stores a change on the persona's scope", async () => {
   const { main } = await mountPage();
   button(main, "Edit", "Bo").click();
   await settle();
@@ -591,14 +593,15 @@ test("an editor picks the persona's default model, and Save stores it on the per
     [...select.options].map((o) => o.value),
     ["", "alpha"],
   );
-  select.value = "alpha";
+  assert.equal(select.value, "alpha");
+  select.value = "";
   select.dispatchEvent(new window.Event("change"));
   await settle();
   calls = [];
   form.dispatchEvent(new window.Event("submit", { cancelable: true }));
   await settle();
   const put = calls.find((c) => c.method === "PUT" && c.path === "/api/runtime-config");
-  assert.deepEqual(put?.body, { modelId: "alpha", scopeId: "persona:p-bo" });
+  assert.deepEqual(put?.body, { inherit: true, scopeId: "persona:p-bo" });
 });
 
 test("a search answered after the query changed shows nothing for the old query", async () => {
