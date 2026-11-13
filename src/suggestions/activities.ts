@@ -49,7 +49,7 @@ const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
   store: DurableMap<SuggestedActivityProfile>;
-  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get" | "personHasSessions">;
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get" | "personHasAuthoredTurns">;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
   enabled: boolean;
@@ -118,7 +118,7 @@ export function createSuggestedActivityService(deps: {
       new Intl.DateTimeFormat("en-US", { timeZone: timezone });
       let profile = await deps.store.get(principalId);
       if (!profile) {
-        if (!(await deps.sessions.personHasSessions(personIds(principalId)))) return ungenerated;
+        if (!(await deps.sessions.personHasAuthoredTurns(personIds(principalId)))) return ungenerated;
         profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
       }
       const seen = poll ? {} : { lastSeenAt: now() };
