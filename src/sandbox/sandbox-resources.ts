@@ -73,9 +73,7 @@ export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
       WITH tool_sets AS MATERIALIZED (
         SELECT c.tenant_id, c.session_id, ${msOf("res.created_at")} AS at, c.body ->> 'sandbox_id' AS sandbox_id,
                r.id AS run_id, r.session_id AS thread_ref,
-               CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb ->> 'botActor' = 'true'
-                 AND NOT EXISTS (SELECT 1 FROM items m WHERE m.tenant_id = c.tenant_id AND m.turn_id = c.turn_id
-                                    AND m.kind = 'SteeringMessage' AND m.seq < c.seq) END AS bot
+               CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb ->> 'botActor' = 'true' END AS bot
           FROM items c
           JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
                         AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
