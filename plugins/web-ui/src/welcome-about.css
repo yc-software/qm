@@ -10,7 +10,6 @@
   line-height: 1.4;
 }
 .welcome-about {
-  --orange: #f26522;
   --ease: cubic-bezier(0.2, 0.75, 0.25, 1);
   --bubble: color-mix(in srgb, var(--foreground) 6%, var(--background));
   max-width: 1040px;
@@ -233,7 +232,7 @@
   gap: 9px;
   padding: 8px 10px;
   border: 1px solid var(--sl-border);
-  border-left: 3px solid var(--orange);
+  border-left: 3px solid var(--primary);
   border-radius: 8px;
   background: var(--sl-card);
   font-size: var(--font-12-5);
@@ -536,7 +535,7 @@
   animation: about-bar 800ms var(--ease) calc(var(--mark) * var(--about-speed) + var(--dl)) both;
 }
 .welcome-about .bars div:first-child i {
-  background: var(--orange);
+  background: var(--primary);
 }
 .welcome-about .app-stats {
   display: grid;
@@ -1187,12 +1186,12 @@
 }
 @keyframes about-flag {
   to {
-    background: color-mix(in srgb, var(--orange) 9%, var(--background));
+    background: color-mix(in srgb, var(--primary) 9%, var(--background));
   }
 }
 @keyframes about-flag-dot {
   to {
-    background: var(--orange);
+    background: var(--primary);
   }
 }
 @keyframes about-done {
@@ -1202,7 +1201,7 @@
 }
 @keyframes about-bug {
   to {
-    color: var(--orange);
+    color: var(--primary);
   }
 }
 @keyframes about-open {
