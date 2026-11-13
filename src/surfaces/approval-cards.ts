@@ -31,10 +31,7 @@ export interface CardButton {
   style?: "primary" | "danger";
 }
 
-export function approvalButtons(
-  p: Pick<PendingApproval, "requestId" | "grantModes">,
-  reviewable: boolean,
-): CardButton[] {
+export function approvalButtons(p: Pick<PendingApproval, "requestId" | "grantModes">, reviewable = true): CardButton[] {
   const allow: CardButton[] = [
     { actionId: "hilo_allow_once", value: p.requestId, label: "Allow once", style: "primary" },
     ...(p.grantModes?.session === false
@@ -45,6 +42,20 @@ export function approvalButtons(
       : [{ actionId: "hilo_allow_always", value: p.requestId, label: "Allow always" }]),
   ];
   return [...(reviewable ? allow : []), { actionId: "hilo_deny", value: p.requestId, label: "Deny", style: "danger" }];
+}
+
+type ReplayedFields = "surface" | "async" | "idempotencyKey" | "redeliveryKey" | "approval";
+
+export function replayableTurn<T extends object>(request: T): Omit<T, ReplayedFields> {
+  const {
+    surface: _surface,
+    async: _async,
+    idempotencyKey: _idempotencyKey,
+    redeliveryKey: _redeliveryKey,
+    approval: _approval,
+    ...turn
+  } = request as T & Partial<Record<ReplayedFields, unknown>>;
+  return turn;
 }
 
 export type ApprovalDecision = "deny" | "once" | "session" | "always";

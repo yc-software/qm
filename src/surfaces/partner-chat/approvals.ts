@@ -19,6 +19,7 @@ import {
   keychainButtons,
   keychainCardWording,
   keychainDecision,
+  replayableTurn,
   toolCallView,
   type ApprovalDecision,
   type CardButton,
@@ -27,9 +28,8 @@ import {
 import type { SurfaceAction } from "../contract.ts";
 import type { PartnerChatClient } from "./client.ts";
 import { editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
-import { parsePartnerChatRef } from "./protocol.ts";
+import { PARTNER_CHAT, parsePartnerChatRef } from "./protocol.ts";
 
-const DETAIL_MAX = 12_000;
 const SUBJECT_MAX = 150;
 
 type ApprovalSubject = Pick<PendingApproval, "command" | "summary" | "kind">;
@@ -75,12 +75,18 @@ function parseAction(id: string): { actionId: string; value: string } | undefine
 }
 
 function inline(text: string): string {
-  return `\`${text.replaceAll("`", "'").replace(/\s+/g, " ")}\``;
+  const line = text
+    .replaceAll("`", "'")
+    .split("\n")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ");
+  return `\`${line}\``;
 }
 
 function block(text: string): string {
-  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length));
-  const fence = "`".repeat(Math.max(3, longest + 1));
+  let fence = "```";
+  while (text.includes(fence)) fence += "`";
   return `${fence}\n${text}\n${fence}`;
 }
 
@@ -106,16 +112,14 @@ function commandApprovalCard(p: PendingApproval): Card {
   const title = toolTitle(p);
   let heading = title ? `🔒 **Approval needed:** ${title}` : "🔒 **Approval needed.**";
   if (p.kind === "input") heading = "🔒 **My security screen flagged part of this message. Allow it?**";
-  const detail = commandDetail(p);
-  const reviewable = detail.length <= DETAIL_MAX;
   const lines = [
     heading,
-    p.summary && !title ? headSlice(p.summary, 400) : "",
-    p.purpose ? `**Why:** ${headSlice(p.purpose, 400)}` : "",
-    reviewable ? detail : "**Command:** too long to show here, so it can only be denied from this chat.",
-    `**Flagged as:** ${headSlice(p.reason, 200)}`,
+    p.summary && !title ? p.summary : "",
+    p.purpose ? `**Why:** ${p.purpose}` : "",
+    commandDetail(p),
+    `**Flagged as:** ${p.reason}`,
   ];
-  return { body: lines.filter(Boolean).join("\n\n"), actions: approvalButtons(p, reviewable).map(surfaceAction) };
+  return { body: lines.filter(Boolean).join("\n\n"), actions: approvalButtons(p).map(surfaceAction) };
 }
 
 function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?: string): string {
@@ -126,7 +130,7 @@ function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?
 
 function keychainCard(view: KeychainApprovalView): Card {
   const { pending, duration, status } = keychainCardWording(view);
-  const summary = `Use your **${headSlice(view.service, 150)}** credential in ${view.conversation}${duration}.`;
+  const summary = `Use your **${view.service}** credential in ${view.conversation}${duration}.`;
   return {
     body: `${pending ? "🔒 **Approval needed.**" : `**${status}**`}\n\n${summary}`,
     actions: pending ? keychainButtons(view.ask).map(surfaceAction) : [],
@@ -137,7 +141,7 @@ export function partnerChatApprovalCardRoute(request: TurnRequest): Destination 
   const ref = request.deliveryTarget ? parsePartnerChatRef(request.deliveryTarget) : null;
   if (!ref || !request.liveReplies || isSystemActor(request.actor.externalId)) return undefined;
   return {
-    type: "partner-chat",
+    type: PARTNER_CHAT,
     target: request.deliveryTarget!,
     account: { id: ref.account, workspace: ref.account },
   };
@@ -193,14 +197,9 @@ export function createPartnerChatApprovals(deps: {
         return settle({ body: `_${APPROVAL_EXPIRED}_`, actions: [] });
       if (!samePerson(request.actor.externalId, click.actor.externalId)) return tell(APPROVAL_REQUESTER_ONLY);
       const decision = approvalDecision(command);
-      const {
-        idempotencyKey: _idempotencyKey,
-        redeliveryKey: _redeliveryKey,
-        approval: _approval,
-        ...replay
-      } = request;
       const queued = await deps.app.turn({
-        ...replay,
+        ...replayableTurn(request),
+        surface: PARTNER_CHAT,
         actor: click.actor,
         approval: {
           requestId: parsed.value,

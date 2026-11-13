@@ -89,6 +89,7 @@ export interface CapabilityClaims {
   triggered?: boolean;
   threadRef?: string;
   surface?: string;
+  liveReplies?: boolean;
   exp: number;
 }
 
@@ -168,6 +169,7 @@ export async function verifyCapabilityToken(
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
+  if (claims.liveReplies !== undefined && typeof claims.liveReplies !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;

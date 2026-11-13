@@ -21,7 +21,7 @@ import {
 import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
 import { createPartnerChatApprovals } from "../src/surfaces/partner-chat/approvals.ts";
 import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
-import { removePartnerChatReaction } from "../src/surfaces/partner-chat/reactions.ts";
+import { setPartnerChatReaction } from "../src/surfaces/partner-chat/reactions.ts";
 import { signPartnerChat, signPartnerChatRequest } from "../src/surfaces/partner-chat/protocol.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -1190,10 +1190,12 @@ test("a react delivery adds the agent's reaction under the chat's own emoji name
     await react("👍🏽");
     const unknown = await react("not_a_real_emoji");
     await settled(async () => (await deliveries.pending("partner-chat")).length === 0);
-    await removePartnerChatReaction(
+    await setPartnerChatReaction(
       createPartnerChatClient({ url: partnerChat.url, secret: SECRET }),
-      { account: "7001", chat: "88", messageId: "1021" },
+      { account: "7001", chat: "88" },
+      "1021",
       ":white_check_mark:",
+      false,
     );
     assert.deepEqual(
       partnerChat.received.map((r) => [r.path, r.body, r.signed]),

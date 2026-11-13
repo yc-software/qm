@@ -1,4 +1,4 @@
-import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
+import { emojiNameOf } from "./emoji-map.ts";
 import { sleep } from "./util.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { trimTrailing } from "../util/text.ts";
@@ -43,17 +43,14 @@ const SKIN_TONE_BY_MODIFIER: Record<string, string> = {
   "🏿": "6",
 };
 const SKIN_TONE_MODIFIER = /[\u{1F3FB}-\u{1F3FF}]/gu;
-const VARIATION_SELECTOR_16 = /️/g;
 
 function emojiCharToName(s: string): string | null {
   let tone: string | undefined;
-  const base = s
-    .replace(SKIN_TONE_MODIFIER, (m) => {
-      tone = SKIN_TONE_BY_MODIFIER[m];
-      return "";
-    })
-    .replace(VARIATION_SELECTOR_16, "");
-  const name = EMOJI_NAME_BY_CHAR[base];
+  const base = s.replace(SKIN_TONE_MODIFIER, (m) => {
+    tone = SKIN_TONE_BY_MODIFIER[m];
+    return "";
+  });
+  const name = emojiNameOf(base);
   if (!name) return null;
   return tone ? `${name}::skin-tone-${tone}` : name;
 }

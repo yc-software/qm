@@ -426,6 +426,7 @@ import { partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
 import { createPartnerChatTurns } from "./surfaces/partner-chat/turns.ts";
 import { createPartnerChatApprovals, partnerChatApprovalCardRoute } from "./surfaces/partner-chat/approvals.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
+import { PARTNER_CHAT } from "./surfaces/partner-chat/protocol.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -2081,7 +2082,7 @@ export function buildApp(
   });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
     slack: slackApprovalCardRoute,
-    "partner-chat": partnerChatApprovalCardRoute,
+    [PARTNER_CHAT]: partnerChatApprovalCardRoute,
   });
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
@@ -2607,7 +2608,7 @@ export function buildApp(
   const partnerChatDelivery =
     partnerChatClient && partnerChatTurns
       ? createDeliveryRelay(deliveries, {
-          type: "partner-chat",
+          type: PARTNER_CHAT,
           send: partnerChatSender({
             client: partnerChatClient,
             blobs: slackCore,

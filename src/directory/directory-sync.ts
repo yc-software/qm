@@ -285,6 +285,13 @@ export function createDirectorySync(deps: {
     async upsertGroup(groupId, principalIds) {
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
+      const roster = await q(
+        `SELECT m.principal_id FROM directory_group_members m
+           JOIN directory_groups g ON g.org_id = m.org_id AND g.group_id = m.group_id AND g.roster_known
+          WHERE m.org_id = $1 AND m.group_id = $2`,
+        [orgId, groupId],
+      );
+      if (roster.length === ids.length && roster.every((r) => ids.includes(String(r.principal_id)))) return;
       await withPgTransaction(await pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query(

@@ -182,6 +182,7 @@ interface ReachNowInput {
   delete?: { messageTs: string };
   edit?: { messageTs: string };
   currentDestination?: Destination;
+  turn?: { surface?: string; liveReplies?: boolean };
 }
 export type ReachNowResult =
   | {

@@ -12,12 +12,12 @@ import type { PartnerChatActionClick } from "./approvals.ts";
 import type { PartnerChatClient } from "./client.ts";
 import { stagePartnerChatFiles } from "./files.ts";
 import {
+  PARTNER_CHAT,
+  chatContainer,
   findMessage,
   partnerChatRef,
   partnerChatTs,
   parsePartnerChatEvent,
-  parsePartnerChatActionEvent,
-  parsePartnerChatReactionEvent,
   parsePartnerChatRef,
   verifyPartnerChat,
   type PartnerChatEvent,
@@ -26,9 +26,12 @@ import {
 } from "./protocol.ts";
 import type { PartnerChatTurns } from "./turns.ts";
 
-const SURFACE = "partner-chat";
 const CONTEXT_SCAN = 500;
 const CONTEXT_DEFAULT_COUNT = 100;
+
+function eventContainer(event: Pick<PartnerChatEvent, "account" | "chat">): string {
+  return chatContainer({ account: event.account, kind: event.chat.kind, chat: event.chat.id });
+}
 
 type InboundApp = Pick<
   App,
@@ -55,7 +58,7 @@ export function createPartnerChatInbound(deps: {
   async function followedThread(container: string, thread: string) {
     const [root, [lastReply]] = await Promise.all([
       findMessage(cache, container, thread),
-      cache.readMessages(container, { surface: SURFACE, sub: thread, self: true, limit: 1, noFallback: true }),
+      cache.readMessages(container, { surface: PARTNER_CHAT, sub: thread, self: true, limit: 1, noFallback: true }),
     ]);
     if (!root?.self && !lastReply) return undefined;
     return { ...(root?.self ? { opener: root.text } : {}), ...(lastReply ? { lastReplyTs: lastReply.ts } : {}) };
@@ -68,7 +71,7 @@ export function createPartnerChatInbound(deps: {
     triggerTs: string,
   ) {
     const unanswered = await cache.readMessages(container, {
-      surface: SURFACE,
+      surface: PARTNER_CHAT,
       sub: thread,
       ...(followed.lastReplyTs ? { after: followed.lastReplyTs } : {}),
       noFallback: true,
@@ -94,10 +97,7 @@ export function createPartnerChatInbound(deps: {
     } catch (e) {
       return { status: 400, body: { error: "invalid_json", detail: errMessage(e) } };
     }
-    const reaction = parsePartnerChatReactionEvent(parsed);
-    const action = parsePartnerChatActionEvent(parsed);
-    const special = reaction.success ? reaction : action;
-    const result = special.success ? special : parsePartnerChatEvent(parsed);
+    const result = parsePartnerChatEvent(parsed);
     if (!result.success)
       return {
         status: 400,
@@ -110,8 +110,15 @@ export function createPartnerChatInbound(deps: {
       return { status: 404, body: { error: "unknown_account" } };
     }
     return inTenant(tenant, (): Promise<{ status: number; body: Record<string, unknown> }> => {
-      if ("reaction" in event) return acceptReaction(event);
-      return "action" in event ? acceptAction(event) : accept(event);
+      switch (event.type) {
+        case "reaction.added":
+        case "reaction.removed":
+          return acceptReaction(event);
+        case "action.invoked":
+          return acceptAction(event);
+        default:
+          return accept(event);
+      }
     });
   }
 
@@ -140,10 +147,11 @@ export function createPartnerChatInbound(deps: {
     }
     if (chat.kind === "group")
       await deps.registerGroup(
-        partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id }),
+        eventContainer(event),
         humans.map((p) => p.externalId),
       );
-    return { members, humans, listed };
+    const actor = listed.bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
+    return { humans, listed, actor };
   }
 
   function turnFrame(
@@ -154,7 +162,7 @@ export function createPartnerChatInbound(deps: {
     replyThread: string | undefined,
   ) {
     const { chat } = event;
-    const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
+    const container = eventContainer(event);
     const replyTarget = partnerChatRef({
       account: event.account,
       kind: chat.kind,
@@ -162,10 +170,10 @@ export function createPartnerChatInbound(deps: {
       ...(replyThread ? { thread: replyThread } : {}),
     });
     return {
-      surface: SURFACE,
+      surface: PARTNER_CHAT,
       actor,
       surfaceOrigin: {
-        author: { surface: SURFACE, account: event.account, id: actorId },
+        author: { surface: PARTNER_CHAT, account: event.account, id: actorId },
         workspace: event.account,
         ...(replyThread ? { replyThread } : {}),
         audience: "internal" as const,
@@ -202,7 +210,7 @@ export function createPartnerChatInbound(deps: {
       messageId: event.message.id,
       actionId: action.id,
       userId: action.user.id,
-      actor: who.humans[who.members.indexOf(who.listed)]!,
+      actor: who.actor,
     });
     return { status: 200, body: { ok: true } };
   }
@@ -213,8 +221,8 @@ export function createPartnerChatInbound(deps: {
     if (reaction.user.bot) return { status: 200, body: { ok: true, ignored: "bot_reaction" } };
     const who = await participants(event, reaction.user.id);
     if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
-    const reactor = who.humans[who.members.indexOf(who.listed)]!;
-    const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
+    const reactor = who.actor;
+    const container = eventContainer(event);
     const isDM = chat.kind === "dm";
     const onBotMessage =
       (message.app_post && message.user.bot === true) ||
@@ -257,7 +265,7 @@ export function createPartnerChatInbound(deps: {
           ...(!onBotMessage && authorName && message.user.id !== reaction.user.id ? { authorName } : {}),
           ...(message.body ? { messageText: message.body } : {}),
         }),
-        redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:reaction:${event.event_id}`,
+        redeliveryKey: `${PARTNER_CHAT}:${event.account}:${chat.id}:reaction:${event.event_id}`,
       },
     });
     return { status: 200, body: { ok: true } };
@@ -267,11 +275,10 @@ export function createPartnerChatInbound(deps: {
     const { message, chat } = event;
     const who = await participants(event, message.user.id);
     if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
-    const { members, humans, listed } = who;
+    const { humans, listed, actor: author } = who;
     const bot = listed.bot === true;
-    const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
     const thread = event.thread_id ?? undefined;
-    const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
+    const container = eventContainer(event);
     const appPost = bot && message.app_post;
     const own = appPost
       ? await findMessage(cache, container, message.id, { self: true, includeDeleted: true })
@@ -291,7 +298,7 @@ export function createPartnerChatInbound(deps: {
     await deps.app.ingestSurfaceEvents(
       [
         {
-          surface: SURFACE,
+          surface: PARTNER_CHAT,
           container,
           ts,
           sub: own ? (own.sub ?? null) : (thread ?? null),
@@ -310,7 +317,7 @@ export function createPartnerChatInbound(deps: {
           kind: chat.kind,
         },
       ],
-      SURFACE,
+      PARTNER_CHAT,
     );
     if (!addressed) return { status: 200, body: { ok: true } };
     const replyThread = thread ?? (chat.kind === "group" ? message.id : undefined);
@@ -342,7 +349,7 @@ export function createPartnerChatInbound(deps: {
           ...(staged?.attachments.length ? { attachments: staged.attachments } : {}),
           ...(staged?.issues.length ? { inboundNotes: staged.issues } : {}),
           ...(followed && thread ? await threadDetection(container, thread, followed, ts) : {}),
-          redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
+          redeliveryKey: `${PARTNER_CHAT}:${event.account}:${chat.id}:${message.id}`,
         },
         ...(followed && thread ? { unprompted: true } : {}),
       });
@@ -360,24 +367,28 @@ export function createPartnerChatInbound(deps: {
           }
         : { origin: { kind: "human" as const, messageTs: ts } }),
       async: true,
-      redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
+      redeliveryKey: `${PARTNER_CHAT}:${event.account}:${chat.id}:${message.id}`,
     });
     const destination = {
-      type: SURFACE,
+      type: PARTNER_CHAT,
       target: replyTarget,
       account: { id: event.account, workspace: event.account },
     };
     if (!queued.runId)
-      await deps.unansweredReply(queued, destination, `notice:${SURFACE}:${event.account}:${chat.id}:${message.id}`);
+      await deps.unansweredReply(
+        queued,
+        destination,
+        `notice:${PARTNER_CHAT}:${event.account}:${chat.id}:${message.id}`,
+      );
     return { status: 200, body: { ok: true } };
   }
 
   async function answerContext(query: SurfaceContextQuery): Promise<SurfaceContextResult> {
     const ref = query.conversationTarget ? parsePartnerChatRef(query.conversationTarget) : null;
     if (!ref) return { messages: [], note: "this conversation can't be read" };
-    const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
+    const container = chatContainer(ref);
     const replies = await cache.readMessages(container, {
-      surface: SURFACE,
+      surface: PARTNER_CHAT,
       ...(ref.thread ? { sub: ref.thread } : {}),
       ...(query.before ? { before: query.before } : {}),
       limit: CONTEXT_SCAN,
@@ -403,7 +414,7 @@ export function createPartnerChatInbound(deps: {
   }
 
   deps.app.onContextRequestCreated((request) => {
-    if (request.source !== SURFACE) return;
+    if (request.source !== PARTNER_CHAT) return;
     void answerContext(request.query)
       .then((result) => deps.app.fulfillContextRequest(request.id, { result }))
       .catch(reportFailureAs("partner-chat: answer context request", undefined));

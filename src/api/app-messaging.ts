@@ -28,6 +28,7 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { editableIn } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
@@ -592,10 +593,7 @@ export function createMessagingMethods(
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
       }
-      const editable = hasNamedTarget
-        ? baseDestination.type === "slack" || baseDestination.type === "group"
-        : deps.surfaces.get(baseDestination.type)?.capabilities.mirrored === true;
-      if (input.edit && !editable) {
+      if (input.edit && !editableIn(deps.surfaces, baseDestination.type, input.turn ?? {})) {
         return {
           ok: false,
           status: 400,

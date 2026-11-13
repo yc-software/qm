@@ -4,7 +4,9 @@ import type { ActorAssertion } from "../../types.ts";
 import type { Surface, SurfacePromptHints } from "../contract.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import {
+  PARTNER_CHAT,
   partnerChatContainer,
+  partnerChatMessageIdSchema,
   partnerChatMessageId,
   partnerChatRef,
   parsePartnerChatRef,
@@ -40,7 +42,7 @@ export function createPartnerChatSurface(deps: {
   label?: string;
 }): Surface<null> {
   return {
-    kind: "partner-chat",
+    kind: PARTNER_CHAT,
     label: deps.label ?? DEFAULT_LABEL,
     capabilities: {
       mirrored: true,
@@ -56,7 +58,7 @@ export function createPartnerChatSurface(deps: {
       await reachEnqueue({
         deliveries: deps.deliveries,
         destination: {
-          type: "partner-chat",
+          type: PARTNER_CHAT,
           target: partnerChatRef({
             account: ref.account,
             kind: ref.kind === "dm" ? "dm" : "group",
@@ -73,9 +75,10 @@ export function createPartnerChatSurface(deps: {
     async threadTarget(target, threadTs) {
       const ref = parsePartnerChatRef(target);
       const id = partnerChatMessageId(threadTs);
-      if (!ref || !/^\d+$/.test(id)) throw new Error(`can't reply under ${threadTs} in ${target}`);
+      if (!ref || !partnerChatMessageIdSchema.safeParse(id).success)
+        throw new Error(`can't reply under ${threadTs} in ${target}`);
       const [parent] = await deps.surfaceCache.readMessages(partnerChatContainer(target), {
-        surface: "partner-chat",
+        surface: PARTNER_CHAT,
         timestamps: [threadTs],
         limit: 1,
         noFallback: true,

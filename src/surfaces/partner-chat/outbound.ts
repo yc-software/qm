@@ -3,17 +3,12 @@ import { refusedStatus, type Send } from "../../delivery/relay.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { KeychainApprovals } from "../../credentials/keychain-approval.ts";
 import type { Delivery } from "../../types.ts";
-import { errMessage } from "../../util/errors.ts";
-import type { AddressFetch } from "../../util/network.ts";
-import type { BlobSource } from "../attachments.ts";
 import { partnerChatCard } from "./approvals.ts";
-import { PartnerChatHttpError, type PartnerChatClient } from "./client.ts";
-import { UPLOAD_FAILED, uploadPartnerChatFiles } from "./files.ts";
+import { PartnerChatHttpError } from "./client.ts";
+import { uploadPartnerChatFiles, type PartnerChatUploads } from "./files.ts";
 import { deletePartnerChatMessage, editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
-import { partnerChatMessageId, parsePartnerChatRef } from "./protocol.ts";
-import { UnknownPartnerChatReaction, addPartnerChatReaction } from "./reactions.ts";
-
-const MESSAGE_ID = /^\d+$/;
+import { partnerChatMessageId, partnerChatMessageIdSchema, parsePartnerChatRef } from "./protocol.ts";
+import { UnknownPartnerChatReaction, setPartnerChatReaction } from "./reactions.ts";
 
 class UnsupportedDelivery extends Error {}
 
@@ -21,14 +16,17 @@ function refusal(e: unknown): e is PartnerChatHttpError {
   return e instanceof PartnerChatHttpError && refusedStatus(e.status);
 }
 
-export function partnerChatSender(deps: {
-  client: PartnerChatClient;
-  blobs: BlobSource;
-  storageFetch?: AddressFetch;
-  app: Pick<App, "ingestSurfaceEvents" | "readSurfaceMessages" | "tenantFor" | "getApproval">;
-  keychainApprovals?: Pick<KeychainApprovals, "card">;
-  now?: () => number;
-}): Send {
+function badId(id: string | undefined): id is string {
+  return id !== undefined && !partnerChatMessageIdSchema.safeParse(id).success;
+}
+
+export function partnerChatSender(
+  deps: PartnerChatUploads & {
+    app: Pick<App, "ingestSurfaceEvents" | "readSurfaceMessages" | "tenantFor" | "getApproval">;
+    keychainApprovals?: Pick<KeychainApprovals, "card">;
+    now?: () => number;
+  },
+): Send {
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
     if (!ref) throw new UnsupportedDelivery(`partner-chat: unroutable target ${d.destination.target}`);
@@ -40,9 +38,8 @@ export function partnerChatSender(deps: {
     const { react, delete: del, pin, edit, editRef } = d.destination;
     if (react) {
       const messageId = partnerChatMessageId(react.messageTs);
-      if (!MESSAGE_ID.test(messageId)) throw new UnsupportedDelivery(`partner-chat: bad message id ${messageId}`);
-      await addPartnerChatReaction(deps.client, { account: ref.account, chat: ref.chat, messageId }, react.emoji);
-      return;
+      if (badId(messageId)) throw new UnsupportedDelivery(`partner-chat: bad message id ${messageId}`);
+      return setPartnerChatReaction(deps.client, ref, messageId, react.emoji, true);
     }
     if (pin) throw new UnsupportedDelivery("partner-chat: pins are not supported");
     if (del) return deletePartnerChatMessage(deps, ref, del.messageTs);
@@ -52,24 +49,11 @@ export function partnerChatSender(deps: {
       return;
     }
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
-    if (thread !== undefined && !MESSAGE_ID.test(thread))
-      throw new UnsupportedDelivery(`partner-chat: bad thread id ${thread}`);
-    let fileIds: string[] = [];
-    if (d.attachments?.length) {
-      try {
-        fileIds = await uploadPartnerChatFiles(
-          deps.client,
-          ref.account,
-          ref.chat,
-          d.attachments,
-          deps.blobs,
-          deps.storageFetch,
-        );
-      } catch (e) {
-        console.error(`[partner-chat] delivery ${d.id} attachment upload failed: ${errMessage(e)}`);
-        body = [body, UPLOAD_FAILED].filter(Boolean).join("\n\n");
-      }
-    }
+    if (badId(thread)) throw new UnsupportedDelivery(`partner-chat: bad thread id ${thread}`);
+    const { fileIds = [], failureNote } = d.attachments?.length
+      ? await uploadPartnerChatFiles(deps, ref, d.attachments)
+      : {};
+    body = [body, failureNote].filter(Boolean).join("\n\n");
     if (editRef && !fileIds.length) {
       const settled = await (
         body ? editPartnerChatMessage(deps, ref, editRef, body) : deletePartnerChatMessage(deps, ref, editRef)

@@ -4,7 +4,7 @@ import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import type { WornPersona } from "../types.ts";
-import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
+import { emojiNameOf } from "./emoji-map.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -38,7 +38,7 @@ export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined)
 
 function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
   if (icon?.kind === "custom") return icon.name;
-  if (icon?.kind === "emoji") return EMOJI_NAME_BY_CHAR[icon.value.replace(/\uFE0F/g, "")];
+  if (icon?.kind === "emoji") return emojiNameOf(icon.value);
   return undefined;
 }
 

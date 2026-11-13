@@ -2,9 +2,15 @@ import type { App } from "../../api/app-types.ts";
 import type { IngestEvent } from "../../surface-cache/types.ts";
 import type { SurfaceAction } from "../contract.ts";
 import type { PartnerChatClient } from "./client.ts";
-import { findMessage, partnerChatMessageId, partnerChatRef, partnerChatTs, type PartnerChatRef } from "./protocol.ts";
+import {
+  PARTNER_CHAT,
+  chatContainer,
+  findMessage,
+  partnerChatMessageId,
+  partnerChatTs,
+  type PartnerChatRef,
+} from "./protocol.ts";
 
-const SURFACE = "partner-chat";
 const SELF_AUTHOR = "self";
 
 export interface PartnerChatMessages {
@@ -25,7 +31,7 @@ function ownPost(deps: PartnerChatMessages, container: string, messageId: string
 }
 
 function ownEvent(container: string, ts: string, createdAt: number): IngestEvent {
-  return { surface: SURFACE, container, ts, self: true, bot: true, handled: true, createdAt };
+  return { surface: PARTNER_CHAT, container, ts, self: true, bot: true, handled: true, createdAt };
 }
 
 async function recordChange(
@@ -34,9 +40,10 @@ async function recordChange(
   messageId: string,
   change: Pick<IngestEvent, "text" | "editedAt" | "deleted">,
 ): Promise<void> {
-  const container = partnerChatRef({ account: where.account, kind: where.kind, chat: where.chat });
+  const container = chatContainer(where);
   const own = await ownPost(deps, container, messageId);
-  if (own) await deps.app.ingestSurfaceEvents([{ ...ownEvent(container, own.ts, own.createdAt), ...change }], SURFACE);
+  if (own)
+    await deps.app.ingestSurfaceEvents([{ ...ownEvent(container, own.ts, own.createdAt), ...change }], PARTNER_CHAT);
 }
 
 export async function postPartnerChatMessage(
@@ -61,7 +68,7 @@ export async function postPartnerChatMessage(
   });
   if (typeof parsed.message_id !== "string" && typeof parsed.message_id !== "number") return undefined;
   const messageId = String(parsed.message_id);
-  const container = partnerChatRef({ account: where.account, kind: where.kind, chat: where.chat });
+  const container = chatContainer(where);
   const known = await ownPost(deps, container, messageId);
   if (known) return known.ts;
   const at = (deps.now ?? Date.now)();
@@ -69,7 +76,7 @@ export async function postPartnerChatMessage(
   if (message.recipientUserId) return ts;
   await deps.app.ingestSurfaceEvents(
     [{ ...ownEvent(container, ts, at), sub: where.thread ?? null, authorId: SELF_AUTHOR, text: message.text }],
-    SURFACE,
+    PARTNER_CHAT,
   );
   return ts;
 }

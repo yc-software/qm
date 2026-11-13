@@ -19,21 +19,22 @@ describe("POST /v1/reach with edit", () => {
   let base: string;
   let built: BuiltApp;
 
-  const cap = async (destination?: Destination) =>
+  const cap = async (destination?: Destination, turn: { surface?: string; liveReplies?: boolean } = {}) =>
     await mintCapabilityToken(
       {
         actorId: "U-carol",
         scopeId: scopeId("personal", "U-carol"),
         exp: Date.now() + CAPABILITY_TTL_MS,
         ...(destination ? { destination } : {}),
+        ...turn,
       },
       SECRET,
     );
 
-  const post = async (body: unknown, destination?: Destination) =>
+  const post = async (body: unknown, destination?: Destination, turn?: { surface?: string; liveReplies?: boolean }) =>
     fetch(`${base}/v1/reach`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": await cap(destination) },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap(destination, turn) },
       body: JSON.stringify(body),
     });
 
@@ -81,9 +82,11 @@ describe("POST /v1/reach with edit", () => {
     assert.equal(d.text, "fixed");
   });
 
-  it("with no target, edits in this conversation on another chat surface", async () => {
+  it("with no target, edits in this conversation on another chat surface only during a live-reply turn", async () => {
     const here: Destination = { type: "partner-chat", target: "partner-chat:7001:dm:88" };
-    const res = await post({ edit: { ts: "1793649600.00000000000000001002" }, text: "42 widgets" }, here);
+    const body = { edit: { ts: "1793649600.00000000000000001002" }, text: "42 widgets" };
+    assert.equal((await post(body, here, { surface: "partner-chat" })).status, 400);
+    const res = await post(body, here, { surface: "partner-chat", liveReplies: true });
     assert.equal(res.status, 200, await res.clone().text());
     const { deliveryId } = (await res.json()) as { deliveryId: string };
     const d = (await built.app.pendingDeliveries("partner-chat")).find((x) => x.id === deliveryId);

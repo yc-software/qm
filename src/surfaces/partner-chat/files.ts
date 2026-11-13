@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { OutgoingAttachment } from "../../types.ts";
+import { errMessage } from "../../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../../util/network.ts";
 import {
   processInboundFiles,
@@ -9,15 +10,21 @@ import {
   type ProcessedInbound,
 } from "../attachments.ts";
 import type { PartnerChatClient } from "./client.ts";
-import type { PartnerChatFile } from "./protocol.ts";
+import { partnerChatMessageIdSchema, type PartnerChatFile, type PartnerChatRef } from "./protocol.ts";
+
+export interface PartnerChatUploads {
+  client: PartnerChatClient;
+  blobs: BlobSource;
+  storageFetch?: AddressFetch;
+}
 
 const TRANSFER_TIMEOUT_MS = 300_000;
-export const UPLOAD_FAILED = "I couldn't attach the file(s). Try again in a moment.";
+const UPLOAD_FAILED = "I couldn't attach the file(s). Try again in a moment.";
 
 const storageUrl = z.string().startsWith("https://");
 const downloadSchema = z.object({ url: storageUrl });
 const uploadSchema = z.object({
-  file_id: z.string().regex(/^\d{1,20}$/),
+  file_id: partnerChatMessageIdSchema,
   upload: z.object({ url: storageUrl, fields: z.record(z.string(), z.string()) }),
 });
 
@@ -52,19 +59,17 @@ export function stagePartnerChatFiles(
   );
 }
 
-export async function uploadPartnerChatFiles(
-  client: PartnerChatClient,
-  account: string,
-  chat: string,
+async function uploadFiles(
+  deps: PartnerChatUploads,
+  where: Pick<PartnerChatRef, "account" | "chat">,
   attachments: readonly OutgoingAttachment[],
-  blobs: BlobSource,
-  send: AddressFetch = publicFetch,
 ): Promise<string[]> {
+  const send = deps.storageFetch ?? publicFetch;
   const fileIds: string[] = [];
-  for (const { name, mimetype, file } of await readOutgoingFiles(attachments, blobs)) {
+  for (const { name, mimetype, file } of await readOutgoingFiles(attachments, deps.blobs)) {
     const { file_id, upload } = uploadSchema.parse(
-      await client.call(account, "/agent_app/files/upload", {
-        chat_id: chat,
+      await deps.client.call(where.account, "/agent_app/files/upload", {
+        chat_id: where.chat,
         name,
         content_type: mimetype,
         size_bytes: file.length,
@@ -82,4 +87,17 @@ export async function uploadPartnerChatFiles(
     fileIds.push(file_id);
   }
   return fileIds;
+}
+
+export async function uploadPartnerChatFiles(
+  deps: PartnerChatUploads,
+  where: Pick<PartnerChatRef, "account" | "chat">,
+  attachments: readonly OutgoingAttachment[],
+): Promise<{ fileIds?: string[]; failureNote?: string }> {
+  try {
+    return { fileIds: await uploadFiles(deps, where, attachments) };
+  } catch (e) {
+    console.error(`[partner-chat] file upload failed in chat ${where.chat}: ${errMessage(e)}`);
+    return { failureNote: UPLOAD_FAILED };
+  }
 }

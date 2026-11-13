@@ -67,6 +67,15 @@ export const REACTION_ID = /^~([0-9a-z]+)$/;
 
 export const MAX_REACTIONS_PER_TURN = 5;
 
+export function withinReactionBudget<T extends ReplyReaction>(reactions: readonly T[]): T[] {
+  let budget = MAX_REACTIONS_PER_TURN;
+  return reactions.flatMap((r) => {
+    const names = r.names.slice(0, budget);
+    budget -= names.length;
+    return names.length ? [{ ...r, names }] : [];
+  });
+}
+
 export function reactionInstruction(place: string, otherMessages: boolean): string {
   return (
     `When a ${place}user explicitly asks you to add an emoji reaction, you MUST actually react by writing ` +

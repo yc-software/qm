@@ -8,10 +8,9 @@ import { reactionDetectGuidance, reactionInstruction } from "../reactions.ts";
 import { createRunWaiter } from "../run-wait.ts";
 import { HANDOFF_INSTRUCTION, runSurfaceTurn, type SurfaceTurnBody } from "../turn-driver.ts";
 import { createTurnFlow, drivenLive, liveRunHoldsDelivery, runDeliveryId } from "../turn-flow.ts";
-import type { PartnerChatRef } from "./protocol.ts";
+import { PARTNER_CHAT, type PartnerChatRef } from "./protocol.ts";
 import { createPartnerChatTransport, type PartnerChatTransportDeps } from "./transport.ts";
 
-const SURFACE = "partner-chat";
 const ACK_PICKS = [...CURATED_ACK_EMOJI, ...DEFAULT_ACK_REACTIONS];
 
 export interface PartnerChatTurn {
@@ -51,11 +50,11 @@ export function createPartnerChatTurns(
 ) {
   const flow = createTurnFlow(
     {
-      submitTurn: (body) => deps.app.turn({ ...body, surface: SURFACE }),
+      submitTurn: (body) => deps.app.turn({ ...body, surface: PARTNER_CHAT }),
       waitRun: createRunWaiter({ runs: deps.runs, turnStream: deps.turnStream, getRun: (id) => deps.app.getRun(id) }),
       ackRunDelivery: (runId) => deps.app.ackDeliveryByKey(`run:${runId}`),
     },
-    SURFACE,
+    PARTNER_CHAT,
   );
   const reportEditRef = async (runId: string, editRef: string): Promise<void> => {
     if (!(await deps.app.setRunDeliveryState(runId, { editRef }))) throw new Error(`run ${runId} not found`);
@@ -72,7 +71,7 @@ export function createPartnerChatTurns(
     const label = `chat=${where.chat} at=${turn.trigger}`;
     const transport = createPartnerChatTransport(deps, turn);
     return new Promise<void>((resolve, reject) => {
-      const done = runSurfaceTurn({ flow, label: SURFACE, reportEditRef }, transport, {
+      const done = runSurfaceTurn({ flow, label: PARTNER_CHAT, reportEditRef }, transport, {
         kind: where.kind === "dm" ? "dm" : "channel",
         trigger: turn.trigger,
         where: label,

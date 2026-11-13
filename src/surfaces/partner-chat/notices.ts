@@ -6,6 +6,7 @@ import type { Destination, TurnResult } from "../../types.ts";
 
 import { AWAITING_APPROVAL } from "../approval-cards.ts";
 import { drivenLive } from "../turn-flow.ts";
+import { PARTNER_CHAT } from "./protocol.ts";
 
 function noticeText(result: Partial<TurnResult>, cards = false): string | undefined {
   if (result.status === "pending_approval")
@@ -17,7 +18,7 @@ function noticeText(result: Partial<TurnResult>, cards = false): string | undefi
 
 export function partnerChatRunNotice(run: Run): string | undefined {
   if (
-    run.request.surface !== "partner-chat" ||
+    run.request.surface !== PARTNER_CHAT ||
     run.request.origin.kind !== "human" ||
     drivenLive(run.request) ||
     !run.result

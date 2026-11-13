@@ -10,6 +10,7 @@ import {
   type PendingApproval,
   type ToolCallView,
   approvalButtons,
+  replayableTurn,
   argText,
   toolCallView,
 } from "../surfaces/approval-cards.ts";
@@ -230,15 +231,7 @@ export function recoveredApprovalContext(
   if (!req || typeof req.actor?.externalId !== "string" || typeof req.text !== "string") return null;
   const kind = req.conversation?.kind;
   if (kind !== "dm" && kind !== "channel" && kind !== "group") return null;
-  const {
-    surface: _surface,
-    async: _async,
-    idempotencyKey: _idempotencyKey,
-    redeliveryKey: _redeliveryKey,
-    approval: _approval,
-    relayInput: _relayInput,
-    ...turn
-  } = req;
+  const turn = replayableTurn(req);
   const origin =
     typeof req.deliveryTarget === "string" && req.deliveryTarget
       ? parseDeliveryTarget(req.deliveryTarget)

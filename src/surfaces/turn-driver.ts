@@ -24,8 +24,8 @@ export interface SurfaceTransport {
   applyReactions(reactions: readonly ReplyReaction[]): Promise<void>;
   typing(on: boolean, run?: { runId: string; emoji(): Promise<string> | undefined }): Promise<void>;
   upload(attachments: OutgoingAttachment[]): Promise<{ fileIds?: readonly string[]; failureNote?: string }>;
-  render(markdown: string): string;
-  escape(text: string): string;
+  render?(markdown: string): string;
+  escape?(text: string): string;
   readReply(reply: string): { text: string; reactions: ReplyReaction[] };
 }
 
@@ -80,7 +80,7 @@ export async function runSurfaceTurn(
       taskManaged: !!turn.taskAck,
       postAck: async (text) => {
         const ref = await transport.post(
-          transport.render(text),
+          transport.render?.(text) ?? text,
           queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : undefined,
         );
         if (!ref || !queuedRunId || unprompted || !deps.reportEditRef) return;
@@ -103,7 +103,7 @@ export async function runSurfaceTurn(
   const goalNotice = unprompted
     ? undefined
     : createGoalNoticePresenter({
-        escape: transport.escape,
+        escape: transport.escape ?? String,
         post: (text) => transport.post(text, { notice: true }),
         update: (ref, text) => transport.edit(ref, text),
         onError: (error) => console.error(`[${label}] goal notice update failed:`, (error as Error).message),
@@ -210,7 +210,7 @@ export async function runSurfaceTurn(
     const { text: replyBody, reactions } = transport.readReply(result.reply ?? "");
     const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
     let reply = result.stopped ? "" : "(no response)";
-    if (replyBody) reply = transport.render(replyBody);
+    if (replyBody) reply = transport.render?.(replyBody) ?? replyBody;
     else if (hasNonText) reply = "";
     const deliverReply = async (): Promise<void> => {
       const uploaded = result.attachments?.length ? await transport.upload(result.attachments) : {};

@@ -11,6 +11,14 @@ export function turnCapabilities(
   return { ...surface.capabilities, liveReplies: true, textOnly: false };
 }
 
+export function editableIn(
+  surfaces: SurfaceRegistry,
+  destinationType: string,
+  turn: { surface?: string; liveReplies?: boolean },
+): boolean {
+  return destinationType === "group" || turnCapabilities(surfaces.get(destinationType), turn)?.liveReplies === true;
+}
+
 export function surfaceToolPrompt(
   surface: Surface,
   turn: { surface?: string; liveReplies?: boolean } = {},
