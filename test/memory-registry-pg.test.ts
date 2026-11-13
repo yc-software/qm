@@ -32,6 +32,7 @@ import { routedTo, startMcpTestServer, type McpTestServer } from "./support/mcp-
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const change = {
   actor: "admin-alice",
@@ -621,6 +622,7 @@ test("an agent reaches every registry route only where the registry may be shown
     config: built.config,
     auditLog: built.auditLog,
     memoryRegistry: built.memoryRegistry,
+    runs: liveRunStore(),
     capabilitySecret: secret,
     signingSecret: secret,
   });
@@ -629,11 +631,9 @@ test("an agent reaches every registry route only where the registry may be shown
   await built.memoryRegistry.update((record) =>
     putBinding(personalBrain()(record), "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
   );
+  const admin = { ...liveRunClaims("admin-alice"), actorId: "admin-alice", aud: CONTROL_PLANE_AUD };
   const capabilityIn = (scopeId: string) =>
-    mintCapabilityToken(
-      { actorId: "admin-alice", scopeId, aud: CONTROL_PLANE_AUD, liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
-      secret,
-    );
+    mintCapabilityToken({ ...admin, scopeId, exp: Date.now() + CAPABILITY_TTL_MS }, secret);
   const call = async (cap: string, method: string, path: string, body: unknown) => {
     const res = await fetch(`http://localhost:${(server.address() as AddressInfo).port}${path}`, {
       method,

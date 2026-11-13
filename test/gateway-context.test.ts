@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderGatewayContext, webSurfaceLabel } from "../src/core/orchestrator/prompt-blocks.ts";
+import { renderGatewayContext, shownPlace, webSurfaceLabel } from "../src/core/orchestrator/prompt-blocks.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
@@ -13,13 +13,25 @@ import { testConfig } from "./support/test-config.ts";
 test("renders gateway + location + identifier lines", () => {
   const out = renderGatewayContext("slack", {
     location: "#eng-platform",
-    details: { channel: "C0123", channel_name: "#eng-platform", thread_ts: "1718.0001" },
+    hostIds: { channel: "C0123", thread_ts: "1718.0001" },
+    details: { channel_name: "#eng-platform" },
   });
   assert.match(out, /^## Where you are/);
   assert.match(out, /^Slack, in #eng-platform\.$/m);
   assert.match(out, /- channel: C0123/);
   assert.match(out, /- channel_name: #eng-platform/);
   assert.match(out, /- thread_ts: 1718\.0001/);
+});
+
+test("the screen reads the place the prompt shows, and never host IDs", () => {
+  const ctx = { location: "Room", details: { location: "Detail" }, hostIds: { channel: "C1" } };
+  assert.deepEqual(shownPlace("slack", ctx, true), { details: { location: "Detail" } });
+  assert.deepEqual(shownPlace(undefined, ctx, true), { location: "Room", details: { location: "Detail" } });
+  assert.match(renderGatewayContext(undefined, ctx, "ada"), /^In Room\.$/m);
+  const twice = { details: { " topic": "Hidden", topic: "Shown" } };
+  assert.deepEqual(shownPlace("slack", twice, false), { details: { topic: "Shown" } });
+  assert.doesNotMatch(renderGatewayContext("slack", twice), /Hidden/);
+  assert.doesNotMatch(renderGatewayContext("web", ctx, ""), /Room/);
 });
 
 test("gateway only (no surface-provided context) still names the gateway", () => {

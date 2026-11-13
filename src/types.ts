@@ -331,20 +331,21 @@ export interface AttachmentMeta {
 export interface GatewayContext {
   location?: string;
   details?: Record<string, string>;
+  hostIds?: Record<string, string>;
   instructions?: string;
   reactionGuidance?: string;
   botHandle?: string;
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
   text: string;
   files?: string[];
@@ -481,6 +482,7 @@ export interface PendingApprovalRecord {
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
+  homeChannel?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

@@ -484,7 +484,7 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
-  assertDefaultSandboxUsable?: () => Promise<void>;
+  defaultComputer?: () => Promise<SandboxResource | undefined>;
   boundSandboxId?: string;
   workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
@@ -794,6 +794,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
               if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
+              if (deps.botActor)
+                throw new Error("a Slack bot's turn cannot change the default computer; pass sandbox_id instead");
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
@@ -807,6 +809,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               undefined,
               undefined,
               input.memoryGb,
+              undefined,
+              !deps.botActor,
             );
             await deps.provisionResource(record.id);
             return record;
@@ -834,17 +838,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const access = await accessSandbox(sandboxId);
         return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
-      await deps.assertDefaultSandboxUsable?.();
+      const fallback = (await deps.defaultComputer?.())?.id;
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
-      return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
+      return probe(await deps.sandbox.computerStatus(writableScopeId, fallback), deps.provision);
     },
     async restartComputer(requested?: string, memoryGb?: number): Promise<void> {
-      const sandboxId =
-        requested ??
-        deps.boundSandboxId ??
-        (memoryGb === undefined ? undefined : (await deps.sandboxResources?.resolve(writableScopeId))?.id);
+      const named = requested ?? deps.boundSandboxId;
+      const fallback = named === undefined ? (await deps.defaultComputer?.())?.id : undefined;
+      const sandboxId = named ?? (memoryGb === undefined ? undefined : fallback);
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
@@ -852,11 +855,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return resources.restart(deps.createdBy, sandboxId, memoryGb);
       }
       if (memoryGb !== undefined) throw new Error("a memory size needs a computer from sandbox list");
-      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
-      await deps.sandbox.restartComputer(writableScopeId);
+      await deps.sandbox.restartComputer(writableScopeId, undefined, fallback);
     },
     async execute(
       command: string,

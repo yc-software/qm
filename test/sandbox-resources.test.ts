@@ -174,7 +174,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   assert.equal((await defaults.get("personal:alice"))?.sandboxId, null);
   await assert.rejects(
     router.provision("personal:alice"),
-    /sandbox list, create, set_default, then retry before reporting blocked/,
+    /get one as the sandbox tool describes, then retry before reporting blocked/,
   );
   const explicit = await router.provision("personal:alice", { sandboxId: record.id });
   assert.equal(explicit.resourceId, record.id);
@@ -683,8 +683,7 @@ test("retirement waits for background startup to commit its live registry row", 
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
-      if ((await registry.liveByScope(record.ownerScopeId)).some((r) => r.sandboxId === record.id))
-        throw new Error("live background work");
+      if ((await registry.listLive()).some((r) => r.sandboxId === record.id)) throw new Error("live background work");
     },
   });
   const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: "local" });

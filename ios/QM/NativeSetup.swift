@@ -24,9 +24,9 @@ struct NativeSetupView: View {
         NavigationLink {
           NativeSlackAccountView(client: client)
         } label: {
-          setupLabel(
-            "Connect your Slack account", "Let QM work with your Slack context.",
-            "bubble.left.and.bubble.right")
+          NativeServiceLabel(service: "slack") {
+            setupText("Connect your Slack account", "Let QM work with your Slack context.")
+          }
         }
         NavigationLink {
           NativeKeychainView(client: client)
@@ -64,12 +64,15 @@ struct NativeSetupView: View {
   }
   private func setupLabel(_ title: String, _ detail: String, _ icon: String) -> some View {
     Label {
-      VStack(alignment: .leading, spacing: 6) {
-        Text(title).font(.headline)
-        Text(detail).font(.subheadline).foregroundStyle(.secondary)
-      }.padding(.vertical, 8)
+      setupText(title, detail)
     } icon: {
       Image(systemName: icon).foregroundStyle(QMTheme.ink)
     }
+  }
+  private func setupText(_ title: String, _ detail: String) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title).font(.headline)
+      Text(detail).font(.subheadline).foregroundStyle(.secondary)
+    }.padding(.vertical, 8)
   }
 }

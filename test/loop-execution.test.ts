@@ -119,3 +119,28 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
     }
   });
 }
+
+test("a loop whose triage backlog is too long to screen at once triages what fits on each fire", async () => {
+  const built = buildApp(testConfig());
+  const owner = scopeId("personal", "U1");
+  await built.featureFlags.setEnabled("loop_triage", owner, true, "admin");
+  const fields = { owner: "U1", createdBy: "U1", ownerScopeId: owner, playbook: "Sort.", successCondition: "Sorted." };
+  const { loop } = await built.loops.store.create({ ...fields, name: "Long inbox" });
+  await built.loops.store.update(loop.id, { triage: { prioritize: { enabled: true } } });
+  const filler = "\u0001".repeat(400);
+  await built.loops.items.ingest(
+    Array.from({ length: 40 }, (_, i) => ({
+      loopId: loop.id,
+      dedupeKey: `item-${i}`,
+      sourcePayload: { title: filler, from: filler, snippet: filler },
+      proposal: { data: {}, by: "agent" as const },
+    })),
+  );
+  const triaged = async () => (await built.loops.items.byLoop(loop.id)).filter((item) => item.triage).length;
+  const fired = await built.loops.fire!.fire(loop.id, "f1", undefined, { enumerate: false });
+  assert.equal(fired.note, "enqueued 0, worked 0");
+  const first = await triaged();
+  assert.ok(first > 0 && first < 40);
+  await built.loops.fire!.fire(loop.id, "f2", undefined, { enumerate: false });
+  assert.equal(await triaged(), 40);
+});

@@ -705,6 +705,32 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.match(((await overHttp.json()) as any).message, /cron tool/);
   });
 
+  it("records the agent turn that changed a cron: its actor, its run and whether it was bot work", async () => {
+    const owner = { "x-agent-capability": await capChannelMembers("U1") };
+    const created = await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "standup notes" }, owner);
+    const { cron } = (await created.json()) as any;
+    await post("/v1/share", { type: "cron", id: cron.id, toScope: "personal:U2", permission: "write" }, owner);
+    const teammate = { "x-agent-capability": await capChannel("U2", { runId: "run-u2" }) };
+    assert.equal((await patch(`/v1/crons/${cron.id}`, { title: "standup (renamed)" }, teammate)).status, 200);
+    const bot = {
+      "x-agent-capability": await capFor("B1", scopeId("personal", "B1"), { botActor: true, runId: "run-b1" }),
+    };
+    const botCron = (
+      (await (await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "x" }, bot)).json()) as any
+    ).cron;
+    assert.equal((await del(`/v1/crons/${botCron.id}`, bot)).status, 200);
+    const changes = (await built.auditLog.events(testTenant)).filter(
+      (e) => [cron.id, botCron.id].includes(e.resource) && ["cron_update", "cron_delete"].includes(e.action),
+    );
+    assert.deepEqual(
+      changes.map(({ principalId, action, detail }) => ({ principalId, action, detail })),
+      [
+        { principalId: "U2", action: "cron_update", detail: JSON.stringify({ runId: "run-u2" }) },
+        { principalId: "B1", action: "cron_delete", detail: JSON.stringify({ runId: "run-b1", botActor: true }) },
+      ],
+    );
+  });
+
   it("a channel cron is readable by a member but never administrable by them (your boss's channel cron stays out of your DM's control)", async () => {
     const created = (await (
       await post(
