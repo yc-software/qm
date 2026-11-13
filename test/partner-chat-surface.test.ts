@@ -13,6 +13,11 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { partnerChatPrincipal, createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
 import { PARTNER_CHAT_CLAIM_MS, createPartnerChatClient } from "../src/surfaces/partner-chat/client.ts";
+import {
+  postPartnerChatMessage,
+  setPartnerChatTyping,
+  type PartnerChatMessages,
+} from "../src/surfaces/partner-chat/messages.ts";
 import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
 import { signPartnerChat, signPartnerChatRequest } from "../src/surfaces/partner-chat/protocol.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
@@ -42,6 +47,7 @@ async function fakePartnerChat(status = 200) {
   const received: Received[] = [];
   const messages = new Map<string, { chat_id: unknown; thread_id: unknown; body: unknown }>();
   let next = 41;
+  const keyed = new Map<string, string>();
   const server = createServer((req: IncomingMessage, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
@@ -63,10 +69,21 @@ async function fakePartnerChat(status = 200) {
             ) &&
           Math.abs(Date.now() / 1000 - Number(req.headers["x-agent-app-request-timestamp"])) <= 300,
       });
-      const id = String(++next);
-      if (status === 200) messages.set(id, { chat_id: body.chat_id, thread_id: body.thread_id, body: body.body });
-      res.writeHead(status, { "content-type": "application/json" });
-      res.end(JSON.stringify(status === 200 ? { message_id: id } : { error: "nope" }));
+      const key = String(body.client_message_id);
+      const target = messages.get(String(body.message_id));
+      const change = status === 200 && req.url !== "/agent_app/messages" && req.url !== "/agent_app/typing";
+      const id = change ? String(body.message_id) : (keyed.get(key) ?? String(++next));
+      if (change && target && req.url === "/agent_app/messages/update") target.body = body.body;
+      else if (change && target) messages.delete(id);
+      else if (status === 200 && req.url === "/agent_app/messages")
+        messages.set(keyed.set(key, id).get(key)!, {
+          chat_id: body.chat_id,
+          thread_id: body.thread_id,
+          body: body.body,
+        });
+      const code = change && !target ? 404 : status;
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify(code === 200 ? { message_id: id } : { error: change ? "message not found" : "nope" }));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -311,7 +328,11 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
 function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
   const send = partnerChatSender({
     client: createPartnerChatClient({ url, secret: SECRET }),
-    app: { tenantFor, ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
+    app: {
+      tenantFor,
+      readSurfaceMessages: async () => [],
+      ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
+    },
   });
   return { deliveries, mirrored, settled: (until: () => Promise<boolean>) => relayUntil(deliveries, send, until) };
 }
@@ -330,7 +351,7 @@ async function relayUntil(
   }
 }
 
-test("partner-chat deliveries are signed posts mirrored as the agent's own, and edits are refused", async () => {
+test("partner-chat deliveries are signed posts mirrored as the agent's own", async () => {
   const partnerChat = await fakePartnerChat();
   const { deliveries, mirrored, settled } = outboundFor(`${partnerChat.url}/`);
   try {
@@ -346,22 +367,6 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
       attachments: [{ name: "chart.png", mimeType: "image/png", blob: { kind: "inline", data: "" } }] as never,
       idempotencyKey: "run:00000000-0000-4000-8000-000000000001",
     });
-    const refused = await Promise.all([
-      deliveries.enqueue({
-        destination: { type: "partner-chat", target: CONTAINER, editRef: "1793649600.00000000000000001021" },
-        text: "edited by ref",
-        idempotencyKey: "edit-by-ref",
-      }),
-      deliveries.enqueue({
-        destination: {
-          type: "partner-chat",
-          target: CONTAINER,
-          edit: { messageTs: "1793649600.00000000000000000043" },
-        },
-        text: "explicit edit",
-        idempotencyKey: "explicit-edit",
-      }),
-    ]);
     await settled(async () => (await deliveries.pending("partner-chat")).length === 0);
     assert.deepEqual(
       partnerChat.received.map((r) => [r.path, r.body, r.signed]),
@@ -382,8 +387,6 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
         ],
       ],
     );
-    for (const d of refused)
-      assert.equal((await deliveries.get(d.id))?.failedReason, "partner-chat: only non-empty text posts are supported");
     assert.deepEqual(
       mirrored.map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text, m.self]),
       [
@@ -864,7 +867,7 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const deliveries = createDeliveryStore();
   const sent: string[] = [];
   const send = partnerChatSender({
-    app: { tenantFor, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    app: { tenantFor, readSurfaceMessages: async () => [], ingestSurfaceEvents: async () => ({ upserted: 0 }) },
     client: createPartnerChatClient({
       url: "https://chat.example",
       secret: SECRET,
@@ -893,4 +896,79 @@ test("a retryable failure holds back later posts to the same chat target only", 
     (await deliveries.pending("partner-chat")).map((d) => d.text),
     ["first in 88", "second in 88"],
   );
+});
+
+test("a status post becomes the final reply in place, and the agent can revise or delete what it posted", async () => {
+  const { built, partnerChat } = await partnerChatApp();
+  const deliveries = createDeliveryStore();
+  const ops: PartnerChatMessages = {
+    client: createPartnerChatClient({ url: partnerChat.url, secret: SECRET }),
+    app: built.app,
+  };
+  const send = partnerChatSender({ ...ops, app: built.app });
+  const thread = { account: "7001", kind: "group" as const, chat: "88", thread: "1009" };
+  const status = () =>
+    withTenant(TEST_TENANT, () => postPartnerChatMessage(ops, thread, { text: "On it", idempotencyKey: "status:r1" }));
+  const deliver = async (destination: Record<string, unknown>, text: string, idempotencyKey: string) => {
+    const d = await deliveries.enqueue({
+      destination: { type: "partner-chat", target: `${CONTAINER}:1009`, ...destination },
+      text,
+      idempotencyKey,
+    });
+    await relayUntil(deliveries, send, async () => (await deliveries.pending("partner-chat")).length === 0);
+    return (await deliveries.get(d.id))?.failedReason ?? null;
+  };
+  const cached = () =>
+    built.surfaceCache
+      .readMessages(CONTAINER, { surface: "partner-chat", self: true, includeDeleted: true, noFallback: true })
+      .then((all) => all.map((m) => [m.ts, m.sub, m.text, Boolean(m.editedAt), Boolean(m.deleted)]));
+  try {
+    const ref = (await status())!;
+    assert.equal(await status(), ref);
+    assert.deepEqual(await cached(), [[ref, "1009", "On it", false, false]]);
+
+    assert.equal(await deliver({ editRef: ref }, "Here is the answer", "run:r1"), null);
+    assert.deepEqual(partnerChat.shown(), [{ id: "42", chat_id: "88", thread_id: "1009", body: "Here is the answer" }]);
+    assert.deepEqual(await cached(), [[ref, "1009", "Here is the answer", true, false]]);
+
+    assert.equal(await deliver({ edit: { messageTs: ref } }, "Here is the answer, revised", "revise"), null);
+    assert.equal(await deliver({ edit: { messageTs: ref } }, " ", "blank"), null);
+    assert.deepEqual(
+      partnerChat.shown().map((m) => m.body),
+      ["Here is the answer, revised"],
+    );
+    assert.equal(
+      await deliver({ edit: { messageTs: "1793649600.00000000000000000999" } }, "nothing there", "stray"),
+      "partner-chat 404: message not found",
+    );
+
+    assert.equal(await deliver({ editRef: "1793649600.00000000000000000999" }, "Posted afresh", "run:r2"), null);
+    assert.deepEqual(
+      partnerChat.shown().map((m) => [m.id, m.body]),
+      [
+        ["42", "Here is the answer, revised"],
+        ["43", "Posted afresh"],
+      ],
+    );
+
+    assert.equal(await deliver({ delete: { messageTs: ref } }, "", "remove"), null);
+    assert.equal(await deliver({ editRef: (await cached())[1]![0] as string }, "", "run:r3"), null);
+    assert.deepEqual(partnerChat.shown(), []);
+    assert.deepEqual(
+      (await cached()).map((m) => m[4]),
+      [true, true],
+    );
+
+    await setPartnerChatTyping(ops.client, thread, true);
+    await setPartnerChatTyping(ops.client, { account: "7001", chat: "88" }, false);
+    assert.deepEqual(
+      partnerChat.received.slice(-2).map((r) => [r.path, r.body, r.signed]),
+      [
+        ["/agent_app/typing", { chat_id: "88", thread_id: "1009", typing: true }, true],
+        ["/agent_app/typing", { chat_id: "88", typing: false }, true],
+      ],
+    );
+  } finally {
+    await partnerChat.close();
+  }
 });
