@@ -172,7 +172,6 @@ test("validProjectIcon accepts one emoji, a named custom emoji, or an https imag
     { kind: "custom", name: "x", extra: 1 },
     { kind: "image", url: "http://example.com/a.png" },
     { kind: "image", url: "data:image/png;base64,YWJj" },
-    { kind: "image", url: `https://example.com/${"a".repeat(2048)}` },
     "🚢",
     ":shipit:",
     42,

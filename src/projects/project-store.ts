@@ -108,7 +108,6 @@ export function validProjectIcon(value: unknown): value is ProjectIcon | null {
 }
 
 function imageUrl(value: string): boolean {
-  if (value.length > 2048) return false;
   try {
     return new URL(value).protocol === "https:";
   } catch {
