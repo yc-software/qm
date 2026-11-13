@@ -18,6 +18,7 @@ import {
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { msOf } from "../sessions/items.ts";
+import { fold } from "../identity/user-tenancy.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 
 export interface CreateLoopInput extends CreateTriggerInput {
@@ -268,54 +269,29 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
 export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
   id: "users/v2/0010-hold-bot-loop-ships",
   statements: [
-    `SET LOCAL statement_timeout = 0`,
     `DO $$
     BEGIN
-      IF to_regclass('items') IS NULL OR to_regclass('runs') IS NULL OR to_regclass('loops') IS NULL
+      IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('loops') IS NULL
          OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
         RETURN;
       END IF;
-      WITH bot_runs AS MATERIALIZED (
-        SELECT tenant_id, id::uuid AS turn_id, jsonb_build_object('runId', id, 'threadRef', session_id) AS source
-          FROM runs
-         WHERE pg_input_is_valid(id, 'uuid')
-           AND CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb ->> 'botActor' = 'true' END
-      ), bot_calls AS MATERIALIZED (
-        SELECT c.tenant_id, ${msOf("c.created_at")} AS started, ${msOf("res.created_at")} AS ended,
-               generate_series(${msOf("c.created_at")} / 60000, ${msOf("res.created_at")} / 60000) AS minute, r.source,
-               concat_ws(' ', c.body, c.text, res.body, res.text) AS evidence
-          FROM bot_runs r
-          JOIN items c ON c.tenant_id = r.tenant_id AND c.turn_id = r.turn_id AND c.kind = 'ToolCall'
-          JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
-                        AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
-      ), granted AS (
-        SELECT DISTINCT ON (g.tenant_id, g.id) g.tenant_id, g.id, l.json ->> 'ownerScopeId' AS scope,
-               l.id AS loop_id, g.json ->> 'shipAction' AS ship_action, b.source
+      WITH granted AS (
+        SELECT g.tenant_id, g.id, l.json ->> 'ownerScopeId' AS scope, l.id AS loop_id
           FROM loop_ship_grants g
-          JOIN bot_calls b ON b.tenant_id = g.tenant_id AND b.minute = (g.json ->> 'createdAt')::bigint / 60000
-                          AND (g.json ->> 'createdAt')::bigint BETWEEN b.started AND b.ended
-                          AND strpos(b.evidence, g.json ->> 'loopId') > 0
           JOIN loops l ON l.tenant_id = g.tenant_id AND l.id = g.json ->> 'loopId'
          WHERE NOT g.json ? 'revokedAt'
-         ORDER BY g.tenant_id, g.id, b.started DESC
-      ), holds AS (
-        SELECT x.tenant_id, x.id, x.scope, x.source, jsonb_agg(DISTINCT p ->> 'action') AS actions
-          FROM (SELECT tenant_id, loop_id AS id, scope, source, ship_action AS action FROM granted
-                UNION ALL
-                SELECT tenant_id, id, json ->> 'ownerScopeId', NULL, NULL FROM loops WHERE json @> '{"botActor": true}') x
-          JOIN loops l ON l.tenant_id = x.tenant_id AND l.id = x.id
-          CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'shipActions') p
-         WHERE p ->> 'gate' = 'auto' AND (x.action IS NULL OR p ->> 'action' = x.action)
-         GROUP BY x.tenant_id, x.id, x.scope, x.source
+           AND EXISTS (SELECT 1 FROM user_links k JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
+                        WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")})
       ), gated AS (
-        SELECT l.tenant_id, l.id,
-               jsonb_agg(CASE WHEN h.actions ? (p ->> 'action') THEN p || '{"gate": "hold"}'::jsonb ELSE p END ORDER BY n)
+        SELECT l.tenant_id, l.id, any_value(l.json ->> 'ownerScopeId') AS scope,
+               jsonb_agg(p ->> 'action' ORDER BY n) FILTER (WHERE p ->> 'gate' = 'auto') AS actions,
+               jsonb_agg(CASE WHEN p ->> 'gate' = 'auto' THEN p || '{"gate": "hold"}'::jsonb ELSE p END ORDER BY n)
                  AS ship_actions
-          FROM (SELECT tenant_id, id, jsonb_agg(a) AS actions
-                  FROM holds CROSS JOIN LATERAL jsonb_array_elements_text(actions) a GROUP BY tenant_id, id) h
-          JOIN loops l ON l.tenant_id = h.tenant_id AND l.id = h.id
+          FROM loops l
           CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'shipActions') WITH ORDINALITY AS a(p, n)
+         WHERE l.json @> '{"botActor": true}'
          GROUP BY l.tenant_id, l.id
+        HAVING bool_or(p ->> 'gate' = 'auto')
       ), held AS (
         UPDATE loops l SET json = l.json || jsonb_build_object('shipActions', g.ship_actions)
           FROM gated g WHERE l.tenant_id = g.tenant_id AND l.id = g.id
@@ -332,12 +308,10 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
       )
       INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
       SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, id, scope, detail::text
-        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope,
-                     COALESCE(source, '{}') || jsonb_build_object('heldShipActions', actions) AS detail
-                FROM holds
+        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope, jsonb_build_object('heldShipActions', actions) AS detail
+                FROM gated
               UNION ALL
-              SELECT tenant_id, 'ship_grant_revoke', id, scope, source || jsonb_build_object('loopId', loop_id)
-                FROM granted) entries;
+              SELECT tenant_id, 'ship_grant_revoke', id, scope, jsonb_build_object('loopId', loop_id) FROM granted) entries;
     END $$`,
   ],
 };
