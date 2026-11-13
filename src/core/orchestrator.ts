@@ -61,7 +61,7 @@ import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
-import { loadsScopeContext } from "../resolution/context-filter.ts";
+import { isOwnScopeBotWork } from "../resolution/context-filter.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { deliverAddressedReply, interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
@@ -583,8 +583,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const admissionRefusal = await admitAudienceAndBudget(tenant, deps, conversation, actor, surface, external);
       if (admissionRefusal) return admissionRefusal;
 
-      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external, input.botActor === true);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      const ownScopeBotWork = isOwnScopeBotWork({ actorId: actor.id, scopeId, botActor: input.botActor });
+      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external, ownScopeBotWork);
       const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
       const audienceScopeId =
         !automationDestination ||
@@ -759,8 +760,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const mcpToolsReady =
         !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const livePersonTurn = liveAuthorTurn && input.botActor !== true;
-      const useMemory =
-        !external && input.skipMemory !== true && loadsScopeContext(actor.id, scopeId, input.botActor === true);
+      const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
       const personaTurn =
@@ -807,6 +807,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryPolicy,
         useMemory,
         botActor: input.botActor === true,
+        ownScopeBotWork,
         notebookOnly,
         memory: deps.memory,
         files: deps.files,
@@ -1579,7 +1580,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resolution,
           provision,
           provisionResource,
-          botActor: input.botActor === true,
+          ownScopeBotWork,
         });
         const surfaceToolDeps = createSurfaceToolDeps({
           tenant,

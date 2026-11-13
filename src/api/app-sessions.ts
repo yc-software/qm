@@ -517,8 +517,8 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(tenant, principalId, opts, inScope, botActor) {
-      return filesForViewer(tenant, principalId, botActor === true, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork) {
+      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope);
     },
 
     async uploadFileForViewer(tenant, principalId, input) {
@@ -560,10 +560,10 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId, botActor) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
       const art = await deps.files.get(id);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId, botActor);
+      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
         const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
@@ -1336,7 +1336,7 @@ export function createSessionMethods(
     getSoul(scopeIdValue, reader) {
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
-      const readable = loadsScopeContext(reader.actorId, scopeIdValue, reader.botActor);
+      const readable = loadsScopeContext(reader.actorId, scopeIdValue, reader.ownScopeBotWork);
       const soul = readable ? deps.config.getSoul(scopeIdValue) : null;
       return {
         scopeId: scopeIdValue,
@@ -1354,7 +1354,7 @@ export function createSessionMethods(
       const allowedPersonal =
         kind === "personal" &&
         samePerson(ref, actorId) &&
-        loadsScopeContext(actorId, scopeIdValue, opts?.botActor === true);
+        loadsScopeContext(actorId, scopeIdValue, opts?.ownScopeBotWork === true);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();

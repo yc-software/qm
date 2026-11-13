@@ -33,6 +33,7 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
   botActor: boolean;
+  ownScopeBotWork: boolean;
   notebookOnly?: boolean;
   memory: MemoryService;
   files: FileArtifactStore;
@@ -79,7 +80,7 @@ export async function resolveTurnContext(input: ContextInput) {
     targetScope: input.targetScope,
     nativeScopes: baseRecallScopes,
     audience: input.audience,
-    open: resolution.sharingPosture === "open",
+    open: resolution.sharingPosture === "open" && !input.botActor,
     ...(input.notebookOnly ? { notebookOnly: true } : {}),
     config: input.config,
     isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,
@@ -172,7 +173,7 @@ export async function resolveTurnContext(input: ContextInput) {
           ...sharingSources,
           ...(!input.external ? [resolution.orgScopeId] : []),
         ]),
-      ].filter((scope) => loadsScopeContext(input.actor.id, scope, input.botActor));
+      ].filter((scope) => loadsScopeContext(input.actor.id, scope, input.ownScopeBotWork));
       const grantedSkills: GrantedSkillRef[] = input.external
         ? []
         : (
@@ -183,7 +184,7 @@ export async function resolveTurnContext(input: ContextInput) {
                 input.audience,
                 input.targetScope,
                 resolution.orgScopeId,
-                entitledScopes(input.botActor),
+                entitledScopes(input.ownScopeBotWork),
               )
               .catch(swallowAs("context: skill grants for audience", []))
           ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));

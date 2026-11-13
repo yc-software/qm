@@ -32,7 +32,7 @@ import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../typ
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
-import { loadsScopeContext } from "../resolution/context-filter.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -765,7 +765,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     readSoul(capability) {
       const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId, {
         actorId: capability.actorId,
-        botActor: capability.botActor === true,
+        ownScopeBotWork: isOwnScopeBotWork(capability),
       });
       return { effectiveSoul, soul, soulVersion };
     },
@@ -774,7 +774,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,
-          botActor: capability.botActor === true,
+          ownScopeBotWork: isOwnScopeBotWork(capability),
           expectedVersion,
           sessionId: capability.sessionId,
         });
@@ -803,7 +803,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       if (
         (req.type === "file" || req.type === "skill") &&
-        !loadsScopeContext(capability.actorId, home.ownerScopeId, capability.botActor === true)
+        !loadsScopeContext(capability.actorId, home.ownerScopeId, isOwnScopeBotWork(capability))
       )
         return {
           ok: false,

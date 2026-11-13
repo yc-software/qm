@@ -169,12 +169,12 @@ export function createArtifactAccess(turn: {
   resolution: TurnResolution;
   provision: TurnSandboxes["provision"];
   provisionResource: TurnSandboxes["provisionResource"];
-  botActor: boolean;
+  ownScopeBotWork: boolean;
 }) {
-  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource, botActor } = turn;
+  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource, ownScopeBotWork } = turn;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
   const mayReadArtifact = async (artifact: FileArtifact, storedById = false): Promise<boolean> => {
-    const libraryReach = storedById && botActor;
+    const libraryReach = storedById && ownScopeBotWork;
     if (
       conversation.audience.every((principal) =>
         principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId, libraryReach),

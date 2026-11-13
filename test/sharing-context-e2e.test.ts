@@ -185,6 +185,17 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.equal(await b.turn(own, true), "(exit 0)");
   await b.turn(own, true, "U1", { botActor: true });
   assert.ok((await b.errors.list(testTenant)).some((e) => /sandbox access is no longer authorized/.test(e.message)));
+  await b.remove("U3");
+  const roomFile = await b.file("personal:U1", "room.txt", "ROOM_FILE");
+  const roomGrant = {
+    ownerScopeId: "personal:U1",
+    ref: roomFile,
+    granteeScopeId: "personal:U2",
+    permission: "read",
+  } as const;
+  await b.acl.grant(tenant, { ...roomGrant, grantedBy: "U1" }, "U1");
+  assert.equal(await b.turn("!read shared/room.txt", true, "U1", { botActor: true }), "ROOM_FILE");
+  assert.equal(await b.turn(`!attach file_id:${roomFile}`, true, "U1", { botActor: true }), "");
 });
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {

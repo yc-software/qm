@@ -8,6 +8,7 @@ import {
   UNTRUSTED_CONTENT_SANDBOX_CSP,
 } from "../http.ts";
 import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 
 const PLAYGROUND_CSP = [
   "sandbox allow-scripts allow-pointer-lock",
@@ -36,7 +37,7 @@ async function openForViewer(ctx: ApiCtx) {
     tenantOf(ctx),
     ctx.params.id!,
     viewer,
-    ctx.capability?.botActor === true,
+    isOwnScopeBotWork(ctx.capability),
   );
   if (!opened) sendJson(ctx.res, 404, { error: "not_found" });
   return opened;

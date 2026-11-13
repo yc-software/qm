@@ -53,7 +53,7 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
       const tenant = ambientTenant();
       const libraries = await Promise.all(
         request.principals.map(async (p) => {
-          const scopes = await helpers.currentResourceScopesForViewer(p.id, request.botActor === true);
+          const scopes = await helpers.currentResourceScopesForViewer(p.id, request.ownScopeBotWork === true);
           const [owned, handles] = await Promise.all([
             deps.files.listOwnedByScopes(scopes, { limit: 200 }),
             deps.acl.handlesFor(tenant, scopes),
@@ -80,7 +80,7 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
             tenant,
             file.id,
             request.principals[0]!.id,
-            request.botActor === true,
+            request.ownScopeBotWork === true,
           );
           if (opened) {
             const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(
@@ -106,11 +106,11 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
 }
 function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
   if (!deps.surfaceCache) return null;
-  const canSee = async (principal: Principal, container: string, botActor: boolean): Promise<boolean> => {
+  const canSee = async (principal: Principal, container: string, ownScopeBotWork: boolean): Promise<boolean> => {
     const state = await deps.surfaceCache!.containerState(container);
     if (!state) return false;
     const home = conversationScope({ kind: state.kind ?? "channel", threadRef: container }, principal.id);
-    if (!loadsScopeContext(principal.id, home, botActor)) return false;
+    if (!loadsScopeContext(principal.id, home, ownScopeBotWork)) return false;
     if (state.kind === "group") return deps.directory.groupMember(container, principal.id);
     if (state.kind === "dm") {
       const members = await deps.surfaceCache!.members(container);
@@ -125,7 +125,7 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
       const hits: BackendSearchHit[] = [];
       for (const message of messages) {
         const visible = await Promise.all(
-          request.principals.map((p) => canSee(p, message.container, request.botActor === true)),
+          request.principals.map((p) => canSee(p, message.container, request.ownScopeBotWork === true)),
         );
         if (!visible.every(Boolean)) continue;
         hits.push({

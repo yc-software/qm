@@ -415,11 +415,14 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     await built.app.deleteOwnedSkill({ principalId: "U5", id: mySkill });
     assert.equal((await post(`/v1/skills/${mySkill}/restore`, {}, bot)).status, 404);
     assert.equal(built.config.getSoul(own), "U5 private instruction.");
-    const share = await createControlService(built.app).shareArtifact(
-      { type: "file", id: mine, scope: scopeId("channel", "C") },
-      { actorId: "U5", scopeId: own, botActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
-    );
-    assert.equal(share.ok ? "shared" : share.code, "forbidden");
+    const shared = async (from: string) => {
+      const share = await createControlService(built.app).shareArtifact(
+        { type: "file", id: mine, scope: scopeId("channel", "C") },
+        { actorId: "U5", scopeId: from, botActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+      );
+      return share.ok ? "shared" : share.code;
+    };
+    assert.deepEqual([await shared(own), await shared(scopeId("channel", "C"))], ["forbidden", "shared"]);
   });
 
   it("rejects an invalid/expired token with 401", async () => {
