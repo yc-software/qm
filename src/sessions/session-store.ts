@@ -478,6 +478,8 @@ export interface SessionStore {
 
   scopeHasSessions(scope: ScopeId): Promise<boolean>;
 
+  personHasSessions(principalIds: readonly string[]): Promise<boolean>;
+
   sessionsByThreadRefs(threadRefs: readonly string[]): Promise<SessionRef[]>;
 
   distinctScopes(): Promise<DistinctScope[]>;

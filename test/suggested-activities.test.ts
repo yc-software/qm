@@ -51,7 +51,7 @@ function fixture(used = true) {
   });
   const deps = {
     store,
-    sessions: used ? { ...sessions, scopeHasSessions: async () => true } : sessions,
+    sessions: used ? { ...sessions, personHasSessions: async () => true } : sessions,
     crons,
     enabled: true,
     now: () => time,
@@ -113,7 +113,14 @@ test("someone who has not used QM yet gets the seeds and no generation job until
   await f.sessions.getOrCreateByThread(`web:${person}:first`, "dm", scopeId("personal", person));
   assert.equal((await f.service.get(person, activities)).pending, true);
   await f.settle();
-  assert.equal((await f.crons.list())[0]?.owner, person);
+  const cron = (await f.crons.list())[0]!;
+  assert.equal(cron.owner, person);
+  assert.ok(cron.action!.includes('[{"id":"app","title":"Build my app"}'));
+  assert.ok(!cron.action!.includes("Help me with this project."));
+  const speaker = `speaker-${Date.now()}`;
+  const channel = await f.sessions.getOrCreateByThread(`slack:C1:${speaker}`, "channel", scopeId("channel", "C1"));
+  await f.sessions.addParticipant(channel.id, speaker);
+  assert.equal((await f.service.get(speaker, activities)).pending, true);
 });
 
 test("concurrent enrollment shares one cron and one first run", async () => {

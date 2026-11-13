@@ -2,7 +2,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import type { Session, SessionType, ScopeId } from "../types.ts";
+import { scopeId, type Session, type SessionType, type ScopeId } from "../types.ts";
 import type {
   NewSessionPin,
   SessionPin,
@@ -333,6 +333,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async scopeHasSessions(scope): Promise<boolean> {
       const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1) AS present", [scope]);
+      return Boolean(rows[0]?.present);
+    },
+
+    async personHasSessions(principalIds): Promise<boolean> {
+      const rows = await q(
+        `SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = ANY($1))
+             OR EXISTS(SELECT 1 FROM participants WHERE principal_id = ANY($2)) AS present`,
+        [principalIds.map((id) => scopeId("personal", id)), principalIds],
+      );
       return Boolean(rows[0]?.present);
     },
 
