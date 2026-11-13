@@ -1,16 +1,12 @@
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
 import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
 import {
-  parseActivitySeeds,
   parseSuggestedActivities,
   type ActivitySeeds,
   type SuggestedActivity,
 } from "../../../plugins/chassis/src/suggested-activities.ts";
-import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { orgId } from "../../config.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -26,7 +22,6 @@ export interface WebMeConfig {
   browserErrors?: ReturnType<typeof browserErrorConfig>;
   welcomeCohort?: string;
   suggestedActivities: SuggestedActivity[];
-  activitySeedsDir?: string;
 }
 
 export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
@@ -38,21 +33,15 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
     ...(browserErrors ? { browserErrors } : {}),
     ...(welcomeCohort ? { welcomeCohort } : {}),
     suggestedActivities: parseSuggestedActivities(env.WEB_UI_SUGGESTED_ACTIVITIES),
-    ...(env.DEPLOYMENT_LAYER ? { activitySeedsDir: resolve(env.DEPLOYMENT_LAYER, "activity-seeds") } : {}),
   };
 }
 
-export async function companyActivitySeeds(config: WebMeConfig): Promise<ActivitySeeds | undefined> {
-  if (!config.activitySeedsDir) return undefined;
-  const company = externalOrgId();
-  if (!isDnsLabel(company)) return undefined;
-  const text = await readFile(join(config.activitySeedsDir, `${company}.json`), "utf8").catch(
-    (err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") return undefined;
-      throw err;
-    },
-  );
-  return text === undefined ? undefined : parseActivitySeeds(text);
+function companyActivitySeeds(deps: ApiCtx["deps"]): ActivitySeeds | undefined {
+  return deps.deploymentLayer?.activitySeeds(externalOrgId());
+}
+
+export function seedActivities(deps: ApiCtx["deps"]): SuggestedActivity[] {
+  return companyActivitySeeds(deps)?.activities ?? deps.web?.me.suggestedActivities ?? [];
 }
 
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
@@ -74,7 +63,7 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, workspaceUrl, auth, branding, seeds] = await Promise.all([
+  const [permissions, workspaceUrl, auth, branding] = await Promise.all([
     permissionsOf(ctx, user),
     app
       .directoryMeta()
@@ -82,10 +71,10 @@ async function me(ctx: ApiCtx): Promise<void> {
       .catch(swallowAs("web: /me directory meta", null)),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
-    companyActivitySeeds(config).catch(swallowAs("web: /me activity seeds", undefined)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
-  const fallback = seeds?.activities ?? config.suggestedActivities;
+  const seeds = companyActivitySeeds(deps);
+  const fallback = seedActivities(deps);
   return sendJson(res, 200, {
     user,
     org: orgId(),

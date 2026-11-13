@@ -15,9 +15,12 @@ sandbox/
   tools/<id>/<binary>
   skills/<id>/SKILL.md
   skills/<id>/<text assets>
+  activity-seeds/<org>.json
 ```
 
 The Dockerfile is optional when every declared binary is present in its tool directory. Skill assets delivered through the deployment-layer API are text in v1. Executable text scripts can be delivered as skill assets. Native binary tools must already be installed in the platform image.
+
+`activity-seeds/<org>.json` gives one company its starting suggested activities, where `<org>` is that company's organization id as the deployment knows it. The file is `{ "activities": [...], "apps": { "<app id>": [...] } }`; each activity has `id`, `title`, `prompt`, `icon`, and an optional `source` shown beside the title, and an app's activity may name the company activity it `replaces`. The files travel in the same deployment-layer upload as tools and skills, and the core refuses an upload whose seed file is invalid, naming the file and entry.
 
 ## Configuration
 

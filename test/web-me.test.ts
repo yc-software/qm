@@ -1,10 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { webMeConfig } from "../src/api/routes/web-me.ts";
@@ -114,15 +111,9 @@ test("with suggestion generation on, /me leaves the fallback suggestions to the 
   assert.equal(body.suggestedActivities, undefined);
 });
 
-test("/me carries a company's activity seeds from the deployment layer, and they replace the deployment-wide list", async () => {
-  const layer = mkdtempSync(join(tmpdir(), "qm-seeds-"));
-  after(() => rmSync(layer, { recursive: true, force: true }));
-  mkdirSync(join(layer, "activity-seeds"));
-  const seeded = webMeConfig({ DEPLOYMENT_LAYER: layer, WEB_UI_SUGGESTED_ACTIVITIES: JSON.stringify(activities) });
-  const web = { events: {} as never, me: seeded, shell: { release: async () => undefined } as never };
-  const at = await serve({ web });
+test("/me carries the company's activity seeds from the uploaded deployment layer, and a rejected upload names the entry", async () => {
   const cookie = browserSessionCookie("bob@example.com");
-  const before = await me(cookie, at);
+  const before = await me(cookie);
   assert.equal("welcome" in before, false);
   assert.deepEqual(before.suggestedActivities, activities);
   const idea = { id: "crm", icon: "📇", title: "Track the harbor pilots", prompt: "Track the harbor pilots" };
@@ -132,11 +123,19 @@ test("/me carries a company's activity seeds from the deployment layer, and they
       gmail: [{ id: "g1", icon: "📥", title: "Find replies I owe", prompt: "Find replies I owe", replaces: "crm" }],
     },
   };
-  const file = join(layer, "activity-seeds", `${orgId()}.json`);
-  writeFileSync(file, JSON.stringify({ company: "Tidewater", ...seeds }));
-  const seededMe = await me(cookie, at);
-  assert.deepEqual(seededMe.welcome, seeds);
-  assert.deepEqual(seededMe.suggestedActivities, seeds.activities);
-  writeFileSync(file, JSON.stringify({ activities: [{ id: "crm", title: "No icon", prompt: "No icon" }] }));
-  assert.equal("welcome" in (await me(cookie, at)), false);
+  const file = (org: string, content: unknown) => ({
+    path: `activity-seeds/${org}.json`,
+    content: JSON.stringify(content),
+  });
+  const upload = (...activitySeeds: ReturnType<typeof file>[]) =>
+    built.deploymentLayerStore.put({ contract: 1, tools: [], skills: [], activitySeeds }, "test");
+  await upload(file(orgId(), seeds), file("another-company", { activities: [{ ...idea, id: "theirs" }] }));
+  const seeded = await me(cookie);
+  assert.deepEqual(seeded.welcome, seeds);
+  assert.deepEqual(seeded.suggestedActivities, seeds.activities);
+  await assert.rejects(
+    upload(file(orgId(), { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] })),
+    /activity-seeds\/default-org\.json: activities\[1\]: icon must be one emoji or a built-in icon name/,
+  );
+  assert.deepEqual((await me(cookie)).welcome, seeds);
 });

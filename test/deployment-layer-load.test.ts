@@ -273,3 +273,13 @@ test("replaceDeploymentLayer swaps installFiles so a durable layer update ships 
   replaceDeploymentLayer(target, emptyDeploymentLayer());
   assert.deepEqual(target.installFiles, []);
 });
+
+test("a layer directory's activity seeds load per company, and a misnamed file is refused by path", () => {
+  const dir = layerDir({});
+  mkdirSync(join(dir, "activity-seeds"));
+  const idea = { id: "crm", icon: "📇", title: "Track the harbor pilots", prompt: "Track the harbor pilots" };
+  writeFileSync(join(dir, "activity-seeds", "acme.json"), JSON.stringify({ activities: [idea] }));
+  assert.deepEqual(loadDeploymentLayer(dir).activitySeeds.get("acme"), { activities: [idea], apps: {} });
+  writeFileSync(join(dir, "activity-seeds", "Acme Inc.json"), "{}");
+  assert.throws(() => loadDeploymentLayer(dir), /activity-seeds\/<org>\.json: activity-seeds\/Acme Inc\.json/);
+});
