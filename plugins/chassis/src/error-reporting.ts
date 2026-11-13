@@ -44,7 +44,7 @@ const KEPT_TRACE_DATA = new Set([
   "qm.facts",
   "qm.recalled",
   "qm.skills",
-  "service",
+  "service.name",
   "deployment",
   "time_to_model_request",
   "time_to_first_text",
@@ -187,7 +187,7 @@ export function initializeErrorReporting(
   if (!env.SENTRY_DSN || client) return;
   const tracesSampleRate = parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE);
   const traced = tracesSampleRate > 0;
-  const identity = { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID };
+  const deployment = env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID;
   sdk.init({
     dsn: env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV ?? "development",
@@ -228,12 +228,12 @@ export function initializeErrorReporting(
     tracePropagationTargets: traced ? internalTraceTargets(env) : [],
     attachStacktrace: true,
     sendClientReports: false,
-    initialScope: { tags: identity },
+    initialScope: { tags: { service, deployment } },
     shutdownTimeout: FLUSH_MS,
   });
   sdk.addEventProcessor(tagActiveRequest);
   if (traced) {
-    sdk.getGlobalScope().setAttributes(identity);
+    sdk.getGlobalScope().setAttributes({ "service.name": service, deployment });
     sdk.getClient()?.on("beforeEnvelope", ownTraceHeader(sdk));
   }
   client = sdk;

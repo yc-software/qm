@@ -47,7 +47,7 @@ test("core requests are named by route template and carry no URL, query or heade
     );
     assert.doesNotMatch(JSON.stringify(requests), /private/);
     for (const sent of requests) {
-      assert.equal(sent.attributes.service, "core");
+      assert.equal(sent.attributes["service.name"], "core");
       assert.match(sent.trace_id, /^[a-f0-9]{32}$/);
     }
   } finally {

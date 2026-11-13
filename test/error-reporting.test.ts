@@ -340,7 +340,7 @@ test("sampled requests and queued runs become scrubbed, connected segments", asy
   assert.equal(run.trace_id, request.trace_id, "the run continues the request's trace");
   assert.ok(run.attributes.time_to_first_text >= 15);
   for (const [key, value] of Object.entries({
-    service: "test",
+    "service.name": "test",
     deployment: "test-deployment",
     "messaging.message.id": "run-1",
     "qm.surface": "web",
