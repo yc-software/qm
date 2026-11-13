@@ -48,7 +48,7 @@ import {
   type TurnPostKeys,
 } from "../core/orchestrator/turn-helpers.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
-import { editableIn, turnCapabilities } from "./registry.ts";
+import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { Item } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
@@ -205,14 +205,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         resolveRecipient: (q) => deps.directory.resolve(q),
         resolveChannel: (q) => deps.directory.resolveChannel(q),
         channelMember: (c, p) => deps.directory.channelMember(c, p),
-        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, "slack"),
+        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, SLACK),
         groupMember: (g, p) => deps.directory.groupMember(g, p),
         directoryMember: (p) => deps.directory.get(p),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
-                openGroupViaSurface((query) => deps.surfaceContext!.pull("slack", query), parts),
-              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts, "slack"),
+                openGroupViaSurface((query) => deps.surfaceContext!.pull(SLACK, query), parts),
+              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts, SLACK),
             }
           : {}),
       },

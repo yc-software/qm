@@ -59,6 +59,7 @@ import {
 import type { ParticipantScope } from "../sessions/session-store.ts";
 import type { App, AppDeps, ContextSummary, ProjectView, FileListPage } from "./app-types.ts";
 import { toFileItem } from "./app-types.ts";
+import { SLACK } from "../surfaces/registry.ts";
 import { personLabel } from "../identity/person-names.ts";
 
 type DeploymentAccess = Pick<Deployment, "id" | "ownerScopeId" | "createdBy" | "createdInScope">;
@@ -78,11 +79,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     resolveRecipient: (q) => deps.directory.resolve(q),
     resolveChannel: (q) => deps.directory.resolveChannel(q),
     channelMember: (c, p) => deps.directory.channelMember(c, p),
-    resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, "slack"),
+    resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, SLACK),
     groupMember: (g, p) => deps.directory.groupMember(g, p),
     directoryMember: (p) => deps.directory.get(p),
-    openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull("slack", query), parts),
-    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts, "slack"),
+    openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull(SLACK, query), parts),
+    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts, SLACK),
   };
   const resolveReachTargetFor = (
     target: ReachTarget,

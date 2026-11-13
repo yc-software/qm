@@ -1,5 +1,7 @@
 import type { Surface, SurfaceCapabilities, SurfacePromptHints } from "./contract.ts";
 
+export const SLACK = "slack";
+
 export type SurfaceToolPrompt = Pick<Surface, "label"> &
   Pick<SurfacePromptHints, "mentionSyntax"> & { textOnly?: boolean };
 
