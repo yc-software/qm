@@ -32,7 +32,9 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
     grants: await Promise.all(["gb", "pa", "ge", "gr"].map((id) => loops.grants.get(id))),
   });
   const [before, pg] = [await state(), createPgPool(url)];
-  await pg.q("DELETE FROM qm_schema_migrations WHERE id = 'users/v2/0010-hold-bot-loop-ships'");
+  await pg.q(
+    "DELETE FROM qm_schema_migrations WHERE id IN ('users/v2/0010-rerun-bot-marker-backfill', 'users/v2/0011-hold-bot-loop-ships')",
+  );
   await migrateRegisteredPgSchemas(url);
   const after = await state();
   const audit = await pg.q(`SELECT action, resource, scope_label, detail::jsonb FROM audit_log
@@ -41,7 +43,7 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
   const revocation = { revokedAt: after.grants[0]?.revokedAt, revokedBy: "system:migration" };
   const [[la, lb, lc, le], held] = [before.loops, gates.shipActions.map((p) => ({ ...p, gate: "hold" }))];
   assert.deepEqual(after, {
-    loops: [la, { ...lb, shipActions: held }, { ...lc, shipActions: held }, le],
+    loops: [la, { ...lb, shipActions: held }, { ...lc, botActor: true, shipActions: held }, le],
     grants: before.grants.map((g) => (["gb", "ge"].includes(g!.id) ? { ...g, ...revocation } : g)),
   });
   assert.ok(revocation.revokedAt! >= before.grants[0]!.createdAt);

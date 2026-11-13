@@ -267,7 +267,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
 }
 
 export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
-  id: "users/v2/0010-hold-bot-loop-ships",
+  id: "users/v2/0011-hold-bot-loop-ships",
   statements: [
     `DO $$
     BEGIN
@@ -275,16 +275,13 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
          OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
         RETURN;
       END IF;
-      WITH bots AS NOT MATERIALIZED (
-        SELECT k.tenant_id, k.alias_id FROM user_links k
-          JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
-         WHERE u.kind = 'app'
-      ), granted AS (
+      WITH granted AS (
         SELECT g.tenant_id, g.id, l.json ->> 'ownerScopeId' AS scope, l.id AS loop_id
           FROM loop_ship_grants g
           JOIN loops l ON l.tenant_id = g.tenant_id AND l.id = g.json ->> 'loopId'
          WHERE NOT g.json ? 'revokedAt'
-           AND EXISTS (SELECT 1 FROM bots b WHERE b.tenant_id = g.tenant_id AND b.alias_id = ${fold("g.json ->> 'actorId'")})
+           AND EXISTS (SELECT 1 FROM user_links k JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
+                        WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")})
       ), gated AS (
         SELECT l.tenant_id, l.id, any_value(l.json ->> 'ownerScopeId') AS scope,
                jsonb_agg(p ->> 'action' ORDER BY n) FILTER (WHERE p ->> 'gate' = 'auto') AS actions,
@@ -293,7 +290,6 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
           FROM loops l
           CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'shipActions') WITH ORDINALITY AS a(p, n)
          WHERE l.json @> '{"botActor": true}'
-            OR EXISTS (SELECT 1 FROM bots b WHERE b.tenant_id = l.tenant_id AND b.alias_id = ${fold("l.json ->> 'createdBy'")})
          GROUP BY l.tenant_id, l.id
         HAVING bool_or(p ->> 'gate' = 'auto')
       ), held AS (

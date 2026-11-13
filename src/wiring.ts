@@ -2013,6 +2013,10 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
+  pgArtifactMap.pool.registerMigration({
+    ...BACKFILL_BOT_MARKER_MIGRATION,
+    id: "users/v2/0010-rerun-bot-marker-backfill",
+  });
   pgArtifactMap.pool.registerMigration(HOLD_BOT_LOOP_SHIPS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
