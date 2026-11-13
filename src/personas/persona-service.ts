@@ -39,7 +39,6 @@ export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
   pinned?: boolean;
-  modelId?: string;
 }
 
 export interface PersonaService {
@@ -62,9 +61,10 @@ export interface PersonaService {
   detachCredential(principalId: string, id: string, grantId: string): Promise<PersonaResult<true>>;
   assign(
     principalId: string,
-    session: Pick<Session, "id" | "scopeId">,
+    session: Pick<Session, "id" | "scopeId" | "runtime">,
     personaId: string | null,
-  ): Promise<PersonaResult<PersonaView | null>>;
+  ): Promise<PersonaResult<(PersonaView & { sessionModelId?: string }) | null>>;
+  startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
   forTurn(
     personaId: string | undefined,
     actorId: string,
@@ -100,7 +100,7 @@ export function createPersonaService(deps: {
   flags: Pick<FeatureFlagStore, "enabled">;
   orgScope: ScopeId;
   teams?: Pick<TeamStore, "forTurn">;
-  sessions: Pick<SessionStore, "setPersona">;
+  sessions: Pick<SessionStore, "setPersona" | "setRuntime">;
   isActive: (principalId: string) => boolean;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
   config?: Pick<ScopedConfigStore, "getRuntimeSelectionDurable">;
@@ -143,6 +143,17 @@ export function createPersonaService(deps: {
       service: credential.service,
       ownerId: credential.ownerId,
     }));
+  }
+
+  async function startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(
+    session: S,
+    personaId: string,
+  ): Promise<S> {
+    if (session.runtime) return session;
+    const modelId = (await deps.config?.getRuntimeSelectionDurable(personaScope(personaId)))?.modelId;
+    if (!modelId) return session;
+    await deps.sessions.setRuntime(session.id, { modelId });
+    return { ...session, runtime: { modelId } };
   }
 
   return {
@@ -283,8 +294,13 @@ export function createPersonaService(deps: {
       const held = persona ? await role(principalId, personaId, session.scopeId) : null;
       if (!persona || !held) return { status: "not_found" };
       await deps.sessions.setPersona(session.id, personaId);
-      return { status: "ok", value: { ...persona, role: held } };
+      const { runtime } = await startOnDefaultModel(session, personaId);
+      return {
+        status: "ok",
+        value: { ...persona, role: held, ...(runtime ? { sessionModelId: runtime.modelId } : {}) },
+      };
     },
+    startOnDefaultModel,
     async forTurn(personaId, actorId, contextScope) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
@@ -299,9 +315,7 @@ export function createPersonaService(deps: {
       const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      const scope = personaScope(personaId);
-      const modelId = (await deps.config?.getRuntimeSelectionDurable(scope))?.modelId;
-      return { persona, scope, ...(pinned ? { pinned: true } : {}), ...(modelId ? { modelId } : {}) };
+      return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
     },
   };
 }

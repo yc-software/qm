@@ -142,7 +142,9 @@ access are never copied.
 ## Default model
 
 A persona can carry a default model, stored as the runtime selection of its `persona:<id>`
-scope and set from the persona editor (or `PUT /v1/runtime-config` with that scope; writers
-only). A conversation wearing the persona starts on that model when it has no model of its
-own yet; a model the person picks for the turn still wins, and later turns keep whatever
-model the conversation last used.
+scope and set from the Model panel on the persona's page (or `PUT /v1/runtime-config` with
+that scope; writers only). When a conversation that has no model yet takes the persona,
+core sets the conversation's model to it: on `PUT /v1/sessions/:id/persona`, which returns
+it as `sessionModelId` so the web composer opens on it, and on the first turn in a channel
+or group that pins the persona. From there it is the conversation's own model: a model the
+person picks for the turn still wins, and later turns keep whatever model it last used.

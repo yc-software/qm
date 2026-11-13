@@ -991,8 +991,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         },
       );
       const session =
-        persona?.modelId && !threadSession.runtime
-          ? { ...threadSession, runtime: { modelId: persona.modelId } }
+        persona && deps.personas
+          ? await deps.personas.startOnDefaultModel(threadSession, persona.persona.id)
           : threadSession;
       screenSession.id = session.id;
       const origin = await originOf(session);

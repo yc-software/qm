@@ -48,7 +48,7 @@ import {
 } from "./model-options";
 import { modelSupportsFastMode } from "./pi-models";
 import type { ComposerSurface, ConvCtx, SteeringRun } from "./conv-types";
-import { bumpSessionActivity, dropPendingSession, renderList, sessionsState } from "./sessions";
+import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
@@ -106,7 +106,7 @@ if (typeof window !== "undefined") {
   });
 }
 
-function rememberThreadPick(threadRef: string, value: ModelOptionValue): void {
+export function rememberThreadPick(threadRef: string, value: ModelOptionValue): void {
   const merged = loadThreadPicks();
   merged.delete(threadRef);
   merged.set(threadRef, value);
@@ -351,30 +351,14 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? getRuntimeConfig(key)?.appEditRuntime : undefined;
   }
 
-  function personaRuntime(key = scopeKey()): RuntimeConfig["effective"] | undefined {
-    const threadRef = ctx.chat.state.threadRef;
-    const personaId = threadRef ? sessionsState.list.find((s) => s.threadRef === threadRef)?.personaId : undefined;
-    if (!personaId) return undefined;
-    const personaScope = `persona:${personaId}`;
-    const config = getRuntimeConfig(personaScope);
-    if (!config) {
-      void loadRuntimeConfig(personaScope).then(
-        (loaded) => loaded && syncRuntimeSelection(ctx.chat.state.agent ?? undefined),
-      );
-      return undefined;
-    }
-    const override = config.scopeOverride;
-    return override && getModelOptions(key).some((option) => option.value === override.modelId) ? override : undefined;
-  }
-
   function defaultRuntime(key = scopeKey()): RuntimeConfig["effective"] | undefined {
     const effective = getRuntimeConfig(key)?.effective;
-    const preset = appEditRuntime(key) ?? personaRuntime(key);
-    return preset && effective ? { ...effective, ...preset } : effective;
+    const appEdit = appEditRuntime(key);
+    return appEdit && effective ? { ...effective, ...appEdit } : effective;
   }
 
   function defaultModelId(): ModelOptionValue {
-    return appEditRuntime()?.modelId ?? personaRuntime()?.modelId ?? defaultModelValue(scopeKey());
+    return appEditRuntime()?.modelId ?? defaultModelValue(scopeKey());
   }
 
   function currentModelOption(): ModelOption | undefined {
