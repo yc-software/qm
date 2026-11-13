@@ -53,7 +53,7 @@ export async function postPartnerChatMessage(
   const parsed = await deps.client.call(where.account, "/agent_app/messages", {
     client_message_id: message.idempotencyKey,
     chat_id: where.chat,
-    ...(where.thread ? { thread_id: where.thread } : {}),
+    ...(where.thread && !message.recipientUserId ? { thread_id: where.thread } : {}),
     body: message.text,
     ...(message.fileIds?.length ? { file_ids: message.fileIds } : {}),
     ...(message.actions?.length ? { actions: message.actions } : {}),

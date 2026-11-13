@@ -83,7 +83,7 @@ async function fakePartnerChat(status = 200) {
       if (change && target && req.url === "/agent_app/messages/update")
         Object.assign(target, { body: body.body }, body.actions ? { actions: body.actions } : {});
       else if (change && target) messages.delete(id);
-      else if (status === 200 && req.url === "/agent_app/messages")
+      else if (status === 200 && req.url === "/agent_app/messages" && !(body.recipient_user_id && body.thread_id))
         messages.set(keyed.set(key, id).get(key)!, {
           chat_id: body.chat_id,
           thread_id: body.thread_id,
@@ -91,7 +91,8 @@ async function fakePartnerChat(status = 200) {
           ...(body.actions ? { actions: body.actions } : {}),
           ...(body.recipient_user_id ? { to: body.recipient_user_id } : {}),
         });
-      const code = change && !target ? 404 : status;
+      const privateReply = req.url === "/agent_app/messages" && body.recipient_user_id && body.thread_id;
+      const code = privateReply ? 422 : change && !target ? 404 : status;
       res.writeHead(code, { "content-type": "application/json" });
       res.end(JSON.stringify(code === 200 ? { message_id: id } : { error: change ? "message not found" : "nope" }));
     });
@@ -850,7 +851,7 @@ test("a protocol 2 turn is answered by the turn driver: once in a direct chat, a
     assert.deepEqual(posts.map(String).sort(), [
       ",,run,All clear",
       ",,status,On it.",
-      "1202,5,post,I hit an error and couldn't finish",
+      ",5,post,I hit an error and couldn't finish",
       "1203,,post,[not reacted] Reactions aren't supported in this conversation.",
     ]);
     await settle(async () => (await built.deliveries.pending("partner-chat")).length === 0);
