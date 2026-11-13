@@ -468,19 +468,6 @@ test("Slack send receipts survive a restart, retry a busy session, and collapse 
   assert.equal(visible[0]!.body.slackReplyReceipt, undefined);
 });
 
-test("Slack send receipts are recorded immediately without a listener and skip an already recorded event", async () => {
-  const { sessions, deliveries } = wired();
-  const session = await webSession(sessions, "dm:D123");
-  const destination: Destination = {
-    ...webDestination("dm:D123"),
-    webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "123.789", name: "Alice" },
-  };
-  await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-1" });
-  assert.equal((await sessions.getItems(session.id)).length, 1);
-  await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-2" });
-  assert.equal((await sessions.getItems(session.id)).length, 1);
-});
-
 test("concurrent Slack receipt writers record one item and preserve distinct equal messages", async () => {
   const { sessions, inner, runs } = wired();
   const session = await webSession(sessions, "dm:D123");

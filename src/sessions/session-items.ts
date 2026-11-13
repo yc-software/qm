@@ -260,21 +260,20 @@ export function createSessionItems(deps: {
       });
     },
 
-    async appendDelivery(writer, item, deliveryKey) {
+    async appendDelivery(writer, item) {
       return withSessionLock(writer, async (client) => {
         const existing = await client.query(
           `SELECT 1 FROM items WHERE tenant_id = ${TENANT} AND session_id = $1
            AND ((turn_id = $2 AND kind = $3 AND variant IS NOT DISTINCT FROM $4
                  AND error_code IS NOT DISTINCT FROM $5)
                 OR (kind = 'UserMessage' AND $3 = 'UserMessage'
-                    AND (body ->> 'deliveryKey' = $6 OR external_id = $7))) LIMIT 1`,
+                    AND external_id = $6)) LIMIT 1`,
           [
             writer.sessionId,
             writer.turnId,
             item.kind,
             item.variant ?? null,
             item.errorCode ?? null,
-            deliveryKey,
             item.externalId ?? null,
           ],
         );

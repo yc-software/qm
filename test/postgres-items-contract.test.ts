@@ -240,8 +240,7 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
       body: { name: "Alice", slackReplyReceipt: true, deliveryKey: "k-1" },
     };
     await store.appendMany({ ...writer, turnId: randomUUID() }, [receipt]);
-    assert.equal(await store.appendDelivery({ ...writer, turnId: randomUUID() }, receipt, "k-1"), false);
-    assert.equal(await store.appendDelivery({ ...writer, turnId: randomUUID() }, receipt, "k-2"), false);
+    assert.equal(await store.appendDelivery({ ...writer, turnId: randomUUID() }, receipt), false);
     const texts = async () =>
       (await store.getItems(session.id, { transcript: true })).map((item) => [
         item.text,

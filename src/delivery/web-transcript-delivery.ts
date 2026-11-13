@@ -84,7 +84,7 @@ export function withWebTranscriptDeliveries(
     } else {
       item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
     }
-    const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item, d.idempotencyKey);
+    const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item);
     if (!inserted) return true;
     if (states) {
       const participants = await sessions.participantsOf(session.id);
