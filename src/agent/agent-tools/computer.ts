@@ -31,11 +31,12 @@ export function computerTools(kit: ToolKit) {
     capabilityTtlMs === 0
       ? "Those turn tokens do not expire here, but authorization checks still apply."
       : `Those turn tokens expire ${capabilityTtlHours} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
+  const adoptSandbox = opts?.botActor ? "pass its sandbox_id" : "set it default";
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
     `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
     "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
-    "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
+    `On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, ${adoptSandbox}, and recover work from git or Files.`;
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
@@ -199,19 +200,18 @@ export function computerTools(kit: ToolKit) {
   const sandboxActions = [
     "status",
     "restart",
-    ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
+    ...(opts?.sandboxResources ? ["list", "create", ...(opts.botActor ? [] : ["set_default"]), "retire"] : []),
   ];
   const memorySizedBackends = opts?.sandboxResources ? (opts.memorySizedBackends ?? []) : [];
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
-    description:
-      "Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). set_default: route commands there (null clears). status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, list, create, set_default and retry; report blocked only if creation fails. Durable outputs belong in git or Files.",
+    description: `Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). ${opts?.botActor ? "" : "set_default: route commands there (null clears). "}status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, ${opts?.botActor ? "list or create one and pass its sandbox_id" : "list, create, set_default and retry"}; report blocked only if creation fails. Durable outputs belong in git or Files.`,
     parameters: Type.Object({
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
         Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
-          description: "Sandbox ID; status/restart use the default if omitted. null only for set_default.",
+          description: `Sandbox ID; status/restart use the default if omitted.${sandboxActions.includes("set_default") ? " null only for set_default." : ""}`,
         }),
       ),
       backend: Type.Optional(Type.String({ description: "create: provider from list." })),
@@ -290,7 +290,7 @@ export function computerTools(kit: ToolKit) {
         }
         const verdictLine =
           verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
+            ? ` — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, ${adoptSandbox}, and retry there`
             : "";
         return recordResult(
           callId,
@@ -629,12 +629,15 @@ export function validateSandboxTool(
   if (!["execute", "background", "sandbox"].includes(tool.name)) return tool;
   const properties = (tool.parameters as { properties: Record<string, TSchema> }).properties;
   const schema = Type.Object(properties, { additionalProperties: false });
+  const declared = operationFields[tool.name];
+  const offered = (properties.action as { enum?: string[] } | undefined)?.enum;
+  const operations =
+    declared && Object.fromEntries(Object.entries(declared).filter(([name]) => offered?.includes(name) ?? true));
   return {
     ...tool,
     parameters: schema,
     async execute(callId, params, signal, onUpdate, ctx) {
       const action = isObj(params) ? String(params.action) : "";
-      const operations = operationFields[tool.name];
       const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
       const allowed = fields ? new Set(["action", "purpose", ...fields]) : undefined;
       let required: string[];
@@ -667,7 +670,9 @@ export function validateSandboxTool(
         if (unknown.length) return `${tool.name} has no ${named(unknown)} field`;
         if (unused.length) return `${action} doesn't take ${named(unused)}; omit them and retry`;
         if (nullSandbox)
-          return "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID";
+          return operations && Object.hasOwn(operations, "set_default")
+            ? "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID"
+            : "omit `sandbox_id` or pass a sandbox ID";
         if (!Check(schema, params)) return "a field has the wrong type or value; check the tool schema";
         return undefined;
       })();

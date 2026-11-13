@@ -460,9 +460,23 @@ test("a child sandbox whose first creation failed is created on a later turn sta
   rig.failing.add(`sandbox-${childId}`);
   await assert.rejects(rig.turn(child).tools.execute("true"), /provider hiccup/);
   assert.equal((await rig.resources.get(childId)).state, "failed");
+  assert.equal((await rig.resources.get(childId)).personUsed, true);
   const carol: Principal = { id: "carol", type: "internal", displayName: "Carol" };
   assert.equal((await rig.turn(child, carol).tools.execute("echo ok")).stdout.trim(), "ok");
   assert.equal((await rig.resources.get(childId)).state, "ready");
+});
+
+test("a computer a person creates with the sandbox tool is person-used even if its first open fails", async () => {
+  const rig = turnRig();
+  const provision = rig.backend.provision;
+  rig.backend.provision = async () => {
+    rig.backend.provision = provision;
+    throw new Error("provider hiccup");
+  };
+  const create = rig.turn(rig.session("s")).tools.sandboxResources!("create", { backend: "local", name: "box" });
+  await assert.rejects(create, /provider hiccup/);
+  const { sandboxes } = await rig.resources.list(actor.id, scope);
+  assert.equal(sandboxes.find((computer) => computer.name === "box")?.personUsed, true);
 });
 
 test("a child cannot get its own sandbox on a provider that cannot retire computers", async () => {

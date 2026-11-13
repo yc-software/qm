@@ -109,6 +109,9 @@ export const FORWARD_WEBHOOK_HEADERS = [
   "linear-signature",
   "x-signature",
   "x-delivery-id",
+  "webhook-id",
+  "webhook-timestamp",
+  "webhook-signature",
 ];
 
 export const FORWARD_AGENT_API_HEADERS = [

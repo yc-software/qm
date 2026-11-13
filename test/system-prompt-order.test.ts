@@ -1730,6 +1730,7 @@ test("a live turn in an app edit chat gets a small prompt of its own and six too
     const turn = dm(thread, "edit the app", { surface: "web", conversationHeader: note, origin });
     await postTurn({
       body: {
+        surface: "web",
         text: turn.text,
         actor: { externalId: actor.id },
         conversation: turn.conversation,
