@@ -26,7 +26,7 @@ export function createResourceSearchMethods(
       let visibleSkills = new Set<string>();
       let crons: ReturnType<typeof cronVisibility> | undefined;
       let person: ReturnType<App["personMatcher"]> | undefined;
-      const canSee = async (kind: Exclude<ResourceKind, "deploys">, row: ResourceCandidate): Promise<boolean> => {
+      const canSee = async (kind: Exclude<ResourceKind, "apps">, row: ResourceCandidate): Promise<boolean> => {
         switch (kind) {
           case "skills":
             if (await helpers.canManageSkill(row, principalId)) return true;
@@ -40,7 +40,7 @@ export function createResourceSearchMethods(
             return canAdministerWebhook(app, row, { actorId: principalId }, await person);
         }
       };
-      const kinds: ResourceKind[] = ["skills", "crons", "deploys", "webhooks"];
+      const kinds: ResourceKind[] = ["skills", "crons", "apps", "webhooks"];
       const limited: string[] = [];
       const search = async (kind: ResourceKind): Promise<ResourceSearchHit[]> => {
         const hits: ResourceSearchHit[] = [];
@@ -51,12 +51,12 @@ export function createResourceSearchMethods(
           const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes);
           visibleSkills = new Set(visibleSkillRows(skills, ordered, granted).map((r) => r.skill.id));
         }
-        const deploys = kind === "deploys" ? await helpers.deploymentPermissions(tenant, rows, principalId) : [];
+        const appPermissions = kind === "apps" ? await helpers.appPermissions(tenant, rows, principalId) : [];
         for (let i = 0; i < rows.length; i += 20) {
           const batch = rows.slice(i, i + 20);
           const allowed =
-            kind === "deploys"
-              ? deploys.slice(i, i + 20).map((permission) => permission !== null)
+            kind === "apps"
+              ? appPermissions.slice(i, i + 20).map((permission) => permission !== null)
               : await Promise.all(batch.map((row) => canSee(kind, row)));
           for (const [j, row] of batch.entries()) {
             if (allowed[j]) hits.push(resourceHit(kind, row, query));

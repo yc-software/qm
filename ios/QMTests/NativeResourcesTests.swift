@@ -23,7 +23,7 @@ final class NativeResourcesProtocol: URLProtocol, @unchecked Sendable {
       state.requests.append(request)
       state.bodies.append(payloadData)
       if state.holdsAccessLoad, request.httpMethod == "GET",
-        request.url!.path == "/api/deployments/d1/share"
+        request.url!.path == "/api/apps/d1/share"
       {
         state.heldAccessLoad = self
       }
@@ -58,7 +58,7 @@ final class NativeResourcesProtocol: URLProtocol, @unchecked Sendable {
         #"{"id":"a1","credentialId":"c1","requesterId":"bob","requesterScopeId":"group:web-project-p1","purpose":"Deploy","requestedMode":"once","expiresAt":1800000000000}"#
       body =
         "{\"credentials\":[{\"id\":\"c1\",\"service\":\"vercel\"}],\"connectorCredentials\":[],\"grants\":[],\"asks\":[\(ask)],\"scopeNames\":{\"group:web-project-p1\":\"Launch\"}}"
-    } else if url.path == "/api/deployments/d1/share" {
+    } else if url.path == "/api/apps/d1/share" {
       let grantees = #"[{"scope":"personal:bob","permission":"read"}]"#
       if request.httpMethod == "GET" {
         body = "{\"public\":false,\"externalSharing\":true,\"grantees\":\(grantees)}"
@@ -252,7 +252,7 @@ final class NativeResourcesTests: XCTestCase {
 
   func testPublicAccessFailureRevertsAndSuccessSendsOnlyThePublicFlag() async throws {
     let app = try JSONDecoder().decode(
-      NativeDeployment.self,
+      NativeApp.self,
       from: Data(
         #"{"id":"d1","ownerScopeId":"personal:alice","embedAncestors":["https://a.example"]}"#.utf8)
     )
@@ -284,7 +284,7 @@ final class NativeResourcesTests: XCTestCase {
 
   func testARefreshThatStartedBeforeASaveDoesNotOverwriteIt() async throws {
     let app = try JSONDecoder().decode(
-      NativeDeployment.self, from: Data(#"{"id":"d1","ownerScopeId":"personal:alice"}"#.utf8))
+      NativeApp.self, from: Data(#"{"id":"d1","ownerScopeId":"personal:alice"}"#.utf8))
     let model = AppPermissionsModel(client: client(), app: app)
     await model.load()
     NativeResourcesProtocol.state.withLock { $0.holdsAccessLoad = true }
@@ -305,12 +305,12 @@ final class NativeResourcesTests: XCTestCase {
 
   func testEmbeddingSitesAreTrimmedAndDeduplicatedInTheOrderTyped() {
     XCTAssertEqual(
-      NativeDeployment.parseEmbedAncestors(
+      NativeApp.parseEmbedAncestors(
         "https://tools.example.com\n\n  https://*.example.com  \nhttps://tools.example.com\n"),
       ["https://tools.example.com", "https://*.example.com"])
-    XCTAssertEqual(NativeDeployment.parseEmbedAncestors("\n \n"), [])
+    XCTAssertEqual(NativeApp.parseEmbedAncestors("\n \n"), [])
     XCTAssertEqual(
-      NativeDeployment.parseEmbedAncestors("http://example.com/app"), ["http://example.com/app"])
+      NativeApp.parseEmbedAncestors("http://example.com/app"), ["http://example.com/app"])
   }
 
   func testWebhookCreationOffersAndSendsTheLinearScheme() async throws {

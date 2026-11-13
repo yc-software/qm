@@ -28,6 +28,9 @@ export function exportTokenAccepted(ctx: Pick<BaseCtx, "req" | "res">, token: st
 
 export { isObj } from "../../util/objects.ts";
 
+export const BOT_WORK_PERSON_CREDENTIAL =
+  "this work runs with a Slack bot's restrictions because a bot started it, so it can't ask for a person's credential; ask for it from your own conversation instead";
+
 export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): CapabilityClaims | null {
   if (ctx.capability) return ctx.capability;
   return ctx.actor ? { actorId: ctx.actor.p, scopeId: scopeId("personal", ctx.actor.p), exp: ctx.actor.exp } : null;

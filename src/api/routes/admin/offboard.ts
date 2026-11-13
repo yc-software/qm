@@ -52,9 +52,9 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   for (const g of (await deps.keychain?.listGrants({ ownerId: principalId })) ?? [])
     if (g.status === "active")
       step("keychain_grant", g.id, g.purpose, "revoke", () => deps.keychain!.revokeGrant(g.ownerId, g.id));
-  for (const d of await app.listDeployments())
+  for (const d of await app.listApps())
     if (d.status !== "archived" && (await personal(d.ownerScopeId)))
-      step("app", d.id, d.displayName || d.name, "archive", () => app.archiveDeployment(d.id));
+      step("app", d.id, d.displayName || d.name, "archive", () => app.archiveApp(d.id));
   for (const s of await app.listSkills())
     if (s.status !== "archived" && (await personal(s.scopeId)))
       step("skill", s.id, s.manifest.name, "archive", () => app.archiveSkill(s.id));

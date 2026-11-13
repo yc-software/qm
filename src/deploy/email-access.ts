@@ -1,7 +1,7 @@
 import { validEmail } from "../identity/external-members.ts";
 import { parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 
-export async function deploymentShareScope(
+export async function appShareScope(
   grantee: ScopeId,
   permission: Permission | null,
   canManageEmail?: (email: string) => Promise<boolean>,
@@ -15,7 +15,7 @@ export async function deploymentShareScope(
   return scopeId("personal", email);
 }
 
-export interface DeploymentInvitation {
+export interface AppInvitation {
   emailSent: boolean;
   emailProblem?: string;
   appUrl?: string;
