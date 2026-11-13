@@ -154,7 +154,7 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   const ran = recordRuns(f);
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  const board = swarm.board!.sandboxId;
+  const board = worker.forumSandboxId!;
   const workerBacking = (await f.records.get(worker.sandboxId!))!.backingScopeId;
   const boardDisk = f.disks.get((await f.records.get(board))!.backingScopeId)!;
   f.disks.get(workerBacking)!.set("plan.md", "alice's private plan");
@@ -239,11 +239,13 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   };
 }
 
-async function personSwarm(backend?: ProcessSandbox) {
+async function personSwarm(backend?: ProcessSandbox, forum?: "forum") {
   const f = await channelSwarm(backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
-  await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work" });
+  const shared = forum && (await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal", "Swarm board"));
+  if (shared) f.disks.set(shared.backingScopeId, new Map());
+  await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work", forumSandboxId: shared?.id });
   await f.service.sweep();
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
   return f;
@@ -310,9 +312,11 @@ test("outside a swarm, a Slack bot's turn can use a computer it made only until 
 });
 
 test("a Slack bot's channel turn that may not direct a person's swarm cannot list or use the swarm's computers", async (t) => {
-  const observed = await channelTurn(await personSwarm(), releaseBot, true);
-  t.diagnostic(`observed: ${JSON.stringify(observed)}`);
-  assertKeptOut(observed);
+  for (const forum of [undefined, "forum"] as const) {
+    const observed = await channelTurn(await personSwarm(undefined, forum), releaseBot, true);
+    t.diagnostic(`observed: ${JSON.stringify(observed)}`);
+    assertKeptOut(observed);
+  }
 });
 
 test("a Slack bot that started a swarm cannot list or use its computers once a person sent work into it", async (t) => {
@@ -409,6 +413,7 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
   t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
   assertKeptIn(person, false);
   assertKeptIn(bot);
+  assertKeptIn(await channelTurn(await personSwarm(undefined, "forum"), alice, false), false);
 });
 
 test("a person's turn that only lists computers and background jobs leaves a bot-started swarm's computers to its bot", async (t) => {
