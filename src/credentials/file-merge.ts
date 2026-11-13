@@ -28,19 +28,27 @@ export function credentialFileExpiry(file: CredentialFile): number | undefined {
   return undefined;
 }
 
-function credentialFileAccount(file: CredentialFile): string | undefined {
-  try {
-    const value = cacheField(file, "account");
-    return typeof value === "string" && value ? value : undefined;
-  } catch {
-    return undefined;
-  }
+function refreshRefusal(ours: CredentialFile | undefined, theirs: CredentialFile | undefined): string | undefined {
+  if (!ours) return "deleted";
+  if (!theirs) return "a new file";
+  const cache = TOKEN_CACHES.find(({ directory }) => ours.path.startsWith(directory));
+  if (!cache) return "not a token cache";
+  if (!cache.account) return "a token cache with no account field";
+  const accounts = [ours, theirs].map((file) => {
+    try {
+      return cacheField(file, "account");
+    } catch {
+      return undefined;
+    }
+  });
+  if (accounts.some((account) => typeof account !== "string" || !account)) return "account field unreadable";
+  return accounts[0] === accounts[1] ? undefined : "account changed";
 }
 
 export interface CredentialFileMerge {
   files: CredentialFile[];
   overruled: string[];
-  withheld: string[];
+  withheld: Array<{ path: string; reason: string }>;
   byExpiry: Array<{ path: string; kept: "stored" | "refreshed" }>;
 }
 
@@ -61,9 +69,9 @@ export function mergeCredentialFiles(input: {
     const base = input.baseline.get(path);
     let pick = theirs;
     if (version(ours) !== version(theirs) && version(ours) !== base) {
-      const account = ours && credentialFileAccount(ours);
-      if (input.refreshOnly && (!theirs || !account || account !== credentialFileAccount(theirs))) {
-        merged.withheld.push(path);
+      const reason = input.refreshOnly ? refreshRefusal(ours, theirs) : undefined;
+      if (reason) {
+        merged.withheld.push({ path, reason });
         if (theirs) merged.files.push(theirs);
         continue;
       }

@@ -1112,7 +1112,7 @@ export function createKeychain(deps: {
       const ours = Object.entries(credentialFileHashes(normalized));
       if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return unchanged;
       let overruled: string[] = [];
-      let withheld: string[] = [];
+      let withheld: CredentialFileMerge["withheld"] = [];
       let byExpiry: Array<{ path: string; kept: string }> = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
@@ -1153,7 +1153,7 @@ export function createKeychain(deps: {
         );
       if (withheld.length)
         console.warn(
-          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.join(", ")} because a run that isn't its owner's live turn may only refresh a token cache`,
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn may only refresh a token cache`,
         );
       for (const { path, kept } of byExpiry)
         console.warn(

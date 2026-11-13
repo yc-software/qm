@@ -234,7 +234,9 @@ async function finishExecutionFiles(
           return;
         }
         const { overruled, withheld } = await saves[index]!(remaining);
-        const removed = deleted.filter((path) => !overruled.includes(path) && !withheld.includes(path));
+        const removed = deleted.filter(
+          (path) => !overruled.includes(path) && !withheld.some((entry) => entry.path === path),
+        );
         if (removed.length)
           notes.push(
             `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
@@ -245,7 +247,7 @@ async function finishExecutionFiles(
           );
         if (withheld.length)
           notes.push(
-            `could not save its changes to ${withheld.join(", ")} because a run that isn't its owner's live turn may only refresh a token cache; the owner can make the change in their own turn`,
+            `could not save its changes to ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn may only refresh a token cache; the owner can make the change in their own turn`,
           );
       }),
     );

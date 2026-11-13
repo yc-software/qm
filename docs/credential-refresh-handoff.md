@@ -26,12 +26,16 @@ conversation shares that computer through an environment.
 `src/credentials/execute-files.ts` stages requested bundles in a private
 `/tmp/qm-credentials.<random>/home`, points the CLI at it, captures changed files after the
 command and writes them back with `keychain.updateFiles`, which rejects stale writes. Only
-the owner's executions write back; a grant uses the saved files as they are. A run that isn't
-the owner's live turn (a cron, loop, watch, credential-request resume or bot-marked turn, or
-a background job one of them started) writes back only a refreshed token cache: a file the
-saved login already holds, in `.aws/sso/cache/`, with the same `startUrl`. Anything else it
-changed keeps the stored version, with a warning in the core log and on the command's stderr.
-Each execution removes its own directory in `finally`.
+the owner's executions write back; a grant uses the saved files as they are. The owner's live
+turn writes back everything: a turn the owner's own message started in an all-internal
+conversation (a live ambient wake included), a subagent delegated from one, and a background
+job either started. Every other run writes back only a refreshed token cache, a file the saved
+login already holds in `.aws/sso/cache/` with the same `startUrl`. That covers cron, loop,
+watch and webhook fires, swarm workers (a swarm a live turn started included), resumes after
+a credential request or secret drop, bot-marked and impersonated turns, and the jobs they
+start. Anything else such a run changed keeps the stored version; the core log names each path
+and why, and a foreground command's stderr says so. Each execution removes its own directory
+in `finally`.
 
 Background jobs accept the same `credentials` handles. The staging plan, credential ids,
 grant ids and baseline fingerprints (no secrets) are stored on the job's `process_sessions`

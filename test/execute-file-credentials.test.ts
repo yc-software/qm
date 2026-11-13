@@ -600,6 +600,25 @@ test("a background job that changed nothing leaves other commands' saves alone",
   assert.equal(await savedValue(f), "saved-meanwhile");
 });
 
+test("an unattended command saves only token cache refreshes and says why it kept each other change", async (t) => {
+  const f = await fixture(t);
+  const m = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (m.kind !== "file") throw new Error("Expected files");
+  const save = (updated: CredentialFile[]) => f.keychain.updateFiles({ ...m, writeback: true }, updated);
+  const result = await f
+    .context({
+      commandCredentials: [{ handle: "aws", resolve: async () => ({ env: [], files: { files: m.files, save } }) }],
+    })
+    .execute('printf new > "$HOME/.aws/config"; printf changed > "$HOME/.aws/sso/cache/session.json"', {
+      credentials: ["aws"],
+    });
+  assert.match(
+    result.stderr,
+    /could not save its changes to \.aws\/config \(a new file\), \.aws\/sso\/cache\/session\.json \(account field unreadable\)/,
+  );
+  assert.equal(await savedValue(f), "original");
+});
+
 test("a command whose change loses a conflict says so on stderr", async (t) => {
   const f = await fixture(t);
   const other = await startCommand(f);
