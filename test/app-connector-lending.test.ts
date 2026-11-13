@@ -24,6 +24,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -71,6 +72,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SIGNING,
     auditLog,
+    runs: liveRunStore(),
     keychain: {
       connectorAccessToken: async (host: string, principalId: string, accountType?: string) =>
         principalId === PUBLISHER && accountType === "personal" && host !== "api.dropboxapi.com" ? tokenOf(host) : null,
@@ -103,7 +105,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     SIGNING,
   );
   const broker = (body: Record<string, unknown>) => call("/v1/credentials/broker", appToken, body);
-  const lend = async (actorId: string, connectors: unknown, liveActor = true) =>
+  const lend = async (actorId: string, connectors: unknown, liveActor = true, run: object = liveRunClaims(actorId)) =>
     call(
       `/v1/deployments/${d.id}/connectors`,
       await mintCapabilityToken(
@@ -111,7 +113,8 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
           actorId,
           scopeId: personalScope(actorId),
           aud: CONTROL_PLANE_AUD,
-          ...(liveActor ? { liveActor: true } : {}),
+          ...run,
+          liveActor,
           exp: Date.now() + 60_000,
         },
         SIGNING,
@@ -128,6 +131,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "nothing is lent by default");
   assert.equal((await h.lend(CO_MANAGER, ["slack.com"])).status, 403, "a co-manager cannot lend the publisher's");
   assert.equal((await h.lend(PUBLISHER, ["slack.com"], false)).status, 403, "an unattended turn cannot lend");
+  assert.equal((await h.lend(PUBLISHER, ["slack.com"], true, { runId: "finished-run" })).json.error, "inactive_run");
   assert.equal((await h.lend(PUBLISHER, ["evil.example.com"])).json.error, "unknown_connector");
 
   const lent = await h.lend(PUBLISHER, ["Slack.com", "gmail.googleapis.com"]);

@@ -11,6 +11,7 @@ import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -34,6 +35,38 @@ export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): C
 
 export function audit(ctx: Pick<ApiCtx, "deps" | "tenant">, e: Omit<AuditEvent, "at">): void {
   ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e });
+}
+
+export async function activeRun(ctx: ApiCtx): Promise<boolean> {
+  const cap = ctx.capability;
+  if (!cap) return true;
+  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
+  if (
+    !run ||
+    run.status !== "running" ||
+    !cap.runLeaseToken ||
+    run.leaseToken !== cap.runLeaseToken ||
+    run.attempts !== cap.runAttempt ||
+    run.sessionId !== cap.threadRef ||
+    !samePerson(run.request.actor.id, cap.actorId) ||
+    (run.leaseExpiresAt ?? 0) <= Date.now()
+  ) {
+    sendJson(ctx.res, 403, {
+      error: "inactive_run",
+      message:
+        "This call needs the current token of a running turn: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses this access; make the call from a foreground command while the turn is running.",
+    });
+    return false;
+  }
+  return true;
+}
+
+export async function livePersonTurn(ctx: ApiCtx): Promise<boolean> {
+  if (ctx.capability && !personAtKeyboard(ctx.capability)) {
+    sendJson(ctx.res, 403, { error: "human_consent_required" });
+    return false;
+  }
+  return activeRun(ctx);
 }
 
 function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {

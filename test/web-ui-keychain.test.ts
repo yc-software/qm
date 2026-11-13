@@ -7,7 +7,7 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 async function core(t: TestContext): Promise<{ base: string; built: ReturnType<typeof buildApp> }> {
   const config = testConfig({ signingSecret: "web-keychain-signing-secret-0123456789" });
@@ -57,6 +57,27 @@ test("a signed-in person adds, lists and removes only their own keychain entries
   assert.deepEqual(bobView.credentials, []);
 
   assert.equal((await fetch(`${base}/api/keychain/credentials/${saved.id}`, as(bob, "DELETE"))).status, 404);
+  const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "alice")}`;
+  const refusal = [403, { error: "forbidden", message: "Unavailable while impersonating." }];
+  const routes = {
+    POST: [
+      "/v1/connectors/oauth/revoke",
+      "/v1/keychain/grants/missing/revoke",
+      "/v1/personas/missing/credentials",
+      "/v1/user-model-auth/disconnect",
+      "/v1/user-model-auth/api-key",
+      "/v1/user-model-auth/chatgpt/poll",
+      "/v1/user-model-auth/claude/complete",
+      "/v1/connectors/oauth/google/start",
+    ],
+    DELETE: [`/v1/keychain/credentials/${saved.id}`, "/v1/personas/missing", "/v1/personas/missing/credentials/x"],
+    PATCH: ["/v1/runs/missing/input"],
+  };
+  for (const [method, paths] of Object.entries(routes))
+    for (const path of paths) {
+      const res = await fetch(`${base}${path}`, as(impersonating, method, {}));
+      assert.deepEqual([res.status, await res.json()], refusal, path);
+    }
   assert.equal((await built.keychain!.listByOwner("alice")).length, 1);
   assert.equal((await fetch(`${base}/api/keychain/credentials/${saved.id}`, as(alice, "DELETE"))).status, 200);
   assert.equal((await built.keychain!.listByOwner("alice")).length, 0);
