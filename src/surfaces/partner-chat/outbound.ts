@@ -2,16 +2,23 @@ import type { App } from "../../api/app-types.ts";
 import { refusedStatus, type Send } from "../../delivery/relay.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { Delivery } from "../../types.ts";
+import { errMessage } from "../../util/errors.ts";
+import type { AddressFetch } from "../../util/network.ts";
+import type { BlobSource } from "../attachments.ts";
 import { PartnerChatHttpError, type PartnerChatClient } from "./client.ts";
+import { uploadPartnerChatFiles } from "./files.ts";
 import { partnerChatMessageId, partnerChatRef, partnerChatTs, parsePartnerChatRef } from "./protocol.ts";
 
 const MESSAGE_ID = /^\d+$/;
 const SELF_AUTHOR = "self";
+const UPLOAD_FAILED = "I couldn't attach the file(s). Try again in a moment.";
 
 class UnsupportedDelivery extends Error {}
 
 export function partnerChatSender(deps: {
   client: PartnerChatClient;
+  blobs: BlobSource;
+  storageFetch?: AddressFetch;
   app: Pick<App, "ingestSurfaceEvents" | "tenantFor">;
   now?: () => number;
 }): Send {
@@ -19,23 +26,39 @@ export function partnerChatSender(deps: {
 
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
-    const body = d.text.trim();
+    let body = d.text.trim();
     if (!ref) throw new UnsupportedDelivery(`partner-chat: unroutable target ${d.destination.target}`);
     if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
       throw new UnsupportedDelivery(`partner-chat: account ${ref.account} is not bound to this workspace`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
-    if (react || del || pin || edit || editRef || !body)
-      throw new UnsupportedDelivery("partner-chat: only non-empty text posts are supported");
-    if (d.attachments?.length)
-      console.log(`[partner-chat] delivery ${d.id} posts its text without ${d.attachments.length} attachment(s)`);
+    if (react || del || pin || edit || editRef || (!body && !d.attachments?.length))
+      throw new UnsupportedDelivery("partner-chat: only posts with text or files are supported");
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
     if (thread !== undefined && !MESSAGE_ID.test(thread))
       throw new UnsupportedDelivery(`partner-chat: bad thread id ${thread}`);
+    let fileIds: string[] = [];
+    if (d.attachments?.length) {
+      try {
+        fileIds = await uploadPartnerChatFiles(
+          deps.client,
+          ref.account,
+          ref.chat,
+          d.attachments,
+          deps.blobs,
+          deps.storageFetch,
+        );
+      } catch (e) {
+        console.error(`[partner-chat] delivery ${d.id} attachment upload failed: ${errMessage(e)}`);
+        body = [body, UPLOAD_FAILED].filter(Boolean).join("\n\n");
+      }
+    }
+    if (!body && !fileIds.length) throw new UnsupportedDelivery("partner-chat: every attached file is empty");
     const parsed = await deps.client.call(ref.account, "/agent_app/messages", {
       client_message_id: d.idempotencyKey,
       chat_id: ref.chat,
       ...(thread ? { thread_id: thread } : {}),
       body,
+      ...(fileIds.length ? { file_ids: fileIds } : {}),
     });
     const messageId = parsed.message_id;
     if (typeof messageId !== "string" && typeof messageId !== "number") {

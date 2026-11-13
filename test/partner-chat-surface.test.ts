@@ -30,6 +30,7 @@ import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
 const tenantFor = async () => TEST_TENANT;
+const NO_BLOBS = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
 
 interface Received {
@@ -311,6 +312,7 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
 function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
   const send = partnerChatSender({
     client: createPartnerChatClient({ url, secret: SECRET }),
+    blobs: NO_BLOBS,
     app: { tenantFor, ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
   });
   return { deliveries, mirrored, settled: (until: () => Promise<boolean>) => relayUntil(deliveries, send, until) };
@@ -864,6 +866,7 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const deliveries = createDeliveryStore();
   const sent: string[] = [];
   const send = partnerChatSender({
+    blobs: NO_BLOBS,
     app: { tenantFor, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
     client: createPartnerChatClient({
       url: "https://chat.example",

@@ -2568,20 +2568,23 @@ export function buildApp(
     }
   };
   const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
+  const partnerChatClient = config.partnerChat ? createPartnerChatClient(config.partnerChat) : null;
   const partnerChatInbound =
-    partnerChatNotices && config.partnerChat
+    partnerChatNotices && partnerChatClient && config.partnerChat
       ? createPartnerChatInbound({
           secret: config.partnerChat.secret,
+          client: partnerChatClient,
+          stageBlob: slackCore.stageBlob,
           app,
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           unansweredReply: partnerChatNotices.unanswered,
         })
       : null;
-  const partnerChatDelivery = config.partnerChat
+  const partnerChatDelivery = partnerChatClient
     ? createDeliveryRelay(deliveries, {
         type: "partner-chat",
-        send: partnerChatSender({ client: createPartnerChatClient(config.partnerChat), app }),
+        send: partnerChatSender({ client: partnerChatClient, blobs: slackCore, app }),
         claimMs: PARTNER_CHAT_CLAIM_MS,
       })
     : null;

@@ -4,8 +4,11 @@ import type { Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { inTenant } from "../../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../../util/errors.ts";
+import type { AddressFetch } from "../../util/network.ts";
 import { buildContextWindow, detectInputs } from "../context-window.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
+import type { PartnerChatClient } from "./client.ts";
+import { stagePartnerChatFiles } from "./files.ts";
 import {
   findMessage,
   partnerChatRef,
@@ -27,6 +30,9 @@ type InboundApp = Pick<
 
 export function createPartnerChatInbound(deps: {
   secret: string;
+  client: PartnerChatClient;
+  stageBlob: (bytes: Uint8Array) => Promise<{ blobId: string }>;
+  storageFetch?: AddressFetch;
   app: InboundApp;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
@@ -167,6 +173,16 @@ export function createPartnerChatInbound(deps: {
       chat: chat.id,
       ...(replyThread ? { thread: replyThread } : {}),
     });
+    const staged = message.files.length
+      ? await stagePartnerChatFiles(
+          deps.client,
+          event.account,
+          message.files,
+          deps.stageBlob,
+          author.displayName,
+          deps.storageFetch,
+        )
+      : undefined;
     const queued = await deps.app.turn({
       surface: SURFACE,
       actor: author,
@@ -193,6 +209,8 @@ export function createPartnerChatInbound(deps: {
           }
         : {}),
       text: message.body,
+      ...(staged?.attachments.length ? { attachments: staged.attachments } : {}),
+      ...(staged?.issues.length ? { inboundNotes: staged.issues } : {}),
       ...(followed && thread
         ? {
             origin: { kind: "ambient" as const, entryTs: ts, live: true },
