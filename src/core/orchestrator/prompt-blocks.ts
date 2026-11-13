@@ -329,6 +329,7 @@ const SYSTEM_CONTEXT_ORDER = [
   "Sandboxes",
   "Model access",
   "Crons scheduled here",
+  "Personas",
   "Credentials",
   "Skills",
 ] as const;

@@ -431,7 +431,7 @@ export interface SessionStore {
   append(writer: SessionWriter, item: NewItem): Promise<Item>;
   appendMany(writer: SessionWriter, items: readonly NewItem[]): Promise<Item[]>;
   getItems(sessionId: string, opts?: GetItemsOptions): Promise<Item[]>;
-  hasDeliveryEntry(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
+  appendDelivery(writer: SessionWriter, item: NewItem): Promise<boolean>;
   countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
@@ -465,6 +465,7 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
+  latestVisiblePromptAt(sessionId: string, principalId: string): Promise<number | undefined>;
   visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
 
   searchEntries(principalId: string, query: string, limit?: number, botActor?: boolean): Promise<EntrySearchHit[]>;

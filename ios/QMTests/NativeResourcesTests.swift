@@ -8,39 +8,71 @@ final class NativeResourcesProtocol: URLProtocol, @unchecked Sendable {
     var requests: [URLRequest] = []
     var repeatCursor = false
     var rejectMutation = false
+    var publicLinksUnavailable = false
+    var holdsAccessLoad = false
+    var heldAccessLoad: NativeResourcesProtocol?
+    var bodies: [Data] = []
   }
   static let state = OSAllocatedUnfairLock(initialState: State())
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
+    let payloadData = request.bodyData
+    let payload = (try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any]) ?? [:]
     let snapshot = Self.state.withLock { state in
       state.requests.append(request)
+      state.bodies.append(payloadData)
+      if state.holdsAccessLoad, request.httpMethod == "GET",
+        request.url!.path == "/api/deployments/d1/share"
+      {
+        state.heldAccessLoad = self
+      }
       return state
     }
+    if snapshot.heldAccessLoad !== self { respond(snapshot, payload) }
+  }
+  static func releaseAccessLoad() {
+    let (held, snapshot) = state.withLock { state in
+      let held = state.heldAccessLoad
+      state.heldAccessLoad = nil
+      state.holdsAccessLoad = false
+      return (held, state)
+    }
+    held?.respond(snapshot, [:])
+  }
+  private func respond(_ snapshot: State, _ payload: [String: Any]) {
     let url = request.url!
     let body: String
     var status = 200
     let project =
       #"{"id":"p1","name":"Launch","ownerId":"alice","memberIds":["alice"],"scopeId":"group:web-project-p1","members":[{"principalId":"alice","displayName":"Alice"}]}"#
-    if url.path == "/api/memory" {
-      let first = #"{"id":"f1","text":"Keeps answers short","createdAt":1000}"#
-      let second = #"{"id":"f2","text":"Prefers Swift","createdAt":2000}"#
-      if snapshot.rejectMutation && request.httpMethod != "GET" {
-        status = 403
-        body = #"{"error":"forbidden"}"#
-      } else if request.httpMethod == "PATCH" {
-        let edited = #"{"id":"f1","text":"Keeps answers very short","createdAt":1000}"#
-        body = "{\"facts\":[\(edited),\(second)]}"
-      } else if request.httpMethod == "DELETE" {
-        body = "{\"facts\":[\(second)]}"
-      } else {
-        body = "{\"facts\":[\(first),\(second)]}"
-      }
-    } else if url.path == "/api/contexts" {
+    if url.path == "/api/contexts" {
       body =
         "{\"contexts\":[{\"scopeId\":\"group:web-project-p1\",\"kind\":\"group\",\"name\":\"Launch\",\"sessionCount\":0,\"project\":\(project)}]}"
     } else if url.path == "/api/sessions" {
       body = #"{"sessions":[]}"#
+    } else if url.path == "/api/connectors" {
+      body = #"{"providers":{}}"#
+    } else if url.path == "/api/keychain/overview" {
+      let ask =
+        #"{"id":"a1","credentialId":"c1","requesterId":"bob","requesterScopeId":"group:web-project-p1","purpose":"Deploy","requestedMode":"once","expiresAt":1800000000000}"#
+      body =
+        "{\"credentials\":[{\"id\":\"c1\",\"service\":\"vercel\"}],\"connectorCredentials\":[],\"grants\":[],\"asks\":[\(ask)],\"scopeNames\":{\"group:web-project-p1\":\"Launch\"}}"
+    } else if url.path == "/api/deployments/d1/share" {
+      let grantees = #"[{"scope":"personal:bob","permission":"read"}]"#
+      if request.httpMethod == "GET" {
+        body = "{\"public\":false,\"externalSharing\":true,\"grantees\":\(grantees)}"
+      } else if snapshot.publicLinksUnavailable {
+        status = 409
+        body = #"{"error":"public_links_unavailable","message":"Public links are unavailable."}"#
+      } else {
+        body =
+          "{\"ok\":true,\"public\":\(payload["public"] as? Bool ?? false),\"reach\":\"anyone with the link\",\"grantees\":\(grantees)}"
+      }
+    } else if url.path == "/api/webhooks" {
+      let verification = payload["verification"] as? [String: String] ?? [:]
+      body =
+        "{\"url\":\"https://native-resources.example/hooks/w1\",\"webhook\":{\"id\":\"w1\",\"action\":\"Triage\",\"verification\":{\"scheme\":\"\(verification["scheme"] ?? "")\",\"secret\":\"***\"},\"enabled\":true,\"createdAt\":1000}}"
     } else if url.path.hasPrefix("/api/projects") {
       status = snapshot.rejectMutation ? 403 : 201
       body = "{\"project\":\(project)}"
@@ -68,6 +100,11 @@ final class NativeResourcesProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor
 final class NativeResourcesTests: XCTestCase {
+  private func bodies() -> [[String: Any]] {
+    NativeResourcesProtocol.state.withLock { $0.bodies }.compactMap {
+      try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    }
+  }
   private func client() -> APIClient {
     NativeResourcesProtocol.state.withLock { $0 = .init() }
     let config = URLSessionConfiguration.ephemeral
@@ -127,12 +164,12 @@ final class NativeResourcesTests: XCTestCase {
     let drafts = DraftStore(account: account, thread: conversation.threadRef)
     try drafts.write(.init(text: "Unsent project draft", conversation: conversation))
     let model = ProjectsModel(client: client, user: user)
-    await model.load()
-    XCTAssertEqual(model.conversations.first?.label, "Unsent project draft")
-    XCTAssertEqual(model.conversations.first?.localOnly, true)
+    await model.loadConversations(conversation.scopeId)
+    XCTAssertEqual(model.conversations[conversation.scopeId]?.first?.label, "Unsent project draft")
+    XCTAssertEqual(model.conversations[conversation.scopeId]?.first?.localOnly, true)
     try drafts.write(.init())
-    await model.load()
-    XCTAssertTrue(model.conversations.isEmpty)
+    await model.loadConversations(conversation.scopeId)
+    XCTAssertEqual(model.conversations[conversation.scopeId], [])
   }
 
   func testCronTitleEditsDoNotResetCadenceOrChangeLiteralMessages() throws {
@@ -189,31 +226,6 @@ final class NativeResourcesTests: XCTestCase {
     XCTAssertFalse(model.busy)
   }
 
-  func testMemoryEditsAndForgetsFactsThroughTheServerList() async throws {
-    let model = MemoryModel(client: client())
-    await model.load()
-    XCTAssertEqual(model.facts.map(\.id), ["f1", "f2"])
-    let edited = await model.edit(model.facts[0], text: "Keeps answers very short")
-    XCTAssertTrue(edited)
-    XCTAssertEqual(model.facts.first?.text, "Keeps answers very short")
-    let patch = try XCTUnwrap(NativeResourcesProtocol.state.withLock { $0.requests.last })
-    XCTAssertEqual(patch.httpMethod, "PATCH")
-    let forgot = await model.forget(model.facts[0])
-    XCTAssertTrue(forgot)
-    XCTAssertEqual(model.facts.map(\.id), ["f2"])
-    XCTAssertFalse(model.busy)
-  }
-
-  func testMemoryKeepsFactsWhenTheServerRejectsAChange() async {
-    let model = MemoryModel(client: client())
-    await model.load()
-    NativeResourcesProtocol.state.withLock { $0.rejectMutation = true }
-    let forgot = await model.forget(model.facts[0])
-    XCTAssertFalse(forgot)
-    XCTAssertEqual(model.facts.map(\.id), ["f1", "f2"])
-    XCTAssertNotNil(model.error)
-  }
-
   func testAPIComponentsEncodeOnceAndCannotAddAPathOrQuery() {
     let client = client()
     let member = "alice+ops@example.com/team?admin=true#fragment"
@@ -224,5 +236,90 @@ final class NativeResourcesTests: XCTestCase {
     XCTAssertFalse(url.absoluteString.contains("%252F"))
     XCTAssertEqual(
       client.url("api/sessions").absoluteString, "https://native-resources.example/api/sessions")
+  }
+
+  func testKeychainListsARequestWithItsRequesterScopeAndMode() async throws {
+    let model = KeychainModel(client: client())
+    await model.load()
+    let ask = try XCTUnwrap(model.overview?.asks?.first)
+    XCTAssertEqual(ask.credentialId, "c1")
+    XCTAssertEqual(ask.requesterScopeId, "group:web-project-p1")
+    XCTAssertEqual(ask.requestedMode, "once")
+    XCTAssertEqual(ask.purpose, "Deploy")
+    XCTAssertEqual(model.overview?.scopeNames?["group:web-project-p1"], "Launch")
+    XCTAssertNil(model.error)
+  }
+
+  func testPublicAccessFailureRevertsAndSuccessSendsOnlyThePublicFlag() async throws {
+    let app = try JSONDecoder().decode(
+      NativeDeployment.self,
+      from: Data(
+        #"{"id":"d1","ownerScopeId":"personal:alice","embedAncestors":["https://a.example"]}"#.utf8)
+    )
+    XCTAssertEqual(app.embedAncestors, ["https://a.example"])
+    let model = AppPermissionsModel(client: client(), app: app)
+    await model.load()
+    XCTAssertFalse(model.isPublic)
+    XCTAssertTrue(model.externalSharing)
+    XCTAssertEqual(model.grants.map(\.scope), ["personal:bob"])
+    NativeResourcesProtocol.state.withLock { $0.publicLinksUnavailable = true }
+
+    await model.setPublic(true)
+
+    XCTAssertFalse(model.isPublic)
+    XCTAssertEqual(model.error, "Public links are unavailable.")
+    XCTAssertFalse(model.busy)
+    NativeResourcesProtocol.state.withLock { $0.publicLinksUnavailable = false }
+
+    await model.setPublic(true)
+
+    XCTAssertTrue(model.isPublic)
+    XCTAssertNil(model.error)
+    let body = try XCTUnwrap(bodies().last)
+    XCTAssertEqual(body["public"] as? Bool, true)
+    XCTAssertEqual(body.keys.sorted(), ["public"])
+    await model.setPublic(true)
+    XCTAssertEqual(bodies().count, 2)
+  }
+
+  func testARefreshThatStartedBeforeASaveDoesNotOverwriteIt() async throws {
+    let app = try JSONDecoder().decode(
+      NativeDeployment.self, from: Data(#"{"id":"d1","ownerScopeId":"personal:alice"}"#.utf8))
+    let model = AppPermissionsModel(client: client(), app: app)
+    await model.load()
+    NativeResourcesProtocol.state.withLock { $0.holdsAccessLoad = true }
+    let refresh = Task { await model.load() }
+    while NativeResourcesProtocol.state.withLock({ $0.heldAccessLoad == nil }) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+
+    await model.setPublic(true)
+    XCTAssertTrue(model.isPublic)
+    NativeResourcesProtocol.releaseAccessLoad()
+    await refresh.value
+
+    XCTAssertTrue(model.isPublic)
+    XCTAssertFalse(model.loading)
+    XCTAssertNil(model.error)
+  }
+
+  func testEmbeddingSitesAreTrimmedAndDeduplicatedInTheOrderTyped() {
+    XCTAssertEqual(
+      NativeDeployment.parseEmbedAncestors(
+        "https://tools.example.com\n\n  https://*.example.com  \nhttps://tools.example.com\n"),
+      ["https://tools.example.com", "https://*.example.com"])
+    XCTAssertEqual(NativeDeployment.parseEmbedAncestors("\n \n"), [])
+    XCTAssertEqual(
+      NativeDeployment.parseEmbedAncestors("http://example.com/app"), ["http://example.com/app"])
+  }
+
+  func testWebhookCreationOffersAndSendsTheLinearScheme() async throws {
+    XCTAssertTrue(WebhooksModel.verificationSchemes.contains { $0.id == "linear" })
+    let model = WebhooksModel(client: client())
+    let result = await model.create(action: "Triage", scheme: "linear", secret: "", filters: "")
+    let created = try XCTUnwrap(result)
+    XCTAssertEqual(created.webhook.verification.scheme, "linear")
+    let body = try XCTUnwrap(bodies().last)
+    XCTAssertEqual((body["verification"] as? [String: String])?["scheme"], "linear")
   }
 }

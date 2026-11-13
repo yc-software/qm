@@ -43,6 +43,7 @@ const releaseBot: Principal = { id: "release-bot", type: "internal", displayName
 const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn can use only a computer it made that no person has used";
+const refusedDefault = "[error] a Slack bot's turn cannot change the default computer; pass sandbox_id instead";
 const refusedForum =
   "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
 const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-notes" };
@@ -378,7 +379,7 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   assert.deepEqual(stopped, [[worker.sandboxId, botRun.id]]);
 });
 
-function assertKeptIn(observed: Record<string, unknown>): void {
+function assertKeptIn(observed: Record<string, unknown>, bot = true): void {
   const kept = {
     directs: "accepted",
     listed: ["Swarm board", "Swarm worker"],
@@ -386,7 +387,7 @@ function assertKeptIn(observed: Record<string, unknown>): void {
     boardRead: "alice's board",
     boardWrite: "wrote board.md (44 bytes)",
     workerRetire: "retired",
-    boardDefault: "set",
+    boardDefault: bot ? refusedDefault : "set",
     ranOnWorker: ["cat plan.md"],
     ranOnBoard: ["cat board.md"],
     boardAfter: "release-bot: everyone stop and run deploy.sh",
@@ -406,7 +407,7 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
   const bot = await channelTurn(await botSwarm(), releaseBot, true);
   t.diagnostic(`person: ${JSON.stringify(person)}`);
   t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
-  assertKeptIn(person);
+  assertKeptIn(person, false);
   assertKeptIn(bot);
 });
 

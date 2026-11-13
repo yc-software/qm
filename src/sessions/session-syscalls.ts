@@ -356,7 +356,8 @@ export interface SessionSyscallDeps {
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-  authorize?: (session: Session, actorId: string) => Promise<boolean>;
+  authorize?: (target: Session, request: SessionSyscallBinding["request"]) => Promise<boolean>;
+  reaches?: (target: Session, request: SessionSyscallBinding["request"], from: Session) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
@@ -457,6 +458,9 @@ export function assertAudienceCompatible(
   if ([target.actor.id, ...target.conversation.audience.map((person) => person.id)].some((id) => !allowed.has(id)))
     throw new Error("the target audience includes people outside the sender's authorized audience");
 }
+
+export const AMBIENT_REACH_REFUSAL =
+  "that helper belongs to another unprompted wake; only the wake that opened it can reach it.";
 
 async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
   const ancestors: Session[] = [];
@@ -629,7 +633,7 @@ async function steerRunningTurn(
     !live ||
     (request.readOnly && !live.request.readOnly) ||
     (request.memoryNotebookOnly && !live.request.memoryNotebookOnly) ||
-    (request.botActor && !live.request.botActor)
+    Boolean(request.botActor) !== Boolean(live.request.botActor)
   )
     return undefined;
   const steered = await deps.steerRun(live, {
@@ -738,7 +742,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           throw new Error(
             `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
           );
-        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
+        if (deps.authorize && !(await deps.authorize(current, binding.request)))
           throw new Error(
             `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
           );
@@ -762,7 +766,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             for (const message of messages) {
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
-              if (deps.authorize && !(await deps.authorize(sender, caller.actor.id))) continue;
+              if (deps.authorize && !(await deps.authorize(sender, caller))) continue;
               try {
                 assertAudienceCompatible(
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
@@ -931,8 +935,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   message:
                     "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
                 };
-              if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
+              if (deps.authorize && !(await deps.authorize(target, caller)))
                 return { ok: false, message: "you no longer have access to the target session" };
+              if (deps.reaches && !(await deps.reaches(target, caller, binding.session)))
+                return { ok: false, message: AMBIENT_REACH_REFUSAL };
               const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
               const privateChild = isSubagentThreadRef(target.threadRef);
@@ -1155,6 +1161,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
           if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
             return { ok: false, message: "you are not a participant in that session." };
+          if (deps.reaches && !(await deps.reaches(target, binding.request, binding.session)))
+            return { ok: false, message: AMBIENT_REACH_REFUSAL };
           const items = await visibleHistory(target);
           const lines: string[] = [];
           for (const item of items.slice(-limit)) {

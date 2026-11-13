@@ -36,6 +36,7 @@ for (const surface of ["web", "slack", "swarm"]) {
             conversation: { kind: "dm", threadRef: `${surface}-context` },
             text,
             gatewayContext: { details: { topic: "Room Topic" }, hostIds: { channel: "Forged" } },
+            deliveryCandidates: [{ target: "C-lobby", label: "Lobby Name" }],
             origin: surface === "swarm" ? { kind: "automation", screenData: "assigned task" } : { kind: "human" },
           }),
         });
@@ -44,7 +45,8 @@ for (const surface of ["web", "slack", "swarm"]) {
         assert.equal(result.status, "ok");
         if (text === "!sysprompt") assert.ok(result.reply?.includes("Room Topic") && !result.reply.includes("Forged"));
       }
-      assert.ok(calls.some((call) => call.hook !== "tool_response" && call.payload.includes("Room Topic")));
+      for (const shown of ["Room Topic", "Lobby Name"])
+        assert.ok(calls.some((call) => call.hook !== "tool_response" && call.payload.includes(shown)));
       const outputs = calls.filter((call) => call.hook === "tool_response");
       assert.ok(outputs.length >= 3);
       for (const call of outputs) {
