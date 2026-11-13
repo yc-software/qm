@@ -9,11 +9,11 @@ import type { App } from "../src/api/app.ts";
 function appWith(endpoint: Record<string, unknown>): App {
   return {
     tenantFor: async () => TEST_TENANT,
-    reachDeployment: async () => ({ status: "ok", endpoint }),
+    reachApp: async () => ({ status: "ok", endpoint }),
   } as unknown as App;
 }
 
-test("/d/ proxy serves the warming page to a browser navigation when the deployment hangs", async () => {
+test("/d/ proxy serves the warming page to a browser navigation when the app hangs", async () => {
   const held: import("node:net").Socket[] = [];
   const upstream = createHttpServer((req) => {
     held.push(req.socket);
@@ -43,7 +43,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the deploym
   }
 });
 
-test("/d/ proxy serves the warming page to a browser navigation when the deployment refuses connections", async () => {
+test("/d/ proxy serves the warming page to a browser navigation when the app refuses connections", async () => {
   const upstream = createHttpServer(() => {});
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;

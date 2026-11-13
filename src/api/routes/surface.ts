@@ -583,7 +583,7 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
     files: out.files,
     crons: out.crons,
     webhooks: out.webhooks.map(redactWebhook),
-    deployments: out.deployments,
+    apps: out.apps,
     skills: out.skills,
     manageable: out.manageable,
   });

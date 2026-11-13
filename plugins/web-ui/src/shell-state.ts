@@ -32,7 +32,7 @@ const VIEWS = [
   "loops",
   "files",
   "keychain",
-  "deploys",
+  "apps",
   "memory",
   "skills",
   "personas",

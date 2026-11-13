@@ -8,7 +8,7 @@ test("compact server results link to each resource without downloading lists", (
       hits: [
         { id: "skill/1", kind: "skills", title: "Review", snippet: "Changes" },
         { id: "cron1", kind: "crons", title: "Daily", snippet: "Digest" },
-        { id: "app1", kind: "deploys", title: "Sales", snippet: "Tracker" },
+        { id: "app1", kind: "apps", title: "Sales", snippet: "Tracker" },
         { id: "group:team", kind: "contexts", title: "Team", snippet: "Project" },
         { id: "hook1", kind: "webhooks", title: "Review", snippet: "GitHub" },
       ],

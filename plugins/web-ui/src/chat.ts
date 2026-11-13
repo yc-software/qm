@@ -1883,7 +1883,7 @@ export function createChatSurface(
           crumb,
         });
         if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
-        switchView(tool === "apps" ? "deploys" : tool);
+        switchView(tool);
       },
     });
   }

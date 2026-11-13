@@ -1,5 +1,5 @@
-export function deploymentGitParts(pathname: string): { id: string; tail: string } | null {
-  const prefix = "/v1/deployments/";
+export function appGitParts(pathname: string): { id: string; tail: string } | null {
+  const prefix = "/v1/apps/";
   if (!pathname.startsWith(prefix)) return null;
   const rest = pathname.slice(prefix.length);
   const marker = "/git/";
@@ -14,8 +14,8 @@ export function deploymentGitParts(pathname: string): { id: string; tail: string
   }
 }
 
-export function isDeploymentGitRoute(method: string, pathname: string): boolean {
-  const parts = deploymentGitParts(pathname);
+export function isAppGitRoute(method: string, pathname: string): boolean {
+  const parts = appGitParts(pathname);
   if (!parts) return false;
   return (
     (method === "GET" && parts.tail === "info/refs") ||

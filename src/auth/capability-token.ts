@@ -9,7 +9,7 @@ import type { UserStore } from "../identity/user-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
-export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
+export const APP_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
 const DEFAULT_SANDBOX_CAPABILITY_TTL_HOURS = 48;
 
 export function parseSandboxCapabilityTtlMs(value: string | undefined): number {
