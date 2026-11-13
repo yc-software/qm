@@ -67,7 +67,7 @@ export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
     BEGIN
       IF to_regclass('items') IS NULL OR to_regclass('runs') IS NULL OR to_regclass('sessions') IS NULL
          OR to_regclass('audit_log') IS NULL OR to_regclass('sandbox_defaults') IS NULL
-         OR to_regclass('sandbox_resources') IS NULL THEN
+         OR to_regclass('sandbox_resources') IS NULL OR to_regclass('environment_attachments') IS NULL THEN
         RETURN;
       END IF;
       WITH tool_sets AS MATERIALIZED (
@@ -81,11 +81,13 @@ export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
          WHERE c.kind = 'ToolCall' AND c.tool = 'sandbox' AND c.body ->> 'action' = 'set_default'
            AND res.is_error IS NOT TRUE
       ), events AS (
-        SELECT t.tenant_id, COALESCE(sr.json ->> 'ownerScopeId', s.scope_id) AS scope, t.at, t.sandbox_id, t.bot,
-               t.run_id, t.thread_ref
+        SELECT t.tenant_id, COALESCE(sr.json ->> 'ownerScopeId', ea.environment_id, s.scope_id) AS scope, t.at,
+               t.sandbox_id, t.bot, t.run_id, t.thread_ref
           FROM tool_sets t
           JOIN sessions s ON s.tenant_id = t.tenant_id AND s.id = t.session_id
           LEFT JOIN sandbox_resources sr ON sr.tenant_id = t.tenant_id AND sr.id = t.sandbox_id
+          LEFT JOIN environment_attachments ea ON ea.tenant_id = t.tenant_id AND ea.scope_id = s.scope_id
+                                               AND ea.attached_at <= t.at
         UNION ALL
         SELECT tenant_id, scope_label, at, NULLIF(resource, 'null'), false, NULL, NULL
           FROM audit_log WHERE action = 'sandbox.default'

@@ -10,16 +10,16 @@ import { testTenant } from "./support/test-tenant.ts";
 
 test("a deploy clears a default computer only while a bot-marked turn's set is still in force", async () => {
   const url = testDatabaseUrl();
-  const { app, sessions, sandboxResources, auditLog } = buildApp(testConfig({ databaseUrl: url }));
+  const { app, sessions, sandboxResources, auditLog, environments } = buildApp(testConfig({ databaseUrl: url }));
   await migrateRegisteredPgSchemas(url);
   const scoped = (scopeId: string) => sandboxResources.forTurn({ actorId: "U1", scopeId, isCurrent: async () => true });
   const computer = async (scope: string) => (await scoped(scope).create("U1", scope, "sprites")).id;
   const wake = { surface: "slack", origin: { kind: "human" }, text: "go", async: true } as const;
-  const set = async (scope: string, sandboxId: string, bot?: "admitted" | "refused") => {
+  const set = async (scope: string, sandboxId: string | null, bot?: "admitted" | "refused", key = scope) => {
     const conversation = { kind: "channel", threadRef: `slack:${scope.slice(8)}:${bot ?? "person"}` } as const;
     const { runId } = await app.turn({ ...wake, actor: { externalId: "U1" }, botActor: !!bot, conversation });
     const items: never[] = [];
-    const put = (_: string, input: { sandboxId: string }) => scoped(scope).setDefault("U1", scope, input.sandboxId);
+    const put = (_: string, input: { sandboxId: string | null }) => scoped(key).setDefault("U1", key, input.sandboxId);
     const current = bot === "refused" ? {} : { sandboxResources: put };
     const ref = { current, emit: async (item: never) => void items.push(item), scopeLabel: scope };
     const sandbox = createAgentTools(ref as never, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
@@ -31,6 +31,8 @@ test("a deploy clears a default computer only while a bot-marked turn's set is s
   };
   const [a, b, c, d] = ["channel:C1", "channel:C2", "channel:C3", "channel:C4"] as const;
   const from = await set(a, await computer(a), "admitted");
+  await environments.attach(a, (await environments.create({ id: "channel:C5" })).id, "U1");
+  await set(a, null, undefined, "channel:C5");
   const kept = await computer(b);
   await set(b, kept, "admitted");
   const admin = { at: Date.now(), principalId: "U1", action: "sandbox.default", resource: kept, scopeLabel: b };
