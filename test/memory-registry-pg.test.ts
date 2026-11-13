@@ -841,6 +841,19 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
   assert.equal((await api.call("DELETE", "/v1/memory", "U1", { ...self, ids: [mint.id] })).status, 200);
   assert.equal((await api.call("DELETE", scoped, admin, BRAIN_REF)).status, 403);
   assert.equal((await api.call("DELETE", "/v1/memory", "U1", { ...self, ...BRAIN_REF })).status, 403);
+  const endedTurn = await mintCapabilityToken(
+    {
+      actorId: "U1",
+      scopeId: ALICE_SCOPE,
+      audienceScopeId: ALICE_SCOPE,
+      liveActor: true,
+      runId: "ended-run",
+      memory: { write: ALICE_SCOPE, read: [ALICE_SCOPE] },
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    TEST_CAPABILITY_SECRET,
+  );
+  assert.equal((await api.call("DELETE", "/v1/memory/facts", endedTurn, BRAIN_REF, "x-agent-capability")).status, 403);
 
   assert.deepEqual(
     (await notebook(built)).map((text) => text.replace(/ on \d{4}-\d\d-\d\d\.$/, ".")),
