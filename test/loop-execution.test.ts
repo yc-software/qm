@@ -55,7 +55,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
             command = 'test "$ERROR_SOURCE_TOKEN" = synthetic-error-source-token && printf source-readable';
           else if (stage === "work") command = "printf 'RCA and proposed fix' > loop-proposal.txt && printf prepared";
           else if (stage === "judge") command = `${check} && printf verified`;
-          else command = "printf shipped";
+          else command = "printf '{\"done\":true}'";
           const result = await built.app.turn({
             ...req,
             text:

@@ -72,6 +72,7 @@ export interface TriggerOutcome {
   userNote?: string;
   reply?: string;
   sessionId?: string;
+  awaitingApproval?: true;
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
@@ -252,6 +253,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
+  let awaitingApproval = false;
   let runDelivers = false;
   let scriptVerdict: string | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
@@ -333,6 +335,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
+    awaitingApproval = Boolean(res.pendingApprovals?.length);
     runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
@@ -380,6 +383,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(awaitingApproval ? { awaitingApproval: true as const } : {}),
   };
 
   if (isTriggerFailure(outcome) && !runDelivers) await sendErrorNotice(userNote ?? note ?? status!);
