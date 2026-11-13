@@ -922,12 +922,13 @@ a.chat-row-open {
   opacity: 0.7;
 }
 
-.surface-slack {
+.surface-mark {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
-.surface-slack .slack-mark,
+.surface-mark .slack-mark,
+.surface-mark .icon,
 .surface-glyph .slack-mark {
   display: block;
   flex-shrink: 0;

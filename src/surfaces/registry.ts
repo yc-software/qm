@@ -13,6 +13,7 @@ export function surfaceToolPrompt(surface: Surface): SurfaceToolPrompt {
 
 export interface SurfaceRegistry {
   get(kind: string): Surface | undefined;
+  list(): readonly Surface[];
 }
 
 export function createSurfaceRegistry(deps: { surfaces: readonly Surface[] }): SurfaceRegistry {
@@ -21,5 +22,5 @@ export function createSurfaceRegistry(deps: { surfaces: readonly Surface[] }): S
     if (byKind.has(surface.kind)) throw new Error(`surface kinds must be unique: ${surface.kind}`);
     byKind.set(surface.kind, surface);
   }
-  return { get: (kind) => byKind.get(kind) };
+  return { get: (kind) => byKind.get(kind), list: () => deps.surfaces };
 }

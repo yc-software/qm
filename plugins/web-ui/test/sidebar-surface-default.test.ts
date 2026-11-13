@@ -44,6 +44,14 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
         surface: "webhook",
         createdAt: 4,
       },
+      {
+        id: "partner",
+        threadRef: "partner-chat:7001:dm:301",
+        scopeId: "personal:tester",
+        surface: "partner-chat",
+        title: "Data room checklist",
+        createdAt: 1.2,
+      },
       { id: "child", threadRef: "web:tester:child", scopeId: "personal:tester", parentSessionId: "web", createdAt: 1 },
       {
         id: "archived",
@@ -70,18 +78,29 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       } else if (stored !== null) localStorage.setItem("web-ui:web-only", stored);
       const shell = await env.vite.ssrLoadModule("/src/shell.ts");
       const sidebar = await env.vite.ssrLoadModule("/src/sessions.ts");
-      shell.appState.me = { user: "tester", org: "test", permissions: [] };
+      shell.appState.me = {
+        user: "tester",
+        org: "test",
+        permissions: [],
+        chatSurfaces: [
+          { kind: "slack", label: "Slack" },
+          { kind: "partner-chat", label: "Community chat" },
+        ],
+      };
       shell.mountShell();
       await sidebar.refreshSessions();
       const rowIds = () =>
         [...document.querySelectorAll<HTMLElement>("#sidebar-body .session-row")].map((row) => row.dataset.sessionId);
       const slackRow = () => document.querySelector('[data-session-id="slack"]');
       const groupRow = () => document.querySelector('[data-session-id="group"]');
-      assert.deepEqual(rowIds(), stored === "1" ? ["web"] : ["web", "slack", "group"]);
+      const partnerRow = () => document.querySelector('[data-session-id="partner"]');
+      assert.deepEqual(rowIds(), stored === "1" ? ["web"] : ["web", "slack", "group", "partner"]);
       if (stored !== "1") {
         assert.ok(slackRow()?.querySelector(".slack-mark"));
         assert.ok(groupRow()?.querySelector(".slack-mark"));
-        assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /slack/);
+        assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /Slack/);
+        assert.ok(partnerRow()?.querySelector(".surface-glyph svg:not(.slack-mark)"));
+        assert.match(partnerRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /Community chat/);
       }
       assert.equal(document.querySelector('[data-view="inbox"]'), null);
       assert.equal(document.querySelector('[data-view="calendar"]'), null);
@@ -92,7 +111,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       assert.equal(sidebar.sessionsState.webOnly, true);
       sidebar.setWebOnly(false);
       await sidebar.refreshSessions();
-      assert.deepEqual(rowIds(), ["web", "slack", "group"]);
+      assert.deepEqual(rowIds(), ["web", "slack", "group", "partner"]);
       assert.ok(slackRow()?.querySelector(".slack-mark"));
       assert.equal(slackRow()?.querySelector(".ro-lock"), null);
       assert.doesNotMatch(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /read-only/);
