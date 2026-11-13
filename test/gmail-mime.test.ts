@@ -176,7 +176,10 @@ test("app-connection calls reuse the account the proxy resolved on the first cal
     `#!/usr/bin/env python3\nimport json, sys\nargs = sys.argv[1:]\nbody = sys.stdin.read() if "@-" in args else ""\n` +
       `open(${JSON.stringify(log)}, "a").write(body + "\\n")\n` +
       `open(args[args.index("-D") + 1], "w").write("HTTP/1.1 200 OK\\r\\nX-Composio-Account: ca_resolved1\\r\\n\\r\\n")\n` +
-      `print(json.dumps({"messages": [{"id": "m1"}, {"id": "m2"}], "threadId": "t1", "payload": {"headers": []}}) + "\\n200", end="")\n`,
+      `meta = json.dumps({"threadId": "t1", "payload": {"headers": []}})\n` +
+      `part = "--b\\nContent-ID: <response-%s>\\n\\nHTTP/1.1 200 OK\\n\\n" + meta + "\\n"\n` +
+      `listing = json.dumps({"messages": [{"id": "m1"}, {"id": "m2"}]})\n` +
+      `print((part % "m1" + part % "m2" + "--b--" if "/batch/" in body else listing) + "\\n200", end="")\n`,
   );
   chmodSync(stub, 0o755);
   const env: Record<string, string | undefined> = {
@@ -191,10 +194,8 @@ test("app-connection calls reuse the account the proxy resolved on the first cal
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  assert.equal(calls.length, 3);
-  assert.equal(calls[0].accountId, undefined);
   assert.deepEqual(
-    calls.slice(1).map((c: { accountId?: string }) => c.accountId),
-    ["ca_resolved1", "ca_resolved1"],
+    calls.map((c: { accountId?: string }) => c.accountId),
+    [undefined, "ca_resolved1"],
   );
 });
