@@ -79,3 +79,20 @@ struct NativeConversationListLoading: View {
     .accessibilityLabel("Loading conversations")
   }
 }
+
+struct NativeLoadingSection<Content: View>: View {
+  let label: String
+  var spacing: CGFloat = 12
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: spacing) {
+      Text(label).font(.subheadline).foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      content.accessibilityHidden(true)
+    }
+    .allowsHitTesting(false)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(label)
+  }
+}

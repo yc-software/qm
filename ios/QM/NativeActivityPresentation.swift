@@ -35,12 +35,12 @@ enum NativeActivityKind {
 extension NativeWorkItem {
   var activityKind: NativeActivityKind? {
     if isThinking { return .thinking }
-    switch (entry.payload?.tool, entry.payload?.action) {
+    switch (entry.tool, entry.body?.action) {
     case ("read", _), ("files", "read"), ("skills", "read"): return .read
     case ("write", _), ("files", "write"): return .write
     case ("search", _), ("tool_search", _): return .search
     case ("execute", _):
-      return entry.payload?.details?["background"] == .bool(true) ? .background : .execute
+      return entry.details?["background"] == .bool(true) ? .background : .execute
     case ("sandbox", "exec"): return .execute
     case ("background", _): return .background
     case ("apps", "publish"): return .publish
@@ -112,7 +112,7 @@ struct NativeActivitySummary {
         case .work(let work):
           title =
             work.isThinking
-            ? NativeThinkingPresentation(text: work.entry.payload?.thinking ?? "", live: true).title
+            ? NativeThinkingPresentation(text: work.entry.text ?? "", live: true).title
             : work.label(active: last.active, turnFailed: last.turnFailed)
           icon = work.activityKind?.icon ?? "wrench"
         case .reasoning(let block):

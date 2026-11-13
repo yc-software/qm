@@ -55,7 +55,7 @@ private final class SubagentMonitoringProtocol: URLProtocol, @unchecked Sendable
     var contentType = "application/json"
     switch url.path {
     case "/api/sessions/agent":
-      body = "{\"session\":{\(Self.session)},\"entries\":[]}"
+      body = "{\"session\":{\(Self.session)},\"items\":[]}"
     case "/api/sessions/row":
       let status: String
       switch phase {

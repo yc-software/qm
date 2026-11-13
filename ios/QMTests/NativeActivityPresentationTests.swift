@@ -23,39 +23,28 @@ final class NativeActivityPresentationTests: XCTestCase {
   }
 
   func testToolIdentitySurvivesCompletionAndFailure() throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"kind":"ToolCall","seq":1,"createdAt":1,"tool":"execute","callId":"command","body":{"purpose":"Check build","command":"build"}},
-          {"kind":"ToolResult","seq":2,"createdAt":2,"tool":"execute","callId":"command","body":{"ok":false,"error":"Build failed"}},
-          {"type":"tool_call","seq":3,"createdAt":3,"payload":{"tool":"files","action":"read","callId":"file","path":"docs/SPEC.md"}},
-          {"type":"tool_result","seq":4,"createdAt":4,"payload":{"callId":"file","ok":true}},
-          {"type":"tool_call","seq":5,"createdAt":5,"payload":{"tool":"background","action":"watch","callId":"watch"}}
-        ]
+        [{"kind":"ToolCall","seq":1,"createdAt":1,"tool":"execute","callId":"command","body":{"purpose":"Check build","command":"build"}},{"kind":"ToolResult","seq":2,"createdAt":2,"tool":"execute","callId":"command","body":{"ok":false,"error":"Build failed"}},{"seq":3,"createdAt":3,"kind":"ToolCall","callId":"file","tool":"files","body":{"action":"read","path":"docs/SPEC.md"}},{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"file","body":{"ok":true}},{"seq":5,"createdAt":5,"kind":"ToolCall","callId":"watch","tool":"background","body":{"action":"watch"}}]
         """#.utf8))
-    let items = NativeWorkItem.items(entries)
-    XCTAssertEqual(items.map { $0.activityKind?.icon }, ["terminal", "book-open", "terminal"])
-    XCTAssertEqual(items.map { $0.state(active: true) }, [.failed, .complete, .running])
+    let work = NativeWorkItem.items(items)
+    XCTAssertEqual(work.map { $0.activityKind?.icon }, ["terminal", "book-open", "terminal"])
+    XCTAssertEqual(work.map { $0.state(active: true) }, [.failed, .complete, .running])
     XCTAssertEqual(
-      items.map { $0.label(active: true) }, ["Check build · Failed", "SPEC.md", "Managing process"])
+      work.map { $0.label(active: true) }, ["Check build · Failed", "SPEC.md", "Managing process"])
   }
 
   func testLatestThoughtReplacesCompletedToolInLiveSummary() throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"user","seq":1,"createdAt":1,"payload":{"text":"Check","runId":"run"}},
-          {"type":"tool_call","seq":2,"createdAt":2,"payload":{"tool":"execute","callId":"check","purpose":"Check build"}},
-          {"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"check","ok":true}},
-          {"type":"thinking","seq":4,"createdAt":4,"payload":{"thinking":"**Reviewing the result**\nThe build passed."}}
-        ]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{"purpose":"Check build"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"**Reviewing the result**\nThe build passed.","body":{}}]
         """#.utf8))
     let timeline = NativeChatTimeline(
-      messages: chatMessages(entries), entries: entries, activeRunID: "run")
+      messages: chatMessages(items), items: items, activeRunID: "run")
     let section = try XCTUnwrap(
       NativeChatTranscriptSection.grouped(timeline.items, activeRunID: "run", status: .working).last
     )
@@ -67,19 +56,13 @@ final class NativeActivityPresentationTests: XCTestCase {
   }
 
   func testCompletedActivityUsesAssistantBoundaryTiming() throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"user","seq":1,"createdAt":1000,"payload":{"text":"Check","runId":"run"}},
-          {"type":"tool_call","seq":2,"createdAt":2000,"payload":{"tool":"execute","callId":"check"}},
-          {"type":"tool_result","seq":3,"createdAt":4000,"payload":{"callId":"check","ok":true}},
-          {"type":"text","seq":4,"createdAt":4500,"payload":{"text":"Done","phase":"final_answer"}},
-          {"type":"assistant","seq":5,"createdAt":5000,"payload":{"text":"Done","runId":"run","workStartedAt":1000,"workFinishedAt":5000}}
-        ]
+        [{"seq":1,"createdAt":1000,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":2,"createdAt":2000,"kind":"ToolCall","callId":"check","tool":"execute","body":{}},{"seq":3,"createdAt":4000,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4500,"kind":"AgentMessage","variant":"narration","text":"Done","body":{"phase":"final_answer"}},{"seq":5,"createdAt":5000,"kind":"AgentMessage","turnId":"run","text":"Done","body":{"workStartedAt":1000,"workFinishedAt":5000}}]
         """#.utf8))
-    let timeline = NativeChatTimeline(messages: chatMessages(entries), entries: entries)
+    let timeline = NativeChatTimeline(messages: chatMessages(items), items: items)
     let section = try XCTUnwrap(
       NativeChatTranscriptSection.grouped(timeline.items, activeRunID: nil, status: nil).first {
         $0.isActivity

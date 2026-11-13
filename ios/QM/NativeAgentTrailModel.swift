@@ -76,8 +76,8 @@ struct NativeAgentBranch: Identifiable, Equatable {
   static func pendingLaunches(_ activity: [NativeWorkItem], listed: [Self]) -> [NativeWorkItem] {
     let listedIDs = Set(listed.map(\.id))
     return activity.filter { item in
-      guard item.entry.type == "tool_call", item.opensAgents,
-        item.entry.payload?.action == "open"
+      guard item.entry.presentationRole == "tool_call", item.opensAgents,
+        item.entry.body?.action == "open"
       else { return false }
       switch item.state(active: true) {
       case .running:

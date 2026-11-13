@@ -3,59 +3,16 @@ import os
 
 @testable import QM
 
-final class NativeAgentTrailProtocol: URLProtocol, @unchecked Sendable {
-  struct State {
-    var response =
-      #"{"sessions":[{"id":"agent","scopeId":"personal:alice","threadRef":"agent:1","parentSessionId":"root","title":"Check streaming","purpose":"Verify updates after commentary","working":true,"workingSince":1000}]}"#
-    var failing = false
-    var requests: [URLRequest] = []
-    var started: XCTestExpectation?
-    var pending: NativeAgentTrailProtocol?
-  }
-  static let state = OSAllocatedUnfairLock(initialState: State())
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-  override func startLoading() {
-    let started = Self.state.withLock { state in
-      state.requests.append(request)
-      if state.started != nil { state.pending = self }
-      return state.started
-    }
-    if let started { started.fulfill() } else { finish() }
-  }
-
-  func finish() {
-    let state = Self.state.withLock { $0 }
-    if state.failing {
-      client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
-      return
-    }
-    client?.urlProtocol(
-      self,
-      didReceive: HTTPURLResponse(
-        url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-      cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data(state.response.utf8))
-    client?.urlProtocolDidFinishLoading(self)
-  }
-
-  override func stopLoading() {
-    Self.state.withLock { state in
-      if state.pending === self { state.pending = nil }
-    }
-  }
-}
-
 @MainActor
 final class NativeAgentTrailTests: XCTestCase {
-  private func client() -> APIClient {
-    NativeAgentTrailProtocol.state.withLock { $0 = .init() }
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [NativeAgentTrailProtocol.self]
-    return APIClient(
-      baseURL: URL(string: "https://agent-trail.example.test")!, configuration: configuration)
-  }
+  private let server = NativeRouteProtocol.Server(
+    fallback: .init(
+      body:
+        #"{"sessions":[{"id":"agent","scopeId":"personal:alice","threadRef":"agent:1","parentSessionId":"root","title":"Check streaming","purpose":"Verify updates after commentary","working":true,"workingSince":1000}]}"#
+    ))
+  private let route = "GET /api/sessions/root/children"
+
+  private func client() -> APIClient { server.client() }
 
   private func conversation(_ id: String, parent: String? = "root") -> Conversation {
     Conversation(
@@ -78,20 +35,17 @@ final class NativeAgentTrailTests: XCTestCase {
   }
 
   func testAgentLaunchAppearsBeforeChildrenRefreshAndHandsOffToListedAgent() async throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"tool_call","seq":1,"createdAt":1,"payload":{"tool":"subagents","action":"open","callId":"launch","name":"Check streaming"}},
-          {"type":"tool_result","seq":2,"createdAt":2,"payload":{"tool":"subagents","action":"open","callId":"launch","sessionId":"agent","title":"Check streaming"}}
-        ]
+        [{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"launch","tool":"subagents","body":{"action":"open","name":"Check streaming"}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"launch","tool":"subagents","body":{"action":"open","sessionId":"agent","title":"Check streaming"}}]
         """#.utf8))
-    let starting = NativeWorkItem.items([entries[0]])
+    let starting = NativeWorkItem.items([items[0]])
     XCTAssertEqual(
-      NativeAgentBranch.pendingLaunches(starting, listed: []).map(\.id), [entries[0].id])
-    let opened = NativeWorkItem.items(entries)
-    XCTAssertEqual(NativeAgentBranch.pendingLaunches(opened, listed: []).map(\.id), [entries[0].id])
+      NativeAgentBranch.pendingLaunches(starting, listed: []).map(\.id), [items[0].id])
+    let opened = NativeWorkItem.items(items)
+    XCTAssertEqual(NativeAgentBranch.pendingLaunches(opened, listed: []).map(\.id), [items[0].id])
     XCTAssertEqual(opened.first?.agentSessionID, "agent")
     let model = NativeAgentTrailModel(client: client(), conversationID: "root")
     await model.refresh()
@@ -100,23 +54,14 @@ final class NativeAgentTrailTests: XCTestCase {
   }
 
   func testFailedBlockedAndUnconfirmedLaunchesDoNotShowStarting() throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"tool_call","seq":1,"createdAt":1,"payload":{"tool":"subagents","action":"open","callId":"failed"}},
-          {"type":"tool_result","seq":2,"createdAt":2,"payload":{"tool":"subagents","action":"open","callId":"failed","error":"Unavailable","sessionId":"failed-agent"}},
-          {"type":"tool_call","seq":3,"createdAt":3,"payload":{"tool":"subagents","action":"open","callId":"blocked"}},
-          {"type":"tool_result","seq":4,"createdAt":4,"payload":{"tool":"subagents","action":"open","callId":"blocked","blocked":"needs_approval"}},
-          {"type":"tool_call","seq":5,"createdAt":5,"payload":{"tool":"subagents","action":"open","callId":"missing-id"}},
-          {"type":"tool_result","seq":6,"createdAt":6,"payload":{"tool":"subagents","action":"open","callId":"missing-id","ok":true}},
-          {"type":"tool_call","seq":7,"createdAt":7,"payload":{"tool":"subagents","action":"read","callId":"read"}},
-          {"type":"tool_call","seq":8,"createdAt":8,"payload":{"tool":"files","action":"open","callId":"file"}}
-        ]
+        [{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"failed","tool":"subagents","body":{"action":"open"}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"failed","tool":"subagents","body":{"action":"open","error":"Unavailable","sessionId":"failed-agent"}},{"seq":3,"createdAt":3,"kind":"ToolCall","callId":"blocked","tool":"subagents","body":{"action":"open"}},{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"blocked","tool":"subagents","body":{"action":"open","blocked":"needs_approval"}},{"seq":5,"createdAt":5,"kind":"ToolCall","callId":"missing-id","tool":"subagents","body":{"action":"open"}},{"seq":6,"createdAt":6,"kind":"ToolResult","callId":"missing-id","tool":"subagents","body":{"action":"open","ok":true}},{"seq":7,"createdAt":7,"kind":"ToolCall","callId":"read","tool":"subagents","body":{"action":"read"}},{"seq":8,"createdAt":8,"kind":"ToolCall","callId":"file","tool":"files","body":{"action":"open"}}]
         """#.utf8))
     XCTAssertTrue(
-      NativeAgentBranch.pendingLaunches(NativeWorkItem.items(entries), listed: []).isEmpty)
+      NativeAgentBranch.pendingLaunches(NativeWorkItem.items(items), listed: []).isEmpty)
   }
 
   func testMissingParentsAndCyclesKeepEveryServedAgentAccessibleOnce() {
@@ -146,8 +91,8 @@ final class NativeAgentTrailTests: XCTestCase {
 
   func testNextPromptRetiresFinishedAgentsAndKeepsTheirHistoryAcrossReopens() async {
     let client = client()
-    NativeAgentTrailProtocol.state.withLock {
-      $0.response =
+    server.state.withLock {
+      $0.fallback.body =
         #"{"sessions":[{"id":"returned","scopeId":"personal:alice","threadRef":"agent:returned","lastActivityAt":1000},{"id":"failed","scopeId":"personal:alice","threadRef":"agent:failed","lastTurnFailed":true,"lastActivityAt":1000},{"id":"working","scopeId":"personal:alice","threadRef":"agent:working","working":true,"lastActivityAt":1000},{"id":"waiting","scopeId":"personal:alice","threadRef":"agent:waiting","awaitingInput":true,"lastActivityAt":1000},{"id":"new","scopeId":"personal:alice","threadRef":"agent:new","lastActivityAt":3000}]}"#
     }
     for _ in 0..<2 {
@@ -168,33 +113,33 @@ final class NativeAgentTrailTests: XCTestCase {
 
   func testReactivatedAgentKeepsItsResultUntilTheNextPrompt() async {
     let model = NativeAgentTrailModel(client: client(), conversationID: "root")
-    NativeAgentTrailProtocol.state.withLock {
-      $0.response =
+    server.state.withLock {
+      $0.fallback.body =
         #"{"sessions":[{"id":"agent","scopeId":"personal:alice","threadRef":"agent:1","lastActivityAt":1000}]}"#
     }
     await model.refresh()
     XCTAssertTrue(NativeAgentBranch.current(model.branches, since: 2000).isEmpty)
-    NativeAgentTrailProtocol.state.withLock {
-      $0.response =
+    server.state.withLock {
+      $0.fallback.body =
         #"{"sessions":[{"id":"agent","scopeId":"personal:alice","threadRef":"agent:1","working":true,"lastActivityAt":3000}]}"#
     }
     await model.refresh()
     XCTAssertEqual(NativeAgentBranch.current(model.branches, since: 2000).map(\.id), ["agent"])
-    NativeAgentTrailProtocol.state.withLock {
-      $0.response =
+    server.state.withLock {
+      $0.fallback.body =
         #"{"sessions":[{"id":"agent","scopeId":"personal:alice","threadRef":"agent:1","lastActivityAt":3000}]}"#
     }
     await model.refresh()
     XCTAssertEqual(NativeAgentBranch.current(model.branches, since: 2000).map(\.id), ["agent"])
     XCTAssertTrue(NativeAgentBranch.current(model.branches, since: 4000).isEmpty)
-    NativeAgentTrailProtocol.state.withLock {
-      $0.response =
+    server.state.withLock {
+      $0.fallback.body =
         #"{"sessions":[{"id":"agent","scopeId":"personal:alice","threadRef":"agent:1","working":true,"lastActivityAt":4000}]}"#
     }
     await model.refresh()
     XCTAssertEqual(NativeAgentBranch.current(model.branches, since: 4000).map(\.id), ["agent"])
-    NativeAgentTrailProtocol.state.withLock {
-      $0.response =
+    server.state.withLock {
+      $0.fallback.body =
         #"{"sessions":[{"id":"agent","scopeId":"personal:alice","threadRef":"agent:1","lastTurnFailed":true,"lastActivityAt":5000}]}"#
     }
     await model.refresh()
@@ -241,31 +186,31 @@ final class NativeAgentTrailTests: XCTestCase {
     XCTAssertEqual(model.branches.first?.state, .working)
     let checkedAt = model.updatedAt
     XCTAssertNotNil(checkedAt)
-    NativeAgentTrailProtocol.state.withLock { $0.failing = true }
+    server.state.withLock { $0.fallback.failure = .notConnectedToInternet }
     await model.refresh()
     XCTAssertEqual(model.branches.map(\.id), ["agent"])
     XCTAssertEqual(model.updatedAt, checkedAt)
     XCTAssertTrue(model.stale)
-    NativeAgentTrailProtocol.state.withLock {
-      $0.failing = false
-      $0.response = #"{"sessions":[]}"#
+    server.state.withLock {
+      $0.fallback.failure = nil
+      $0.fallback.body = #"{"sessions":[]}"#
     }
     await model.refresh()
     XCTAssertTrue(model.branches.isEmpty)
     XCTAssertFalse(model.stale)
     XCTAssertEqual(
-      NativeAgentTrailProtocol.state.withLock { $0.requests.map { $0.url?.path } },
+      server.state.withLock { $0.calls.map { $0.url.path } },
       Array(repeating: "/api/sessions/root/children", count: 3))
   }
 
   func testInitialFailureIsVisibleAndRetryCanFindNewlySpawnedAgents() async {
     let model = NativeAgentTrailModel(client: client(), conversationID: "root")
-    NativeAgentTrailProtocol.state.withLock { $0.failing = true }
+    server.state.withLock { $0.fallback.failure = .notConnectedToInternet }
     await model.refresh()
     XCTAssertTrue(model.branches.isEmpty)
     XCTAssertNotNil(model.error)
     XCTAssertNil(model.updatedAt)
-    NativeAgentTrailProtocol.state.withLock { $0.failing = false }
+    server.state.withLock { $0.fallback.failure = nil }
     await model.refresh()
     XCTAssertEqual(model.branches.map(\.id), ["agent"])
     XCTAssertNil(model.error)
@@ -276,12 +221,13 @@ final class NativeAgentTrailTests: XCTestCase {
     XCTAssertFalse(model.loading)
     await model.refresh()
     let started = expectation(description: "Agent refresh started")
-    NativeAgentTrailProtocol.state.withLock { $0.started = started }
+    server.hold(route)
+    server.state.withLock { $0.onCall = { _ in started.fulfill() } }
     let pending = Task { await model.refresh() }
     await fulfillment(of: [started], timeout: 2)
     XCTAssertTrue(model.loading)
     XCTAssertEqual(model.branches.map(\.id), ["agent"])
-    NativeAgentTrailProtocol.state.withLock { $0.pending }?.finish()
+    server.release(route)
     await pending.value
     XCTAssertFalse(model.loading)
     XCTAssertEqual(model.branches.map(\.id), ["agent"])
@@ -292,11 +238,12 @@ final class NativeAgentTrailTests: XCTestCase {
     let model = NativeAgentTrailModel(client: client, conversationID: "root")
     await model.refresh()
     let started = expectation(description: "Agent refresh started")
-    NativeAgentTrailProtocol.state.withLock { $0.started = started }
+    server.hold(route)
+    server.state.withLock { $0.onCall = { _ in started.fulfill() } }
     let pending = Task { await model.refresh() }
     await fulfillment(of: [started], timeout: 2)
     client.signOut()
-    NativeAgentTrailProtocol.state.withLock { $0.pending }?.finish()
+    server.release(route)
     await pending.value
     XCTAssertTrue(model.branches.isEmpty)
     XCTAssertNil(model.updatedAt)
@@ -307,7 +254,8 @@ final class NativeAgentTrailTests: XCTestCase {
     let model = NativeAgentTrailModel(client: client(), conversationID: "root")
     await model.refresh()
     let started = expectation(description: "Agent refresh started")
-    NativeAgentTrailProtocol.state.withLock { $0.started = started }
+    server.hold(route)
+    server.state.withLock { $0.onCall = { _ in started.fulfill() } }
     let pending = Task { await model.refresh() }
     await fulfillment(of: [started], timeout: 2)
     pending.cancel()

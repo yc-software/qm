@@ -40,48 +40,28 @@ final class NativeTranscriptContractTests: XCTestCase {
         "earlierItems": 7,
         "session": ["id": "conversation", "scopeId": "personal:alice", "threadRef": "web:chat"],
       ])
-    XCTAssertEqual(history.entries.count, 5)
-    XCTAssertEqual(history.earlierEntries, 7)
-    let messages = chatMessages(history.entries)
+    XCTAssertEqual(history.items.count, 5)
+    XCTAssertEqual(history.earlierItems, 7)
+    let messages = chatMessages(history.items)
     XCTAssertEqual(messages.map(\.text), ["Check the file", "Here is the report"])
     XCTAssertEqual(messages.map(\.runID), ["turn", "turn"])
     XCTAssertEqual(messages.first?.speaker, "Alice")
     XCTAssertEqual(messages.first?.slackTimestamp, "100.1")
-    XCTAssertEqual(messages.last?.activity.map(\.type), ["thinking", "tool_call", "tool_result"])
-    XCTAssertEqual(history.entries[1].payload?.thinking, "Checking the contents")
-    XCTAssertEqual(history.entries[2].payload?.command, "cat report.txt")
-    XCTAssertEqual(history.entries[2].payload?.callId, "read")
-    XCTAssertEqual(history.entries[2].payload?.details?["step"]?["index"], .number(2))
-    XCTAssertEqual(history.entries[3].payload?.details?["result"]?.string, "File contents")
-    XCTAssertEqual(history.entries[3].payload?.details?["count"], .number(1))
-    XCTAssertEqual(history.entries.last?.itemKind, "AgentMessage")
-    XCTAssertEqual(history.entries.last?.seq, 5)
-    XCTAssertEqual(history.entries.last?.createdAt, 5000)
-  }
-
-  func testLegacyEntriesTranscriptStillDecodesWithoutChangingPresentation() throws {
-    let history = try decode(
-      Transcript.self,
-      [
-        "entries": [
-          ["type": "user", "seq": 1, "createdAt": 1000, "payload": ["text": "Question"]],
-          ["type": "assistant", "seq": 2, "createdAt": 2000, "payload": ["text": "Answer"]],
-        ],
-        "earlierEntries": 4,
-      ])
-    XCTAssertEqual(chatMessages(history.entries).map(\.text), ["Question", "Answer"])
-    XCTAssertEqual(history.earlierEntries, 4)
-    XCTAssertNil(history.entries.first?.itemKind)
+    XCTAssertEqual(messages.last?.activity.map(\.presentationRole), ["thinking", "tool_call", "tool_result"])
+    XCTAssertEqual(history.items[1].text, "Checking the contents")
+    XCTAssertEqual(history.items[2].body?.command, "cat report.txt")
+    XCTAssertEqual(history.items[2].callId, "read")
+    XCTAssertEqual(history.items[2].step, 2)
+    XCTAssertEqual(history.items[3].text, "File contents")
+    XCTAssertEqual(history.items[3].details?["count"], .number(1))
+    XCTAssertEqual(history.items.last?.kind, "AgentMessage")
+    XCTAssertEqual(history.items.last?.seq, 5)
+    XCTAssertEqual(history.items.last?.createdAt, 5000)
   }
 
   func testItemsEnvelopeIsAuthoritativeAndInvalidHistoryStillFails() throws {
-    let history = try decode(
-      Transcript.self,
-      ["items": [], "entries": [["type": "invalid"]], "earlierItems": 3, "earlierEntries": 99])
-    XCTAssertTrue(history.entries.isEmpty)
-    XCTAssertEqual(history.earlierEntries, 3)
     XCTAssertThrowsError(try decode(Transcript.self, ["session": NSNull()]))
-    XCTAssertThrowsError(try decode(Transcript.self, ["items": NSNull(), "entries": []]))
+    XCTAssertThrowsError(try decode(Transcript.self, ["items": NSNull()]))
     var malformed = item("AgentMessage", text: "Answer")
     malformed.removeValue(forKey: "createdAt")
     XCTAssertThrowsError(try decode(Transcript.self, ["items": [malformed]]))
@@ -108,16 +88,16 @@ final class NativeTranscriptContractTests: XCTestCase {
     let event = try decode(
       StreamEvent.self,
       ["type": "CUSTOM", "name": "run", "value": ["status": "running", "activity": activity]])
-    XCTAssertEqual(run.activity?.map(\.type), ["text_start", "thinking", "tool_call"])
+    XCTAssertEqual(run.activity?.map(\.presentationRole), ["text_start", "thinking", "tool_call"])
     XCTAssertEqual(event.run?.activity?.map(\.id), run.activity?.map(\.id))
-    XCTAssertEqual(run.activity?.first?.payload?.details?["streamOffset"], .number(2))
-    XCTAssertEqual(run.activity?.last?.payload?.details?["path"]?.string, "report.txt")
-    XCTAssertEqual(run.activity?.last?.itemKind, "ToolCall")
+    XCTAssertEqual(run.activity?.first?.details?["streamOffset"], .number(2))
+    XCTAssertEqual(run.activity?.last?.details?["path"]?.string, "report.txt")
+    XCTAssertEqual(run.activity?.last?.kind, "ToolCall")
   }
 
   func testNarrationDeliveredFilesAndToolOutputKeepTheirVariants() throws {
-    let entries = try decode(
-      [Entry].self,
+    let items = try decode(
+      [Item].self,
       [
         item("AgentMessage", text: "Working", columns: ["variant": "narration"]),
         item(
@@ -127,11 +107,11 @@ final class NativeTranscriptContractTests: XCTestCase {
           "ToolResult", seq: 3, body: ["output": ["bytes": 10], "ok": false],
           columns: ["callId": "read", "tool": "execute", "blobSha": "blob", "isError": true]),
       ])
-    XCTAssertEqual(entries.map(\.type), ["text", "delivery", "tool_result"])
-    XCTAssertEqual(entries[1].payload?.files?.first?.artifactId, "file")
-    XCTAssertEqual(entries[2].payload?.details?["output"]?["bytes"], .number(10))
-    XCTAssertEqual(entries[2].payload?.details?["output"]?["blob"]?.string, "blob")
-    XCTAssertFalse(try XCTUnwrap(entries[2].payload).succeeded)
+    XCTAssertEqual(items.map(\.presentationRole), ["text", "delivery", "tool_result"])
+    XCTAssertEqual(items[1].body?.files?.first?.artifactId, "file")
+    XCTAssertEqual(items[2].details?["output"]?["bytes"], .number(10))
+    XCTAssertEqual(items[2].details?["blobSha"]?.string, "blob")
+    XCTAssertFalse(items[2].succeeded)
   }
 
   func testSteeringApprovalRevisionAndErrorMetadataRemainVisible() throws {
@@ -149,7 +129,7 @@ final class NativeTranscriptContractTests: XCTestCase {
             "Error", seq: 5, text: "The response failed", columns: ["errorCode": "turn_failure"]),
         ]
       ])
-    let messages = chatMessages(history.entries)
+    let messages = chatMessages(history.items)
     XCTAssertEqual(messages.count, 5)
     XCTAssertTrue(messages[0].edited)
     XCTAssertTrue(messages[1].steered)
@@ -160,34 +140,20 @@ final class NativeTranscriptContractTests: XCTestCase {
     XCTAssertFalse(approved)
     XCTAssertEqual(command, "publish")
     XCTAssertEqual(scope, "session")
-    XCTAssertEqual(history.entries[2].payload?.requestId, "approval")
-    XCTAssertEqual(history.entries[4].payload?.details?["errorCode"]?.string, "turn_failure")
+    XCTAssertEqual(history.items[2].elicitId, "approval")
+    XCTAssertEqual(history.items[4].details?["errorCode"]?.string, "turn_failure")
     XCTAssertEqual(messages.last?.role, "error")
     XCTAssertEqual(messages.last?.text, "The response failed")
   }
 
-  func testExpandedActivityAcceptsCurrentAndLegacyEnvelopes() throws {
+  func testExpandedActivityUsesCurrentEnvelope() throws {
     let current = try decode(
-      TranscriptEntryResponse.self,
-      [
-        "item": item(
-          "ToolResult", text: "Full output", body: ["ok": true],
-          columns: ["callId": "read", "tool": "execute"])
-      ])
-    let legacy = try decode(
-      TranscriptEntryResponse.self,
-      [
-        "entry": [
-          "type": "tool_result", "seq": 1, "createdAt": 1000,
-          "payload": ["result": "Full output", "ok": true, "callId": "read", "tool": "execute"],
-        ]
-      ])
-    XCTAssertEqual(current.entry.id, legacy.entry.id)
-    XCTAssertEqual(
-      current.entry.payload?.details?["result"], legacy.entry.payload?.details?["result"])
-    XCTAssertEqual(current.entry.itemKind, "ToolResult")
-    XCTAssertNil(legacy.entry.itemKind)
-    XCTAssertThrowsError(try decode(TranscriptEntryResponse.self, [:]))
+      TranscriptItemResponse.self,
+      ["item": item("ToolResult", text: "Full output", body: ["ok": true],
+        columns: ["callId": "read", "tool": "execute"])])
+    XCTAssertEqual(current.item.text, "Full output")
+    XCTAssertEqual(current.item.kind, "ToolResult")
+    XCTAssertThrowsError(try decode(TranscriptItemResponse.self, [:]))
   }
 
   func testNullTextDoesNotEraseBodyFieldsAndHiddenMessagesStayHidden() throws {
@@ -204,11 +170,11 @@ final class NativeTranscriptContractTests: XCTestCase {
                 ["name": "report.txt", "artifactId": "report"]
               ],
             ]),
-          item("AgentMessage", seq: 3, body: ["text": "Preserved body text"]),
+          item("AgentMessage", seq: 3, text: "Recorded answer"),
         ]
       ])
-    let messages = chatMessages(history.entries)
-    XCTAssertEqual(messages.map(\.text), ["Visible attachment", "Preserved body text"])
+    let messages = chatMessages(history.items)
+    XCTAssertEqual(messages.map(\.text), ["Visible attachment", "Recorded answer"])
     XCTAssertEqual(messages.first?.files.first?.artifactId, "report")
   }
 }

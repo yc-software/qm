@@ -52,7 +52,7 @@ final class ForegroundSyncProtocol: URLProtocol, @unchecked Sendable {
         #"{"session":{"id":"one","scopeId":"personal:test","threadRef":"web:test:one","surface":"web"}}"#
     default:
       body =
-        "{\"entries\":[{\"type\":\"user\",\"seq\":\(count),\"createdAt\":\(count),\"payload\":{\"text\":\"Update \(count)\"}}]}"
+        "{\"items\":[{\"kind\":\"UserMessage\",\"seq\":\(count),\"createdAt\":\(count),\"text\":\"Update \(count)\",\"body\":{}}]}"
     }
     let status = Self.statusCodes.withLock { $0[request.url!.absoluteString]?[count] ?? 200 }
     let response = HTTPURLResponse(
@@ -307,12 +307,12 @@ final class ForegroundSyncTests: XCTestCase {
       .absoluteString
     ForegroundSyncProtocol.held.withLock { $0[key] = 3 }
     await chat.resume(refreshInterval: .milliseconds(20))
-    try await eventually { (chat.entries.last?.seq ?? 0) >= 2 }
-    XCTAssertEqual(chat.entries.last?.seq, 2)
+    try await eventually { (chat.items.last?.seq ?? 0) >= 2 }
+    XCTAssertEqual(chat.items.last?.seq, 2)
     try await eventually { ForegroundSyncProtocol.counts.withLock { $0[key] } == 3 }
     chat.pause()
     try await eventually { ForegroundSyncProtocol.stopped.withLock { $0[key] } == 1 }
-    XCTAssertEqual(chat.entries.last?.seq, 2)
+    XCTAssertEqual(chat.items.last?.seq, 2)
   }
   func testSeededDestinationDoesNotDownloadHistoryOrSessionListAgain() async throws {
     let client = APIClient(
@@ -322,7 +322,7 @@ final class ForegroundSyncTests: XCTestCase {
     let transcript = try JSONDecoder().decode(
       Transcript.self,
       from: Data(
-        #"{"entries":[{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Loaded directly"}}],"earlierEntries":12}"#
+        #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Loaded directly","body":{}}],"earlierItems":12}"#
           .utf8))
     let chat = ChatModel(
       conversation: Conversation(
@@ -331,8 +331,8 @@ final class ForegroundSyncTests: XCTestCase {
       client: client, user: "test", knownSession: true, transcript: transcript)
     await chat.resume()
     chat.pause()
-    XCTAssertEqual(chat.entries.first?.payload?.text, "Loaded directly")
-    XCTAssertEqual(chat.earlierEntries, 12)
+    XCTAssertEqual(chat.items.first?.text, "Loaded directly")
+    XCTAssertEqual(chat.earlierItems, 12)
     XCTAssertTrue(chat.hasLoadedTranscript)
     let base = client.baseURL.absoluteString
     let requests = ForegroundSyncProtocol.counts.withLock { $0.filter { $0.key.hasPrefix(base) } }

@@ -130,7 +130,7 @@ final class StreamTests: XCTestCase {
       ))
     try text.apply(
       event(
-        #"{"type":"CUSTOM","name":"run","value":{"status":"running","attempt":2,"partial":"e\u0301","partialStartOffset":500}}"#
+        #"{"type":"CUSTOM","name":"run","value":{"status":"running","attempt":2,"partial":"é","partialStartOffset":500}}"#
       ))
     try text.apply(
       event(
@@ -139,7 +139,7 @@ final class StreamTests: XCTestCase {
     XCTAssertEqual(text.text, "e\u{301}!")
     try text.apply(
       event(
-        #"{"type":"CUSTOM","name":"run","value":{"status":"done","attempt":2,"partial":"e\u0301!","partialStartOffset":500,"result":{"status":"ok","reply":"Full answer e\u0301!"}}}"#
+        #"{"type":"CUSTOM","name":"run","value":{"status":"done","attempt":2,"partial":"é!","partialStartOffset":500,"result":{"status":"ok","reply":"Full answer é!"}}}"#
       ))
     XCTAssertEqual(text.text, "Full answer e\u{301}!")
   }

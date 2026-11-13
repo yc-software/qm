@@ -502,9 +502,9 @@ struct ChatView: View {
       Group {
         pinsSection
         forkOrigin
-        if model.earlierEntries > 0,
+        if model.earlierItems > 0,
           inheritedExpanded || model.conversation.forkBoundarySeq == nil
-            || model.earlierEntries > (model.conversation.forkBoundarySeq ?? -1) + 1
+            || model.earlierItems > (model.conversation.forkBoundarySeq ?? -1) + 1
         {
           Button {
             Task { await model.loadEarlier() }
@@ -519,7 +519,7 @@ struct ChatView: View {
         if showsInitialHistoryPlaceholder {
           NativeChatHistoryPlaceholder()
         } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
-          && model.earlierEntries == 0 && visible.isEmpty && model.displayedPartial.isEmpty
+          && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
           && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
         {
           ContentUnavailableView {

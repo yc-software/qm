@@ -127,7 +127,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
   private static let stoppedEvent =
     "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"done\",\"result\":{\"status\":\"ok\",\"reply\":\"(stopped)\",\"stopped\":true}}}\n\n"
   private static let questionEntry =
-    #"{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Question","runId":"run"}}"#
+    #"{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Question","body":{}}"#
 
   private static let swarmRoot = #"{"id":"root","depth":0,"state":"ready"}"#
   private static let swarmWorkers =
@@ -143,7 +143,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
   }
 
   private static func page(_ reply: Reply, host: String, count: Int) -> Reply {
-    guard reply.body.hasPrefix(#"{"entries""#) else { return reply }
+    guard reply.body.hasPrefix(#"{"items""#) else { return reply }
     var reply = reply
     var fields = #""session":"# + session(host: host)
     if host.hasPrefix("goal-page"), count != 3 {
@@ -204,7 +204,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
         ? #","activity":[]"#
         : host.hasPrefix("lifecycle-terminal-activity-omitted")
           ? ""
-          : #","activity":[{"type":"tool_call","seq":2,"createdAt":2,"payload":{"tool":"execute","callId":"check"}},{"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"check","ok":true}},{"type":"text","seq":4,"createdAt":4,"payload":{"text":"Final update","phase":"commentary"}}]"#
+          : #","activity":[{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"AgentMessage","variant":"narration","text":"Final update","body":{"phase":"commentary"}}]"#
       return Reply(
         body: #"{"status":"done","attempt":1,"result":{"status":"ok","reply":"Answer"}"#
           + activity + "}")
@@ -316,7 +316,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     if host.hasPrefix("reconnect-stall"), count > 1 { reply.held = true }
     if host.hasPrefix("posted-finish") || host.hasPrefix("posted-lag") {
       reply.body =
-        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"type\":\"tool_call\",\"seq\":4,\"createdAt\":4,\"payload\":{\"tool\":\"execute\",\"callId\":\"after\"}},{\"type\":\"tool_result\",\"seq\":5,\"createdAt\":5,\"payload\":{\"callId\":\"after\",\"ok\":true}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
+        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"seq\":4,\"createdAt\":4,\"kind\":\"ToolCall\",\"callId\":\"after\",\"tool\":\"execute\",\"body\":{}},{\"seq\":5,\"createdAt\":5,\"kind\":\"ToolResult\",\"callId\":\"after\",\"body\":{\"ok\":true}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
     }
     if host.hasPrefix("posted-active") {
       reply.body =
@@ -325,46 +325,46 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     if host.hasPrefix("steered-live") {
       reply.held = count == 1
       reply.body =
-        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"running\",\"activity\":[{\"type\":\"user\",\"seq\":2,\"createdAt\":2,\"payload\":{\"text\":\"Change course\",\"runId\":\"run\",\"steered\":true,\"ts\":\"queued-steer:web:test:chat:queued\"}}]}}\n\n"
+        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"running\",\"activity\":[{\"seq\":2,\"createdAt\":2,\"kind\":\"SteeringMessage\",\"turnId\":\"run\",\"externalId\":\"queued-steer:web:test:chat:queued\",\"text\":\"Change course\",\"body\":{}}]}}\n\n"
     }
     if host.hasPrefix("activity-lag") {
       reply.body =
-        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"type\":\"thinking\",\"seq\":2,\"createdAt\":2,\"payload\":{\"thinking\":\"Working through it.\"}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
+        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"seq\":2,\"createdAt\":2,\"kind\":\"Reasoning\",\"text\":\"Working through it.\",\"body\":{}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
     }
     if host.hasPrefix("phase-finish-held") {
       reply.body =
-        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"done\",\"activity\":[{\"type\":\"text\",\"seq\":2,\"createdAt\":2,\"payload\":{\"text\":\"First update\"}},{\"type\":\"thinking\",\"seq\":3,\"createdAt\":3,\"payload\":{\"thinking\":\"Finishing\"}},{\"type\":\"text_start\",\"seq\":3,\"createdAt\":4,\"payload\":{\"streamOffset\":14}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
+        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"done\",\"activity\":[{\"seq\":2,\"createdAt\":2,\"kind\":\"AgentMessage\",\"variant\":\"narration\",\"text\":\"First update\",\"body\":{}},{\"seq\":3,\"createdAt\":3,\"kind\":\"Reasoning\",\"text\":\"Finishing\",\"body\":{}},{\"seq\":3,\"createdAt\":4,\"marker\":\"text_start\",\"streamOffset\":14}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
     }
     return reply
   }
 
   private static func historyReply(host: String, count: Int, url: URL) -> Reply {
     if host.hasPrefix("outcome-refused") {
-      return Reply(body: #"{"entries":["# + questionEntry + "]}")
+      return Reply(body: #"{"items":["# + questionEntry + "]}")
     }
     if host.hasPrefix("outcome-stopped"), count > 1 {
       return Reply(
-        body: #"{"entries":["# + questionEntry
-          + #",{"type":"system","seq":2,"createdAt":2,"payload":{"kind":"turn_stopped","reason":"because you stopped it"}}]}"#
+        body: #"{"items":["# + questionEntry
+          + #",{"seq":2,"createdAt":2,"kind":"Stop","body":{"reason":"because you stopped it"}}]}"#
       )
     }
     if host.hasPrefix("lifecycle-history-gap") {
       if count == 2 { return Reply(status: 503) }
       let earlier =
-        #"{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Earlier question"}},{"type":"assistant","seq":2,"createdAt":2,"payload":{"text":"Earlier answer"}}"#
+        #"{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Earlier question","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Earlier answer","body":{}}"#
       let missed =
-        #",{"type":"user","seq":3,"createdAt":3,"payload":{"text":"Missed question"}},{"type":"assistant","seq":4,"createdAt":4,"payload":{"text":"Missed answer"}},{"type":"user","seq":5,"createdAt":5,"payload":{"text":"Current question","runId":"run"}}"#
-      return Reply(body: #"{"entries":["# + earlier + (count == 1 ? "" : missed) + "]}")
+        #",{"seq":3,"createdAt":3,"kind":"UserMessage","text":"Missed question","body":{}},{"seq":4,"createdAt":4,"kind":"AgentMessage","text":"Missed answer","body":{}},{"seq":5,"createdAt":5,"kind":"UserMessage","turnId":"run","text":"Current question","body":{}}"#
+      return Reply(body: #"{"items":["# + earlier + (count == 1 ? "" : missed) + "]}")
     }
     if host.hasPrefix("phase-finish-held") {
-      return Reply(body: #"{"entries":["# + questionEntry + "]}", held: count == 2)
+      return Reply(body: #"{"items":["# + questionEntry + "]}", held: count == 2)
     }
     if host.hasPrefix("resume-empty") {
-      return Reply(body: #"{"entries":["# + questionEntry + "]}")
+      return Reply(body: #"{"items":["# + questionEntry + "]}")
     }
     if host.hasPrefix("lifecycle-accepted") {
       return Reply(
-        body: count == 1 ? #"{"entries":[]}"# : #"{"entries":["# + questionEntry + "]}",
+        body: count == 1 ? #"{"items":[]}"# : #"{"items":["# + questionEntry + "]}",
         held: count == 2)
     }
     if host.hasPrefix("lifecycle-stale-resume") || host.hasPrefix("lifecycle-background")
@@ -372,38 +372,38 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
       || host.hasPrefix("lifecycle-unmonitored-rejection")
       || host.hasPrefix("lifecycle-terminal-activity")
     {
-      return Reply(body: #"{"entries":["# + questionEntry + "]}")
+      return Reply(body: #"{"items":["# + questionEntry + "]}")
     }
     if host.hasPrefix("fork-history") {
       return forkHistoryReply(host: host, count: count, url: url)
     }
     if host.hasPrefix("missing-history") { return Reply(status: 503) }
-    if host.hasPrefix("empty-history") { return Reply(body: #"{"entries":[]}"#) }
+    if host.hasPrefix("empty-history") { return Reply(body: #"{"items":[]}"#) }
     if host.hasPrefix("posted-") {
       return Reply(
         status: host.hasPrefix("posted-finish") && count > 1 ? 503 : 200,
         body:
-          #"{"entries":["# + questionEntry
-          + #",{"type":"tool_call","seq":2,"createdAt":2,"payload":{"action":"post","callId":"post","text":"Answer"}},{"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"post","ok":true}}]}"#
+          #"{"items":["# + questionEntry
+          + #",{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"Answer"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"post","body":{"ok":true}}]}"#
       )
     }
     if host.hasPrefix("accepted") {
-      return Reply(body: count == 1 ? #"{"entries":[]}"# : #"{"entries":["# + questionEntry + "]}")
+      return Reply(body: count == 1 ? #"{"items":[]}"# : #"{"items":["# + questionEntry + "]}")
     }
     if host.hasPrefix("finish-held") || host.hasPrefix("lifecycle-terminal-lookup-race"),
       count == 2
     {
       return Reply(
-        body: #"{"entries":["# + questionEntry
-          + #",{"type":"assistant","seq":2,"createdAt":2,"payload":{"text":"Answer"}}]}"#,
+        body: #"{"items":["# + questionEntry
+          + #",{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Answer","body":{}}]}"#,
         held: true)
     }
     if count == 1 || host.hasPrefix("active-failure") || host.hasPrefix("activity-lag") {
-      return Reply(body: #"{"entries":["# + questionEntry + "]}")
+      return Reply(body: #"{"items":["# + questionEntry + "]}")
     }
     return Reply(
-      body: #"{"entries":["# + questionEntry
-        + #",{"type":"assistant","seq":2,"createdAt":2,"payload":{"text":"Answer"}}]}"#)
+      body: #"{"items":["# + questionEntry
+        + #",{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Answer","body":{}}]}"#)
   }
 
   private static func forkHistoryReply(host: String, count: Int, url: URL) -> Reply {
@@ -414,7 +414,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     }
     return Reply(
       body:
-        #"{"entries":[{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Inherited question"}},{"type":"assistant","seq":5,"createdAt":5,"payload":{"text":"Inherited answer"}}],"earlierEntries":0}"#,
+        #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Inherited question","body":{}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Inherited answer","body":{}}],"earlierItems":0}"#,
       held: host.hasPrefix("fork-history-held")
     )
   }
@@ -474,7 +474,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
         ? "Before background" : "Current response"
       let activity =
         host.hasPrefix("lifecycle-terminal-activity")
-        ? #","activity":[{"type":"tool_call","seq":2,"createdAt":2,"payload":{"tool":"execute","callId":"check"}}]"#
+        ? #","activity":[{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{}}]"#
         : ""
       load(
         "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"\(partial)\",\"status\":\"running\",\"attempt\":1,\"result\":null\(activity)}}\n\n",

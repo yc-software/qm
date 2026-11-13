@@ -16,7 +16,7 @@ private final class NativeAgentPromptProtocol: URLProtocol, @unchecked Sendable 
 
   private static let states = OSAllocatedUnfairLock(initialState: [String: State]())
   private static let prompt =
-    #"{"type":"user","seq":1,"createdAt":1000,"payload":{"text":"Earlier human prompt","runId":"current"}}"#
+    #"{"seq":1,"createdAt":1000,"kind":"UserMessage","turnId":"current","text":"Earlier human prompt","body":{}}"#
 
   static func configure(_ host: String, scenario: Scenario) {
     states.withLock { $0[host] = State(scenario: scenario) }
@@ -64,17 +64,17 @@ private final class NativeAgentPromptProtocol: URLProtocol, @unchecked Sendable 
         status = 503
         body = #"{"message":"Transcript temporarily unavailable"}"#
       } else if state.scenario == .earlierPrompt, before == nil {
-        let entries = (2...26).map { sequence in
-          let payload =
+        let items = (2...26).map { sequence in
+          let content =
             sequence.isMultiple(of: 2)
-            ? #"{"hidden":true,"text":"Continue the task"}"#
-            : #"{"text":"<wake reason=\"subagent\" name=\"Worker\" sessionId=\"child\" kind=\"final_answer\">Finished</wake>"}"#
+            ? #""hidden":true,"text":"Continue the task""#
+            : #""text":"<wake reason=\"subagent\" name=\"Worker\" sessionId=\"child\" kind=\"final_answer\">Finished</wake>""#
           return
-            "{\"type\":\"user\",\"seq\":\(sequence),\"createdAt\":\(3000 + sequence),\"payload\":\(payload)}"
+            "{\"kind\":\"UserMessage\",\"seq\":\(sequence),\"createdAt\":\(3000 + sequence),\(content),\"body\":{}}"
         }
-        body = "{\"entries\":[\(entries.joined(separator: ","))],\"earlierEntries\":1}"
+        body = "{\"items\":[\(items.joined(separator: ","))],\"earlierItems\":1}"
       } else {
-        body = "{\"entries\":[\(Self.prompt)],\"earlierEntries\":0}"
+        body = "{\"items\":[\(Self.prompt)],\"earlierItems\":0}"
       }
     case "/api/sessions/chat/approvals":
       body = #"{"approvals":[]}"#
@@ -144,8 +144,8 @@ final class NativeAgentPromptTests: XCTestCase {
     let refreshed = await chat.refresh()
     XCTAssertTrue(refreshed)
     XCTAssertEqual(chat.latestPromptAt, 1000)
-    XCTAssertEqual(chat.entries.compactMap(\.seq), Array(2...26))
-    XCTAssertEqual(chat.earlierEntries, 1)
+    XCTAssertEqual(chat.items.compactMap(\.seq), Array(2...26))
+    XCTAssertEqual(chat.earlierItems, 1)
     XCTAssertEqual(chat.messages.count, 12)
     XCTAssertTrue(chat.messages.allSatisfy { $0.role == "notice" })
     XCTAssertEqual(
@@ -153,7 +153,7 @@ final class NativeAgentPromptTests: XCTestCase {
     let refreshedAgain = await chat.refresh()
     XCTAssertTrue(refreshedAgain)
     XCTAssertEqual(chat.latestPromptAt, 1000)
-    XCTAssertEqual(chat.entries.compactMap(\.seq), Array(2...26))
+    XCTAssertEqual(chat.items.compactMap(\.seq), Array(2...26))
     XCTAssertEqual(NativeAgentPromptProtocol.state(chat.client.baseURL.host!)?.earlierReads, 1)
   }
 

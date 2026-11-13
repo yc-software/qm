@@ -7,8 +7,8 @@ final class ChatModel {
   var conversation: Conversation {
     didSet { if conversation != oldValue { presentationRevision += 1 } }
   }
-  var entries: [Entry] = [] { didSet { presentationRevision += 1 } }
-  private var inheritedEntries: [Entry]? { didSet { presentationRevision += 1 } }
+  var items: [Item] = [] { didSet { presentationRevision += 1 } }
+  private var inheritedEntries: [Item]? { didSet { presentationRevision += 1 } }
   var loadingInherited = false
   private(set) var hasLoadedTranscript: Bool
 
@@ -29,7 +29,7 @@ final class ChatModel {
 
   private struct Presentation {
     let revision: Int
-    let transcriptEntries: [Entry]
+    let transcriptEntries: [Item]
     let messages: [ChatMessage]
     let forkableMessageIDs: Set<String>
     let partialIsRecorded: Bool
@@ -49,10 +49,10 @@ final class ChatModel {
     if let cachedPresentation, cachedPresentation.revision == revision {
       return cachedPresentation
     }
-    let currentIDs = Set(entries.map(\.id))
+    let currentIDs = Set(items.map(\.id))
     let transcriptEntries =
       ((inheritedEntries ?? []).filter { !currentIDs.contains($0.id) }
-      + entries).sorted { ($0.seq ?? Int.max) < ($1.seq ?? Int.max) }
+      + items).sorted { ($0.seq ?? Int.max) < ($1.seq ?? Int.max) }
     let messages = presentedChatMessages(
       transcriptEntries, runs: runPresentations, activeRunID: activeRunID,
       queuedRunIDs: queuedRunIDs, liveActivity: liveActivity, surface: conversation.surface)
@@ -63,7 +63,7 @@ final class ChatModel {
     }
     let timeline = NativeChatTimeline(
       messages: messages + (live?.messages ?? []),
-      entries: transcriptEntries + runPresentations.flatMap(\.activity) + liveActivity,
+      items: transcriptEntries + runPresentations.flatMap(\.activity) + liveActivity,
       activeRunID: activeRunID, reasoning: live == nil ? [] : liveReasoning,
       reasoningAfterText: reasoningAfterText,
       streamingMessageID: live?.messages.last?.id)
@@ -77,7 +77,7 @@ final class ChatModel {
           NativeForkPoint.points(
             transcriptEntries, inheritedBoundary: conversation.forkBoundarySeq
           ).map(\.id)),
-      partialIsRecorded: partialRunID.map { hasRecordedRunReply(entries, runID: $0) } ?? false,
+      partialIsRecorded: partialRunID.map { hasRecordedRunReply(items, runID: $0) } ?? false,
       liveTimeline: live, timeline: timeline, visiblePromptAt: visiblePromptAt,
       latestPromptAt: latestPromptAt,
       agentActivity: timeline.items.compactMap { item in
@@ -111,7 +111,7 @@ final class ChatModel {
     presentationRevision += 1
   }
 
-  var transcriptEntries: [Entry] { presentation.transcriptEntries }
+  var transcriptEntries: [Item] { presentation.transcriptEntries }
   var messages: [ChatMessage] { presentation.messages }
   var forkableMessageIDs: Set<String> { presentation.forkableMessageIDs }
   var latestPromptAt: Double? { presentation.latestPromptAt }
@@ -126,13 +126,13 @@ final class ChatModel {
   var uploadingName: String?
   @ObservationIgnored var attachmentUploadTask: Task<Void, Never>?
   var partial = "" { didSet { streamChanged() } }
-  private(set) var liveActivity: [Entry] = [] {
+  private(set) var liveActivity: [Item] = [] {
     didSet {
       presentationRevision += 1
       guard !queue.steering.isEmpty else { return }
       queue.settleSteering(
         recorded: Set(
-          liveActivity.lazy.filter { $0.payload?.steered == true }.compactMap { $0.payload?.ts }))
+          liveActivity.lazy.filter { $0.steered == true }.compactMap { $0.messageTs }))
     }
   }
   @ObservationIgnored private(set) lazy var queue = QueuedInputsModel(
@@ -203,7 +203,7 @@ final class ChatModel {
   var sending = false
   var runtimeSelection: RuntimeSelection?
   var runtimeConfiguration: RuntimeConfiguration?
-  var earlierEntries = 0
+  var earlierItems = 0
   var loadingEarlier = false
   var forking = false
   private(set) var goal: Conversation.Goal?
@@ -238,9 +238,9 @@ final class ChatModel {
     goal = conversation.goal
     if let transcript {
       goal = transcript.goal
-      entries = transcript.entries
+      items = transcript.items
       pins = transcript.pins ?? []
-      earlierEntries = transcript.earlierEntries ?? 0
+      earlierItems = transcript.earlierItems ?? 0
       seededTranscript = true
     }
     drafts = DraftStore(
@@ -325,46 +325,46 @@ final class ChatModel {
           session = response.session
         }
         let retained =
-          transcript.entries.first?.seq.map { first in
-            entries.filter { ($0.seq ?? Int.max) < first }
+          transcript.items.first?.seq.map { first in
+            items.filter { ($0.seq ?? Int.max) < first }
           } ?? []
         pins = transcript.pins ?? []
         goal = transcript.goal
         conversation = session
-        entries = retained + transcript.entries
+        items = retained + transcript.items
         hasLoadedTranscript = true
         if let id = activeRunID, completedRunIDs.contains(id),
-          hasRecordedRunReply(entries, runID: id)
+          hasRecordedRunReply(items, runID: id)
         {
           recordCompletion(id: id, reply: nil)
           activeRunID = nil
           if partialRunID == id { partial = "" }
         }
         if let partialRunID, completedRunIDs.contains(partialRunID),
-          hasRecordedRunReply(entries, runID: partialRunID)
+          hasRecordedRunReply(items, runID: partialRunID)
         {
           partial = ""
         }
-        let recordedEntryIDs = Set(entries.map(\.id))
+        let recordedEntryIDs = Set(items.map(\.id))
         let recordedFailures =
           runPresentations.contains { $0.failure != nil }
-          ? Set(chatMessages(entries).lazy.filter { $0.role == "error" }.compactMap(\.runID)) : []
+          ? Set(chatMessages(items).lazy.filter { $0.role == "error" }.compactMap(\.runID)) : []
         runPresentations.removeAll { run in
           let failureRecorded =
             run.failure == nil || run.runID.map(recordedFailures.contains) == true
           return failureRecorded
             && (unassociatedReplies.contains(run.id)
-              || (run.input?.isRecorded(in: entries) ?? true)
+              || (run.input?.isRecorded(in: items) ?? true)
                 && (run.reply == nil
                   || run.runID.map {
-                    hasRecordedRunReply(entries, runID: $0, includingPosts: false)
+                    hasRecordedRunReply(items, runID: $0, includingPosts: false)
                   }
                     == true)
                 && run.activity.filter(NativeWorkItem.supports).allSatisfy {
                   recordedEntryIDs.contains($0.id)
                 })
         }
-        earlierEntries = max(0, (transcript.earlierEntries ?? 0) - retained.count)
+        earlierItems = max(0, (transcript.earlierItems ?? 0) - retained.count)
         await recoverEarlierPrompt()
         guard current == generation, revision == transcriptRevision else { return false }
         if conversation.canReply {
@@ -755,7 +755,7 @@ final class ChatModel {
   }
 
   func needsEarlierHistory(for sequence: Int) -> Bool {
-    guard earlierEntries > 0, let first = entries.first?.seq, first > sequence else { return false }
+    guard earlierItems > 0, let first = items.first?.seq, first > sequence else { return false }
     if let boundary = conversation.forkBoundarySeq, sequence <= boundary,
       transcriptEntries.contains(where: { ($0.seq ?? Int.max) <= sequence })
     {
@@ -771,7 +771,7 @@ final class ChatModel {
     loadingInherited = true
     defer { loadingInherited = false }
     var before = boundary + 1
-    var loaded: [Entry] = []
+    var loaded: [Item] = []
     do {
       while !Task.isCancelled {
         let page: Transcript = try await client.fetch(
@@ -780,9 +780,9 @@ final class ChatModel {
             .init(name: "beforeSeq", value: String(before)), .init(name: "tailTurns", value: "25"),
           ])
         guard !Task.isCancelled else { return }
-        let inherited = page.entries.filter { ($0.seq ?? Int.max) <= boundary }
+        let inherited = page.items.filter { ($0.seq ?? Int.max) <= boundary }
         loaded.insert(contentsOf: inherited, at: 0)
-        guard (page.earlierEntries ?? 0) > 0, let first = inherited.first?.seq,
+        guard (page.earlierItems ?? 0) > 0, let first = inherited.first?.seq,
           first > 0, first < before
         else { break }
         before = first
@@ -796,7 +796,7 @@ final class ChatModel {
   }
 
   func loadEarlier() async {
-    guard !loadingEarlier, let first = entries.first?.seq else { return }
+    guard !loadingEarlier, let first = items.first?.seq else { return }
     loadingEarlier = true
     defer { loadingEarlier = false }
     let reading = messages.first?.sequence
@@ -807,9 +807,9 @@ final class ChatModel {
           .init(name: "beforeSeq", value: String(first)), .init(name: "tailTurns", value: "25"),
         ])
       guard !Task.isCancelled else { return }
-      let existing = Set(entries.map(\.id))
-      entries.insert(contentsOf: page.entries.filter { !existing.contains($0.id) }, at: 0)
-      earlierEntries = page.earlierEntries ?? 0
+      let existing = Set(items.map(\.id))
+      items.insert(contentsOf: page.items.filter { !existing.contains($0.id) }, at: 0)
+      earlierItems = page.earlierItems ?? 0
       readingSequence = reading
       syncError = nil
     } catch {
@@ -828,7 +828,7 @@ final class ChatModel {
   }
 
   private func recoverEarlierPrompt() async {
-    guard presentation.visiblePromptAt == nil, earlierEntries > 0, let first = entries.first?.seq,
+    guard presentation.visiblePromptAt == nil, earlierItems > 0, let first = items.first?.seq,
       earlierPromptBoundary != first
     else { return }
     let current = generation
@@ -844,12 +844,12 @@ final class ChatModel {
         guard current == generation, revision == transcriptRevision, !Task.isCancelled else {
           return
         }
-        if let prompt = Self.latestPrompt(in: chatMessages(page.entries)) {
+        if let prompt = Self.latestPrompt(in: chatMessages(page.items)) {
           earlierPromptAt = prompt
           earlierPromptBoundary = first
           return
         }
-        guard (page.earlierEntries ?? 0) > 0, let next = page.entries.first?.seq,
+        guard (page.earlierItems ?? 0) > 0, let next = page.items.first?.seq,
           next > 0, next < before
         else {
           earlierPromptBoundary = first

@@ -5,29 +5,6 @@ import XCTest
 
 @testable import QM
 
-private final class FilePreviewProtocol: URLProtocol, @unchecked Sendable {
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-  override func startLoading() {
-    XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "portal_session=preview-test")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "*/*")
-    XCTAssertEqual(request.url?.path, "/api/files/server-report/content")
-    client?.urlProtocol(
-      self,
-      didReceive: HTTPURLResponse(
-        url: request.url!, statusCode: 200, httpVersion: nil,
-        headerFields: [
-          "Content-Type": "text/plain",
-          "Content-Disposition": "inline; filename*=UTF-8''Server%20Report.txt",
-        ])!, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data("A server attachment".utf8))
-    client?.urlProtocolDidFinishLoading(self)
-  }
-
-  override func stopLoading() {}
-}
-
 final class FilePreviewTests: XCTestCase {
   func testAttachmentLinksUseOnlyMatchingDeliveredMetadata() {
     let files = [DeliveredFile(name: "Quarterly Report.png", artifactId: "file-1")]
@@ -89,11 +66,17 @@ final class FilePreviewTests: XCTestCase {
 
   @MainActor
   func testAuthenticatedPreviewUsesServerFilenameWhenLinkHasNoName() async throws {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [FilePreviewProtocol.self]
-    let client = APIClient(
-      baseURL: URL(string: "https://\(UUID().uuidString).example.test")!,
-      configuration: configuration)
+    let server = NativeRouteProtocol.Server()
+    let client = server.client([
+      "GET /api/files/server-report/content": [
+        .init(
+          body: "A server attachment",
+          headers: [
+            "Content-Type": "text/plain",
+            "Content-Disposition": "inline; filename*=UTF-8''Server%20Report.txt",
+          ])
+      ]
+    ])
     try client.saveSession("preview-test")
     defer { client.signOut() }
     let file = try XCTUnwrap(
@@ -102,6 +85,9 @@ final class FilePreviewTests: XCTestCase {
 
     let preview = try await FilePreviewResource.file(file).load(client: client)
 
+    XCTAssertEqual(server.calls.count, 1)
+    XCTAssertEqual(server.calls.first?.headers["Cookie"], "portal_session=preview-test")
+    XCTAssertEqual(server.calls.first?.headers["Accept"], "*/*")
     XCTAssertEqual(preview.url.lastPathComponent, "Server Report.txt")
     XCTAssertEqual(try String(contentsOf: preview.url, encoding: .utf8), "A server attachment")
     XCTAssertTrue(QLPreviewController.canPreview(preview.url as NSURL))

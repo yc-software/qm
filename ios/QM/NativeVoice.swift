@@ -13,7 +13,7 @@ struct NativeVoiceFragment: Identifiable {
 }
 enum NativeVoiceTimelineContent {
   case speech(NativeVoiceFragment)
-  case activity(Entry)
+  case activity(Item)
   case status(String)
   case result(String)
 }
@@ -34,8 +34,8 @@ struct NativeVoiceTranscript {
   mutating func appendResult(_ text: String) {
     appendItem(.result(text))
   }
-  mutating func appendActivity(_ entries: [Entry], runID: String) {
-    for entry in entries
+  mutating func appendActivity(_ items: [Item], runID: String) {
+    for entry in items
     where NativeWorkItem.supports(entry) && activityIDs.insert("\(runID):\(entry.id)").inserted {
       appendItem(.activity(entry))
     }
@@ -405,7 +405,7 @@ final class NativeVoiceModel: NSObject {
       Log.background.failure("Voice briefing history", error)
       history = nil
     }
-    let messages = chatMessages(history?.entries ?? []).filter {
+    let messages = chatMessages(history?.items ?? []).filter {
       $0.role == "user" || $0.role == "assistant"
     }
     return NativeVoiceBridge.briefing(

@@ -331,7 +331,7 @@ final class NativeConversationToolsTests: XCTestCase {
       #"{"id":"side1","scopeId":"user:alice","threadRef":"web:alice:x","surface":"web","sideChat":{"entrySeq":7,"quote":"q","occurrence":0,"expanded":true}"#
     server.reply(expand, #"{"session":"# + session + "}}")
     server.reply(
-      "GET /api/sessions/side1", #"{"session":"# + session + #","canContinue":true},"entries":[]}"#)
+      "GET /api/sessions/side1", #"{"session":"# + session + #","canContinue":true},"items":[]}"#)
     let opened = await model.expand(chat)
     XCTAssertTrue(opened)
     XCTAssertNil(model.error)

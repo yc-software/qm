@@ -19,7 +19,7 @@ struct NativeConversationTools: View {
             Text(String(point.title.prefix(70))).tag(point.id)
           }
         }
-        if model.earlierEntries > 0 {
+        if model.earlierItems > 0 {
           Button {
             Task { await model.loadEarlier() }
           } label: {
@@ -181,7 +181,7 @@ struct NativeActivityView: View {
   @Bindable var model: ChatModel
   var body: some View {
     QMList {
-      if model.earlierEntries > 0 {
+      if model.earlierItems > 0 {
         Button {
           Task { await model.loadEarlier() }
         } label: {
@@ -190,7 +190,7 @@ struct NativeActivityView: View {
             busy: model.loadingEarlier)
         }.disabled(model.loadingEarlier)
       }
-      ForEach(model.entries) { entry in NativeActivityRow(entry: entry, client: model.client) }
+      ForEach(model.items) { entry in NativeActivityRow(entry: entry, client: model.client) }
       if let error = model.error { Text(error).foregroundStyle(.red) }
     }.navigationTitle("Activity").refreshable { _ = await model.refresh() }
   }
@@ -360,22 +360,23 @@ struct NativeForkPoint: Identifiable {
   let id: String
   let title: String
   let cut: String
-  static func points(_ entries: [Entry], inheritedBoundary: Int? = nil, surface: String? = nil)
+  static func points(_ items: [Item], inheritedBoundary: Int? = nil, surface: String? = nil)
     -> [Self]
   {
     let entriesByID = Dictionary(
-      entries.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+      items.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
     var userSeqs: [Int] = []
-    for entry in entries {
-      guard entry.type == "user", let payload = entry.payload, payload.hidden != true,
+    for entry in items {
+      let payload = entry
+      guard entry.presentationRole == "user", payload.isHidden != true,
         let sequence = entry.seq
       else { continue }
       let hasText = payload.text.map { !$0.isEmpty } ?? false
-      let hasAttachments = payload.attachments.map { !$0.isEmpty } ?? false
+      let hasAttachments = payload.body?.attachments.map { !$0.isEmpty } ?? false
       if hasText || hasAttachments { userSeqs.append(sequence) }
     }
 
-    return chatMessages(entries, surface: surface).compactMap { message in
+    return chatMessages(items, surface: surface).compactMap { message in
       guard ["user", "assistant"].contains(message.role), let entry = entriesByID[message.id],
         let seq = entry.seq
       else { return nil }

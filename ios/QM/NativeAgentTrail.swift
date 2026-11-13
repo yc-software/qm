@@ -71,7 +71,7 @@ private struct NativeAgentTrailContent: View {
     NativeAgentBranch.pendingLaunches(agentActivity, listed: model.branches)
   }
   private var launchActivityID: String {
-    agentActivity.filter { $0.opensAgents && $0.entry.payload?.action == "open" }
+    agentActivity.filter { $0.opensAgents && $0.entry.body?.action == "open" }
       .map { "\($0.id):\($0.result?.id ?? "")" }.joined(separator: "|")
   }
   private var summary: String {
@@ -222,7 +222,7 @@ private struct NativeAgentTrailContent: View {
 
   private func launchLabel(_ item: NativeWorkItem) -> some View {
     let name =
-      [item.entry.payload?.name, item.result?.payload?.details?["title"]?.string]
+      [item.entry.body?.name, item.result?.details?["title"]?.string]
       .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
       .first { !$0.isEmpty } ?? "Agent"
     return HStack(spacing: 8) {

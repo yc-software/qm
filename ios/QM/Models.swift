@@ -154,8 +154,8 @@ struct ConversationList: Decodable {
 }
 
 struct Transcript: Decodable {
-  let entries: [Entry]
-  let earlierEntries: Int?
+  let items: [Item]
+  let earlierItems: Int?
   let pins: [NativeConversationPin]?
   let session: Conversation?
   let goal: Conversation.Goal?
@@ -168,105 +168,6 @@ struct NativeConversationPin: Decodable, Identifiable {
   let preview: String?
   let addedBy: String
   let createdAt: Double
-}
-
-struct Entry: Decodable, Identifiable {
-  let id: String
-  let type: String
-  let payload: EntryPayload?
-  let createdAt: Double
-  let seq: Int?
-  let truncated: Bool?
-  var itemKind: String? = nil
-}
-
-struct NativePlayground: Decodable, Identifiable {
-  let kind: String
-  let artifactId: String
-  let title: String
-  var id: String { artifactId }
-}
-
-final class EntryPayload: Decodable, Sendable {
-  let details: NativeActivityValue?
-  struct Display: Decodable { let artifact: NativePlayground? }
-  let playground: NativePlayground?
-  let text: String?
-  let display: String?
-  let hidden: Bool?
-  let attachments: [DeliveredFile]?
-  let files: [DeliveredFile]?
-  let action: String?
-  let tool: String?
-  let callId: String?
-  let ok: Bool?
-  let isError: Bool?
-  let denied: Bool?
-  let blocked: String?
-  let error: String?
-  let kind: String?
-  let message: String?
-  let name: String?
-  let silent: Bool?
-  let runId: String?
-  let steered: Bool?
-  let thinking: String?
-  let redacted: Bool?
-  let approved: Bool?
-  let command: String?
-  let scope: String?
-  let requestId: String?
-  let ts: String?
-
-  enum CodingKeys: String, CodingKey {
-    case text, display, hidden, attachments, files, action, tool, callId, ok, isError, denied,
-      blocked, error, kind, message, name, silent, runId, steered, thinking, redacted, approved,
-      command, scope, requestId, ts
-  }
-
-  init(from decoder: Decoder) throws {
-    details = try NativeActivityValue(from: decoder)
-    let c = try decoder.container(keyedBy: CodingKeys.self)
-    text = c.logged(String.self, forKey: .text)
-    display = details?["display"]?.string
-    if case .object = details?["display"] {
-      playground = c.logged(Display.self, forKey: .display)?.artifact
-    } else {
-      playground = nil
-    }
-    hidden = c.logged(Bool.self, forKey: .hidden)
-    attachments = c.logged([DeliveredFile].self, forKey: .attachments)
-    files = c.logged([DeliveredFile].self, forKey: .files)
-    action = c.logged(String.self, forKey: .action)
-    tool = c.logged(String.self, forKey: .tool)
-    callId = c.logged(String.self, forKey: .callId)
-    ok = c.logged(Bool.self, forKey: .ok)
-    isError = c.logged(Bool.self, forKey: .isError)
-    denied = c.logged(Bool.self, forKey: .denied)
-    blocked = c.logged(String.self, forKey: .blocked)
-    switch details?["error"] {
-    case .string(let message): error = message
-    case nil, .null, .bool(false): error = nil
-    default: error = "error"
-    }
-    kind = c.logged(String.self, forKey: .kind)
-    message = c.logged(String.self, forKey: .message)
-    name = c.logged(String.self, forKey: .name)
-    silent = c.logged(Bool.self, forKey: .silent)
-    runId = c.logged(String.self, forKey: .runId)
-    steered = c.logged(Bool.self, forKey: .steered)
-    thinking = c.logged(String.self, forKey: .thinking)
-    redacted = c.logged(Bool.self, forKey: .redacted)
-    approved = c.logged(Bool.self, forKey: .approved)
-    command = c.logged(String.self, forKey: .command)
-    scope = c.logged(String.self, forKey: .scope)
-    requestId = c.logged(String.self, forKey: .requestId)
-    ts = c.logged(String.self, forKey: .ts)
-  }
-
-  var succeeded: Bool {
-    ok != false && isError != true && denied != true && blocked == nil && error == nil
-  }
 }
 
 struct DeliveredFile: Decodable {
@@ -307,9 +208,9 @@ struct RunInput: Decodable {
   let createdAt: Double
   let attachments: [Attachment]?
 
-  func isRecorded(in entries: [Entry]) -> Bool {
-    entries.contains {
-      $0.type == "user" && ($0.payload?.runId == runId || (seq != nil && $0.seq == seq))
+  func isRecorded(in items: [Item]) -> Bool {
+    items.contains {
+      $0.presentationRole == "user" && ($0.turnId == runId || (seq != nil && $0.seq == seq))
     }
   }
 
@@ -328,14 +229,14 @@ struct ChatRunPresentation: Identifiable {
   var reply: String?
   var failure: String?
   var finished = false
-  var activity: [Entry] = []
+  var activity: [Item] = []
 }
 
 func presentedChatMessages(
-  _ entries: [Entry], runs: [ChatRunPresentation], activeRunID: String?,
-  queuedRunIDs: Set<String> = [], liveActivity: [Entry] = [], surface: String? = nil
+  _ items: [Item], runs: [ChatRunPresentation], activeRunID: String?,
+  queuedRunIDs: Set<String> = [], liveActivity: [Item] = [], surface: String? = nil
 ) -> [ChatMessage] {
-  var messages = chatMessages(entries, surface: surface)
+  var messages = chatMessages(items, surface: surface)
   if let activeRunID {
     let indices = messages.indices.filter { messages[$0].runID == activeRunID }
     for entry in liveActivity {
@@ -343,7 +244,7 @@ func presentedChatMessages(
     }
   }
   for run in runs {
-    if let input = run.input, !input.isRecorded(in: entries), !queuedRunIDs.contains(run.id),
+    if let input = run.input, !input.isRecorded(in: items), !queuedRunIDs.contains(run.id),
       run.finished || activeRunID == nil || activeRunID == run.runID
     {
       let position =
@@ -367,14 +268,15 @@ func presentedChatMessages(
     let projectedIDs = Set(projected.map(\.id))
     let delivered = run.activity.contains {
       projectedIDs.contains($0.id)
-        && ($0.type == "assistant" || $0.type == "tool_call" && $0.payload?.action == "post")
+        && ($0.presentationRole == "assistant"
+          || $0.presentationRole == "tool_call" && $0.body?.action == "post")
     }
     let last = run.activity.last
     let finalNarration =
-      last?.type == "text" && last?.payload?.details?["phase"] == .string("final_answer")
-      && last?.payload?.details?["demoted"] != .bool(true) && last?.payload?.text == run.reply
+      last?.presentationRole == "text" && last?.details?["phase"] == .string("final_answer")
+      && last?.details?["demoted"] != .bool(true) && last?.text == run.reply
     let replyRecorded =
-      (run.runID.map { hasRecordedRunReply(entries, runID: $0) } ?? false)
+      (run.runID.map { hasRecordedRunReply(items, runID: $0) } ?? false)
       || delivered || finalNarration
     var seen = Set(messages.filter { $0.runID == run.runID }.flatMap(\.activity).map(\.id))
     var remainingActivity = run.activity.filter {
@@ -432,7 +334,7 @@ struct Run: Decodable {
   let result: RunResult?
   var replyComplete: Bool? = nil
   var input: RunInput? = nil
-  var activity: [Entry]? = nil
+  var activity: [Item]? = nil
   var attempt: Int? = nil
   var partialStartOffset: Int? = nil
   var reasoning: [RunReasoning]? = nil
@@ -507,7 +409,7 @@ struct ChatMessage: Identifiable {
   var runID: String?
   var sequence: Int?
   var createdAt: Double?
-  var activity: [Entry] = []
+  var activity: [Item] = []
   var steered = false
   var slackTimestamp: String?
   var edited = false
@@ -515,35 +417,34 @@ struct ChatMessage: Identifiable {
   var notice: ChatNotice?
 }
 
-func chatMessages(_ entries: [Entry], runID: String? = nil, surface: String? = nil)
+func chatMessages(_ items: [Item], runID: String? = nil, surface: String? = nil)
   -> [ChatMessage]
 {
   var builder = ChatMessageBuilder(currentRunID: runID, surface: surface)
-  for entry in entries { builder.add(entry) }
+  for entry in items { builder.add(entry) }
   return builder.messagesWithReferences()
 }
 
 private struct ChatMessageBuilder {
   var messages: [ChatMessage] = []
-  var posts: [String: Entry] = [:]
+  var posts: [String: Item] = [:]
   var posted = false
   var lastText = ""
   var lastTextID: String?
   var lastTextPhase: String?
-  var lastTextStep: NativeActivityValue?
+  var lastTextStep: String?
   var silent = false
   var playgroundIDs = Set<String>()
   var currentRunID: String?
   var surface: String?
-  var activity: [Entry] = []
+  var activity: [Item] = []
   var turnStart = 0
 
-  mutating func add(_ entry: Entry) {
-    guard let payload = entry.payload else { return }
+  mutating func add(_ entry: Item) {
     let messageCount = messages.count
-    if entry.type == "user", payload.steered != true || payload.runId != nil {
-      currentRunID = payload.runId
-    } else if let runID = payload.runId {
+    if entry.presentationRole == "user", entry.steered != true || entry.turnId != nil {
+      currentRunID = entry.turnId
+    } else if let runID = entry.turnId {
       currentRunID = runID
     }
     if NativeWorkItem.supports(entry),
@@ -551,22 +452,22 @@ private struct ChatMessageBuilder {
     {
       activity.append(entry)
     }
-    switch entry.type {
-    case "user": addUser(entry, payload)
-    case "text": addText(entry, payload)
+    switch entry.presentationRole {
+    case "user": addUser(entry)
+    case "text": addText(entry)
     case "tool_call":
-      if payload.action == "post", let callID = payload.callId { posts[callID] = entry }
-    case "tool_result": addToolResult(entry, payload)
-    case "assistant": addAssistant(entry, payload)
-    case "delivery": addDelivery(entry, payload)
+      if entry.body?.action == "post", let callID = entry.callId { posts[callID] = entry }
+    case "tool_result": addToolResult(entry)
+    case "assistant": addAssistant(entry)
+    case "delivery": addDelivery(entry)
     case "approval_resolved":
-      if let approved = payload.approved, let command = payload.command {
+      if let approved = entry.approved, let command = entry.body?.command {
         messages.append(
           ChatMessage(
             id: entry.id, role: "notice", text: "",
-            notice: .approval(approved: approved, command: command, scope: payload.scope)))
+            notice: .approval(approved: approved, command: command, scope: entry.body?.scope)))
       }
-    case "system": addSystem(entry, payload)
+    case "system": addSystem(entry)
     default: break
     }
     attachActivity(entry, from: messageCount)
@@ -576,8 +477,8 @@ private struct ChatMessageBuilder {
     messages.indices.last { $0 >= turnStart && messages[$0].role == "assistant" }
   }
 
-  private mutating func addUser(_ entry: Entry, _ payload: EntryPayload) {
-    if payload.steered != true {
+  private mutating func addUser(_ entry: Item) {
+    if entry.steered != true {
       activity = []
       turnStart = messages.count
       posts = [:]
@@ -588,24 +489,25 @@ private struct ChatMessageBuilder {
       lastTextPhase = nil
       lastTextStep = nil
     }
-    guard payload.hidden != true,
-      !(payload.details?["overheard"] == .bool(true)
-        && payload.details?["sourceRole"] == .string("agent"))
+    guard entry.isHidden != true,
+      !(entry.details?["overheard"] == .bool(true)
+        && entry.details?["sourceRole"] == .string("agent"))
     else { return }
-    let written = payload.display ?? payload.text ?? ""
+    let written = entry.body?.display ?? entry.text ?? ""
     let text = surface == "slack" ? SlackText.markdown(written) : written
-    if let mail = SubagentMail(text: payload.text) {
+    if let mail = SubagentMail(text: entry.text) {
       messages.append(ChatMessage(id: entry.id, role: "notice", text: "", notice: .subagent(mail)))
-    } else if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
+    } else if !text.isEmpty || !(entry.body?.attachments ?? []).isEmpty {
       messages.append(
         ChatMessage(
-          id: entry.id, role: "user", text: text, files: payload.attachments ?? [],
-          speaker: payload.name, steered: payload.steered == true, slackTimestamp: payload.ts))
+          id: entry.id, role: "user", text: text, files: entry.body?.attachments ?? [],
+          speaker: entry.body?.name, steered: entry.steered == true,
+          slackTimestamp: entry.messageTs))
     }
   }
 
-  private mutating func addToolResult(_ entry: Entry, _ payload: EntryPayload) {
-    if payload.tool == "miniapp", payload.succeeded, let artifact = payload.playground,
+  private mutating func addToolResult(_ entry: Item) {
+    if entry.tool == "miniapp", entry.succeeded, let artifact = entry.body?.playground,
       artifact.kind == "playground", FilePreviewResource.path(for: artifact.artifactId) != nil,
       !artifact.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       playgroundIDs.insert(artifact.id).inserted
@@ -613,40 +515,39 @@ private struct ChatMessageBuilder {
       messages.append(
         ChatMessage(id: entry.id, role: "assistant", text: "", playgrounds: [artifact]))
     }
-    if payload.tool == "finish_silently" && payload.silent == true
-      || payload.tool == "stay_silent" && payload.ok == true
+    if entry.tool == "finish_silently" && entry.body?.silent == true
+      || entry.tool == "stay_silent" && entry.body?.ok == true
     {
       silent = true
     }
-    if let callID = payload.callId, let post = posts.removeValue(forKey: callID),
-      payload.succeeded
+    if let callID = entry.callId, let post = posts.removeValue(forKey: callID),
+      entry.succeeded
     {
       messages.append(
         ChatMessage(
-          id: post.id, role: "assistant", text: post.payload?.text ?? "",
-          files: payload.files ?? []))
+          id: post.id, role: "assistant", text: post.body?.text ?? "",
+          files: entry.body?.files ?? []))
       posted = true
-    } else if payload.tool == "attach", payload.succeeded, let files = payload.files,
+    } else if entry.tool == "attach", entry.succeeded, let files = entry.body?.files,
       !files.isEmpty
     {
       messages.append(ChatMessage(id: entry.id, role: "assistant", text: "", files: files))
     }
   }
 
-  private mutating func addAssistant(_ entry: Entry, _ payload: EntryPayload) {
+  private mutating func addAssistant(_ entry: Item) {
     if !posted && !silent {
-      let text = payload.text?.isEmpty == false ? payload.text! : lastText
+      let text = entry.text?.isEmpty == false ? entry.text! : lastText
       if let last = messages.indices.last, messages[last].id == lastTextID,
-        lastTextPhase != "commentary", messages[last].text == text, activity.isEmpty,
-        lastTextStep == nil || payload.details?["step"] == nil
-          || lastTextStep == payload.details?["step"]
+        lastTextPhase != "commentary", activity.isEmpty,
+        lastTextStep != nil, lastTextStep == entry.stepIdentity
       {
-        messages[last].files += payload.attachments ?? []
-      } else if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
+        messages[last].files += entry.body?.attachments ?? []
+      } else if !text.isEmpty || !(entry.body?.attachments ?? []).isEmpty {
         messages.append(
           ChatMessage(
-            id: entry.id, role: "assistant", text: text, files: payload.attachments ?? [],
-            speaker: payload.name))
+            id: entry.id, role: "assistant", text: text, files: entry.body?.attachments ?? [],
+            speaker: entry.body?.name))
       }
     }
     posted = false
@@ -658,19 +559,20 @@ private struct ChatMessageBuilder {
     posts = [:]
   }
 
-  private mutating func addText(_ entry: Entry, _ payload: EntryPayload) {
-    lastText = payload.text ?? ""
-    lastTextPhase = payload.details?["phase"]?.string
-    lastTextStep = payload.details?["step"]
-    guard payload.hidden != true, payload.details?["demoted"] != .bool(true),
+  private mutating func addText(_ entry: Item) {
+    lastText = entry.text ?? ""
+    lastTextPhase = entry.details?["phase"]?.string
+    lastTextStep = entry.stepIdentity
+    guard entry.isHidden != true, entry.details?["retracted"] == nil,
+      entry.details?["prodded"] == nil,
       !lastText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else { return }
     lastTextID = entry.id
     messages.append(ChatMessage(id: entry.id, role: "assistant", text: lastText))
   }
 
-  private mutating func addDelivery(_ entry: Entry, _ payload: EntryPayload) {
-    guard let files = payload.files, !files.isEmpty else { return }
+  private mutating func addDelivery(_ entry: Item) {
+    guard let files = entry.body?.files, !files.isEmpty else { return }
     if let last = lastAssistantInTurn {
       messages[last].files += files
     } else {
@@ -678,9 +580,9 @@ private struct ChatMessageBuilder {
     }
   }
 
-  private mutating func addSystem(_ entry: Entry, _ payload: EntryPayload) {
-    if payload.kind == "message_revision", let action = payload.action,
-      ["edited", "deleted"].contains(action), let timestamp = payload.ts, !timestamp.isEmpty
+  private mutating func addSystem(_ entry: Item) {
+    if entry.kind == "Retraction", let action = entry.body?.action,
+      ["edited", "deleted"].contains(action), let timestamp = entry.messageTs, !timestamp.isEmpty
     {
       for index in messages.indices where messages[index].slackTimestamp == timestamp {
         if action == "edited" { messages[index].edited = true }
@@ -689,16 +591,19 @@ private struct ChatMessageBuilder {
       messages.append(
         ChatMessage(
           id: entry.id, role: "notice", text: "",
-          notice: .revision(action: action, speaker: payload.name, text: payload.text ?? "")))
-    } else if payload.kind == "turn_failure", let message = payload.message {
+          notice: .revision(
+            action: action, speaker: entry.body?.name, text: entry.body?.text ?? "")))
+    } else if entry.kind == "Error", let message = entry.text {
       messages.append(ChatMessage(id: entry.id, role: "error", text: message))
-    } else if payload.kind == "turn_stopped" {
+    } else if entry.kind == "Stop" {
       messages.append(ChatMessage(id: entry.id, role: "notice", text: "", notice: .stopped))
     }
   }
 
-  private mutating func attachActivity(_ entry: Entry, from messageCount: Int) {
-    if entry.type == "assistant", messageCount == messages.count, let first = activity.first {
+  private mutating func attachActivity(_ entry: Item, from messageCount: Int) {
+    if entry.presentationRole == "assistant", messageCount == messages.count,
+      let first = activity.first
+    {
       messages.append(ChatMessage(id: "activity:\(first.id)", role: "assistant", text: ""))
     }
     for index in messageCount..<messages.count {
@@ -727,12 +632,14 @@ private struct ChatMessageBuilder {
   }
 }
 
-private func attachToolResult(_ entry: Entry, to messages: inout [ChatMessage], indices: [Int])
+private func attachToolResult(_ entry: Item, to messages: inout [ChatMessage], indices: [Int])
   -> Bool
 {
-  guard entry.type == "tool_result", let callID = entry.payload?.callId,
+  guard entry.presentationRole == "tool_result", let callID = entry.callId,
     let index = indices.last(where: { index in
-      messages[index].activity.contains { $0.type == "tool_call" && $0.payload?.callId == callID }
+      messages[index].activity.contains {
+        $0.presentationRole == "tool_call" && $0.callId == callID
+      }
     })
   else { return false }
   if !messages[index].activity.contains(where: { $0.id == entry.id }) {
@@ -796,7 +703,7 @@ struct StreamEvent: Decodable {
     let result: RunResult?
     let replyComplete: Bool?
     let input: RunInput?
-    let activity: [Entry]?
+    let activity: [Item]?
     let attempt: Int?
     let partialStartOffset: Int?
     let reasoning: [RunReasoning]?
@@ -827,10 +734,12 @@ struct StreamText {
       self = StreamText()
       self.attempt = attempt
     }
-    let lastText = run.activity?.last { $0.type == "text_start" || $0.type == "text" }
-    if lastText?.type == "text" { textPosition = nil }
-    if let marker = run.activity?.last(where: { $0.type == "text_start" }),
-      case .number(let offset) = marker.payload?.details?["streamOffset"]
+    let lastText = run.activity?.last {
+      $0.presentationRole == "text_start" || $0.presentationRole == "text"
+    }
+    if lastText?.presentationRole == "text" { textPosition = nil }
+    if let marker = run.activity?.last(where: { $0.presentationRole == "text_start" }),
+      case .number(let offset) = marker.details?["streamOffset"]
     {
       let offset = NSDecimalNumber(decimal: offset).intValue
       if textBlockOffset != offset {
@@ -851,7 +760,7 @@ struct StreamText {
       isFinalReply = false
       startOffset = run.partialStartOffset ?? 0
       utf16Offset = startOffset + partial.utf16.count
-      if lastText?.type == "text" {
+      if lastText?.presentationRole == "text" {
         textPosition = nil
       } else if utf16Offset > (textBlockOffset ?? startOffset) {
         recordTextPosition()
@@ -939,22 +848,22 @@ func sidebarConversations(_ conversations: [Conversation]) -> [Conversation] {
   conversations.filter { !$0.isSubagent }
 }
 
-func hasRecordedRunReply(_ entries: [Entry], runID: String, includingPosts: Bool = true) -> Bool {
+func hasRecordedRunReply(_ items: [Item], runID: String, includingPosts: Bool = true) -> Bool {
   var matchesRun = false
   var posts: [String: Bool] = [:]
-  for entry in entries {
-    if entry.type == "user" {
-      if entry.payload?.steered != true || entry.payload?.runId != nil {
-        matchesRun = entry.payload?.runId == runID
+  for entry in items {
+    if entry.presentationRole == "user" {
+      if entry.steered != true || entry.turnId != nil {
+        matchesRun = entry.turnId == runID
       }
-    } else if matchesRun && entry.type == "assistant" {
+    } else if matchesRun && entry.presentationRole == "assistant" {
       return true
-    } else if entry.type == "tool_call", entry.payload?.action == "post",
-      let callID = entry.payload?.callId
+    } else if entry.presentationRole == "tool_call", entry.body?.action == "post",
+      let callID = entry.callId
     {
       posts[callID] = matchesRun
-    } else if entry.type == "tool_result", let callID = entry.payload?.callId,
-      posts.removeValue(forKey: callID) == true, entry.payload?.succeeded == true, includingPosts
+    } else if entry.presentationRole == "tool_result", let callID = entry.callId,
+      posts.removeValue(forKey: callID) == true, entry.succeeded == true, includingPosts
     {
       return true
     }

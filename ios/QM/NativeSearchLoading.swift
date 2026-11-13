@@ -51,9 +51,7 @@ struct NativePeopleSearchLoading: View {
   @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 32
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text(label).font(.subheadline).foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+    NativeLoadingSection(label: label, spacing: 16) {
       VStack(spacing: 18) {
         ForEach(0..<3) { row in
           HStack(spacing: 12) {
@@ -67,12 +65,9 @@ struct NativePeopleSearchLoading: View {
           }
           .modifier(NativeLoadingPulse(phaseOffset: Double(row) * 0.15))
         }
-      }.accessibilityHidden(true)
+      }
     }
     .padding(.vertical, 8)
-    .allowsHitTesting(false)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(label)
   }
 }
 
@@ -83,9 +78,7 @@ struct NativeCatalogLoading: View {
   @ScaledMetric(relativeTo: .body) private var actionHeight: CGFloat = 10
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(label).font(.subheadline).foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+    NativeLoadingSection(label: label) {
       VStack(spacing: 0) {
         ForEach(0..<2) { row in
           VStack(alignment: .leading, spacing: 8) {
@@ -99,12 +92,9 @@ struct NativeCatalogLoading: View {
           .modifier(NativeLoadingPulse(phaseOffset: Double(row) * 0.18))
           if row == 0 { Divider() }
         }
-      }.accessibilityHidden(true)
+      }
     }
     .padding(.vertical, 6)
-    .allowsHitTesting(false)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(label)
   }
 }
 
@@ -114,9 +104,7 @@ struct NativeAppCollectionLoading: View {
   @ScaledMetric(relativeTo: .caption) private var detailHeight: CGFloat = 8
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(label).font(.subheadline).foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+    NativeLoadingSection(label: label) {
       VStack(spacing: 0) {
         ForEach(0..<3) { row in
           VStack(alignment: .leading, spacing: 6) {
@@ -127,11 +115,8 @@ struct NativeAppCollectionLoading: View {
           .modifier(NativeLoadingPulse(phaseOffset: Double(row) * 0.15))
           if row < 2 { Divider() }
         }
-      }.accessibilityHidden(true)
+      }
     }
     .padding(.vertical, 8)
-    .allowsHitTesting(false)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(label)
   }
 }

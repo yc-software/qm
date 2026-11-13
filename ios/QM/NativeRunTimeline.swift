@@ -5,8 +5,7 @@ struct NativeRunTimeline {
     let start: Int?
     let startIsRecorded: Bool
     let deliveredPost: Bool
-    let finalText: String?
-    let assistantTexts: Set<String>
+    let finalTextIsRecorded: Bool
 
     func callAsFunction(_ partial: String, startOffset: Int, finalReply: Bool) -> String {
       if !finalReply, let start {
@@ -14,7 +13,7 @@ struct NativeRunTimeline {
           ? ""
           : String(decoding: partial.utf16.dropFirst(max(0, start - startOffset)), as: UTF16.self)
       }
-      if finalReply ? deliveredPost || finalText == partial : assistantTexts.contains(partial) {
+      if deliveredPost || finalReply && finalTextIsRecorded {
         return ""
       }
       return partial
@@ -26,7 +25,7 @@ struct NativeRunTimeline {
   let liveText: LiveText
 
   init(
-    activity: [Entry], partial: String, startOffset: Int, runID: String,
+    activity: [Item], partial: String, startOffset: Int, runID: String,
     recorded: [ChatMessage], finalReply: Bool = false
   ) {
     let projected = chatMessages(activity, runID: runID)
@@ -38,24 +37,25 @@ struct NativeRunTimeline {
       messages[index].activity.removeAll { recordedActivity.contains($0.id) }
     }
     let tail = activity.filter { NativeWorkItem.supports($0) && !consumed.contains($0.id) }
-    let lastText = activity.last { $0.type == "text_start" || $0.type == "text" }
+    let lastText = activity.last {
+      $0.presentationRole == "text_start" || $0.presentationRole == "text"
+    }
     let runMessages = (recorded + projected).filter { $0.runID == runID }
     let runMessageIDs = Set(runMessages.map(\.id))
     var start: Int?
-    if let marker = activity.last(where: { $0.type == "text_start" }),
-      case .number(let offset) = marker.payload?.details?["streamOffset"]
+    if let marker = activity.last(where: { $0.presentationRole == "text_start" }),
+      case .number(let offset) = marker.details?["streamOffset"]
     {
       start = NSDecimalNumber(decimal: offset).intValue
     }
     let liveText = LiveText(
-      start: start, startIsRecorded: lastText?.type == "text",
+      start: start, startIsRecorded: lastText?.presentationRole == "text",
       deliveredPost: (activity + recorded.flatMap(\.activity)).contains {
-        $0.type == "tool_call" && $0.payload?.action == "post" && runMessageIDs.contains($0.id)
+        $0.presentationRole == "tool_call" && $0.body?.action == "post"
+          && runMessageIDs.contains($0.id)
       },
-      finalText: activity.last?.id == lastText?.id && lastText?.type == "text"
-        && lastText?.payload?.details?["phase"] == .string("final_answer")
-        ? lastText?.payload?.text : nil,
-      assistantTexts: Set(runMessages.lazy.filter { $0.role == "assistant" }.map(\.text)))
+      finalTextIsRecorded: activity.last?.id == lastText?.id && lastText?.presentationRole == "text"
+        && lastText?.details?["phase"] == .string("final_answer"))
     let text = liveText(partial, startOffset: startOffset, finalReply: finalReply)
     responding = !text.isEmpty
     messages.append(
@@ -95,12 +95,12 @@ struct NativeChatTimeline {
   let items: [NativeChatTimelineItem]
 
   init(
-    messages: [ChatMessage], entries: [Entry], activeRunID: String? = nil,
+    messages: [ChatMessage], items: [Item], activeRunID: String? = nil,
     reasoning: [RunReasoning] = [], reasoningAfterText: Set<String> = [],
     streamingMessageID: String? = nil
   ) {
     var seen = Set<String>()
-    let recorded = (entries + messages.flatMap(\.activity)).enumerated()
+    let recorded = (items + messages.flatMap(\.activity)).enumerated()
       .filter { seen.insert($0.element.id).inserted }
       .sorted {
         let left = $0.element.seq ?? Int.max
@@ -109,7 +109,7 @@ struct NativeChatTimeline {
       }.map(\.element)
     let groups = Dictionary(grouping: recorded.filter { $0.stepID != nil }) { $0.stepID! }
     var emittedSteps = Set<String>()
-    let entries = recorded.flatMap { entry -> [Entry] in
+    let orderedItems = recorded.flatMap { entry -> [Item] in
       guard let stepID = entry.stepID else { return [entry] }
       guard emittedSteps.insert(stepID).inserted else { return [] }
       return (groups[stepID] ?? []).enumerated().sorted {
@@ -118,33 +118,37 @@ struct NativeChatTimeline {
         return left == right ? $0.offset < $1.offset : left < right
       }.map(\.element)
     }
-    let entryOrder = Dictionary(uniqueKeysWithValues: entries.enumerated().map { ($1.id, $0) })
+    let entryOrder = Dictionary(uniqueKeysWithValues: orderedItems.enumerated().map { ($1.id, $0) })
     var entryRuns: [String: String] = [:]
     for message in messages {
       entryRuns[message.id] = message.runID
       for entry in message.activity { entryRuns[entry.id] = message.runID }
     }
     var currentRunID: String?
-    for entry in entries {
-      if entry.type == "user", entry.payload?.steered != true {
-        currentRunID = entry.payload?.runId
-      } else if let runID = entry.payload?.runId {
+    for entry in orderedItems {
+      if entry.presentationRole == "user", entry.steered != true {
+        currentRunID = entry.turnId
+      } else if let runID = entry.turnId {
         currentRunID = runID
       }
       if entryRuns[entry.id] == nil { entryRuns[entry.id] = currentRunID }
     }
-    let runPositions = Dictionary(grouping: entries.enumerated()) {
+    let runPositions = Dictionary(grouping: orderedItems.enumerated()) {
       entryRuns[$0.element.id] ?? ""
     }.mapValues { $0.map(\.offset) }
     var work: [NativeWorkItem] = []
     var calls: [String: Int] = [:]
-    for entry in entries where NativeWorkItem.supports(entry) {
-      let callKey = (entryRuns[entry.id] ?? "") + ":" + (entry.payload?.callId ?? entry.id)
-      if entry.type == "tool_result", let index = calls[callKey], work[index].result == nil {
+    for entry in orderedItems where NativeWorkItem.supports(entry) {
+      let callKey = (entryRuns[entry.id] ?? "") + ":" + (entry.callId ?? entry.id)
+      if entry.presentationRole == "tool_result", let index = calls[callKey],
+        work[index].result == nil
+      {
         work[index].result = entry
       } else {
-        if entry.type == "tool_call" { calls[callKey] = work.count }
-        work.append(NativeWorkItem(entry: entry, result: entry.type == "tool_result" ? entry : nil))
+        if entry.presentationRole == "tool_call" { calls[callKey] = work.count }
+        work.append(
+          NativeWorkItem(
+            entry: entry, result: entry.presentationRole == "tool_result" ? entry : nil))
       }
     }
     var ordered: [(item: NativeChatTimelineItem, position: Int, rank: Int, order: Int)] = []
@@ -173,7 +177,7 @@ struct NativeChatTimeline {
           NativeChatTimelineItem(
             id: "work:\(block.id)", content: .reasoning(block), runID: activeRunID,
             sequence: nil, active: true),
-          runPositions[activeRunID ?? ""]?.max() ?? max(0, entries.count - 1),
+          runPositions[activeRunID ?? ""]?.max() ?? max(0, orderedItems.count - 1),
           reasoningAfterText.contains(block.id) ? 3 : 1, index
         ))
     }
@@ -186,12 +190,12 @@ struct NativeChatTimeline {
       let positions = runPositions[message.runID ?? ""] ?? []
       let sourcePosition =
         entryOrder[message.id].flatMap { index in
-          entries[index].seq == message.sequence ? index : nil
-        } ?? message.sequence.flatMap { sequence in entries.firstIndex { $0.seq == sequence } }
+          orderedItems[index].seq == message.sequence ? index : nil
+        } ?? message.sequence.flatMap { sequence in orderedItems.firstIndex { $0.seq == sequence } }
       let beforePosition =
         sourcePosition == nil
         ? message.sequence.flatMap { sequence in
-          entries.firstIndex { ($0.seq ?? Int.max) > sequence }
+          orderedItems.firstIndex { ($0.seq ?? Int.max) > sequence }
         } : nil
       let position =
         sourcePosition ?? beforePosition
@@ -219,7 +223,7 @@ struct NativeChatTimeline {
       return $0.offset < $1.offset
     }.map(\.element.item)
     var durations: [String: Double] = [:]
-    for entry in entries {
+    for entry in orderedItems {
       if let runID = entryRuns[entry.id], let duration = entry.workDuration {
         durations[runID] = duration
       }
@@ -296,10 +300,10 @@ struct NativeChatTranscriptSection: Identifiable {
   }
 }
 
-extension Entry {
+extension Item {
   var workDuration: Double? {
-    guard case .number(let start) = payload?.details?["workStartedAt"],
-      case .number(let end) = payload?.details?["workFinishedAt"]
+    guard case .number(let start) = details?["workStartedAt"],
+      case .number(let end) = details?["workFinishedAt"]
     else { return nil }
     let seconds = NSDecimalNumber(decimal: (end - start) / 1000).doubleValue
     return seconds.isFinite && seconds >= 0 ? seconds : nil

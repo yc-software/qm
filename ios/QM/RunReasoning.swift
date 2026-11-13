@@ -8,15 +8,14 @@ struct RunReasoning: Decodable, Identifiable {
   var id: String { "\(step):\(index)" }
 }
 
-extension Entry {
-  var stepID: String? { payload?.details?["step"]?["id"]?.string }
-  var stepIndex: Int? {
-    guard case .number(let index) = payload?.details?["step"]?["index"] else { return nil }
-    return NSDecimalNumber(decimal: index).intValue
-  }
+extension Item {
+  var stepID: String? { body?.wire?.message?.id }
+  var stepIndex: Int? { step }
 
-  var reasoningID: String? {
-    guard type == "thinking", let id = stepID, let index = stepIndex
+  var reasoningID: String? { kind == "Reasoning" ? stepIdentity : nil }
+
+  var stepIdentity: String? {
+    guard let id = stepID, let index = stepIndex
     else { return nil }
     return "\(id):\(index)"
   }

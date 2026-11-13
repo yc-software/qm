@@ -215,14 +215,14 @@ final class ChatReconciliationTests: XCTestCase {
     let chat = try chat("cached-history")
     defer { chat.client.signOut() }
     let entry = try JSONDecoder().decode(
-      Entry.self,
+      Item.self,
       from: Data(
-        #"{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Question"}}"#.utf8))
-    chat.entries = [entry]
+        #"{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Question","body":{}}"#.utf8))
+    chat.items = [entry]
     XCTAssertEqual(chat.messages.map(\.text), ["Question"])
     chat.partial = "Streaming"
     XCTAssertEqual(chat.messages.map(\.text), ["Question"])
-    chat.entries.removeAll()
+    chat.items.removeAll()
     XCTAssertTrue(chat.messages.isEmpty)
     XCTAssertTrue(chat.transcriptEntries.isEmpty)
   }
@@ -292,10 +292,10 @@ final class ChatReconciliationTests: XCTestCase {
     chat.pending = PendingSend(text: "Saved message", idempotencyKey: "saved")
     XCTAssertFalse(view.showsInitialHistoryPlaceholder)
     chat.pending = nil
-    chat.entries = try JSONDecoder().decode(
-      [Entry].self,
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
-        #"[{"type":"user","seq":1,"createdAt":1000,"payload":{"text":"Existing message"}}]"#
+        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Existing message","body":{}}]"#
           .utf8))
     XCTAssertFalse(view.showsInitialHistoryPlaceholder)
     XCTAssertEqual(chat.messages.first?.text, "Existing message")
@@ -383,18 +383,18 @@ final class ChatReconciliationTests: XCTestCase {
     defer { chat.client.signOut() }
     chat.conversation.forkedFrom = .init(sessionId: "source", title: "Original")
     chat.conversation.forkBoundarySeq = 5
-    chat.earlierEntries = 9999
-    chat.entries = try JSONDecoder().decode(
-      [Entry].self,
+    chat.earlierItems = 9999
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
-        #"[{"type":"user","seq":10000,"createdAt":10000,"payload":{"text":"Latest question"}}]"#
+        #"[{"seq":10000,"createdAt":10000,"kind":"UserMessage","text":"Latest question","body":{}}]"#
           .utf8))
     await chat.loadInheritedHistory()
     XCTAssertNil(chat.error)
     XCTAssertEqual(
       chat.messages.map(\.text), ["Inherited question", "Inherited answer", "Latest question"])
-    XCTAssertEqual(chat.entries.map(\.seq), [10000])
-    XCTAssertEqual(chat.earlierEntries, 9999)
+    XCTAssertEqual(chat.items.map(\.seq), [10000])
+    XCTAssertEqual(chat.earlierItems, 9999)
     XCTAssertFalse(chat.needsEarlierHistory(for: 5))
     XCTAssertTrue(chat.needsEarlierHistory(for: 5000))
     XCTAssertFalse(chat.needsEarlierHistory(for: 10000))
@@ -423,10 +423,10 @@ final class ChatReconciliationTests: XCTestCase {
       defer { chat.client.signOut() }
       chat.conversation.forkedFrom = .init(sessionId: "source", title: "Original")
       chat.conversation.forkBoundarySeq = 5
-      chat.entries = try JSONDecoder().decode(
-        [Entry].self,
+      chat.items = try JSONDecoder().decode(
+        [Item].self,
         from: Data(
-          #"[{"type":"user","seq":6,"createdAt":6,"payload":{"text":"Latest question"}}]"#
+          #"[{"seq":6,"createdAt":6,"kind":"UserMessage","text":"Latest question","body":{}}]"#
             .utf8))
       let loading = Task {
         if inherited { await chat.loadInheritedHistory() } else { await chat.loadEarlier() }
@@ -457,7 +457,7 @@ final class ChatReconciliationTests: XCTestCase {
     await chat.resume()
     await until { chat.messages.last?.role == "assistant" }
     XCTAssertEqual(chat.messages.map(\.text), ["Question", "Answer"])
-    XCTAssertEqual(chat.messages.last?.activity.first?.payload?.thinking, "Working through it.")
+    XCTAssertEqual(chat.messages.last?.activity.first?.text, "Working through it.")
     XCTAssertNil(chat.activeRunID)
     XCTAssertEqual(chat.displayedPartial, "")
   }
@@ -507,7 +507,7 @@ final class ChatReconciliationTests: XCTestCase {
     }
     let answer = Sighting()
     let invariant = watch {
-      guard chatMessages(chat.entries).contains(where: { $0.role == "assistant" }) else { return }
+      guard chatMessages(chat.items).contains(where: { $0.role == "assistant" }) else { return }
       answer.seen = true
       XCTAssertEqual(chat.displayedPartial, "")
       XCTAssertNil(chat.activeRunID)
@@ -516,13 +516,13 @@ final class ChatReconciliationTests: XCTestCase {
     await chat.resume()
     let approvals = key(chat, "/api/sessions/chat/approvals")
     await stub { $0.received[approvals] == 2 }
-    XCTAssertTrue(chatMessages(chat.entries).contains { $0.role == "assistant" })
+    XCTAssertTrue(chatMessages(chat.items).contains { $0.role == "assistant" })
     XCTAssertEqual(chat.displayedPartial, "")
     XCTAssertNil(chat.activeRunID)
     release(chat, "/api/sessions/chat/approvals", 2)
     await stub { $0.loaded[approvals] == 2 }
     XCTAssertTrue(answer.seen)
-    XCTAssertEqual(chatMessages(chat.entries).filter { $0.role == "assistant" }.count, 1)
+    XCTAssertEqual(chatMessages(chat.items).filter { $0.role == "assistant" }.count, 1)
     XCTAssertNil(ChatReconciliationProtocol.log.received[key(chat, "/api/runs/run")])
   }
 
@@ -534,7 +534,7 @@ final class ChatReconciliationTests: XCTestCase {
     }
     await chat.resume()
     await until { chat.reconnecting }
-    XCTAssertEqual(chatMessages(chat.entries).last?.text, "Answer")
+    XCTAssertEqual(chatMessages(chat.items).last?.text, "Answer")
     XCTAssertEqual(chat.displayedPartial, "")
     XCTAssertNil(chat.activeRunID)
   }
@@ -582,7 +582,7 @@ final class ChatReconciliationTests: XCTestCase {
     await stub { $0.received[approvals] == 2 }
     await chat.reconcileActivity(.init(runId: nil, queued: []))
     XCTAssertEqual(chat.displayedPartial, "")
-    XCTAssertEqual(chatMessages(chat.entries).filter { $0.role == "assistant" }.count, 1)
+    XCTAssertEqual(chatMessages(chat.items).filter { $0.role == "assistant" }.count, 1)
   }
 
   func testCompletedReplayWithoutRunIDReconcilesBeforeFailedApprovals() async throws {
@@ -596,7 +596,7 @@ final class ChatReconciliationTests: XCTestCase {
     let sending = Task { await chat.send() }
     let approvals = key(chat, "/api/sessions/chat/approvals")
     await stub { $0.received[approvals] == 2 }
-    XCTAssertEqual(chat.entries.count, 2)
+    XCTAssertEqual(chat.items.count, 2)
     XCTAssertEqual(chat.displayedPartial, "")
     release(chat, "/api/sessions/chat/approvals", 2)
     await sending.value
@@ -613,7 +613,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    await until { chat.entries.count == 2 }
+    await until { chat.items.count == 2 }
     await chat.reconcileActivity(.init(runId: "run", queued: []))
     XCTAssertNil(chat.activeRunID)
     XCTAssertEqual(ChatReconciliationProtocol.log.received[key(chat, "/api/runs/run/events")], 1)
@@ -658,7 +658,7 @@ final class ChatReconciliationTests: XCTestCase {
     }
     chat.draft = "Question"
     await chat.send()
-    XCTAssertTrue(chat.entries.isEmpty)
+    XCTAssertTrue(chat.items.isEmpty)
     XCTAssertEqual(chat.messages.map(\.text), ["Question"])
     await chat.refresh()
     XCTAssertEqual(chat.messages.map(\.text), ["Question"])
@@ -666,33 +666,25 @@ final class ChatReconciliationTests: XCTestCase {
   }
 
   func testIdenticalRepliesAcrossSeparateRunsRemainVisible() throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"user","seq":1,"createdAt":1,"payload":{"text":"Repeat","runId":"old"}},
-          {"type":"assistant","seq":2,"createdAt":2,"payload":{"text":"Same answer"}},
-          {"type":"user","seq":3,"createdAt":3,"payload":{"text":"Repeat","runId":"new"}}
-        ]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"old","text":"Repeat","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Same answer","body":{}},{"seq":3,"createdAt":3,"kind":"UserMessage","turnId":"new","text":"Repeat","body":{}}]
         """#.utf8))
-    XCTAssertTrue(hasRecordedRunReply(entries, runID: "old"))
-    XCTAssertFalse(hasRecordedRunReply(entries, runID: "new"))
-    XCTAssertEqual(chatMessages(entries).count, 3)
+    XCTAssertTrue(hasRecordedRunReply(items, runID: "old"))
+    XCTAssertFalse(hasRecordedRunReply(items, runID: "new"))
+    XCTAssertEqual(chatMessages(items).count, 3)
   }
 
   func testSteeringWithoutRunIDKeepsTheActiveRunAssociation() throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"user","seq":1,"createdAt":1,"payload":{"text":"Start","runId":"run"}},
-          {"type":"user","seq":2,"createdAt":2,"payload":{"text":"Steer","steered":true}},
-          {"type":"assistant","seq":3,"createdAt":3,"payload":{"text":"Done"}}
-        ]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Start","body":{}},{"seq":2,"createdAt":2,"kind":"SteeringMessage","text":"Steer","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"Done","body":{}}]
         """#.utf8))
-    XCTAssertTrue(hasRecordedRunReply(entries, runID: "run"))
+    XCTAssertTrue(hasRecordedRunReply(items, runID: "run"))
   }
   func testWithdrawnQueueInputDoesNotReappearWhenActiveRunFinishes() async throws {
     let chat = try chat("overlap")

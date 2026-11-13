@@ -385,15 +385,17 @@ final class AppModel {
     let generation = client.generation
     await withTaskGroup(of: Void.self) { group in
       for id in ids {
-        group.addTask { @MainActor in
-          guard client.generation == generation else { return }
-          do {
-            let _: ConversationUpdate = try await client.fetch(
-              "api/sessions/\(id)", body: ["unread": false])
-          } catch { Log.background.failure("Marking a conversation read", error) }
-        }
+        group.addTask { await self.markRead(id, client: client, generation: generation) }
       }
     }
+  }
+
+  private func markRead(_ id: String, client: APIClient, generation: UUID) async {
+    guard client.generation == generation else { return }
+    do {
+      let _: ConversationUpdate = try await client.fetch(
+        "api/sessions/\(id)", body: ["unread": false])
+    } catch { Log.background.failure("Marking a conversation read", error) }
   }
 
   func newConversation() -> Conversation? {

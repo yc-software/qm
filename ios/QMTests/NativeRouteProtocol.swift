@@ -8,11 +8,13 @@ final class NativeRouteProtocol: URLProtocol, @unchecked Sendable {
     var status = 200
     var body = "{}"
     var failure: URLError.Code?
+    var headers: [String: String]?
   }
   struct Call {
     let method: String
     let url: URL
     let body: Data
+    let headers: [String: String]
     var route: String { "\(method) \(url.path)" }
     var exact: String { "\(route)?\(query ?? "")" }
     var query: String? { url.query }
@@ -95,7 +97,8 @@ final class NativeRouteProtocol: URLProtocol, @unchecked Sendable {
 
   override func startLoading() {
     let call = Call(
-      method: request.httpMethod ?? "GET", url: request.url!, body: request.bodyData)
+      method: request.httpMethod ?? "GET", url: request.url!, body: request.bodyData,
+      headers: request.allHTTPHeaderFields ?? [:])
     let keys = [call.exact, call.route]
     self.keys = keys
     let server = server
@@ -127,7 +130,7 @@ final class NativeRouteProtocol: URLProtocol, @unchecked Sendable {
     client?.urlProtocol(
       self,
       didReceive: HTTPURLResponse(
-        url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: nil)!,
+        url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: reply.headers)!,
       cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: Data(reply.body.utf8))
     client?.urlProtocolDidFinishLoading(self)

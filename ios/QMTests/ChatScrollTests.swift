@@ -10,20 +10,19 @@ private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
     initialState: [String: @Sendable () -> Void]())
 
   static func imageHistory() throws -> Data {
-    let entries: [[String: Any]] = (1...90).map { sequence in
+    let items: [[String: Any]] = (1...90).map { sequence in
       [
-        "type": "assistant", "seq": sequence, "createdAt": sequence,
-        "payload": [
-          "text": "Images from message \(sequence).\n\n"
+        "kind": "AgentMessage", "seq": sequence, "createdAt": sequence,
+        "text": "Images from message \(sequence).\n\n"
             + "![Workspace image](/api/files/markdown-\(sequence)/content)\n\n"
             + "![Attached image](attachment://figure-\(sequence).png)",
-          "attachments": [
+        "body": ["attachments": [
             ["name": "figure-\(sequence).png", "artifactId": "attachment-\(sequence)"]
           ],
         ],
       ]
     }
-    return try JSONSerialization.data(withJSONObject: ["entries": entries, "earlierEntries": 0])
+    return try JSONSerialization.data(withJSONObject: ["items": items, "earlierItems": 0])
   }
 
   static func requestedImages(at host: String) -> [URLRequest] {
@@ -31,7 +30,7 @@ private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
   }
 
   static func mixedHistory() throws -> Data {
-    let entries: [[String: Any]] = (1...90).map { sequence in
+    let items: [[String: Any]] = (1...90).map { sequence in
       let text: String
       if sequence % 3 == 0 {
         text =
@@ -47,24 +46,22 @@ private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
           + String(repeating: "Please check this detail.\n", count: sequence % 14 + 1)
       }
       return [
-        "type": sequence % 3 == 0 ? "assistant" : "user", "seq": sequence,
-        "createdAt": sequence, "payload": ["text": text],
+        "kind": sequence % 3 == 0 ? "AgentMessage" : "UserMessage", "seq": sequence,
+        "createdAt": sequence, "text": text, "body": [:],
       ]
     }
-    return try JSONSerialization.data(withJSONObject: ["entries": entries, "earlierEntries": 0])
+    return try JSONSerialization.data(withJSONObject: ["items": items, "earlierItems": 0])
   }
 
   static func history(count: Int, first: Int = 1) throws -> Data {
     try JSONSerialization.data(withJSONObject: [
-      "entries": (first..<(first + count)).map { sequence in
+      "items": (first..<(first + count)).map { sequence in
         [
-          "type": "user", "seq": sequence, "createdAt": sequence,
-          "payload": [
-            "text": "Message \(sequence). " + String(repeating: "Conversation text. ", count: 8)
-          ],
+          "kind": "UserMessage", "seq": sequence, "createdAt": sequence,
+          "text": "Message \(sequence). " + String(repeating: "Conversation text. ", count: 8), "body": [:],
         ] as [String: Any]
       },
-      "earlierEntries": first - 1,
+      "earlierItems": first - 1,
     ])
   }
 
@@ -231,13 +228,12 @@ final class ChatScrollTests: XCTestCase {
       try await self.waitUntil { abs(self.distanceFromBottom(scroll)) < 2 }
       model.activeRunID = "current"
       let oldHeight = scroll.contentSize.height
-      model.entries.append(
+      model.items.append(
         try JSONDecoder().decode(
-          Entry.self,
+          Item.self,
           from: JSONSerialization.data(withJSONObject: [
-            "type": "tool_call", "seq": 61, "createdAt": 61,
-            "payload": [
-              "runId": "current", "callId": "tool", "tool": "execute",
+            "kind": "ToolCall", "seq": 61, "createdAt": 61,
+            "turnId": "current", "callId": "tool", "tool": "execute", "body": [
               "description": String(repeating: "Inspecting the requested file. ", count: 12),
             ],
           ])))
@@ -328,9 +324,9 @@ final class ChatScrollTests: XCTestCase {
       }
       let readingOffset = scroll.contentOffset.y
       let readingHeight = scroll.contentSize.height
-      model.entries = try JSONDecoder().decode(
+      model.items = try JSONDecoder().decode(
         Transcript.self, from: ChatScrollProtocol.history(count: 64)
-      ).entries
+      ).items
       try await self.waitUntil { scroll.contentSize.height > readingHeight }
       XCTAssertEqual(scroll.contentOffset.y, readingOffset, accuracy: 1)
     }
@@ -429,11 +425,11 @@ final class ChatScrollTests: XCTestCase {
       let readingOffset = scroll.contentOffset.y
       let oldHeight = self.visibleHeight(scroll)
       let newMessage = try JSONDecoder().decode(
-        Entry.self,
+        Item.self,
         from: Data(
-          #"{"type":"user","seq":61,"createdAt":2000,"payload":{"text":"A later question","runId":"next"}}"#
+          #"{"seq":61,"createdAt":2000,"kind":"UserMessage","turnId":"next","text":"A later question","body":{}}"#
             .utf8))
-      model.entries.append(newMessage)
+      model.items.append(newMessage)
       try await self.waitUntil(diagnostics: { self.geometry(scroll) }) {
         self.visibleHeight(scroll) > oldHeight + 60
       }
@@ -464,9 +460,9 @@ final class ChatScrollTests: XCTestCase {
         abs(self.distanceFromBottom(scroll)) < 2
       }
       let oldHeight = scroll.contentSize.height
-      model.entries = try JSONDecoder().decode(
+      model.items = try JSONDecoder().decode(
         Transcript.self, from: ChatScrollProtocol.history(count: 64)
-      ).entries
+      ).items
       try await self.waitUntil(diagnostics: { "Appended history: \(self.geometry(scroll))" }) {
         scroll.contentSize.height > oldHeight && abs(self.distanceFromBottom(scroll)) < 2
       }

@@ -18,27 +18,19 @@ final class NativeWorkPresentationTests: XCTestCase {
   }
 
   func testIndividualToolDetailsRemainExpandedAcrossCompletion() throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"user","seq":1,"createdAt":1,"payload":{"text":"Check","runId":"run"}},
-          {"type":"tool_call","seq":2,"createdAt":2,"payload":{"tool":"files","callId":"first"}},
-          {"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"first","ok":true}},
-          {"type":"text","seq":4,"createdAt":4,"payload":{"text":"Progress"}},
-          {"type":"tool_call","seq":5,"createdAt":5,"payload":{"tool":"search","callId":"second"}},
-          {"type":"tool_result","seq":6,"createdAt":6,"payload":{"callId":"second","ok":true}},
-          {"type":"assistant","seq":7,"createdAt":7,"payload":{"text":"Done"}}
-        ]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"first","tool":"files","body":{}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"first","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"AgentMessage","variant":"narration","text":"Progress","body":{}},{"seq":5,"createdAt":5,"kind":"ToolCall","callId":"second","tool":"search","body":{}},{"seq":6,"createdAt":6,"kind":"ToolResult","callId":"second","body":{"ok":true}},{"seq":7,"createdAt":7,"kind":"AgentMessage","text":"Done","body":{}}]
         """#.utf8))
     let client = APIClient(baseURL: URL(string: "https://example.com")!)
     let disclosure = NativeWorkDisclosureState()
-    let pending = try XCTUnwrap(NativeWorkItem.items([entries[1]]).first)
+    let pending = try XCTUnwrap(NativeWorkItem.items([items[1]]).first)
     let live = NativeTimelineWorkRow(
       item: pending, client: client, user: "test", disclosure: disclosure, active: true)
     live.expanded.wrappedValue = true
-    let timeline = NativeChatTimeline(messages: chatMessages(entries), entries: entries)
+    let timeline = NativeChatTimeline(messages: chatMessages(items), items: items)
     let work = timeline.items.compactMap { item -> NativeWorkItem? in
       if case .work(let work) = item.content { return work }
       return nil
@@ -61,23 +53,18 @@ final class NativeWorkPresentationTests: XCTestCase {
   func testActivityDisclosureStaysOpenThroughReasoningToolsAndCompletion() throws {
     let client = APIClient(baseURL: URL(string: "https://example.com")!)
     let disclosure = NativeWorkDisclosureState()
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"user","seq":0,"createdAt":0,"payload":{"text":"Check","runId":"run"}},
-          {"type":"thinking","seq":1,"createdAt":1,"payload":{"thinking":"Checking","step":{"id":"step","index":0}}},
-          {"type":"tool_call","seq":2,"createdAt":2,"payload":{"tool":"subagents","action":"open","name":"Scout","callId":"spawn"}},
-          {"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"spawn","ok":true}}
-        ]
+        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":1,"createdAt":1,"kind":"Reasoning","text":"Checking","step":0,"body":{"wire":{"message":{"id":"step"}}}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"spawn","tool":"subagents","body":{"action":"open","name":"Scout"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"spawn","body":{"ok":true}}]
         """#.utf8))
     func group(
-      _ history: [Entry], status: NativeReadOnlyWorkStatus?, reasoning: [RunReasoning] = []
+      _ history: [Item], status: NativeReadOnlyWorkStatus?, reasoning: [RunReasoning] = []
     ) throws -> NativeTimelineActivityGroup {
       let runID = status == nil ? nil : "run"
       let timeline = NativeChatTimeline(
-        messages: chatMessages(history), entries: history, activeRunID: runID,
+        messages: chatMessages(history), items: history, activeRunID: runID,
         reasoning: reasoning)
       let sections = NativeChatTranscriptSection.grouped(
         timeline.items, activeRunID: runID, status: status)
@@ -87,10 +74,10 @@ final class NativeWorkPresentationTests: XCTestCase {
         disclosure: disclosure)
     }
     let reasoning = [RunReasoning(step: "step", index: 0, text: "Checking")]
-    let thinking = try group([entries[0]], status: .working, reasoning: reasoning)
+    let thinking = try group([items[0]], status: .working, reasoning: reasoning)
     thinking.expanded.wrappedValue = true
-    let running = try group(Array(entries.prefix(3)), status: .working, reasoning: reasoning)
-    let completed = try group(entries, status: nil)
+    let running = try group(Array(items.prefix(3)), status: .working, reasoning: reasoning)
+    let completed = try group(items, status: nil)
     XCTAssertEqual(thinking.section.items.count, 1)
     XCTAssertEqual(running.section.items.count, 2)
     XCTAssertEqual(completed.section.items.count, 2)
@@ -107,10 +94,10 @@ final class NativeWorkPresentationTests: XCTestCase {
 
   func testThinkingYieldsToProgressiveAnswerAndReturnsForLaterWork() throws {
     let history = try JSONDecoder().decode(
-      [Entry].self,
+      [Item].self,
       from: Data(
         #"""
-        [{"type":"user","seq":0,"createdAt":0,"payload":{"text":"Hello","runId":"run"}}]
+        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Hello","body":{}}]
         """#.utf8))
     func sections(_ text: String, reasoning: [RunReasoning] = [], after: Set<String> = [])
       -> [NativeChatTranscriptSection]
@@ -119,7 +106,7 @@ final class NativeWorkPresentationTests: XCTestCase {
         activity: [], partial: text, startOffset: 0, runID: "run",
         recorded: chatMessages(history))
       let timeline = NativeChatTimeline(
-        messages: chatMessages(history) + live.messages, entries: history, activeRunID: "run",
+        messages: chatMessages(history) + live.messages, items: history, activeRunID: "run",
         reasoning: reasoning, reasoningAfterText: after,
         streamingMessageID: live.messages.last?.id)
       return NativeChatTranscriptSection.grouped(
@@ -141,7 +128,7 @@ final class NativeWorkPresentationTests: XCTestCase {
 
   func testAnswerKeepsAttentionStatesAndDoesNotHideNextRunThinking() {
     let message = ChatMessage(id: "answer", role: "assistant", text: "Hello", runID: "run")
-    let timeline = NativeChatTimeline(messages: [message], entries: [], activeRunID: "run")
+    let timeline = NativeChatTimeline(messages: [message], items: [], activeRunID: "run")
     for status: NativeReadOnlyWorkStatus in [.reconnecting, .awaitingInput, .pending] {
       XCTAssertEqual(
         NativeChatTranscriptSection.grouped(
@@ -159,23 +146,13 @@ final class NativeWorkPresentationTests: XCTestCase {
   }
 
   func testCompletedAndFailedActivityKeepDistinctSummaries() async throws {
-    let entries = try JSONDecoder().decode(
-      [Entry].self,
+    let items = try JSONDecoder().decode(
+      [Item].self,
       from: Data(
         #"""
-        [
-          {"type":"user","seq":0,"createdAt":0,"payload":{"text":"Review the launch plan","runId":"run"}},
-          {"type":"text","seq":1,"createdAt":1,"payload":{"text":"I’ll check the available tools and data first."}},
-          {"type":"tool_call","seq":2,"createdAt":2,"payload":{"tool":"execute","callId":"check","purpose":"Check tools and data"}},
-          {"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"check","ok":true}},
-          {"type":"tool_call","seq":4,"createdAt":4,"payload":{"tool":"tool_search","callId":"list","purpose":"List available tools"}},
-          {"type":"tool_result","seq":5,"createdAt":5,"payload":{"callId":"list","ok":true}},
-          {"type":"text","seq":6,"createdAt":6,"payload":{"text":"Next I’ll check the project directory."}},
-          {"type":"tool_call","seq":7,"createdAt":7,"payload":{"tool":"execute","callId":"lookup","purpose":"Check project access"}},
-          {"type":"tool_result","seq":8,"createdAt":8,"payload":{"callId":"lookup","ok":false,"error":"Access unavailable"}}
-        ]
+        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Review the launch plan","body":{}},{"seq":1,"createdAt":1,"kind":"AgentMessage","variant":"narration","text":"I’ll check the available tools and data first.","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{"purpose":"Check tools and data"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"list","tool":"tool_search","body":{"purpose":"List available tools"}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"list","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"AgentMessage","variant":"narration","text":"Next I’ll check the project directory.","body":{}},{"seq":7,"createdAt":7,"kind":"ToolCall","callId":"lookup","tool":"execute","body":{"purpose":"Check project access"}},{"seq":8,"createdAt":8,"kind":"ToolResult","callId":"lookup","body":{"ok":false,"error":"Access unavailable"}}]
         """#.utf8))
-    let timeline = NativeChatTimeline(messages: chatMessages(entries), entries: entries)
+    let timeline = NativeChatTimeline(messages: chatMessages(items), items: items)
     let sections = NativeChatTranscriptSection.grouped(
       timeline.items, activeRunID: nil, status: nil
     )

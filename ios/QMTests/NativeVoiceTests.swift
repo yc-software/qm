@@ -107,9 +107,9 @@ final class NativeVoiceTests: XCTestCase {
       ]
     }
     let tool = try JSONDecoder().decode(
-      Entry.self,
+      Item.self,
       from: Data(
-        #"{"type":"tool_call","createdAt":1,"seq":2,"payload":{"tool":"search","callId":"c1"}}"#
+        #"{"createdAt":1,"seq":2,"kind":"ToolCall","callId":"c1","tool":"search","body":{}}"#
           .utf8))
     _ = transcript.append(speech("Checking.", 0))
     transcript.appendActivity([tool], runID: "run")
@@ -123,7 +123,7 @@ final class NativeVoiceTests: XCTestCase {
       case .result(let result) = transcript.items[3].content
     else { return XCTFail("Events must retain arrival order") }
     XCTAssertEqual(first.text, "Checking.")
-    XCTAssertEqual(activity.payload?.tool, "search")
+    XCTAssertEqual(activity.tool, "search")
     XCTAssertEqual(second.text, " Found it.")
     XCTAssertEqual(result, "One result")
   }
@@ -221,7 +221,7 @@ final class NativeVoiceTests: XCTestCase {
     XCTAssertEqual(model.taskStatus, "Verified result")
     XCTAssertTrue(
       model.transcript.items.contains {
-        if case .activity(let entry) = $0.content { return entry.payload?.tool == "search" }
+        if case .activity(let entry) = $0.content { return entry.tool == "search" }
         return false
       })
   }
@@ -350,7 +350,7 @@ final class VoiceTaskProtocol: URLProtocol, @unchecked Sendable {
       ? #"{"message":"Unavailable"}"#
       : request.url?.path == "/api/turn"
         ? #"{"runId":"run","status":"queued"}"#
-        : #"{"status":"running","replyComplete":true,"activity":[{"type":"tool_call","seq":1,"createdAt":1,"payload":{"tool":"search","callId":"search-1"}}],"result":{"status":"ok","reply":"Verified result"}}"#
+        : #"{"status":"running","replyComplete":true,"activity":[{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"search-1","tool":"search","body":{}}],"result":{"status":"ok","reply":"Verified result"}}"#
     if request.url?.host?.hasPrefix("metadata-") == true, request.url?.path != "/api/turn" {
       let count = Self.counts.withLock { values in
         values[request.url!.absoluteString, default: 0] += 1
