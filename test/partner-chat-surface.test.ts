@@ -818,27 +818,39 @@ test("a direct chat is only trusted when its author is its one listed person", a
 test("a protocol 2 turn is answered by the turn driver: once in a direct chat, and to the asker alone when a group turn fails", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
-    const direct = event({ body: "!surfacename", eventId: "v2-d", messageId: "1201", protocol: 2 });
+    const direct = event({ body: "!preamble On it.", eventId: "v2-d", messageId: "1201", protocol: 2 });
     direct.chat.kind = "dm";
     direct.chat.members = direct.chat.members.filter((m) => m.id !== "6");
     assert.equal((await deliver(direct)).status, 200);
     assert.equal((await deliver(direct)).status, 200);
     await deliver(event({ body: "!refuse", mentions: true, eventId: "v2-g", messageId: "1202", protocol: 2 }));
-    await settle(async () => partnerChat.received.length >= 2);
+    const react = { body: "!react 1793649600.00000000000000001203 tada", mentions: true };
+    await deliver(event({ ...react, eventId: "v1-r", messageId: "1203" }));
+    await deliver(event({ ...react, eventId: "v2-r", messageId: "1204", protocol: 2 }));
+    const messages = () => partnerChat.received.filter((r) => r.path === "/agent_app/messages");
+    const reacted = () => partnerChat.received.filter((r) => r.body.name === "tada").map((r) => r.body.message_id);
+    await settle(async () => messages().length >= 3 && reacted().length >= 1);
     await new Promise((r) => setTimeout(r, 1_500));
-    const sent = partnerChat.received.filter((r) => r.path === "/agent_app/messages");
+    const sent = messages();
     const posts = sent.map(({ body }) => [
       body.thread_id,
       body.recipient_user_id,
       String(body.client_message_id).split(":")[0],
       String(body.body).split(" — ")[0],
     ]);
+    assert.deepEqual(reacted(), ["1203"]);
     assert.deepEqual(posts.map(String).sort(), [
-      ",,run,surface:partner-chat",
+      ",,run,All clear",
+      ",,status,On it.",
       "1202,5,post,I hit an error and couldn't finish",
+      "1203,,post,[not reacted] Reactions aren't supported in this conversation.",
     ]);
     await settle(async () => (await built.deliveries.pending("partner-chat")).length === 0);
-    assert.deepEqual(await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true }), []);
+    const mirrored = await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true });
+    assert.deepEqual(
+      mirrored.map((m) => m.sub),
+      ["1203"],
+    );
   } finally {
     await partnerChat.close();
   }
