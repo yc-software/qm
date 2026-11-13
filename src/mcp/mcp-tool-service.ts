@@ -396,14 +396,19 @@ export function createMcpToolService(opts: {
   async function loaded(): Promise<ReturnType<typeof tenantState>> {
     const state = tenantState();
     if (state.loadedAt !== undefined || closed) {
-      const version = closed
-        ? state.version
-        : await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
-      if (version === state.version) refreshIfStale(state);
-      else await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+      refreshIfStale(state);
       return state;
     }
     await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+    return state;
+  }
+
+  async function upToDate(): Promise<ReturnType<typeof tenantState>> {
+    const state = await loaded();
+    if (closed) return state;
+    const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
+    if (version !== state.version)
+      await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
     return state;
   }
 
@@ -412,7 +417,7 @@ export function createMcpToolService(opts: {
     audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<McpToolDescriptor[]> {
-    const { snapshot, perUserServers: gated, attestedServers } = await loaded();
+    const { snapshot, perUserServers: gated, attestedServers } = await upToDate();
     const current = snapshot.filter((t) => {
       const attested = attestedServers.get(t.serverId);
       return !attested || attestsInAudience(attested.attestAudience, principalId, audienceScopeId, actAsActor);
