@@ -19,6 +19,7 @@ import {
   appUrlOf,
   currentVersionOf,
   deployCurrentGitRef,
+  FILES_PUBLISH_REF,
   type DeployStore,
   type Deployment,
   type DeployEndpoint,
@@ -33,7 +34,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
-import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
+import { createLiveEdits, type LiveEditSaved, type Overwritten } from "./live-edits.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 export interface DeployFile {
@@ -61,7 +62,7 @@ export interface DeployInput extends RedeployInput {
 export type Reach =
   { status: "ok"; id: string; endpoint: DeployEndpoint } | { status: "denied" } | { status: "not_found" };
 
-type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved };
+type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved; overwritten?: Overwritten };
 
 export interface AppSourceReader {
   commit: string;
@@ -531,6 +532,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await withdrawLoanUnlessPublisher(before, input.actor);
         const current = currentVersionOf(before);
         assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
+        const overwritten = await liveEdits.overwrittenBy(before, input.files);
+        const reported = overwritten ? { overwritten } : {};
         const inherited = input.env ?? current?.env;
         const env = input.stampEnv ? { ...inherited, ...input.stampEnv } : inherited;
         if (
@@ -541,7 +544,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           envKey(env) === envKey(current.env)
         ) {
           const liveEdit = await liveEdits.save(before, input.actor ?? before.createdBy, { files: input.files });
-          if (liveEdit) return { ...(await deps.deployStore.get(id))!, liveEdit };
+          const head = liveEdit && (await liveEdits.savedHeadOf(before));
+          if (head) await deps.deployStore.setRef(id, FILES_PUBLISH_REF, head.commit);
+          if (liveEdit) return { ...(await deps.deployStore.get(id))!, liveEdit, ...reported };
         }
         await deps.deployStore.deleteDraft(id);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
@@ -563,7 +568,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           resource: `${id}@v${v.version}`,
           scopeLabel: before.ownerScopeId,
         });
-        return (await deps.deployStore.get(id))!;
+        return { ...(await deps.deployStore.get(id))!, ...reported };
       });
     },
 
@@ -929,10 +934,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           resource: existing.id,
           scopeLabel: existing.ownerScopeId,
         });
-        let liveEdit: LiveEditSaved | undefined;
+        let published: Pick<PublishedDeployment, "liveEdit" | "overwritten"> = {};
         if (input.files?.length) {
           const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-          ({ liveEdit } = await this.redeploy(existing.id, {
+          const { liveEdit, overwritten } = await this.redeploy(existing.id, {
             actor: createdBy,
             entrypoint,
             files: input.files,
@@ -940,11 +945,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
             ...(input.env ? { env: input.env } : {}),
             ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
-          }));
+          });
+          published = { ...(liveEdit ? { liveEdit } : {}), ...(overwritten ? { overwritten } : {}) };
         } else if (input.alwaysOn !== undefined) await this.setDeploymentAlwaysOn(existing.id, input.alwaysOn);
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
-        return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
+        return { ...(await deps.deployStore.get(existing.id))!, ...published };
       }
 
       if (input.rollbackTo !== undefined) {
@@ -971,7 +977,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!(await personOrOwningBot(caller, async () => samePerson(existing.createdBy, caller.actorId))))
           throw new Error(`not authorized to manage deployment: ${input.name}`);
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-        const { liveEdit } = await this.redeploy(existing.id, {
+        const { liveEdit, overwritten } = await this.redeploy(existing.id, {
           actor: createdBy,
           entrypoint,
           files,
@@ -982,7 +988,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
-        return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
+        return {
+          ...(await deps.deployStore.get(existing.id))!,
+          ...(liveEdit ? { liveEdit } : {}),
+          ...(overwritten ? { overwritten } : {}),
+        };
       }
       const d = await this.deploy({
         ownerScopeId,

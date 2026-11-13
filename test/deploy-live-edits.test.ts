@@ -310,3 +310,31 @@ test("someone who cannot publish the app cannot save edits to it", async () => {
   assert.equal(h.state.edits.length, 0);
   assert.equal(await h.deployStore.draftOf(d.id), null);
 });
+
+test("a folder publish names the files it replaced that changed since the last folder publish", async () => {
+  const h = harness();
+  const d = await publishApp(h, "live-overwrite");
+  const owner = { ownerScopeId: scopeId("personal", OWNER), createdBy: OWNER };
+  const folder = (extra: Array<{ path: string; data: string }> = []) =>
+    h.save("live-overwrite", tree(true, "v2", [{ path: "old.css", data: "body{}" }, ...extra]));
+  assert.equal((await folder()).overwritten, undefined);
+
+  const edit = (data: string) =>
+    h.deploy.editSource(d.id, OWNER, async () => ({ files: [{ path: "dark.js", data }], deletedPaths: [] }));
+  await edit("dark");
+  assert.equal((await folder([{ path: "dark.js", data: "dark" }])).overwritten, undefined);
+
+  await edit("darker");
+  const commit = (await h.deployStore.draftOf(d.id))!.commit;
+  assert.deepEqual((await folder()).overwritten, { paths: ["dark.js"], commit });
+
+  await edit("darkest");
+  const files = tree(true, "v2", [{ path: "old.css", data: "body{}" }]);
+  const newEntrypoint = await h.deploy.deployOrUpdate({
+    ...owner,
+    name: "live-overwrite",
+    entrypoint: "npm start",
+    files,
+  });
+  assert.deepEqual(newEntrypoint.overwritten?.paths, ["dark.js"]);
+});

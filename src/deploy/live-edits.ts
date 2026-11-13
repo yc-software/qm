@@ -8,6 +8,7 @@ import { bytes, normalizeRelPath } from "./deploy-fs.ts";
 import type { DeployProvider } from "./deploy-provider.ts";
 import type { DeployGitTreeFile } from "./deploy-git-store.ts";
 import {
+  FILES_PUBLISH_REF,
   currentVersionOf,
   type DeployEndpoint,
   type DeployStore,
@@ -28,6 +29,11 @@ export interface LiveEditSaved {
   first?: boolean;
   publishAt?: number;
   previousFailure?: string;
+}
+
+export interface Overwritten {
+  paths: string[];
+  commit: string;
 }
 
 interface LiveEditDeps {
@@ -155,6 +161,23 @@ export function createLiveEdits(deps: LiveEditDeps) {
       changed: [...next.tree].filter(([path, sha]) => known.get(path) !== sha).map(([path, sha]) => ({ path, sha })),
       deletedPaths: [...known.keys()].filter((path) => !next.tree.has(path)),
     };
+  }
+
+  async function overwrittenBy(
+    d: Deployment,
+    files: ReadonlyArray<{ path: string; data: string | Uint8Array }>,
+  ): Promise<Overwritten | undefined> {
+    const [last, head] = await Promise.all([store.refOf(d.id, FILES_PUBLISH_REF), savedHeadOf(d)]);
+    if (!last || !head || last === head.commit) return undefined;
+    const [lastTree, headTree] = await Promise.all([
+      store.commitTreeOf(d.id, last),
+      store.commitTreeOf(d.id, head.commit),
+    ]);
+    const since = await changeOf(d.id, { draft: null, commit: last, tree: lastTree }, { commit: head.commit });
+    const change = await changeOf(d.id, { ...head, tree: headTree }, { files });
+    const editedSince = new Set([...since.changed.map((f) => f.path), ...since.deletedPaths]);
+    const paths = [...change.changed.map((f) => f.path), ...change.deletedPaths].filter((p) => editedSince.has(p));
+    return paths.length ? { paths: paths.sort(), commit: head.commit } : undefined;
   }
 
   async function save(
@@ -301,5 +324,5 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return published ?? 0;
   }
 
-  return { runningVersion, savedHeadOf, savedOf, changeOf, save, publishDue };
+  return { runningVersion, savedHeadOf, savedOf, changeOf, overwrittenBy, save, publishDue };
 }
