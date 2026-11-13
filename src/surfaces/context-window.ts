@@ -11,6 +11,7 @@ export interface ContextWireMessage {
   author: string;
   text: string;
   threadTs?: string;
+  where?: string;
   files?: string[];
   reactions?: ContextReaction[];
 }
@@ -19,6 +20,7 @@ export interface ContextSourceMessage {
   ts: string;
   name: string;
   text: string;
+  where?: string;
   isSelf?: boolean;
   parentTs?: string;
   files?: string[];
@@ -67,6 +69,7 @@ export function buildContextWindow(
       author: m.isSelf ? "you" : m.name || "someone",
       text: opts.clipChars === undefined ? text : clipText(text, opts.clipChars),
       ...(m.parentTs ? { threadTs: m.parentTs } : {}),
+      ...(m.where ? { where: m.where } : {}),
       ...(m.files?.length ? { files: m.files } : {}),
       ...(m.reactions ? { reactions: m.reactions } : {}),
     };

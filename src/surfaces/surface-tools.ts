@@ -13,12 +13,15 @@ import {
   openGroupViaSurface,
   reachEnqueue,
   resolveReachTarget,
+  resolveReadChannel,
   withReact,
   withEdit,
   withDelete,
+  withThread,
   type ReachResolution,
 } from "../reach/reach.ts";
 import { type SandboxHandle } from "../sandbox/sandbox.ts";
+import { channelVisibleTo } from "../directory/visibility.ts";
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
@@ -342,13 +345,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const sending = postText.trim().length > 0 || (f.attachments?.length ?? 0) > 0;
       const d = await resolveDestination(target, { mayOpenGroup: sending });
       if (!d.ok) return { ok: false, message: d.message };
-      const r0 = await enqueue(d.destination, postText, seq, f.attachments);
+      const r0 = await enqueue(withThread(d.destination, target.threadTs), postText, seq, f.attachments);
       if (!r0.ok) return r0;
       const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
       spine.crossConversationPosts += 1;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
       if (target.channel !== undefined) label = `#${target.channel.replace(/^#/, "")}`;
       else if (target.recipient !== undefined) label = `a DM to ${target.recipient}`;
+      if (target.threadTs) label += `, in the thread under ${target.threadTs}`;
       return { ...r, matched: label };
     },
     react: async (input: SurfaceReactInput) => {
@@ -384,11 +388,27 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (textOnly(d.destination)) return { ok: false, message: "Messages in this conversation can't be deleted." };
       return enqueue(withDelete(d.destination, { messageTs: input.ref }), "", seq);
     },
-    readThread: async (opts?: { limit?: number }) => {
+    readThread: async (opts) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
-      if (!currentDestination.target) return { ok: false, message: "this conversation has no thread to read" };
-      const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
-        conversationTarget: currentDestination.target,
+      if (opts?.recipient !== undefined || opts?.participants !== undefined)
+        return { ok: false, message: "read_thread reads this conversation or a named `channel`" };
+      const there =
+        opts?.channel === undefined
+          ? undefined
+          : await resolveReadChannel(
+              {
+                resolveChannel: (q) => deps.directory.resolveChannel(q),
+                channelVisibleTo: (a, c, isPrivate) => channelVisibleTo(deps.directory, a, c, isPrivate),
+                directoryMember: (p) => deps.directory.get(p),
+              },
+              actor.id,
+              opts.channel,
+            );
+      if (there && !there.ok) return { ok: false, message: there.message };
+      if (!there && !currentDestination.target)
+        return { ok: false, message: "this conversation has no thread to read" };
+      const result = await deps.surfaceContext.pull(there ? "slack" : (input.surface ?? "unknown"), {
+        ...(there ? { channelId: there.channelId } : { conversationTarget: currentDestination.target }),
         viewer: actor.id,
         ...rateLimitRecipient,
         ...(opts?.limit !== undefined ? { count: Math.max(1, Math.min(SURFACE_READ_MAX, opts.limit)) } : {}),
@@ -446,11 +466,22 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const limit = Math.max(1, Math.min(SURFACE_SEARCH_MAX, opts?.limit ?? SURFACE_SEARCH_DEFAULT));
       const dest = currentDestination;
       const shapeHits = (messages: unknown[], prefiltered = false) =>
-        (messages as Array<{ ts?: string; time?: string; author?: string; text?: string }>)
+        (
+          messages as Array<{
+            ts?: string;
+            time?: string;
+            author?: string;
+            text?: string;
+            where?: string;
+            threadTs?: string;
+          }>
+        )
           .filter((m) => typeof m?.text === "string" && (prefiltered || m.text.toLowerCase().includes(q.toLowerCase())))
           .slice(-limit)
           .map((m) => ({
             ...(m.ts ? { ref: m.ts } : {}),
+            ...(m.where ? { where: m.where } : {}),
+            ...(m.threadTs && m.threadTs !== m.ts ? { thread: m.threadTs } : {}),
             ...(m.author ? { author: m.author } : {}),
             ...(m.time ? { when: m.time } : {}),
             snippet: String(m.text).slice(0, 200),

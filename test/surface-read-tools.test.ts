@@ -88,6 +88,38 @@ test("read_thread leaves an omitted limit to the surface provider", async () => 
   }
 });
 
+test("read_thread with a channel reads that channel when the asker can see it, and refuses otherwise", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  await built.app.upsertDirectory([{ principalId: "U1", displayName: "Ada", type: "internal" }]);
+  await built.app.upsertChannels(
+    [
+      { channelId: "C20", name: "room", isPrivate: true },
+      { channelId: "C21", name: "closed", isPrivate: true },
+    ],
+    [{ channelId: "C20", principalId: "U1" }],
+  );
+  const queries: any[] = [];
+  const pending = built.app.pendingContextRequests.bind(built.app);
+  built.app.pendingContextRequests = async (source: string) => {
+    const requests = await pending(source);
+    queries.push(...requests.map((r: any) => r.query));
+    return requests;
+  };
+  const stop = startFulfiller(built.app, [{ ts: "5.1", author: "ann", text: "hi" }]);
+  try {
+    await built.app.turn(mention("!read_thread room", "C10", "1000.1"));
+    assert.match(await subToolResult(built, "C10:1000.1", "read_thread"), /read 1 message/);
+    assert.equal(queries[0]?.channelId, "C20");
+    await built.app.turn(mention("!read_thread closed", "C11", "1000.2"));
+    assert.match(await subToolResult(built, "C11:1000.2", "read_thread"), /couldn't read/);
+    assert.equal(queries.length, 1, "nothing was pulled for a channel the asker can't see");
+  } finally {
+    await stop();
+    await built.runtime.stop();
+  }
+});
+
 test("whats_new returns POINTERS (counts of new-here + other active threads), never message prose", async () => {
   const built = freshApp();
   built.runtime.start();
@@ -333,4 +365,16 @@ test("successful Slack reads preserve partial-context and rate-limit guidance in
     assert.ok(output.includes(expected!), action);
     assert.ok(output.includes(guidance), action);
   }
+});
+
+test("search hits name their channel and thread, and reach replies in that thread", async () => {
+  const reaches: unknown[] = [];
+  const tool = surfaceTool({
+    search: async () => ({ ok: true, hits: [{ ref: "2.5", where: "#room (C1)", thread: "2.1", snippet: "stats?" }] }),
+    reach: async (_t: string, target: unknown) => (reaches.push(target), { ok: true, matched: "#room" }),
+  });
+  const found = await tool.execute("c1", { action: "search", query: "stats", source: "slack" });
+  assert.ok(found.content[0].text.includes("[2.5] in #room (C1) (thread 2.1): stats?"));
+  await tool.execute("c2", { action: "reach", channel: "C1", ts: "2.1", text: "here" });
+  assert.deepEqual(reaches, [{ threadTs: "2.1", channel: "C1" }]);
 });

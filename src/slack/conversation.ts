@@ -29,6 +29,7 @@ export interface RecentMessage {
   isBot?: boolean;
   isSelf?: boolean;
   parentTs?: string;
+  where?: string;
   reactions?: ReactionTally[];
   files?: string[];
 }

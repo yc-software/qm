@@ -25,3 +25,12 @@ export async function isVisible(dir: VisibilityDirectory, actorId: string, targe
       return (await dir.listChannelsFor(actorId)).some((c) => c.channelId === target.channelId);
   }
 }
+
+export function channelVisibleTo(
+  dir: VisibilityDirectory,
+  actorId: string,
+  channelId: string,
+  isPrivate?: boolean,
+): Promise<boolean> {
+  return isVisible(dir, actorId, { kind: "channel", channelId, ...(isPrivate !== undefined ? { isPrivate } : {}) });
+}
