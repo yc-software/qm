@@ -13,6 +13,7 @@ import {
   openGroupViaSurface,
   reachEnqueue,
   resolveReachTarget,
+  resolveReadChannel,
   withReact,
   withEdit,
   withDelete,
@@ -20,6 +21,7 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { type SandboxHandle } from "../sandbox/sandbox.ts";
+import { isVisible } from "../directory/visibility.ts";
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
@@ -388,14 +390,30 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     },
     readThread: async (opts) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
-      const elsewhere =
-        opts?.channel !== undefined || opts?.participants !== undefined || opts?.recipient !== undefined;
-      const d = elsewhere ? await resolveDestination(opts) : { ok: true as const, destination: currentDestination };
-      if (!d.ok) return { ok: false, message: d.message };
-      if (!d.destination.target || d.destination.type === "principal")
-        return { ok: false, message: "I can read this conversation, a channel, or a group DM, not someone's DM" };
-      const result = await deps.surfaceContext.pull(elsewhere ? "slack" : (input.surface ?? "unknown"), {
-        ...(elsewhere ? { channelId: d.destination.target } : { conversationTarget: d.destination.target }),
+      if (opts?.recipient !== undefined || opts?.participants !== undefined)
+        return { ok: false, message: "read_thread reads this conversation or a named `channel`" };
+      const there =
+        opts?.channel === undefined
+          ? undefined
+          : await resolveReadChannel(
+              {
+                resolveChannel: (q) => deps.directory.resolveChannel(q),
+                channelVisibleTo: (a, c, isPrivate) =>
+                  isVisible(deps.directory, a, {
+                    kind: "channel",
+                    channelId: c,
+                    ...(isPrivate !== undefined ? { isPrivate } : {}),
+                  }),
+                directoryMember: (p) => deps.directory.get(p),
+              },
+              actor.id,
+              opts.channel,
+            );
+      if (there && !there.ok) return { ok: false, message: there.message };
+      if (!there && !currentDestination.target)
+        return { ok: false, message: "this conversation has no thread to read" };
+      const result = await deps.surfaceContext.pull(there ? "slack" : (input.surface ?? "unknown"), {
+        ...(there ? { channelId: there.channelId } : { conversationTarget: currentDestination.target }),
         viewer: actor.id,
         ...rateLimitRecipient,
         ...(opts?.limit !== undefined ? { count: Math.max(1, Math.min(SURFACE_READ_MAX, opts.limit)) } : {}),
