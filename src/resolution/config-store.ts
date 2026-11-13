@@ -182,7 +182,6 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
-  getWelcomeProfileDurable(): Promise<unknown>;
   getSpendLimitDurable(id: ScopeId): Promise<SpendLimit | null>;
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
@@ -223,7 +222,6 @@ export interface ConfigStoreMaps {
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
   spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
-  welcomeProfiles?: DurableMap<ScopedRow<"profile", unknown>>;
 }
 
 const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
@@ -248,7 +246,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   browseMaxSteps: "browse_max_steps_configs",
   spendLimits: "spend_limit_configs",
   deploymentIdentity: "deployment_identity",
-  welcomeProfiles: "welcome_profiles",
 };
 
 export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
@@ -752,7 +749,6 @@ export function createConfigStore(
     getBranding: (id) => settings.branding.get(id) ?? null,
     setBranding: (id, value) => settings.branding.set(id, value),
     getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,
-    getWelcomeProfileDurable: async () => (await opts.welcomeProfiles.get(org))?.profile,
     getSpendLimitDurable: async (id) => (await settings.spendLimits.durable(id)) ?? null,
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,

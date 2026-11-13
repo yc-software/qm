@@ -90,14 +90,14 @@ export function suggestedActivities(
     redraw,
     collapsed = false,
     count = VISIBLE_COUNT,
-    note,
+    fresh,
   }: {
     onSelect: (activity: SuggestedActivity) => void;
     onDismiss?: (activity: SuggestedActivity) => void;
     redraw: () => void;
     collapsed?: boolean;
     count?: number;
-    note?: (activity: SuggestedActivity) => { text: string; fresh: boolean } | undefined;
+    fresh?: ReadonlySet<string>;
   },
 ): TemplateResult | typeof nothing {
   if (!activities || (!activities.length && !onDismiss)) return nothing;
@@ -112,7 +112,6 @@ export function suggestedActivities(
       ${suggestionRows(
         activities.slice(0, count),
         (activity, motion) => {
-          const noted = note?.(activity);
           return html`<div class="suggested-activity-row ${motion}" ?inert=${motion === "is-leaving"}>
             <div class="suggested-activity-row-inner">
               <button
@@ -125,7 +124,7 @@ export function suggestedActivities(
                   >${activity.icon === "yc" ? html`<span class="suggested-activity-yc">Y</span>` : (icons[activity.icon] ?? activity.icon)}</span
                 >
                 <span class="suggested-activity-title">${activity.title}</span>
-                ${noted ? html`<span class="suggested-activity-note ${noted.fresh ? "is-new" : ""}">${noted.text}</span>` : nothing}
+                ${activity.source ? html`<span class="suggested-activity-note ${fresh?.has(activity.id) ? "is-new" : ""}">${fresh?.has(activity.id) ? "New · " : ""}${activity.source}</span>` : nothing}
               </button>
               ${
                 onDismiss

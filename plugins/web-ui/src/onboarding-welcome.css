@@ -293,7 +293,7 @@ qm-onboarding-welcome {
   cursor: default;
 }
 
-.welcome-content.welcome-profile {
+.welcome-content.welcome-seeded {
   max-width: 720px;
   margin: 0 auto;
 }
@@ -330,12 +330,12 @@ qm-onboarding-welcome {
   margin: 0;
   padding: 0;
 }
-.welcome-profile > :not(.welcome-hero, .welcome-section, .connection-preview-label) {
+.welcome-seeded > :not(.welcome-hero, .welcome-section, .connection-preview-label) {
   max-width: 480px;
   margin-inline: auto;
 }
 @container chat (min-width: 471px) {
-  .message-stack.empty-stack:has(.welcome-profile) {
+  .message-stack.empty-stack:has(.welcome-seeded) {
     width: min(var(--content-w), 100%);
   }
 }
