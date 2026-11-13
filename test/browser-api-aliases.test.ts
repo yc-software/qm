@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { createServer as createNetServer, type AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { API_ALIASES, apiAlias } from "../src/api/browser-session.ts";
 import { apiRoutes } from "../src/api/routes/index.ts";
 import { findRoute } from "../src/api/routes/route.ts";
@@ -12,6 +12,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { freePort } from "./support/free-port.ts";
 
 const SIGNING = "browser-alias-signing-secret-0123456789";
 const PORTAL_IDENTITY = "browser-alias-identity-secret-0123456789";
@@ -44,14 +45,6 @@ const aliases = [...API_ALIASES]
   })
   .filter(({ path }) => !path.startsWith("/api/admin/"))
   .filter(({ method, target }) => findRoute(apiRoutes, method, concrete(target))?.route.auth !== "public");
-
-async function freePort(): Promise<number> {
-  const probe = createNetServer().listen(0, "127.0.0.1");
-  await new Promise((resolve) => probe.once("listening", resolve));
-  const { port } = probe.address() as AddressInfo;
-  await new Promise((resolve) => probe.close(resolve));
-  return port;
-}
 
 async function core(t: TestContext, onBuilt: (built: ReturnType<typeof buildApp>) => void = () => {}): Promise<string> {
   const config = testConfig({ signingSecret: SIGNING, publicWebUrl: "https://qm.example.com" });

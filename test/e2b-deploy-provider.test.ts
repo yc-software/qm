@@ -1,7 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createE2bDeployProvider, type StoredE2bDeployBody } from "../src/deploy/e2b-deploy-provider.ts";
@@ -12,6 +11,7 @@ import { scopeId } from "../src/types.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
+import { freePort } from "./support/free-port.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -30,15 +30,6 @@ afterEach(() => {
   fake?.cleanup();
   fake = undefined;
 });
-
-const freePort = (): Promise<number> =>
-  new Promise((resolve) => {
-    const s = createServer();
-    s.listen(0, () => {
-      const port = (s.address() as { port: number }).port;
-      s.close(() => resolve(port));
-    });
-  });
 
 const deployment = (id: string, extra: Partial<Deployment> = {}): Deployment => ({
   id,

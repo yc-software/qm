@@ -1,18 +1,11 @@
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
-import { createServer, type AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { startQm } from "../src/start.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
-
-async function freePort(): Promise<number> {
-  const probe = createServer();
-  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
-  const { port } = probe.address() as AddressInfo;
-  await new Promise<void>((resolve) => probe.close(() => resolve()));
-  return port;
-}
+import { freePort } from "./support/free-port.ts";
 
 async function statusOf(url: string, init?: RequestInit): Promise<number | string> {
   return fetch(url, init).then(
