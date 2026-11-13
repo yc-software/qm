@@ -31,7 +31,7 @@ test("a deploy marks loops bot work created or rewrote and revokes ship grants b
   const cron = (action: string) => crons.create({ ...base, schedule: { cron: "0 9 * * *", timezone: "UTC" }, action });
   const [ka, kb, kf] = [await cron("a"), await cron("b"), await cron("f")];
   const gates = { shipActions: ["send_email", "post_slack"].map((action) => ({ action, gate: "auto" as const })) };
-  const a = await make("a", { cronId: ka.id, ...gates });
+  const [a, g] = [await make("a", { cronId: ka.id, ...gates }), await make("g", { botActor: true, ...gates })];
   const [c, e] = [await make("c", gates), await make("e", { shipActions: [{ action: "send_email", gate: "hold" }] })];
   const [fromPatch] = await call(true, patch(a.id), () => edit(a.id, "bot a"));
   const [fromCreate, b] = await call(true, api, () => make("b", { cronId: kb.id, ...gates }));
@@ -49,7 +49,7 @@ test("a deploy marks loops bot work created or rewrote and revokes ship grants b
   await call(true, `${api}/${c.id}/grants"`, grant("gr", "post_slack", c.id));
   await loops.grants.revoke("gr", "U1");
   const state = async () => ({
-    loops: await Promise.all([a, b, f, c, e, d].map((loop) => loops.store.get(loop.id))),
+    loops: await Promise.all([a, b, f, c, e, d, g].map((loop) => loops.store.get(loop.id))),
     crons: await Promise.all([ka, kb, kf].map((k) => crons.get(k.id))),
     grants: await Promise.all(["ga", "gc", "pc", "ge", "gr"].map((id) => loops.grants.get(id))),
   });
@@ -62,7 +62,7 @@ test("a deploy marks loops bot work created or rewrote and revokes ship grants b
   await pg.close();
   const [bot, automation] = [{ botActor: true }, { taskAuthor: "automation" }];
   const revocation = { revokedAt: after.grants[0]?.revokedAt, revokedBy: "system:migration" };
-  const [la, lb, lf, lc, le, ld] = before.loops;
+  const [la, lb, lf, lc, le, ld, lg] = before.loops;
   const held = {
     shipActions: [
       { action: "send_email", gate: "hold" },
@@ -78,6 +78,7 @@ test("a deploy marks loops bot work created or rewrote and revokes ship grants b
       { ...lc, ...held },
       le,
       { ...ld, shipActions: allHeld },
+      { ...lg, shipActions: allHeld },
     ],
     crons: [before.crons[0], { ...before.crons[1], ...bot }, { ...before.crons[2], ...bot }],
     grants: before.grants.map((g) => (["ga", "gc", "ge"].includes(g!.id) ? { ...g, ...revocation } : g)),
@@ -97,5 +98,6 @@ test("a deploy marks loops bot work created or rewrote and revokes ship grants b
     ["cron_update", kf.id, scope, { ...fromCreateF, ...bot }],
     ["loop_update", f.id, scope, { ...fromCreateF, ...bot }],
     ["ship_grant_revoke", "ge", scope, { ...fromGrantE, loopId: e.id }],
+    ["loop_update", g.id, scope, { heldShipActions: ["post_slack", "send_email"] }],
   ]);
 });
