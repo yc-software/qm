@@ -178,6 +178,7 @@ export function initializeErrorReporting(
   if (!env.SENTRY_DSN || client) return;
   const tracesSampleRate = parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE);
   const traced = tracesSampleRate > 0;
+  const identity = { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID };
   sdk.init({
     dsn: env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV ?? "development",
@@ -218,12 +219,12 @@ export function initializeErrorReporting(
     tracePropagationTargets: traced ? internalTraceTargets(env) : [],
     attachStacktrace: true,
     sendClientReports: false,
-    initialScope: { tags: { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID } },
+    initialScope: { tags: identity },
     shutdownTimeout: FLUSH_MS,
   });
   sdk.addEventProcessor(tagActiveRequest);
   if (traced) {
-    sdk.getGlobalScope().setAttributes({ service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID });
+    sdk.getGlobalScope().setAttributes(identity);
     sdk.getClient()?.on("beforeEnvelope", ownTraceHeader(sdk));
   }
   client = sdk;

@@ -319,7 +319,7 @@ function unmigrated(migration: PgMigration): Error {
 
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
-  const client = await pool.connect();
+  const client = await tracePoolCheckout(() => pool.connect());
   let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-migrations");
