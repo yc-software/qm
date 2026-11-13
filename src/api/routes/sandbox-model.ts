@@ -59,6 +59,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       data: Object.keys(gateway.models).map((id) => ({ id, object: "model", owned_by: "gateway" })),
     });
   let payload = body;
+  let routed = false;
   if (body && typeof body === "object" && !Array.isArray(body)) {
     const input = body as Record<string, unknown>;
     const user = gatewayActorId(capability!.actorId, gateway.actorKey!);
@@ -74,6 +75,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
             message: `model ${JSON.stringify(input.model)} is not available; choose one of: ${Object.keys(gateway.models).join(", ")}`,
           },
         });
+      routed = true;
       payload = attributed(path, { ...input, model: target }, user);
     }
   }
@@ -100,7 +102,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     if (!response.ok || !response.body) {
       const text = redactGatewayKey(gatewayKey(gateway))(await response.text());
       const retryAfter = response.headers.get("retry-after");
-      const operatorFault = response.status >= 500 || response.status === 401 || response.status === 403;
+      const operatorFault = (routed && response.status >= 500) || response.status === 401 || response.status === 403;
       if (operatorFault) reportFailure("sandbox model: gateway refused", new Error(`${response.status} ${path}`), text);
       res.writeHead(operatorFault ? 502 : response.status, {
         "content-type": contentType,
