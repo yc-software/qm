@@ -275,17 +275,19 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
          OR to_regclass('crons') IS NULL OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
         RETURN;
       END IF;
-      WITH bot_calls AS MATERIALIZED (
+      WITH bot_runs AS MATERIALIZED (
+        SELECT tenant_id, id::uuid AS turn_id, jsonb_build_object('runId', id, 'threadRef', session_id) AS source
+          FROM runs
+         WHERE pg_input_is_valid(id, 'uuid')
+           AND CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb ->> 'botActor' = 'true' END
+      ), bot_calls AS MATERIALIZED (
         SELECT c.tenant_id, ${msOf("c.created_at")} AS started, ${msOf("res.created_at")} AS ended,
-               generate_series(${msOf("c.created_at")} / 60000, ${msOf("res.created_at")} / 60000) AS minute,
-               jsonb_build_object('runId', r.id, 'threadRef', r.session_id) AS source,
+               generate_series(${msOf("c.created_at")} / 60000, ${msOf("res.created_at")} / 60000) AS minute, r.source,
                concat_ws(' ', c.body, c.text, res.body, res.text) AS evidence
-          FROM items c
+          FROM bot_runs r
+          JOIN items c ON c.tenant_id = r.tenant_id AND c.turn_id = r.turn_id AND c.kind = 'ToolCall'
           JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
                         AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
-          JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.turn_id::text
-         WHERE c.kind = 'ToolCall'
-           AND CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb ->> 'botActor' = 'true' END
       ), found AS (
         SELECT l.tenant_id, l.id, any_value(l.json ->> 'ownerScopeId') AS scope, any_value(l.json ->> 'cronId') AS cron_id,
                any_value(l.json @> '{"botActor": true}') AS marked,
