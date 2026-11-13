@@ -6,7 +6,8 @@ import os
 
 private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
   static let imageRequests = OSAllocatedUnfairLock(initialState: [URLRequest]())
-  static let searchResponses = OSAllocatedUnfairLock(
+  static let heldTurnHosts = OSAllocatedUnfairLock(initialState: Set<String>())
+  static let heldResponses = OSAllocatedUnfairLock(
     initialState: [String: @Sendable () -> Void]())
 
   static func imageHistory() throws -> Data {
@@ -117,10 +118,12 @@ private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
       self.client?.urlProtocol(self, didLoad: data)
       self.client?.urlProtocolDidFinishLoading(self)
     }
-    if let url = request.url, let host = url.host, host.hasPrefix("chat-scroll-search-"),
-      url.path == "/api/turn" || url.query?.contains("beforeSeq=") == true
+    if let url = request.url, let host = url.host,
+      host.hasPrefix("chat-scroll-search-")
+        && (url.path == "/api/turn" || url.query?.contains("beforeSeq=") == true)
+        || url.path == "/api/turn" && Self.heldTurnHosts.withLock({ $0.contains(host) })
     {
-      Self.searchResponses.withLock { $0[host + url.path] = deliver }
+      Self.heldResponses.withLock { $0[host + url.path] = deliver }
     } else if request.url?.path == "/api/turn"
       || request.url?.path == "/api/sessions/chat"
         && request.url?.host?.contains("delayed-") == true
@@ -288,6 +291,13 @@ final class ChatScrollTests: XCTestCase {
 
   func testSendKeepsTranscriptVisibleWhileComposerShrinks() async throws {
     try await withChat { model, scroll in
+      let host = try XCTUnwrap(model.client.baseURL.host)
+      let responseKey = host + "/api/turn"
+      _ = ChatScrollProtocol.heldTurnHosts.withLock { $0.insert(host) }
+      defer {
+        _ = ChatScrollProtocol.heldTurnHosts.withLock { $0.remove(host) }
+        ChatScrollProtocol.heldResponses.withLock { $0.removeValue(forKey: responseKey) }?()
+      }
       model.draft = String(repeating: "A long submitted message.\n", count: 8)
       try await self.waitUntil { abs(self.distanceFromBottom(scroll)) < 2 }
       let root = try XCTUnwrap(scroll.window?.rootViewController?.view)
@@ -296,12 +306,15 @@ final class ChatScrollTests: XCTestCase {
       XCTAssertTrue(editor.becomeFirstResponder())
       try await Task.sleep(for: .milliseconds(350))
       let sending = Task { await model.send() }
-      var sendingFrames = 0
-      for _ in 0..<50 {
+      try await self.waitUntil {
+        model.sending && ChatScrollProtocol.heldResponses.withLock { $0[responseKey] != nil }
+      }
+      let finishSend = try XCTUnwrap(
+        ChatScrollProtocol.heldResponses.withLock { $0.removeValue(forKey: responseKey) })
+      for frame in 0..<50 {
+        if frame == 25 { finishSend() }
         try await Task.sleep(for: .milliseconds(10))
-        if model.sending {
-          sendingFrames += 1
-        }
+        if frame < 25 { XCTAssertTrue(model.sending) }
         XCTAssertEqual(
           scroll.contentOffset.x + scroll.adjustedContentInset.left, 0, accuracy: 1,
           self.geometry(scroll))
@@ -311,7 +324,6 @@ final class ChatScrollTests: XCTestCase {
           self.distanceFromBottom(scroll), self.visibleHeight(scroll), self.geometry(scroll))
       }
       await sending.value
-      XCTAssertGreaterThan(sendingFrames, 3)
       XCTAssertTrue(model.draft.isEmpty)
       XCTAssertEqual(model.messages.last?.text, "New reply")
       editor.resignFirstResponder()
@@ -378,13 +390,13 @@ final class ChatScrollTests: XCTestCase {
       model.pause()
       DraftStore.removeAccount(client.baseURL.absoluteString + "test")
       for path in ["/api/sessions/chat", "/api/turn"] {
-        ChatScrollProtocol.searchResponses.withLock { $0.removeValue(forKey: host + path) }?()
+        ChatScrollProtocol.heldResponses.withLock { $0.removeValue(forKey: host + path) }?()
       }
     }
     try await withScrollView(ChatView(model: model, initialSequence: 24)) { scroll in
       try await self.waitUntil {
         model.loadingEarlier
-          && ChatScrollProtocol.searchResponses.withLock { $0[host + "/api/sessions/chat"] != nil }
+          && ChatScrollProtocol.heldResponses.withLock { $0[host + "/api/sessions/chat"] != nil }
       }
       XCTAssertEqual(model.transcriptEntries.first?.seq, 61)
       model.draft = "Please check the latest message."
@@ -396,10 +408,10 @@ final class ChatScrollTests: XCTestCase {
       XCTAssertTrue(try XCTUnwrap(sendButton(in: root)).accessibilityActivate())
       try await self.waitUntil(diagnostics: { self.geometry(scroll) }) {
         model.sending && abs(self.distanceFromBottom(scroll)) < 2
-          && ChatScrollProtocol.searchResponses.withLock { $0[host + "/api/turn"] != nil }
+          && ChatScrollProtocol.heldResponses.withLock { $0[host + "/api/turn"] != nil }
       }
       let deliverHistory = try XCTUnwrap(
-        ChatScrollProtocol.searchResponses.withLock {
+        ChatScrollProtocol.heldResponses.withLock {
           $0.removeValue(forKey: host + "/api/sessions/chat")
         })
       deliverHistory()
@@ -411,7 +423,7 @@ final class ChatScrollTests: XCTestCase {
         self.distanceFromBottom(scroll), 0, accuracy: 2,
         "Loading the searched history must not override Send: \(self.geometry(scroll))")
       let finishSend = try XCTUnwrap(
-        ChatScrollProtocol.searchResponses.withLock { $0.removeValue(forKey: host + "/api/turn") })
+        ChatScrollProtocol.heldResponses.withLock { $0.removeValue(forKey: host + "/api/turn") })
       finishSend()
       try await self.waitUntil { !model.sending && model.messages.last?.text == "New reply" }
       try await self.waitUntil(diagnostics: { self.geometry(scroll) }) {
