@@ -1348,4 +1348,8 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
   const fired = extractToken(mark);
   assert.ok(fired);
   assert.equal(fired!.triggered, true, "a trigger-fired turn's token says so — consent routes refuse it");
+  mark = fakeSprites.execScripts().length;
+  const unproven = { ...turn(false), spawned: true, sessionSenderId: "gone", delegatingRunId: "gone" } as TurnRequest;
+  assert.equal((await built.app.turn(unproven)).status, "ok");
+  assert.equal(extractToken(mark)!.triggered, true, "a session turn whose delegation can't be proven runs unattended");
 });
