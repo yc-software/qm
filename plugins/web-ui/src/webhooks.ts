@@ -431,7 +431,7 @@ function webhookForm() {
         <span class="hint webhook-scheme-guidance">${WEBHOOK_SCHEMES[0]!.guidance}</span>
       </label>
       <label
-        >Signing secret <span class="hint">(leave blank to auto-generate)</span>
+        >Secret <span class="hint">(leave blank to auto-generate)</span>
         <div class="copyrow">
           <input type="text" name="secret" placeholder="auto-generated if blank" />
           <button type="button" class="btn" @click=${fillGeneratedSecret}>Generate</button>
@@ -555,7 +555,7 @@ function showWebhookCreated(w: WebhookView, url: string): void {
         ${
           secret && secret !== "***"
             ? html`<div class="field">
-                <label>Signing secret</label>
+                <label>Secret</label>
                 ${copyRow(secret)}
                 <div class="hint">${WEBHOOK_SCHEMES.find((s) => s.value === w.verification.scheme)?.guidance}</div>
               </div>`
