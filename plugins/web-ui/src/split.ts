@@ -915,7 +915,7 @@ function openPaneTool(panel: IDockviewPanel, tool: SessionTool): void {
     crumb: paneCrumb(panel),
   });
   if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
-  switchView(tool === "apps" ? "deploys" : tool);
+  switchView(tool);
 }
 
 function paneIsWorking(panel: IDockviewPanel): boolean {

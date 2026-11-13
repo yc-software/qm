@@ -24,7 +24,7 @@ test("non-chat views are path-addressed regardless of any session", () => {
   assert.equal(deepLinkPath("", "webhooks", null), "/webhooks");
   assert.equal(deepLinkPath("", "files", "abc"), "/files");
   assert.equal(deepLinkPath("", "keychain", null), "/keychain");
-  assert.equal(deepLinkPath("", "deploys", null), "/apps");
+  assert.equal(deepLinkPath("", "apps", null), "/apps");
 });
 
 test("the contexts view carries its open scope", () => {
@@ -44,19 +44,19 @@ test("session ids are URI-encoded", () => {
 test("parseDeepLink reads the view from the path", () => {
   assert.deepEqual(parseDeepLink("", "/webhooks", ""), { view: "webhooks", session: null, item: null });
   assert.deepEqual(parseDeepLink("", "/crons", ""), { view: "crons", session: null, item: null });
-  assert.deepEqual(parseDeepLink("", "/apps", ""), { view: "deploys", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/apps", ""), { view: "apps", session: null, item: null });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/crons", ""), { view: "crons", session: null, item: null });
   assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1", item: null });
 });
 
 test("legacy deploys links resolve to Apps while new links use /apps", () => {
-  assert.deepEqual(parseDeepLink("", "/deploys", ""), { view: "deploys", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/deploys", ""), { view: "apps", session: null, item: null });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/apps", ""), {
-    view: "deploys",
+    view: "apps",
     session: null,
     item: null,
   });
-  assert.deepEqual(parseDeepLink("", "/", "?view=apps"), { view: "deploys", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/", "?view=apps"), { view: "apps", session: null, item: null });
 });
 
 test("project paths open the contexts view with a resolvable project identifier", () => {

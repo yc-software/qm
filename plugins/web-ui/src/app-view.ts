@@ -34,7 +34,7 @@ export type AppActionView = "target" | "other" | "list" | "away";
 export type AppRefreshResult = "updated" | "failed" | "superseded";
 
 export function appActionView(targetId: string, currentView: string, activeId?: string): AppActionView {
-  if (currentView !== "deploys") return "away";
+  if (currentView !== "apps") return "away";
   if (!activeId) return "list";
   return activeId === targetId ? "target" : "other";
 }

@@ -903,9 +903,9 @@ async function deleteScopeSkill(id: string): Promise<void> {
 }
 
 function resourceGroup(label: string, rows: TemplateResult[]): TemplateResult {
-  const view = label === "Apps" ? "deploys" : label.toLowerCase();
+  const view = label.toLowerCase();
   const scope = contextsState.resourcesScope;
-  const supportsScopeLink = view === "files" || view === "deploys";
+  const supportsScopeLink = view === "files" || view === "apps";
   const href = `${UI_BASE}/${encodeURIComponent(view)}${scope && supportsScopeLink ? `?scope=${encodeURIComponent(scope)}` : ""}`;
   return html`
     <section class="context-panel context-resource-group">

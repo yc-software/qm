@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { withAppDetailNotice, withAppListNotice, type AppNotices } from "../src/deploy-notices.ts";
+import { withAppDetailNotice, withAppListNotice, type AppNotices } from "../src/app-notices.ts";
 
 test("delayed list mutations cannot erase another app's detail error", async () => {
   for (const action of ["edit", "archive", "restore"]) {

@@ -13,7 +13,7 @@ import { api } from "./core-bridge";
 import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { icon } from "./icons";
 import { scopeChip } from "./contexts";
-import { friendlyPrincipal } from "./deploy-view";
+import { friendlyPrincipal } from "./app-view";
 import { errMessage } from "../../chassis/src/errors";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { appState } from "./shell-state";

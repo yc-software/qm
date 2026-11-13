@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after, beforeEach } from "node:test";
 import { browserEnv } from "./browser-env.ts";
-import type { AppView } from "../src/deploy-view.ts";
+import type { AppView } from "../src/app-view.ts";
 
 let requests: Array<{ path: string; resolve: (body: unknown) => void }> = [];
 const { vite, close } = await browserEnv({
@@ -20,8 +20,8 @@ let appState: {
   mainEl: HTMLElement | null;
   me: { user: string; org: string } | null;
 };
-let renderDeploys: () => Promise<void>;
-let openDeployById: (id: string) => void;
+let renderApps: () => Promise<void>;
+let openAppById: (id: string) => void;
 let main: HTMLElement;
 
 beforeEach(async () => {
@@ -30,8 +30,8 @@ beforeEach(async () => {
   main = document.querySelector("main")!;
   vite.moduleGraph.invalidateAll();
   ({ appState } = await vite.ssrLoadModule("/src/shell.ts"));
-  ({ renderDeploys, openDeployById } = await vite.ssrLoadModule("/src/deploys.ts"));
-  appState.currentView = "deploys";
+  ({ renderApps, openAppById } = await vite.ssrLoadModule("/src/apps-page.ts"));
+  appState.currentView = "apps";
   appState.mainEl = main;
   appState.me = { user: "tester", org: "test" };
 });
@@ -43,12 +43,12 @@ const request = (path: string) => {
   return found;
 };
 const listedIds = () =>
-  [...main.querySelectorAll(".deploy-row .list-row-title")].map((row) => row.textContent?.trim() ?? "");
-const detail = () => main.querySelector(".deploy-detail-pane");
+  [...main.querySelectorAll(".app-row .list-row-title")].map((row) => row.textContent?.trim() ?? "");
+const detail = () => main.querySelector(".app-detail-pane");
 const loadingDetail = () => Boolean(detail()?.querySelector(".hint")?.textContent?.includes("Loading"));
 
 test("the initial list refresh redraws the list when no detail was opened", async () => {
-  const rendering = renderDeploys();
+  const rendering = renderApps();
   await settle();
   assert.match(main.textContent ?? "", /Loading apps…/);
   request("/api/apps").resolve({ deployments: [{ id: "app", ownerScopeId: "personal:tester" }] });
@@ -57,14 +57,14 @@ test("the initial list refresh redraws the list when no detail was opened", asyn
 });
 
 test("the initial list refresh leaves an opened detail and its loading state untouched", async () => {
-  const first = renderDeploys();
+  const first = renderApps();
   await settle();
   request("/api/apps").resolve({ deployments: [{ id: "opened-app", ownerScopeId: "personal:tester" }] });
   await first;
   requests = [];
-  const rendering = renderDeploys();
+  const rendering = renderApps();
   await settle();
-  main.querySelector<HTMLButtonElement>(".deploy-manage")!.click();
+  main.querySelector<HTMLButtonElement>(".app-manage")!.click();
   await settle();
   assert.deepEqual(
     requests.map((r) => r.path),
@@ -82,8 +82,8 @@ test("the initial list refresh leaves an opened detail and its loading state unt
 
 for (const listed of [false, true]) {
   test(`app deep links load details when the requested app is ${listed ? "in" : "absent from"} the list`, async () => {
-    openDeployById("linked-app");
-    const rendering = renderDeploys();
+    openAppById("linked-app");
+    const rendering = renderApps();
     await settle();
     request("/api/apps").resolve({
       deployments: listed ? [{ id: "linked-app", displayName: "Linked app" }] : [],
@@ -100,8 +100,8 @@ for (const listed of [false, true]) {
 
 for (const supersede of ["view", "render"] as const) {
   test(`a pending app deep link cannot open after another ${supersede}`, async () => {
-    openDeployById("linked-app");
-    const rendering = renderDeploys();
+    openAppById("linked-app");
+    const rendering = renderApps();
     await settle();
     if (supersede === "view") appState.currentView = "skills";
     else appState.viewRenderSeq++;
@@ -116,8 +116,8 @@ for (const supersede of ["view", "render"] as const) {
 }
 
 async function openDetail(publishedApp: AppView): Promise<HTMLElement> {
-  openDeployById(publishedApp.id);
-  const rendering = renderDeploys();
+  openAppById(publishedApp.id);
+  const rendering = renderApps();
   await settle();
   request("/api/apps").resolve({ deployments: [] });
   await settle();
@@ -136,7 +136,7 @@ for (const count of [0, 7, 23, 150]) {
     };
     const pane = await openDetail(publishedApp);
     const history = () =>
-      [...pane.querySelectorAll(".deploy-detail-section")].find(
+      [...pane.querySelectorAll(".app-detail-section")].find(
         (s) => s.querySelector("h3")?.textContent === "Version history",
       )!;
     const olderButton = () =>
@@ -144,7 +144,7 @@ for (const count of [0, 7, 23, 150]) {
     let shown = 10;
     for (;;) {
       const section = history();
-      const numbers = [...section.querySelectorAll(".deploy-version-row strong")].map((s) =>
+      const numbers = [...section.querySelectorAll(".app-version-row strong")].map((s) =>
         Number(s.textContent!.slice(1)),
       );
       assert.deepEqual(
@@ -170,8 +170,8 @@ for (const count of [0, 7, 23, 150]) {
 }
 
 test("detail redraws reuse the scroll container and retain focus", async () => {
-  openDeployById("app");
-  const rendering = renderDeploys();
+  openAppById("app");
+  const rendering = renderApps();
   await settle();
   request("/api/apps").resolve({ deployments: [] });
   await settle();

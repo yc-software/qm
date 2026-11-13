@@ -35,7 +35,7 @@ export function resourceResults(
       group: labels[hit.kind]!,
       href: deepLinkPath(
         base,
-        hit.kind,
+        hit.kind === "deploys" ? "apps" : hit.kind,
         null,
         hit.kind === "contexts" ? hit.id : null,
         hit.kind === "contexts" ? null : hit.id,

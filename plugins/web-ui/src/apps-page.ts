@@ -1,4 +1,4 @@
-import { openAppPermissions } from "./deploy-permissions";
+import { openAppPermissions } from "./app-permissions";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
@@ -11,7 +11,7 @@ import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
-import { withAppDetailNotice, withAppListNotice, withoutAppDetailNotice, type AppNotices } from "./deploy-notices";
+import { withAppDetailNotice, withAppListNotice, withoutAppDetailNotice, type AppNotices } from "./app-notices";
 import {
   appAfterRestore,
   appActionView,
@@ -30,41 +30,41 @@ import {
   friendlyPrincipal,
   type AppTab,
   type AppView,
-} from "./deploy-view";
+} from "./app-view";
 import { tip } from "./tooltip";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 
-const DEPLOY_TABS: Array<{ value: AppTab; label: string }> = [
+const APP_TABS: Array<{ value: AppTab; label: string }> = [
   { value: "yours", label: "Yours" },
   { value: "shared", label: "Shared" },
   { value: "archived", label: "Archived" },
 ];
 
-type DeployEditField = "displayName" | "name" | "embedAncestors";
+type AppEditField = "displayName" | "name" | "embedAncestors";
 
-const DEPLOY_EDIT_FIELDS: Record<DeployEditField, { endpoint: string; savedValue: (d: AppView) => string }> = {
+const APP_EDIT_FIELDS: Record<AppEditField, { endpoint: string; savedValue: (d: AppView) => string }> = {
   displayName: { endpoint: "display-name", savedValue: (d) => d.displayName ?? "" },
   name: { endpoint: "name", savedValue: (d) => d.name ?? "" },
   embedAncestors: { endpoint: "embed-ancestors", savedValue: (d) => (d.embedAncestors ?? []).join("\n") },
 };
 
-let deployList: AppView[] = [];
-let deployNotices: AppNotices = { list: "", detail: null };
-let deployLoading = false;
-let deployScope: string | null = null;
-let deployQuery = "";
-let deployTab: AppTab = "yours";
-let deployPageHost: HTMLElement | null = null;
-let activeDeploy: AppView | null = null;
+let appList: AppView[] = [];
+let appNotices: AppNotices = { list: "", detail: null };
+let appLoading = false;
+let appScope: string | null = null;
+let appQuery = "";
+let selectedAppTab: AppTab = "yours";
+let appsPageHost: HTMLElement | null = null;
+let activeApp: AppView | null = null;
 let visibleVersionCount = 10;
-let editingDeploy: { id: string; field: DeployEditField } | null = null;
-let deployDraft = "";
+let editingApp: { id: string; field: AppEditField } | null = null;
+let appDraft = "";
 let embedDraft: string[] = [];
-let deploySaving = false;
+let appSaving = false;
 let archiveCandidate: AppView | null = null;
 let restoreArchiveFocus = false;
-let deployToast: { app: AppView; text: string; undo?: boolean } | null = null;
-let deployRefreshSeq = 0;
+let appToast: { app: AppView; text: string; undo?: boolean } | null = null;
+let appRefreshSeq = 0;
 
 function statusLabel(d: AppView): string {
   if (
@@ -96,7 +96,7 @@ function permissionBadge(d: AppView): TemplateResult {
   const title = manage
     ? "You own this app or have permission to manage it."
     : "This app is shared with a context you can access. You can open and clone it, but not change it.";
-  return html`<span class="deploy-permission ${manage ? "manage" : "view"}" ${tip(title)}
+  return html`<span class="app-permission ${manage ? "manage" : "view"}" ${tip(title)}
     >${manage ? "Can manage" : "Can view"}</span
   >`;
 }
@@ -110,13 +110,13 @@ function ownerLabel(d: AppView): string {
   return "Shared context";
 }
 
-function deployTabs(): TemplateResult {
-  const inContext = deployList.filter((d) => appInScope(d, deployScope));
+function appTabs(): TemplateResult {
+  const inContext = appList.filter((d) => appInScope(d, appScope));
   const viewer = appState.me?.user;
   const counts = Object.fromEntries(
-    DEPLOY_TABS.map((tab) => [tab.value, inContext.filter((d) => appTab(d, viewer) === tab.value).length]),
+    APP_TABS.map((tab) => [tab.value, inContext.filter((d) => appTab(d, viewer) === tab.value).length]),
   ) as Record<AppTab, number>;
-  const tabs = DEPLOY_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || deployTab === tab.value);
+  const tabs = APP_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || selectedAppTab === tab.value);
   return html`
     <div class="cron-list-controls" role="tablist" aria-label="App view">
       ${tabs.map(
@@ -124,11 +124,11 @@ function deployTabs(): TemplateResult {
           <button
             type="button"
             role="tab"
-            aria-selected=${deployTab === tab.value}
-            class="cron-filter-chip ${deployTab === tab.value ? "active" : ""}"
+            aria-selected=${selectedAppTab === tab.value}
+            class="cron-filter-chip ${selectedAppTab === tab.value ? "active" : ""}"
             @click=${() => {
-              deployTab = tab.value;
-              drawDeploysPage();
+              selectedAppTab = tab.value;
+              drawAppsPage();
             }}
           >
             <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
@@ -142,31 +142,31 @@ function deployTabs(): TemplateResult {
 function appRow(d: AppView): TemplateResult {
   const running = d.status === "running";
   const title = html`
-    <span class="deploy-row-title">
+    <span class="app-row-title">
       <span class="list-row-title" dir="auto">${appTitle(d)}</span>
     </span>
   `;
   return html`
-    <div class="list-row deploy-row ${d.status === "archived" ? "deploy-row-archived" : ""}">
+    <div class="list-row app-row ${d.status === "archived" ? "app-row-archived" : ""}">
       ${
         running && d.webUrl
           ? html`<a
-              class="deploy-row-main"
+              class="app-row-main"
               href=${d.webUrl}
               target="_blank"
               rel="noreferrer"
               aria-label=${`Open ${appTitle(d)}`}
               >${title}</a
             >`
-          : html`<span class="deploy-row-main">${title}</span>`
+          : html`<span class="app-row-main">${title}</span>`
       }
-      <div class="deploy-row-actions" aria-label="App status and actions">
-        <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+      <div class="app-row-actions" aria-label="App status and actions">
+        <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
         <button
-          class="btn deploy-manage"
+          class="btn app-manage"
           type="button"
           aria-label=${`Manage ${appTitle(d)}`}
-          @click=${() => void openDeploy(d)}
+          @click=${() => void openApp(d)}
         >
           Manage
         </button>
@@ -175,108 +175,108 @@ function appRow(d: AppView): TemplateResult {
   `;
 }
 
-function drawDeploysPage(): void {
-  if (appState.currentView !== "deploys" || !appState.mainEl) return;
-  activeDeploy = null;
-  if (!deployPageHost || deployPageHost.parentElement !== appState.mainEl) {
-    deployPageHost = document.createElement("div");
-    deployPageHost.className = "pane deploys-page";
-    appState.mainEl.replaceChildren(deployPageHost);
+function drawAppsPage(): void {
+  if (appState.currentView !== "apps" || !appState.mainEl) return;
+  activeApp = null;
+  if (!appsPageHost || appsPageHost.parentElement !== appState.mainEl) {
+    appsPageHost = document.createElement("div");
+    appsPageHost.className = "pane apps-page";
+    appState.mainEl.replaceChildren(appsPageHost);
   }
   const viewer = appState.me?.user;
-  const rows = filterApps(deployList, {
-    tab: deployTab,
-    scope: deployScope,
-    query: deployQuery,
+  const rows = filterApps(appList, {
+    tab: selectedAppTab,
+    scope: appScope,
+    query: appQuery,
     viewer,
     sort: "newest",
   });
-  const allForTab = deployList.filter((d) => appTab(d, viewer) === deployTab && appInScope(d, deployScope));
-  let empty = appTabEmptyMessage(deployTab);
-  if (!deployList.length && deployNotices.list) empty = deployNotices.list;
-  else if (deployLoading && deployList.length === 0) empty = "Loading apps…";
-  else if (deployQuery && allForTab.length) empty = "No apps match your search.";
-  else if (deployScope) empty = "No apps in this context.";
-  const content = deployList.length
+  const allForTab = appList.filter((d) => appTab(d, viewer) === selectedAppTab && appInScope(d, appScope));
+  let empty = appTabEmptyMessage(selectedAppTab);
+  if (!appList.length && appNotices.list) empty = appNotices.list;
+  else if (appLoading && appList.length === 0) empty = "Loading apps…";
+  else if (appQuery && allForTab.length) empty = "No apps match your search.";
+  else if (appScope) empty = "No apps in this context.";
+  const content = appList.length
     ? [
-        deployTabs(),
-        ...(deployNotices.list
-          ? [html`<div class="status deploy-list-notice" role="status" aria-live="polite">${deployNotices.list}</div>`]
+        appTabs(),
+        ...(appNotices.list
+          ? [html`<div class="status app-list-notice" role="status" aria-live="polite">${appNotices.list}</div>`]
           : []),
         ...(rows.length ? rows.map(appRow) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
   const scoped = Boolean(scopedSession.active);
-  deployPageHost.classList.toggle("scoped-view", scoped);
+  appsPageHost.classList.toggle("scoped-view", scoped);
   render(
     html`
-      ${scopedViewTopbar("apps", drawDeploysPage)}
+      ${scopedViewTopbar("apps", drawAppsPage)}
       ${listPageTpl({
         title: "Apps",
         search: {
-          value: deployQuery,
+          value: appQuery,
           placeholder: "Search apps",
           onInput: (value) => {
-            deployQuery = value;
-            drawDeploysPage();
+            appQuery = value;
+            drawAppsPage();
           },
         },
         rows: content,
         empty,
       })}
-      ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
+      ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${appToast ? undoToast(appToast) : nothing}
     `,
-    deployPageHost,
+    appsPageHost,
   );
 }
 
-let pendingDeployId: string | null = null;
+let pendingAppId: string | null = null;
 
-export function openDeployById(id: string): void {
-  pendingDeployId = id;
+export function openAppById(id: string): void {
+  pendingAppId = id;
 }
 
-async function openDeploy(d: AppView): Promise<void> {
+async function openApp(d: AppView): Promise<void> {
   visibleVersionCount = 10;
-  editingDeploy = null;
-  deployDraft = "";
-  deployNotices = withoutAppDetailNotice(deployNotices);
-  activeDeploy = d;
-  history.replaceState(null, "", deepLinkPath(UI_BASE, "deploys", null, null, d.id));
-  drawDeployDetail(d, true);
+  editingApp = null;
+  appDraft = "";
+  appNotices = withoutAppDetailNotice(appNotices);
+  activeApp = d;
+  history.replaceState(null, "", deepLinkPath(UI_BASE, "apps", null, null, d.id));
+  drawAppDetail(d, true);
   try {
     const response = await api<{ deployment?: AppView }>(`/api/apps/${encodeURIComponent(d.id)}`);
-    if (appState.currentView !== "deploys" || activeDeploy?.id !== d.id) return;
-    activeDeploy = response.deployment ?? d;
-    drawDeployDetail(activeDeploy);
+    if (appState.currentView !== "apps" || activeApp?.id !== d.id) return;
+    activeApp = response.deployment ?? d;
+    drawAppDetail(activeApp);
   } catch (error) {
-    if (activeDeploy?.id !== d.id) return;
-    deployNotices = withAppDetailNotice(deployNotices, d.id, errMessage(error, "Could not load app details."));
-    drawDeployDetail(d);
+    if (activeApp?.id !== d.id) return;
+    appNotices = withAppDetailNotice(appNotices, d.id, errMessage(error, "Could not load app details."));
+    drawAppDetail(d);
   }
 }
 
-function drawDeployDetail(d: AppView, loading = false): void {
-  if (appState.currentView !== "deploys" || !appState.mainEl || activeDeploy?.id !== d.id) return;
-  const host = appState.mainEl.querySelector<HTMLElement>(".deploy-detail-pane") ?? document.createElement("div");
-  host.className = "resource-pane deploy-detail-pane";
+function drawAppDetail(d: AppView, loading = false): void {
+  if (appState.currentView !== "apps" || !appState.mainEl || activeApp?.id !== d.id) return;
+  const host = appState.mainEl.querySelector<HTMLElement>(".app-detail-pane") ?? document.createElement("div");
+  host.className = "resource-pane app-detail-pane";
   const versions = [...(d.versions ?? [])].sort((a, b) => b.version - a.version);
   const running = d.status === "running";
   const contextScope = appContextScope(d);
-  const editingName = editingDeploy?.id === d.id && editingDeploy.field === "displayName";
-  const editingSlug = editingDeploy?.id === d.id && editingDeploy.field === "name";
-  const editingEmbed = editingDeploy?.id === d.id && editingDeploy.field === "embedAncestors";
+  const editingName = editingApp?.id === d.id && editingApp.field === "displayName";
+  const editingSlug = editingApp?.id === d.id && editingApp.field === "name";
+  const editingEmbed = editingApp?.id === d.id && editingApp.field === "embedAncestors";
   render(
     html`
-      <div class="resource-detail deploy-detail">
-        ${listBackLink("Apps", returnToDeploysList)}
-        <div class="resource-heading deploy-detail-heading">
+      <div class="resource-detail app-detail">
+        ${listBackLink("Apps", returnToAppsList)}
+        <div class="resource-heading app-detail-heading">
           <div>
-            <div class="deploy-heading-title">
+            <div class="app-heading-title">
               <h2 dir="auto">${appTitle(d)}</h2>
-              <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+              <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
             </div>
-            <div class="deploy-detail-url">/d/${appSlug(d)}/</div>
+            <div class="app-detail-url">/d/${appSlug(d)}/</div>
           </div>
           <div class="actions">
             ${running && d.webUrl ? html`<a class="btn primary" href=${d.webUrl} target="_blank" rel="noreferrer">Open app ${icon(ExternalLink, 14)}</a>` : nothing}
@@ -284,35 +284,35 @@ function drawDeployDetail(d: AppView, loading = false): void {
           </div>
         </div>
         ${loading ? html`<div class="hint">Loading authoritative app details…</div>` : nothing}
-        ${deployNotices.detail?.id === d.id ? html`<div class="status">${deployNotices.detail.text}</div>` : nothing}
+        ${appNotices.detail?.id === d.id ? html`<div class="status">${appNotices.detail.text}</div>` : nothing}
 
-        <div class="deploy-summary">
+        <div class="app-summary">
           <span>Live v${d.appliedVersion ?? d.currentVersion ?? "—"}</span>
           ${d.currentVersion !== undefined && d.appliedVersion !== undefined && d.currentVersion !== d.appliedVersion ? html`<span>Latest v${d.currentVersion}</span>` : nothing}
           ${appLatestAt(d) ? html`<span ${tip(new Date(appLatestAt(d)).toLocaleString())}>Updated ${relTime(appLatestAt(d))}</span>` : nothing}
         </div>
-        <div class="deploy-access-line">
+        <div class="app-access-line">
           <div>
             <span>${ownerLabel(d)}</span>
-            ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="deploy-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
-            ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="deploy-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
+            ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="app-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
+            ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="app-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
           </div>
           ${d.ownerScopeId === `personal:${appState.me?.user}` ? html`<button class="btn" type="button" @click=${() => void openAppPermissions(d.id, appTitle(d), d.ownerScopeId!)}>Permissions</button>` : permissionBadge(d)}
         </div>
 
         ${
           canManage(d)
-            ? html`<section class="deploy-detail-section">
+            ? html`<section class="app-detail-section">
                 <h3>Settings</h3>
-                <div class="deploy-setting-row">
+                <div class="app-setting-row">
                   <div><strong>Display name</strong><span>Shown in the app bar and app list.</span></div>
-                  ${editingName ? deployEditForm(d, "displayName") : html`<div class="deploy-setting-value"><span dir="auto">${appTitle(d)}</span><button class="btn" type="button" @click=${() => startEditDeploy(d, "displayName")}>Edit</button></div>`}
+                  ${editingName ? appEditForm(d, "displayName") : html`<div class="app-setting-value"><span dir="auto">${appTitle(d)}</span><button class="btn" type="button" @click=${() => startEditApp(d, "displayName")}>Edit</button></div>`}
                 </div>
-                <div class="deploy-setting-row">
+                <div class="app-setting-row">
                   <div><strong>App URL</strong><span>Changes the app URL. Existing links do not redirect.</span></div>
-                  ${editingSlug ? deployEditForm(d, "name") : html`<div class="deploy-setting-value"><code>/d/${appSlug(d)}/</code><button class="btn" type="button" @click=${() => startEditDeploy(d, "name")}>Change</button></div>`}
+                  ${editingSlug ? appEditForm(d, "name") : html`<div class="app-setting-value"><code>/d/${appSlug(d)}/</code><button class="btn" type="button" @click=${() => startEditApp(d, "name")}>Change</button></div>`}
                 </div>
-                <div class="deploy-setting-row">
+                <div class="app-setting-row">
                   <div>
                     <strong>Embedding</strong
                     ><span
@@ -322,23 +322,23 @@ function drawDeployDetail(d: AppView, loading = false): void {
                   </div>
                   ${
                     editingEmbed
-                      ? deployEditForm(d, "embedAncestors")
-                      : html`<div class="deploy-setting-value">
+                      ? appEditForm(d, "embedAncestors")
+                      : html`<div class="app-setting-value">
                           ${embedAncestorsSummary(d)}
-                          <button class="btn" type="button" @click=${() => startEditDeploy(d, "embedAncestors")}>
+                          <button class="btn" type="button" @click=${() => startEditApp(d, "embedAncestors")}>
                             ${d.embedAncestors?.length ? "Change" : "Allow"}
                           </button>
                         </div>`
                   }
                 </div>
-                <div class="actions deploy-danger-actions">
+                <div class="actions app-danger-actions">
                   ${
                     d.status === "archived"
-                      ? html`<button class="btn" type="button" @click=${() => void restoreDeploy(d)}>
+                      ? html`<button class="btn" type="button" @click=${() => void restoreApp(d)}>
                           ${icon(RotateCcw, 14)}<span>Restore app</span>
                         </button>`
                       : html`<button
-                          class="btn danger deploy-archive-trigger"
+                          class="btn danger app-archive-trigger"
                           data-app-id=${d.id}
                           type="button"
                           @click=${() => requestArchive(d)}
@@ -351,14 +351,14 @@ function drawDeployDetail(d: AppView, loading = false): void {
             : nothing
         }
 
-        <section class="deploy-detail-section">
+        <section class="app-detail-section">
           <h3>Version history</h3>
           ${
             versions.length
-              ? html`<div class="deploy-version-list">
+              ? html`<div class="app-version-list">
                   ${versions.slice(0, visibleVersionCount).map(
                     (version) => html`
-                      <div class="deploy-version-row">
+                      <div class="app-version-row">
                         <div>
                           <strong>v${version.version}</strong
                           >${version.version === d.appliedVersion ? html`<span class="badge ok">Live</span>` : nothing}${version.version === d.currentVersion && version.version !== d.appliedVersion ? html`<span class="badge">Latest</span>` : nothing}
@@ -379,7 +379,7 @@ function drawDeployDetail(d: AppView, loading = false): void {
                   type="button"
                   @click=${() => {
                     visibleVersionCount += 10;
-                    drawDeployDetail(d);
+                    drawAppDetail(d);
                   }}
                 >
                   Show older versions
@@ -388,20 +388,20 @@ function drawDeployDetail(d: AppView, loading = false): void {
           }
         </section>
       </div>
-      ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
+      ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${appToast ? undoToast(appToast) : nothing}
     `,
     host,
   );
   if (host.parentElement !== appState.mainEl) appState.mainEl.replaceChildren(host);
 }
 
-function returnToDeploysList(): void {
-  editingDeploy = null;
-  deployDraft = "";
-  deployNotices = withoutAppDetailNotice(deployNotices);
-  activeDeploy = null;
-  history.replaceState(null, "", deepLinkPath(UI_BASE, "deploys", null));
-  drawDeploysPage();
+function returnToAppsList(): void {
+  editingApp = null;
+  appDraft = "";
+  appNotices = withoutAppDetailNotice(appNotices);
+  activeApp = null;
+  history.replaceState(null, "", deepLinkPath(UI_BASE, "apps", null));
+  drawAppsPage();
 }
 
 function cleanEmbedDraft(rows: readonly string[]): string[] {
@@ -415,36 +415,36 @@ function cleanEmbedDraft(rows: readonly string[]): string[] {
 
 function embedAncestorsSummary(d: AppView): TemplateResult {
   const origins = d.embedAncestors ?? [];
-  if (!origins.length) return html`<span class="deploy-embed-empty">Not embeddable</span>`;
-  return html`<span class="deploy-embed-origins">${origins.map((origin) => html`<code>${origin}</code>`)}</span>`;
+  if (!origins.length) return html`<span class="app-embed-empty">Not embeddable</span>`;
+  return html`<span class="app-embed-origins">${origins.map((origin) => html`<code>${origin}</code>`)}</span>`;
 }
 
-function deployEditForm(d: AppView, field: DeployEditField): TemplateResult {
-  if (field === "embedAncestors") return deployEmbedForm(d);
+function appEditForm(d: AppView, field: AppEditField): TemplateResult {
+  if (field === "embedAncestors") return appEmbedForm(d);
   const slug = field === "name";
   return html`
     <form
-      class="deploy-edit-form"
+      class="app-edit-form"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
-        void commitEditDeploy(d);
+        void commitEditApp(d);
       }}
     >
       <label>
-        <span class="deploy-slug-input ${slug ? "" : "name"}"
+        <span class="app-slug-input ${slug ? "" : "name"}"
           >${slug ? html`<span>/d/</span>` : nothing}<input
-            class="deploy-edit-input"
+            class="app-edit-input"
             aria-label=${slug ? "URL slug" : "Display name"}
-            ?disabled=${deploySaving}
-            .value=${live(deployDraft)}
+            ?disabled=${appSaving}
+            .value=${live(appDraft)}
             @input=${(event: InputEvent) => {
-              deployDraft = (event.currentTarget as HTMLInputElement).value;
+              appDraft = (event.currentTarget as HTMLInputElement).value;
             }}
-            @keydown=${(event: KeyboardEvent) => event.key === "Escape" && cancelEditDeploy()}
+            @keydown=${(event: KeyboardEvent) => event.key === "Escape" && cancelEditApp()}
           />${slug ? html`<span>/</span>` : nothing}</span
         >
       </label>
-      <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${deploySaving}>
+      <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${appSaving}>
         ${icon(Check, 14)}
       </button>
       <button
@@ -452,8 +452,8 @@ function deployEditForm(d: AppView, field: DeployEditField): TemplateResult {
         type="button"
         ${tip("Cancel")}
         aria-label="Cancel"
-        ?disabled=${deploySaving}
-        @click=${cancelEditDeploy}
+        ?disabled=${appSaving}
+        @click=${cancelEditApp}
       >
         ${icon(X, 14)}
       </button>
@@ -461,50 +461,50 @@ function deployEditForm(d: AppView, field: DeployEditField): TemplateResult {
   `;
 }
 
-function deployEmbedForm(d: AppView): TemplateResult {
+function appEmbedForm(d: AppView): TemplateResult {
   const setRow = (index: number, value: string) => {
     embedDraft = embedDraft.map((row, i) => (i === index ? value : row));
   };
   const removeRow = (index: number) => {
     embedDraft = embedDraft.filter((_, i) => i !== index);
     if (!embedDraft.length) embedDraft = [""];
-    drawDeployDetail(d);
+    drawAppDetail(d);
     focusEmbedRow(Math.min(index, embedDraft.length - 1));
   };
   const addRow = () => {
     embedDraft = [...embedDraft, ""];
-    drawDeployDetail(d);
+    drawAppDetail(d);
     focusEmbedRow(embedDraft.length - 1);
   };
   return html`
     <form
-      class="deploy-embed-editor"
+      class="app-embed-editor"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
-        void commitEditDeploy(d);
+        void commitEditApp(d);
       }}
     >
-      <ul class="deploy-embed-list">
+      <ul class="app-embed-list">
         ${embedDraft.map(
           (row, index) => html`
             <li>
               <input
-                class="deploy-edit-input deploy-embed-input"
+                class="app-edit-input app-embed-input"
                 data-embed-row=${index}
                 aria-label="Site allowed to embed this app"
                 spellcheck="false"
                 placeholder="https://tools.example.com"
-                ?disabled=${deploySaving}
+                ?disabled=${appSaving}
                 .value=${live(row)}
                 @input=${(event: InputEvent) => setRow(index, (event.currentTarget as HTMLInputElement).value)}
-                @keydown=${(event: KeyboardEvent) => event.key === "Escape" && cancelEditDeploy()}
+                @keydown=${(event: KeyboardEvent) => event.key === "Escape" && cancelEditApp()}
               />
               <button
                 class="icon-btn"
                 type="button"
                 ${tip("Remove")}
                 aria-label="Remove this site"
-                ?disabled=${deploySaving}
+                ?disabled=${appSaving}
                 @click=${() => removeRow(index)}
               >
                 ${icon(Trash2, 14)}
@@ -513,12 +513,12 @@ function deployEmbedForm(d: AppView): TemplateResult {
           `,
         )}
       </ul>
-      <div class="deploy-embed-actions">
-        <button class="btn" type="button" ?disabled=${deploySaving} @click=${addRow}>
+      <div class="app-embed-actions">
+        <button class="btn" type="button" ?disabled=${appSaving} @click=${addRow}>
           ${icon(Plus, 14)}<span>Add site</span>
         </button>
         <span class="spacer"></span>
-        <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${deploySaving}>
+        <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${appSaving}>
           ${icon(Check, 14)}
         </button>
         <button
@@ -526,13 +526,13 @@ function deployEmbedForm(d: AppView): TemplateResult {
           type="button"
           ${tip("Cancel")}
           aria-label="Cancel"
-          ?disabled=${deploySaving}
-          @click=${cancelEditDeploy}
+          ?disabled=${appSaving}
+          @click=${cancelEditApp}
         >
           ${icon(X, 14)}
         </button>
       </div>
-      <div class="hint deploy-embed-hint">
+      <div class="hint app-embed-hint">
         An https origin each, e.g. <code>https://tools.example.com</code> or <code>https://*.example.com</code>. Save
         with none listed to forbid embedding again.
       </div>
@@ -546,44 +546,44 @@ function focusEmbedRow(index: number): void {
   });
 }
 
-function startEditDeploy(d: AppView, field: DeployEditField): void {
-  editingDeploy = { id: d.id, field };
+function startEditApp(d: AppView, field: AppEditField): void {
+  editingApp = { id: d.id, field };
   if (field === "embedAncestors") embedDraft = [...(d.embedAncestors ?? []), ""];
-  else deployDraft = DEPLOY_EDIT_FIELDS[field].savedValue(d);
-  deployNotices = withoutAppDetailNotice(deployNotices);
-  drawDeployDetail(d);
+  else appDraft = APP_EDIT_FIELDS[field].savedValue(d);
+  appNotices = withoutAppDetailNotice(appNotices);
+  drawAppDetail(d);
   requestAnimationFrame(() => {
-    const input = document.querySelector<HTMLInputElement>(".deploy-edit-input");
+    const input = document.querySelector<HTMLInputElement>(".app-edit-input");
     input?.focus();
     input?.select();
   });
 }
 
-function cancelEditDeploy(): void {
-  editingDeploy = null;
-  deployDraft = "";
+function cancelEditApp(): void {
+  editingApp = null;
+  appDraft = "";
   embedDraft = [];
-  if (activeDeploy) drawDeployDetail(activeDeploy);
-  else drawDeploysPage();
+  if (activeApp) drawAppDetail(activeApp);
+  else drawAppsPage();
 }
 
-async function commitEditDeploy(d: AppView): Promise<void> {
-  if (!editingDeploy || deploySaving) return;
-  const field = editingDeploy.field;
-  const value = deployDraft.trim();
+async function commitEditApp(d: AppView): Promise<void> {
+  if (!editingApp || appSaving) return;
+  const field = editingApp.field;
+  const value = appDraft.trim();
   const embedAncestors = field === "embedAncestors" ? cleanEmbedDraft(embedDraft) : [];
-  const current = DEPLOY_EDIT_FIELDS[field].savedValue(d);
+  const current = APP_EDIT_FIELDS[field].savedValue(d);
   const next = field === "embedAncestors" ? embedAncestors.join("\n") : value;
-  if (next === current) return cancelEditDeploy();
+  if (next === current) return cancelEditApp();
   if (field === "name" && !value) {
-    deployNotices = withAppDetailNotice(deployNotices, d.id, "A URL slug is required.");
-    return drawDeployDetail(d);
+    appNotices = withAppDetailNotice(appNotices, d.id, "A URL slug is required.");
+    return drawAppDetail(d);
   }
-  deploySaving = true;
-  drawDeployDetail(d);
+  appSaving = true;
+  drawAppDetail(d);
   try {
-    const { endpoint } = DEPLOY_EDIT_FIELDS[field];
-    const payloads: Record<DeployEditField, object> = {
+    const { endpoint } = APP_EDIT_FIELDS[field];
+    const payloads: Record<AppEditField, object> = {
       displayName: { displayName: value },
       name: { name: value },
       embedAncestors: { embedAncestors },
@@ -593,28 +593,28 @@ async function commitEditDeploy(d: AppView): Promise<void> {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    editingDeploy = null;
-    deployDraft = "";
+    editingApp = null;
+    appDraft = "";
     embedDraft = [];
-    deploySaving = false;
+    appSaving = false;
     await refreshApps();
-    const updated = deployList.find((item) => item.id === d.id) ?? d;
-    if (currentDeployActionView(d.id) === "target") {
-      await openDeploy(updated);
+    const updated = appList.find((item) => item.id === d.id) ?? d;
+    if (currentAppActionView(d.id) === "target") {
+      await openApp(updated);
     } else {
-      deployToast = { app: updated, text: `${appTitle(updated)} settings saved.` };
-      drawCurrentDeployView();
+      appToast = { app: updated, text: `${appTitle(updated)} settings saved.` };
+      drawCurrentAppView();
     }
   } catch (error) {
-    deploySaving = false;
+    appSaving = false;
     const message = errMessage(error, "Could not save app settings.");
-    if (currentDeployActionView(d.id) === "target") {
-      deployNotices = withAppDetailNotice(deployNotices, d.id, message);
-      drawDeployDetail(activeDeploy!);
+    if (currentAppActionView(d.id) === "target") {
+      appNotices = withAppDetailNotice(appNotices, d.id, message);
+      drawAppDetail(activeApp!);
     } else {
-      deployNotices = withAppListNotice(deployNotices, "");
-      deployToast = { app: d, text: message };
-      drawCurrentDeployView();
+      appNotices = withAppListNotice(appNotices, "");
+      appToast = { app: d, text: message };
+      drawCurrentAppView();
     }
   }
 }
@@ -622,48 +622,48 @@ async function commitEditDeploy(d: AppView): Promise<void> {
 function requestArchive(d: AppView): void {
   restoreArchiveFocus = true;
   archiveCandidate = d;
-  drawCurrentDeployView();
-  setDeployBackgroundInert(true);
+  drawCurrentAppView();
+  setAppBackgroundInert(true);
   requestAnimationFrame(() => {
-    if (appState.currentView !== "deploys" || archiveCandidate?.id !== d.id) return;
+    if (appState.currentView !== "apps" || archiveCandidate?.id !== d.id) return;
     focusDialogCancel(document);
   });
 }
 
 function closeArchiveDialog(): void {
   const restoreFocus = restoreArchiveFocus;
-  setDeployBackgroundInert(false);
+  setAppBackgroundInert(false);
   archiveCandidate = null;
   restoreArchiveFocus = false;
-  drawCurrentDeployView();
+  drawCurrentAppView();
   requestAnimationFrame(() => {
-    if (!restoreFocus || appState.currentView !== "deploys" || archiveCandidate) return;
-    restoreDialogFocus(null, () => document.querySelector<HTMLElement>(".deploy-archive-trigger"));
+    if (!restoreFocus || appState.currentView !== "apps" || archiveCandidate) return;
+    restoreDialogFocus(null, () => document.querySelector<HTMLElement>(".app-archive-trigger"));
   });
 }
 
-function setDeployBackgroundInert(inert: boolean): void {
-  if (inert && appState.currentView !== "deploys") return;
+function setAppBackgroundInert(inert: boolean): void {
+  if (inert && appState.currentView !== "apps") return;
   const roots = new Set<HTMLElement>();
-  if (deployPageHost) roots.add(deployPageHost);
-  if (appState.currentView === "deploys" && appState.mainEl) roots.add(appState.mainEl);
+  if (appsPageHost) roots.add(appsPageHost);
+  if (appState.currentView === "apps" && appState.mainEl) roots.add(appState.mainEl);
   roots.forEach((root) =>
     root
-      .querySelectorAll<HTMLElement>(".list-page-head, .list-search, .list-rows, .deploy-detail, .deploy-toast")
+      .querySelectorAll<HTMLElement>(".list-page-head, .list-search, .list-rows, .app-detail, .app-toast")
       .forEach((element) => {
         element.inert = inert;
       }),
   );
 }
 
-function drawCurrentDeployView(): void {
-  if (appState.currentView !== "deploys") return;
-  if (activeDeploy) drawDeployDetail(activeDeploy);
-  else drawDeploysPage();
+function drawCurrentAppView(): void {
+  if (appState.currentView !== "apps") return;
+  if (activeApp) drawAppDetail(activeApp);
+  else drawAppsPage();
 }
 
-function currentDeployActionView(targetId: string): ReturnType<typeof appActionView> {
-  return appActionView(targetId, appState.currentView, activeDeploy?.id);
+function currentAppActionView(targetId: string): ReturnType<typeof appActionView> {
+  return appActionView(targetId, appState.currentView, activeApp?.id);
 }
 
 function archiveDialog(d: AppView): TemplateResult {
@@ -673,15 +673,15 @@ function archiveDialog(d: AppView): TemplateResult {
       @click=${(event: MouseEvent) => event.target === event.currentTarget && closeArchiveDialog()}
     >
       <div
-        class="project-dialog deploy-archive-dialog"
+        class="project-dialog app-archive-dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="deploy-archive-title"
+        aria-labelledby="app-archive-title"
         @keydown=${(event: KeyboardEvent) => trapDialogFocus(event, closeArchiveDialog)}
       >
         <div class="project-dialog-head">
           <div>
-            <h2 id="deploy-archive-title">Archive <bdi>${appTitle(d)}</bdi>?</h2>
+            <h2 id="app-archive-title">Archive <bdi>${appTitle(d)}</bdi>?</h2>
           </div>
         </div>
         <p>
@@ -691,10 +691,10 @@ function archiveDialog(d: AppView): TemplateResult {
         <div class="project-dialog-actions actions">
           <button class="btn" type="button" data-dialog-cancel @click=${closeArchiveDialog}>Cancel</button>
           <button
-            class="btn danger deploy-archive-confirm"
+            class="btn danger app-archive-confirm"
             type="button"
-            ?disabled=${deploySaving}
-            @click=${() => void archiveDeploy(d)}
+            ?disabled=${appSaving}
+            @click=${() => void archiveApp(d)}
           >
             Archive and take offline
           </button>
@@ -704,101 +704,101 @@ function archiveDialog(d: AppView): TemplateResult {
   `;
 }
 
-async function archiveDeploy(d: AppView): Promise<void> {
-  if (deploySaving) return;
-  deploySaving = true;
-  if (activeDeploy?.id === d.id) deployNotices = withAppDetailNotice(deployNotices, d.id, "Archiving app…");
-  else deployNotices = withAppListNotice(deployNotices, "Archiving app…");
-  setDeployBackgroundInert(false);
+async function archiveApp(d: AppView): Promise<void> {
+  if (appSaving) return;
+  appSaving = true;
+  if (activeApp?.id === d.id) appNotices = withAppDetailNotice(appNotices, d.id, "Archiving app…");
+  else appNotices = withAppListNotice(appNotices, "Archiving app…");
+  setAppBackgroundInert(false);
   archiveCandidate = null;
-  drawCurrentDeployView();
+  drawCurrentAppView();
   try {
     await api(`/api/apps/${encodeURIComponent(d.id)}/archive`, { method: "POST" });
-    deploySaving = false;
-    deployToast = {
+    appSaving = false;
+    appToast = {
       app: { ...d, status: "archived" },
       text: `${appTitle(d)} is offline and archived.`,
       undo: true,
     };
     await refreshApps();
-    const destination = currentDeployActionView(d.id);
+    const destination = currentAppActionView(d.id);
     if (destination === "target" || destination === "list") {
-      activeDeploy = null;
-      deployTab = "yours";
-      drawDeploysPage();
+      activeApp = null;
+      selectedAppTab = "yours";
+      drawAppsPage();
     } else {
-      drawCurrentDeployView();
+      drawCurrentAppView();
     }
   } catch (error) {
-    deploySaving = false;
+    appSaving = false;
     const message = errMessage(error, "Could not archive app.");
-    if (currentDeployActionView(d.id) === "target") {
-      deployNotices = withAppDetailNotice(deployNotices, d.id, message);
-      drawDeployDetail(activeDeploy!);
+    if (currentAppActionView(d.id) === "target") {
+      appNotices = withAppDetailNotice(appNotices, d.id, message);
+      drawAppDetail(activeApp!);
     } else {
-      deployNotices = withAppListNotice(deployNotices, "");
-      deployToast = { app: d, text: message };
-      drawCurrentDeployView();
+      appNotices = withAppListNotice(appNotices, "");
+      appToast = { app: d, text: message };
+      drawCurrentAppView();
     }
   }
 }
 
-async function restoreDeploy(d: AppView): Promise<void> {
-  if (deploySaving) return;
-  const restoringActive = activeDeploy?.id === d.id;
-  deploySaving = true;
-  if (restoringActive) deployNotices = withAppDetailNotice(deployNotices, d.id, "Restoring app…");
-  else if (!activeDeploy) deployNotices = withAppListNotice(deployNotices, "Restoring app…");
-  if (restoringActive || !activeDeploy) drawCurrentDeployView();
+async function restoreApp(d: AppView): Promise<void> {
+  if (appSaving) return;
+  const restoringActive = activeApp?.id === d.id;
+  appSaving = true;
+  if (restoringActive) appNotices = withAppDetailNotice(appNotices, d.id, "Restoring app…");
+  else if (!activeApp) appNotices = withAppListNotice(appNotices, "Restoring app…");
+  if (restoringActive || !activeApp) drawCurrentAppView();
   try {
     const response = await api<{ deployment?: AppView }>(`/api/apps/${encodeURIComponent(d.id)}/restore`, {
       method: "POST",
     });
-    deploySaving = false;
+    appSaving = false;
     const restoredResponse = appAfterRestore(d, response.deployment);
-    deployToast = { app: restoredResponse, text: `${appTitle(d)} is restored and running.` };
+    appToast = { app: restoredResponse, text: `${appTitle(d)} is restored and running.` };
     const refreshResult = await refreshApps();
-    const authoritative = refreshResult === "failed" ? undefined : deployList.find((item) => item.id === d.id);
+    const authoritative = refreshResult === "failed" ? undefined : appList.find((item) => item.id === d.id);
     const restored = appAfterRestore(d, response.deployment, authoritative);
-    deployList = appListAfterRestoreRefresh(deployList, restored, refreshResult);
-    const destination = currentDeployActionView(d.id);
+    appList = appListAfterRestoreRefresh(appList, restored, refreshResult);
+    const destination = currentAppActionView(d.id);
     if (destination === "target") {
-      deployTab = appTab(restored, appState.me?.user);
-      activeDeploy = restored;
-      await openDeploy(restored);
+      selectedAppTab = appTab(restored, appState.me?.user);
+      activeApp = restored;
+      await openApp(restored);
     } else if (destination === "list") {
-      deployTab = appTab(restored, appState.me?.user);
-      activeDeploy = null;
-      drawDeploysPage();
+      selectedAppTab = appTab(restored, appState.me?.user);
+      activeApp = null;
+      drawAppsPage();
     } else {
-      drawCurrentDeployView();
+      drawCurrentAppView();
     }
   } catch (error) {
-    deploySaving = false;
+    appSaving = false;
     const message = errMessage(error, "Could not restore app.");
-    if (currentDeployActionView(d.id) === "target") {
-      deployNotices = withAppDetailNotice(deployNotices, d.id, message);
-      drawDeployDetail(activeDeploy!);
+    if (currentAppActionView(d.id) === "target") {
+      appNotices = withAppDetailNotice(appNotices, d.id, message);
+      drawAppDetail(activeApp!);
     } else {
-      deployNotices = withAppListNotice(deployNotices, "");
-      deployToast = { app: d, text: message };
-      drawCurrentDeployView();
+      appNotices = withAppListNotice(appNotices, "");
+      appToast = { app: d, text: message };
+      drawCurrentAppView();
     }
   }
 }
 
 function undoToast(toast: { app: AppView; text: string; undo?: boolean }): TemplateResult {
   const archived = toast.undo && appArchiveUndoAvailable(toast.app);
-  return html`<div class="deploy-toast" role="status">
+  return html`<div class="app-toast" role="status">
     <span>${toast.text}</span
-    >${archived ? html`<button type="button" ?disabled=${deploySaving} @click=${() => void restoreDeploy(toast.app)}>Undo</button>` : nothing}<button
+    >${archived ? html`<button type="button" ?disabled=${appSaving} @click=${() => void restoreApp(toast.app)}>Undo</button>` : nothing}<button
       class="icon-btn"
       type="button"
       ${tip("Dismiss")}
       aria-label="Dismiss notification"
       @click=${() => {
-        deployToast = null;
-        drawCurrentDeployView();
+        appToast = null;
+        drawCurrentAppView();
       }}
     >
       ${icon(X, 14)}
@@ -807,46 +807,46 @@ function undoToast(toast: { app: AppView; text: string; undo?: boolean }): Templ
 }
 
 async function refreshApps(): Promise<"updated" | "failed" | "superseded"> {
-  const seq = ++deployRefreshSeq;
+  const seq = ++appRefreshSeq;
   try {
     const response = await api<{ deployments?: AppView[] }>("/api/apps");
-    if (seq !== deployRefreshSeq) return "superseded";
-    deployList = response.deployments ?? [];
-    deployNotices = withAppListNotice(deployNotices, "");
+    if (seq !== appRefreshSeq) return "superseded";
+    appList = response.deployments ?? [];
+    appNotices = withAppListNotice(appNotices, "");
     return "updated";
   } catch (error) {
-    if (seq !== deployRefreshSeq) return "superseded";
-    deployNotices = withAppListNotice(deployNotices, errMessage(error, "Failed to load apps."));
+    if (seq !== appRefreshSeq) return "superseded";
+    appNotices = withAppListNotice(appNotices, errMessage(error, "Failed to load apps."));
     return "failed";
   } finally {
-    if (seq === deployRefreshSeq) deployLoading = false;
+    if (seq === appRefreshSeq) appLoading = false;
   }
 }
 
-export async function renderDeploys(): Promise<void> {
-  if (appState.currentView !== "deploys") return;
-  const requestedId = pendingDeployId;
-  pendingDeployId = null;
+export async function renderApps(): Promise<void> {
+  if (appState.currentView !== "apps") return;
+  const requestedId = pendingAppId;
+  pendingAppId = null;
   archiveCandidate = null;
   restoreArchiveFocus = false;
-  setDeployBackgroundInert(false);
+  setAppBackgroundInert(false);
   if (scopedSession.active) {
-    deployScope = scopedSession.active.scopeId;
+    appScope = scopedSession.active.scopeId;
     contextsState.selected = null;
   } else if (contextsState.selected) {
-    deployScope = contextsState.selected;
+    appScope = contextsState.selected;
     contextsState.selected = null;
   } else {
-    deployScope = null;
+    appScope = null;
   }
   const seq = appState.viewRenderSeq;
   await ensureContexts();
-  deployLoading = deployList.length === 0;
-  deployNotices = withAppListNotice(deployNotices, "");
-  drawDeploysPage();
+  appLoading = appList.length === 0;
+  appNotices = withAppListNotice(appNotices, "");
+  drawAppsPage();
   await refreshApps();
-  if (seq !== appState.viewRenderSeq || appState.currentView !== "deploys") return;
+  if (seq !== appState.viewRenderSeq || appState.currentView !== "apps") return;
   if (requestedId) {
-    await openDeploy(deployList.find((d) => d.id === requestedId) ?? { id: requestedId });
-  } else if (appListRefreshCanRedraw(activeDeploy?.id)) drawDeploysPage();
+    await openApp(appList.find((d) => d.id === requestedId) ?? { id: requestedId });
+  } else if (appListRefreshCanRedraw(activeApp?.id)) drawAppsPage();
 }

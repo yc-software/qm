@@ -235,7 +235,7 @@ export function scopedViewTopbar(current: SessionTool, redraw: () => void): Temp
     },
     onTool: (t) => {
       if (t === current) return;
-      void import("./shell").then(({ switchView }) => switchView(t === "apps" ? "deploys" : t));
+      void import("./shell").then(({ switchView }) => switchView(t));
     },
   });
 }

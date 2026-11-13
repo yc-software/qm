@@ -17,7 +17,7 @@ import {
   filterApps,
   friendlyPrincipal,
   type AppView,
-} from "../src/deploy-view.ts";
+} from "../src/app-view.ts";
 
 function publishedApp(patch: Partial<AppView>): AppView {
   return {
@@ -245,8 +245,8 @@ test("delayed app actions re-check the active detail on resolve and reject", asy
         finish = outcome === "resolve" ? resolve : () => reject(new Error(`${action} failed`));
       });
       const settled = pending.then(
-        () => appActionView("A", "deploys", activeId),
-        () => appActionView("A", "deploys", activeId),
+        () => appActionView("A", "apps", activeId),
+        () => appActionView("A", "apps", activeId),
       );
       activeId = "B";
       finish();
