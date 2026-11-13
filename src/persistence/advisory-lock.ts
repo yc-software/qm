@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PgPool, PoolClient } from "./pg-pool.ts";
 import { sleep } from "../util/async.ts";
-import { tracePoolCheckout } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
@@ -78,13 +77,11 @@ export function createPostgresAdvisoryLock(
     keys: Map<string, { shared: boolean; count: number }>;
   };
   const sessions = new AsyncLocalStorage<{ context: Context; active: boolean }>();
-  const sessionClient = async (): Promise<PoolClient> => {
-    const pool = await pg.sessionPool();
-    return tracePoolCheckout(() => pool.connect());
-  };
   const withClient = async <T>(action: (context: Context) => Promise<T>): Promise<T> => {
     const parent = sessions.getStore();
-    const context = parent?.active ? parent.context : { client: await sessionClient(), references: 0, keys: new Map() };
+    const context = parent?.active
+      ? parent.context
+      : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Map() };
     context.references++;
     const lease = { context, active: true };
     try {

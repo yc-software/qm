@@ -92,6 +92,42 @@ test("a run sends every pooled query as one span, and a checkout only when it wa
   }
 });
 
+test("a query sent through the pool itself records a waiting or failed checkout in its own run", { skip }, async () => {
+  configurePgPooling({ queryMax: 1 });
+  const store = createPgPool(URL!);
+  try {
+    const pool = await store.pool();
+    const held = await pool.connect();
+    const waiting = traceQueued(undefined, "waiting-run", {}, () => pool.query("SELECT 1"));
+    await traceQueued(undefined, "releasing-run", {}, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      held.release();
+    });
+    await waiting;
+    await store.close();
+    await traceQueued(undefined, "closed-pool-run", {}, () => assert.rejects(pool.query("SELECT 1"), /calling end/));
+    const runs = await Promise.all(
+      ["waiting-run", "releasing-run", "closed-pool-run"].map((name) => sentry.segment((sent) => sent.name === name)),
+    );
+    assert.deepEqual(
+      runs.map((run) => run.spans.map((sent) => [sent.name, sent.status])),
+      [
+        [
+          ["pg-pool.connect", "ok"],
+          ["SELECT", "ok"],
+        ],
+        [],
+        [["pg-pool.connect", "error"]],
+      ],
+    );
+    const wait = runs[0]!.spans[0]!;
+    assert.ok(wait.end_timestamp - wait.start_timestamp >= 0.02);
+  } finally {
+    await store.close();
+    configurePgPooling({});
+  }
+});
+
 test("a failed span keeps a Sentry status name and loses any other status text", async () => {
   await traceQueued(undefined, "failed-spans-run", {}, async () => {
     await assert.rejects(tracePoolCheckout(() => Promise.reject(new Error("private-no-connection"))));

@@ -55,6 +55,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
       pipeline: true,
     }),
   );
+  traceCheckouts(pool);
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -63,6 +64,20 @@ function guardedPool(pool: Pool): Pool {
   pool.on("error", () => {});
   pool.on("connect", (client) => client.on("error", (error) => console.error("[pg] client error:", errMessage(error))));
   return pool;
+}
+
+function traceCheckouts(pool: Pool): void {
+  const connect: () => Promise<PoolClient> = pool.connect.bind(pool);
+  const checkout = (callback?: Parameters<Pool["connect"]>[0]): Promise<PoolClient> | undefined => {
+    const checkedOut = tracePoolCheckout(connect);
+    if (!callback) return checkedOut;
+    void checkedOut.then(
+      (client) => callback(undefined, client, (discard) => client.release(discard)),
+      (error: Error) => callback(error, undefined, () => {}),
+    );
+    return undefined;
+  };
+  pool.connect = checkout as Pool["connect"];
 }
 
 async function releasePool(
@@ -215,7 +230,7 @@ async function runPgTransaction<T>(
   tenant: string | undefined,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  const client = await tracePoolCheckout(() => pool.connect());
+  const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
     const settings = tenantSettings(tenant);
@@ -319,7 +334,7 @@ function unmigrated(migration: PgMigration): Error {
 
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
-  const client = await tracePoolCheckout(() => pool.connect());
+  const client = await pool.connect();
   let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-migrations");
@@ -589,7 +604,7 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
     signal?.throwIfAborted();
-    const connecting = tracePoolCheckout(() => p.connect());
+    const connecting = p.connect();
     let client: PoolClient;
     try {
       client = await withAbort(() => connecting, signal);
