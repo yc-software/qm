@@ -25,7 +25,7 @@ const enqueuer = (store: ReturnType<typeof createPostgresDeliveryStore>) => (tar
 test("only the oldest row of each conversation is claimed, and not while one is out", { skip }, async () => {
   const store = createPostgresDeliveryStore(testDatabaseUrl());
   const enqueue = enqueuer(store);
-  const claim = async () => (await store.claimDue("webhook", 300)).map((d) => d.text);
+  const claim = async () => (await store.claimDue("webhook", 300)).map((d) => d.text).sort();
   const a1 = await enqueue("a", "a1");
   await enqueue("a", "a2");
   await enqueue("b", "b1");
