@@ -84,16 +84,18 @@ export {
   normalizeReaction,
   normalizeReactions,
   applyReactions,
-  type ReactionTally,
-  summarizeReactions,
-  shouldSurfaceReaction,
-  buildReactionTurnText,
   type ReactionDirective,
   parseReactionGroup,
   resolveReactionTargets,
   extractReactions,
   stripReactionDirectives,
 } from "./reactions.ts";
+export {
+  type ReactionTally,
+  summarizeReactions,
+  shouldSurfaceReaction,
+  buildReactionTurnText,
+} from "../surfaces/reactions.ts";
 export {
   buildContextWindow,
   type RecentMessage,

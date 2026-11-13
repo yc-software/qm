@@ -865,6 +865,7 @@ export function createTurnHandler(deps: {
             channel,
             userId: reactorId,
             rawText: buildReactionTurnText({
+              surfaceLabel: "Slack",
               reactorName,
               emoji,
               added,
