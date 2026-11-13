@@ -357,6 +357,11 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   const adapter = adapterForItem(item);
   if (adapter?.actions.includes(kind)) {
+    if (ctx.capability?.botActor)
+      return sendJson(ctx.res, 403, {
+        error: "forbidden",
+        message: `a Slack bot's turn cannot ${kind} as the loop's owner`,
+      });
     const tokens = ctx.deps.loopSourceTokens;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
