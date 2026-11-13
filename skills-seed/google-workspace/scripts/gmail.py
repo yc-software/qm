@@ -41,8 +41,10 @@ from email.policy import SMTP
 from email.utils import formataddr, getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
 
-API = "https://gmail.googleapis.com/gmail/v1/users/me"
-BATCH_URL = "https://gmail.googleapis.com/batch/gmail/v1"
+HOST = "https://gmail.googleapis.com"
+USER_PATH = "/gmail/v1/users/me"
+API = f"{HOST}{USER_PATH}"
+BATCH_URL = f"{HOST}/batch/gmail/v1"
 BATCH_SIZE = 20
 
 
@@ -50,7 +52,7 @@ ACCOUNT: str | None = None
 
 
 def send(method: str, url: str, what: str, body: dict | str | None = None,
-         content_type: str = "application/json") -> str:
+         content_type: str = "application/json") -> tuple[str, str]:
     global ACCOUNT
     tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
     base, cap = os.environ.get("AGENT_API_URL", ""), os.environ.get("AGENT_API_TOKEN", "")
@@ -85,18 +87,18 @@ def send(method: str, url: str, what: str, body: dict | str | None = None,
     text, _, status = res.stdout.rpartition("\n")
     if not status.startswith("2"):
         sys.exit(f"gmail api {status} on {what}: {text[:500]}")
-    return text
+    return status, text
 
 
 def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
     url = f"{API}/{path}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
-    text = send(method, url, f"{method} {path}", body)
+    status, text = send(method, url, f"{method} {path}", body)
     if not text:
         return {}
     try:
         return json.loads(text)
     except ValueError:
-        sys.exit(f"gmail api non-json response on {method} {path}: {text[:500]}")
+        sys.exit(f"gmail api {status} on {method} {path}: non-json response: {text[:500]}")
 
 
 def batch_get(paths: dict[str, str]) -> list[tuple[str, int, str]]:
@@ -109,11 +111,11 @@ def batch_get(paths: dict[str, str]) -> list[tuple[str, int, str]]:
         part.set_payload(f"GET {path}\r\n")
         request.attach(part)
     body = request.as_string().partition("\r\n\r\n")[2]
-    text = send("POST", BATCH_URL, "POST batch", body, request["Content-Type"])
+    status, text = send("POST", BATCH_URL, "POST batch", body, request["Content-Type"])
     boundary = text.lstrip().split("\n", 1)[0].strip().removeprefix("--")
     reply = message_from_string(f'Content-Type: multipart/mixed; boundary="{boundary}"\n\n{text}')
     if not reply.is_multipart():
-        sys.exit(f"gmail api non-multipart response on POST batch: {text[:500]}")
+        sys.exit(f"gmail api {status} on POST batch: non-multipart response: {text[:500]}")
     results = []
     for part in reply.get_payload():
         status_line, _, rest = part.get_payload().lstrip().partition("\n")
@@ -127,19 +129,19 @@ def message_metadata(ids: list[str]) -> dict[str, dict]:
     found: dict[str, dict] = {}
     pending = ids
     while pending:
-        limited = []
+        limited: dict[str, str] = {}
         for start in range(0, len(pending), BATCH_SIZE):
             chunk = pending[start:start + BATCH_SIZE]
-            for mid, status, body in batch_get({m: f"/gmail/v1/users/me/messages/{m}?{query}" for m in chunk}):
+            for mid, status, body in batch_get({m: f"{USER_PATH}/messages/{m}?{query}" for m in chunk}):
                 if status == 200:
                     found[mid] = json.loads(body)
                 elif status == 429:
-                    limited.append(mid)
+                    limited[mid] = body
                 else:
                     sys.exit(f"gmail api {status} on GET messages/{mid}: {body[:500]}")
         if len(limited) == len(pending):
-            sys.exit(f"gmail api 429 on GET messages: every message in the round was rate limited: {body[:500]}")
-        pending = limited
+            sys.exit(f"gmail api 429 on GET messages/{pending[0]}: {limited[pending[0]][:500]}")
+        pending = list(limited)
     return found
 
 
