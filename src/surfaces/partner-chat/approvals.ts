@@ -4,7 +4,6 @@ import type { KeychainApprovalView, KeychainApprovals } from "../../credentials/
 import { samePerson } from "../../directory/person.ts";
 import { isSystemActor, type ActorAssertion, type Delivery, type Destination, type TurnRequest } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
-import { headSlice } from "../../util/text.ts";
 import {
   APPROVAL_ACTION_IDS,
   APPROVAL_DECISION_LABEL,
@@ -29,8 +28,6 @@ import type { SurfaceAction } from "../contract.ts";
 import type { PartnerChatClient } from "./client.ts";
 import { editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
 import { PARTNER_CHAT, parsePartnerChatRef } from "./protocol.ts";
-
-const SUBJECT_MAX = 150;
 
 type ApprovalSubject = Pick<PendingApproval, "command" | "summary" | "kind">;
 
@@ -123,7 +120,7 @@ function commandApprovalCard(p: PendingApproval): Card {
 }
 
 function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?: string): string {
-  const subject = p.kind === "input" ? "flagged message" : (toolTitle(p) ?? inline(headSlice(p.command, SUBJECT_MAX)));
+  const subject = p.kind === "input" ? "flagged message" : (toolTitle(p) ?? inline(p.command));
   const who = by ? ` by ${by}` : "";
   return `${decision === "deny" ? "" : "✅ "}${APPROVAL_DECISION_LABEL[decision]}${who} · ${subject}`;
 }
