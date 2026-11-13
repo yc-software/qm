@@ -48,6 +48,7 @@ import {
   type TurnPostKeys,
 } from "../core/orchestrator/turn-helpers.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
+import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { Item } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
@@ -165,7 +166,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   } = ctx;
   if (!surfaceToolsActive(ctx) || !defaultDestination) return undefined;
   const currentDestination = defaultDestination;
-  const textOnly = (d: Destination) => deps.surfaces.get(d.type)?.capabilities.textOnly === true;
+  const textOnly = (d: Destination) => turnCapabilities(deps.surfaces.get(d.type), input)?.textOnly === true;
+  const editable = (d: Destination) => editableIn(deps.surfaces, d.type, input);
   const homeSurface = deps.surfaces.get(currentDestination.type);
   const mirroredHome = homeSurface?.capabilities.mirrored ? homeSurface : undefined;
   const rateLimitRecipient =
@@ -203,14 +205,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         resolveRecipient: (q) => deps.directory.resolve(q),
         resolveChannel: (q) => deps.directory.resolveChannel(q),
         channelMember: (c, p) => deps.directory.channelMember(c, p),
-        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts),
+        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, SLACK),
         groupMember: (g, p) => deps.directory.groupMember(g, p),
         directoryMember: (p) => deps.directory.get(p),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
-                openGroupViaSurface((query) => deps.surfaceContext!.pull("slack", query), parts),
-              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts),
+                openGroupViaSurface((query) => deps.surfaceContext!.pull(SLACK, query), parts),
+              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts, SLACK),
             }
           : {}),
       },
@@ -370,7 +372,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (d.destination.type !== "slack" && d.destination.type !== "group")
+      if (!editable(d.destination))
         return { ok: false, message: "I can only edit a Slack message in a channel, group DM, or this conversation." };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);
     },

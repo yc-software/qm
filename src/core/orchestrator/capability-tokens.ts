@@ -199,6 +199,7 @@ async function mintControlPlaneTokens(
       sessionId: session.id,
       origin,
       ...(turnSurface ? { surface: turnSurface } : {}),
+      ...(input.liveReplies ? { liveReplies: true } : {}),
     };
     connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
       controlClaims,

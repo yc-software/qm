@@ -409,85 +409,85 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/apps (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/apps/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/apps/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/apps/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
     routes: [
       {
         method: "GET",
-        path: "/v1/deployments",
+        path: "/v1/apps",
         summary:
-          "list the published apps you can reach across scopes — each row carries your effective permission (read|write) and a ready-to-clone/push gitUrl; find deployment ids here for share / name / display-name / archive / git-url",
+          "list the published apps you can reach across scopes — each row carries your effective permission (read|write) and a ready-to-clone/push gitUrl; find app ids here for share / name / display-name / archive / git-url",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id",
+        path: "/v1/apps/:id",
         summary:
-          "inspect one deployment you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
+          "inspect one app you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/fetch",
+        path: "/v1/apps/:id/fetch",
         summary:
-          "read a deployment's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
+          "read an app's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/logs",
+        path: "/v1/apps/:id/logs",
         summary:
-          "recent runtime output (entrypoint stdout+stderr) of a running deployment you can reach — query tailLines (default 200, max 2000); returns {logs} (null when the provider keeps none)",
+          "recent runtime output (entrypoint stdout+stderr) of a running app you can reach — query tailLines (default 200, max 2000); returns {logs} (null when the provider keeps none)",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/git-url",
+        path: "/v1/apps/:id/git-url",
         summary:
-          "get an authed git remote URL for a deployment you can reach (clone its source; push a new version if you have write access) — returns {url, permission}",
+          "get an authed git remote URL for an app you can reach (clone its source; push a new version if you have write access) — returns {url, permission}",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/share",
+        path: "/v1/apps/:id/share",
         summary: "inspect access for an app you own (:id is its name or id) — returns {public, grantees}; owner-only",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/share",
+        path: "/v1/apps/:id/share",
         summary:
           'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/name",
+        path: "/v1/apps/:id/name",
         summary: "rename an app you manage — body {name} (its URL slug; must be unique)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/display-name",
+        path: "/v1/apps/:id/display-name",
         summary: "set an app's human-friendly display name — body {displayName} (empty clears it)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/always-on",
+        path: "/v1/apps/:id/always-on",
         summary:
           "keep an app you manage permanently warm — body {alwaysOn:true} exempts it from idle sleep so visitors never hit a cold start; {alwaysOn:false} returns it to the default sleep-when-idle",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/embed-ancestors",
+        path: "/v1/apps/:id/embed-ancestors",
         summary:
           "let named sites show an app you manage inside their page (iframe) — body {embedAncestors:[https origins, optionally https://*.example.com]}; list every frame between the app and the browser tab; [] forbids embedding again",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/connectors",
+        path: "/v1/apps/:id/connectors",
         summary:
           "publisher only, after they ask: lend an app they published their connected apps — body {connectors:[hosts]}; [] withdraws; broker use is in the publish skill",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/archive",
+        path: "/v1/apps/:id/archive",
         summary: "take down an app you manage (stops it and frees its endpoint; the source is kept)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/restore",
+        path: "/v1/apps/:id/restore",
         summary: "restore an archived app you manage by reapplying its current saved version",
       },
     ],
@@ -725,7 +725,7 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/crons|deployments|skills?scope=",
+        path: "/v1/admin/crons|apps|skills?scope=",
         summary: "artifacts by owning scope (DM or effective Open sharing)",
       },
       {

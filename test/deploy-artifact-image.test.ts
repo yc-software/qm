@@ -3,12 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  createDeployStore,
-  type DeployStore,
-  type Deployment,
-  type DeploymentVersion,
-} from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type DeployStore, type PublishedApp, type AppVersion } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -31,7 +26,7 @@ function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; pr
     deployDir: mkdtempSync(join(tmpdir(), "deploy-img-")),
     provider: {
       profile: { managedScaleToZero: true },
-      apply: async (_d: Deployment, version: DeploymentVersion) => {
+      apply: async (_d: PublishedApp, version: AppVersion) => {
         probe.appliedImages.push(version.image);
         const image = version.image ?? `registry.fly.io/app:v${version.version}`;
         return { host: "app.flycast", port: 80, image };
@@ -83,7 +78,7 @@ test("rollback reuses the stored image — the provider gets the recorded ref, n
   await deploy.redeploy(d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] });
   probe.appliedImages.length = 0;
 
-  await deploy.rollbackDeployment(d.id, 1);
+  await deploy.rollbackApp(d.id, 1);
   assert.deepEqual(
     probe.appliedImages,
     ["registry.fly.io/app:v1"],

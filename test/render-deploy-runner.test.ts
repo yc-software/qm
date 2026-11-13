@@ -46,12 +46,12 @@ async function fixture(t: TestContext, appSource?: string, entrypoint = "node ap
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
   const backings = testDeployBackings();
-  const { deployments, drafts } = backings;
+  const { deployments: publishedApps, drafts } = backings;
   const archiveStore = testMap<DeployGitArchive>();
   const credentials = testMap<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
   const deployStore = createDeployStore({
-    deployments,
+    deployments: publishedApps,
     drafts,
     git: { repoRoot: gitDir, archiveStore },
     pg: backings.pg,
@@ -90,7 +90,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     deployStore,
   });
   const readerStore = createDeployStore({
-    deployments,
+    deployments: publishedApps,
     drafts,
     git: { repoRoot: join(root, "reader"), archiveStore },
     pg: backings.pg,
@@ -102,7 +102,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "unused", port: 8080 }),
-      destroy: async (deployment) => artifacts.revoke(deployment.id),
+      destroy: async (publishedApp) => artifacts.revoke(publishedApp.id),
     },
     deployDir: join(root, "deploy"),
     acl,
@@ -111,7 +111,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const app = createApp({
     deploy,
-    deploymentGitPrincipals: artifacts,
+    appGitPrincipals: artifacts,
     acl,
     identity,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
@@ -324,15 +324,15 @@ test("Render runner credentials deny forgery, cross-app fetches, and Git writes"
   assert.equal((await request(`${manifest.url}/git-receive-pack`, manifest.token, "POST")).status, 403);
   const access = await verifyDeployGitAccess(signingSecret, manifest.token, Date.now() + 10 * 365 * 24 * 60 * 60_000);
   assert.equal(access?.permission, "read");
-  assert.equal(await f.app.authorizesDeploymentGitAccess(f.d.id, access!.principalId!, "write"), false);
-  assert.equal(await f.app.authorizesDeploymentGitAccess(f.d.id, "render-deploy:forged", "read"), false);
+  assert.equal(await f.app.authorizesAppGitAccess(f.d.id, access!.principalId!, "write"), false);
+  assert.equal(await f.app.authorizesAppGitAccess(f.d.id, "render-deploy:forged", "read"), false);
 });
 
 test("Archiving revokes a runner credential and restoration creates a new one", async (t) => {
   const f = await fixture(t);
   const version = f.d.versions[0]!;
   const manifest = await f.artifacts.prepare(f.d, version);
-  await f.deploy.archiveDeployment(f.d.id);
+  await f.deploy.archiveApp(f.d.id);
   assert.equal((await f.deployStore.get(f.d.id))!.status, "archived");
   const url = `${manifest.url}/info/refs?service=git-upload-pack`;
   assert.equal((await fetch(url, { headers: { authorization: `Bearer ${manifest.token}` } })).status, 403);

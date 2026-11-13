@@ -18,8 +18,7 @@ export function deepLinkPath(
     return `${b}/contexts?scope=${encodeURIComponent(contextScope)}`;
   }
   if (view !== "chats") {
-    const pathView = view === "deploys" ? "apps" : view;
-    return `${b}/${encodeURIComponent(pathView)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
+    return `${b}/${encodeURIComponent(view)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
   }
   if (itemId) throw new Error("the chats view is addressed by session, not by item id");
   return sessionId ? `${b}/s/${encodeURIComponent(sessionId)}` : `${b}/`;
@@ -59,7 +58,6 @@ export function parseDeepLink(
   const requestedView = params.get("view") ?? viewFor();
   let view = requestedView;
   if (view === "connectors") view = "keychain";
-  else if (view === "apps") view = "deploys";
   const itemFor = (): string | null => {
     if (sessionRoute) return null;
     if (pathView === "projects" && projectKind && projectItem) return `${projectKind}:${projectItem}`;

@@ -4,11 +4,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/persistence/durable-map.ts";
-import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type PublishedApp, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testBareDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
-import { DEPLOYMENT_TABLES } from "../src/deploy/page-views.ts";
+import { APP_TABLES } from "../src/deploy/page-views.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
@@ -50,7 +50,7 @@ function makeStore(opts: { touchDebounceMs?: number } = {}): { store: DeployStor
   const factory = makeFactory();
   const store = createDeployStore(
     testDeployBackings({
-      deployments: factory.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
+      deployments: factory.map<PublishedApp>("deployments", undefined, APP_TABLES),
       pg: factory.pool,
       git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
       ...opts,
@@ -76,7 +76,7 @@ test("touch upserts deployment_access without rewriting the blob or bumping the 
   assert.equal((await store.get(d.id))!.lastAccessAt, 111);
   assert.equal((await store.list()).find((x) => x.id === d.id)!.lastAccessAt, 111);
 
-  const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+  const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as PublishedApp;
   assert.equal("lastAccessAt" in blob, false, "touch stays out of the jsonb blob");
   const versionAfter = (await raw("SELECT v FROM durable_map_versions WHERE tbl = 'deployments'"))[0]!.v;
   assert.equal(String(versionAfter), String(versionBefore), "touch does not invalidate the table snapshot cache");
@@ -88,7 +88,7 @@ test("touch upserts deployment_access without rewriting the blob or bumping the 
   assert.equal(
     (await raw("SELECT count(*) c FROM deployment_access WHERE id = $1", [d.id]))[0]!.c,
     "0",
-    "access rows cascade with their deployment",
+    "access rows cascade with their app",
   );
 });
 
@@ -128,14 +128,14 @@ test("a racing create with a taken name fails on the unique index, not just the 
   const a = makeStore().store;
   const b = makeStore().store;
   await a.create(createInput("contested"));
-  await assert.rejects(b.create(createInput("contested")), /deployment name taken: contested/);
+  await assert.rejects(b.create(createInput("contested")), /app name taken: contested/);
 });
 
 test("renaming onto a taken name is rejected by the unique index", { skip }, async () => {
   const { store } = makeStore();
   await store.create(createInput("held"));
   const other = await store.create(createInput("free"));
-  await assert.rejects(store.setName(other.id, "held"), /deployment name taken: held/);
+  await assert.rejects(store.setName(other.id, "held"), /app name taken: held/);
   assert.equal((await store.get(other.id))!.name, "free");
 });
 
@@ -143,8 +143,8 @@ test("rows never touched since the split fall back to the blob's legacy lastAcce
   const { store, factory } = makeStore({ touchDebounceMs: 0 });
   const d = await store.create(createInput());
   await factory
-    .map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES)
-    .merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
+    .map<PublishedApp>("deployments", undefined, APP_TABLES)
+    .merge(d.id, { lastAccessAt: 777 } as Partial<PublishedApp>);
   assert.equal((await store.get(d.id))!.lastAccessAt, 777);
   await store.touch(d.id, 9_999);
   assert.equal((await store.get(d.id))!.lastAccessAt, 9_999, "the access table wins once a touch lands");
@@ -152,8 +152,8 @@ test("rows never touched since the split fall back to the blob's legacy lastAcce
 
 test("pre-existing duplicate names degrade gracefully: no index, deterministic getByName", { skip }, async () => {
   await raw("DROP INDEX IF EXISTS deployments_name_unique");
-  const seed = makeFactory().map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES);
-  const dup = (id: string): Deployment => ({
+  const seed = makeFactory().map<PublishedApp>("deployments", undefined, APP_TABLES);
+  const dup = (id: string): PublishedApp => ({
     id,
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -177,8 +177,8 @@ test("the name index migration skips a tenant's duplicate names instead of faili
   for (const duplicated of [true, false]) {
     const owner = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
     try {
-      const nameIndex = DEPLOYMENT_TABLES.filter((m) => m.id.endsWith("-name-index")).map(definePgMigration);
-      const tables = DEPLOYMENT_TABLES.filter((m) => !m.id.endsWith("-name-index")).map(definePgMigration);
+      const nameIndex = APP_TABLES.filter((m) => m.id.endsWith("-name-index")).map(definePgMigration);
+      const tables = APP_TABLES.filter((m) => !m.id.endsWith("-name-index")).map(definePgMigration);
       await applyPgMigrations(owner, tables);
       await owner.query("INSERT INTO tenants DEFAULT VALUES");
       const tenant = (await owner.query("SELECT id FROM tenants LIMIT 1")).rows[0].id;
@@ -205,7 +205,7 @@ test("concurrent field writes and new versions from two instances all land", { s
     const status = i % 2 ? "running" : "stopped";
     const host = `h${i}.example.test`;
     await Promise.all([a.setStatus(d.id, status), b.setEndpoint(d.id, { host, port: 443 })]);
-    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as PublishedApp;
     assert.equal(blob.status, status, `status survives a concurrent endpoint write (round ${i})`);
     assert.equal(blob.endpoint?.host, host, `endpoint survives a concurrent status write (round ${i})`);
   }
@@ -215,7 +215,7 @@ test("concurrent field writes and new versions from two instances all land", { s
       a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
       b.setStatus(d.id, status),
     ]);
-    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as PublishedApp;
     assert.equal(blob.status, status, `status survives a concurrent new version (round ${i})`);
     assert.equal(blob.versions.length, i + 2, `new version survives a concurrent status write (round ${i})`);
   }
@@ -228,7 +228,7 @@ test("version setters from two instances keep each other's writes on Postgres", 
   const b = makeStore().store;
   const d = await a.create({ ...createInput(), files: [{ path: "s.js", data: "1" }] });
   await a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap", files: [{ path: "s.js", data: "2" }] });
-  const blob = async () => (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+  const blob = async () => (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as PublishedApp;
 
   for (let i = 0; i < 10; i++) {
     const status = i % 2 ? "running" : "stopped";

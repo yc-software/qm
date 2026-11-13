@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { appUrlOf, type Deployment, type DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import { appUrlOf, type PublishedApp, type AppVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
@@ -37,7 +37,7 @@ let appPort: number;
 let reported: { category: string; code: string; message: string; scopeLabel: string }[] = [];
 let reportedErrors: unknown[] = [];
 
-const deployment = (id: string, name?: string): Deployment => ({
+const publishedApp = (id: string, name?: string): PublishedApp => ({
   id,
   ownerScopeId: scopeId("personal", "tester"),
   createdBy: "tester",
@@ -48,11 +48,7 @@ const deployment = (id: string, name?: string): Deployment => ({
   ...(name ? { name } : {}),
 });
 
-function version(
-  files: Record<string, string>,
-  entrypoint: string,
-  extra: Partial<DeploymentVersion> = {},
-): DeploymentVersion {
+function version(files: Record<string, string>, entrypoint: string, extra: Partial<AppVersion> = {}): AppVersion {
   const snapshotDir = mkdtempSync(join(tmpdir(), "porter-deploy-snap-"));
   for (const [rel, body] of Object.entries(files)) {
     mkdirSync(dirname(join(snapshotDir, rel)), { recursive: true });
@@ -108,7 +104,7 @@ after(() => {
 });
 
 test("apply serves the app on a stable public domain", async () => {
-  const d = deployment("dep-1", "myapp");
+  const d = publishedApp("dep-1", "myapp");
   const endpoint = await asCompany(() =>
     provider.apply(d, version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "1" } })),
   );
@@ -133,7 +129,7 @@ test("apply serves the app on a stable public domain", async () => {
 });
 
 test("a company without an app handle gets no app domain, only the host the cluster names", async () => {
-  const d = deployment("dep-nh", "myapp");
+  const d = publishedApp("dep-nh", "myapp");
   const endpoint = await withTenant(randomUUID(), () =>
     createPorterDeployProvider({
       ...singleProcessDeps(),
@@ -151,7 +147,7 @@ test("a company without an app handle gets no app domain, only the host the clus
 });
 
 test("a company with an app handle gets the same <handle>-<app> host on Porter that its app links use", async () => {
-  const d = deployment("dep-h", "sales-board");
+  const d = publishedApp("dep-h", "sales-board");
   const [endpoint, link] = await withTenant(randomUUID(), async () => {
     noteTenantAppHandle("nitroduck7");
     const handled = createPorterDeployProvider({
@@ -173,7 +169,7 @@ test("a company with an app handle gets the same <handle>-<app> host on Porter t
 });
 
 test("after a company's handle changes, the next resolve hands the app back for a re-apply under the new host", async () => {
-  const d = deployment("dep-r", "sales-board");
+  const d = publishedApp("dep-r", "sales-board");
   const hosts = await withTenant(randomUUID(), async () => {
     noteTenantAppHandle("nitroduck7");
     const handled = createPorterDeployProvider({
@@ -214,7 +210,7 @@ const bulkFiles = (): Record<string, string> =>
 test("apply uploads each tree as one bundle and removes it after unpacking", async () => {
   const execsBefore = fake.execScripts().length;
   await provider.apply(
-    deployment("dep-bundle", "bundled"),
+    publishedApp("dep-bundle", "bundled"),
     version({ ...bulkFiles(), "server.js": SERVER }, "node server.js", {
       homeDir: mkdtempSync(join(tmpdir(), "porter-deploy-home-")),
     }),
@@ -232,7 +228,7 @@ test("apply writes files one at a time when the bundle upload fails", async () =
   };
   const execsBefore = fake.execScripts().length;
   await provider.apply(
-    deployment("dep-fallback", "fallback"),
+    publishedApp("dep-fallback", "fallback"),
     version({ ...bulkFiles(), "server.js": SERVER }, "node server.js"),
   );
   const scripts = fake.execScripts().slice(execsBefore);
@@ -244,7 +240,7 @@ test("apply writes files one at a time when the bundle upload fails", async () =
 test("explicit public visibility opts the domain out of the private default", async () => {
   make({ visibility: "public" });
   await asCompany(() =>
-    provider.apply(deployment("dep-1b", "shown"), version({ "server.js": SERVER }, "node server.js")),
+    provider.apply(publishedApp("dep-1b", "shown"), version({ "server.js": SERVER }, "node server.js")),
   );
   assert.deepEqual(fake.bodies()[0]!.networking, [
     { port: appPort, domains: [{ domain: "acme1-shown.apps.test", visibility: "public" }] },
@@ -260,7 +256,7 @@ test("without an apps domain the app defaults to its cluster-internal address", 
     client: fake.client,
     store,
   });
-  const d = deployment("dep-1c", "hidden");
+  const d = publishedApp("dep-1c", "hidden");
   const endpoint = await bare.apply(d, version({ "server.js": SERVER }, "node server.js"));
   assert.deepEqual(endpoint, { host: "127.0.0.1", port: appPort });
   assert.deepEqual(fake.bodies()[0]!.networking, [{ port: appPort, internal: true }]);
@@ -270,7 +266,7 @@ test("without an apps domain the app defaults to its cluster-internal address", 
 });
 
 companyTest("redeploy keeps the domain and the /data volume and retires the old body", async () => {
-  const d = deployment("dep-2", "keeper");
+  const d = publishedApp("dep-2", "keeper");
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "1" } }));
   writeFileSync(join(fake.volumeDir("qmt-app-dep-2-data"), "note.txt"), "kept");
   const endpoint = await provider.apply(
@@ -288,7 +284,7 @@ companyTest("redeploy keeps the domain and the /data volume and retires the old 
 
 test("redeploy waits for a slowly terminating body before claiming its domain", async () => {
   make({ terminateLag: 2 });
-  const d = deployment("dep-2b", "slow");
+  const d = publishedApp("dep-2b", "slow");
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "1" } }));
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "2" } }));
   const bodies = fake.bodies();
@@ -298,7 +294,7 @@ test("redeploy waits for a slowly terminating body before claiming its domain", 
 });
 
 test("an entrypoint that hands off to a background child still counts as ready", async () => {
-  const d = deployment("dep-2c");
+  const d = publishedApp("dep-2c");
   const endpoint = await asCompany(() =>
     provider.apply(d, version({ "server.js": SERVER }, "(sleep 1; exec node server.js) > /dev/null 2>&1 & exit 0")),
   );
@@ -307,7 +303,7 @@ test("an entrypoint that hands off to a background child still counts as ready",
 });
 
 test("a failing entrypoint surfaces its output and leaves no body behind", async () => {
-  const d = deployment("dep-3");
+  const d = publishedApp("dep-3");
   await assert.rejects(
     provider.apply(d, version({}, "node -e \"console.error('boom: missing module'); process.exit(3)\"")),
     /exited without binding port[\s\S]*boom: missing module/,
@@ -317,14 +313,14 @@ test("a failing entrypoint surfaces its output and leaves no body behind", async
 });
 
 test("logs tails the entrypoint output", async () => {
-  const d = deployment("dep-4");
+  const d = publishedApp("dep-4");
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));
   const out = await provider.logs!(d, { tailLines: 50 });
   assert.match(out ?? "", /server starting/);
 });
 
 test("resolveEndpoint reports the live body and forgets a dead one", async () => {
-  const d = deployment("dep-5", "res");
+  const d = publishedApp("dep-5", "res");
   const v = version({ "server.js": SERVER }, "node server.js");
   const applied = await provider.apply(d, v);
   assert.deepEqual(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), applied);
@@ -334,7 +330,7 @@ test("resolveEndpoint reports the live body and forgets a dead one", async () =>
 });
 
 test("an app that crashes after publishing is restarted in place, and keeps resolving while it comes back", async () => {
-  const d = deployment("dep-5d", "crashy");
+  const d = publishedApp("dep-5d", "crashy");
   const crashy = SERVER.replace(
     "if (q.url === '/data')",
     "if (q.url === '/crash') process.exit(1); if (q.url === '/data')",
@@ -351,7 +347,7 @@ test("an app that crashes after publishing is restarted in place, and keeps reso
 });
 
 test("resolveEndpoint returns null when the app and its supervisor are both gone, so the service re-applies", async () => {
-  const d = deployment("dep-5e", "gone");
+  const d = publishedApp("dep-5e", "gone");
   const v = version({ "server.js": SERVER }, "node server.js");
   const applied = await provider.apply(d, v);
   const { sandboxId } = (await store.get("dep-5e"))!;
@@ -363,7 +359,7 @@ test("resolveEndpoint returns null when the app and its supervisor are both gone
 
 test("an app that only answers 5xx fails publish, and the failure reaches the error log with its redacted output", async () => {
   make({ readyWindowSec: 3 });
-  const d = deployment("dep-5f", "broken");
+  const d = publishedApp("dep-5f", "broken");
   const server =
     "console.log('connecting to ' + process.env.DATABASE_URL); console.log('booting with api_key=sk-livevalue1234567890'); require('http').createServer((q, s) => { s.statusCode = 500; s.end('boom'); }).listen(process.env.PORT);";
   const env = { DATABASE_URL: "postgres://app:hunter2hunter2@db/app" };
@@ -381,7 +377,7 @@ test("an app that only answers 5xx fails publish, and the failure reaches the er
 });
 
 test("a crash the supervisor recovers from is reported once, with the output before the exit", async () => {
-  const d = deployment("dep-5g", "crashy2");
+  const d = publishedApp("dep-5g", "crashy2");
   const crashy = SERVER.replace(
     "if (q.url === '/data')",
     "if (q.url === '/crash') { console.error('fatal: out of widgets'); process.exit(3); } if (q.url === '/data')",
@@ -400,7 +396,7 @@ test("a crash the supervisor recovers from is reported once, with the output bef
 });
 
 test("an app found down with no supervisor is reported with its last output", async () => {
-  const d = deployment("dep-5h", "gone2");
+  const d = publishedApp("dep-5h", "gone2");
   const v = version({ "server.js": SERVER }, "node server.js");
   const applied = await provider.apply(d, v);
   const { sandboxId } = (await store.get("dep-5h"))!;
@@ -419,7 +415,7 @@ test("an app found down with no supervisor is reported with its last output", as
 
 test("resolveEndpoint caches the live answer instead of asking Porter on every request", async () => {
   make({ resolveCacheMs: 60_000 });
-  const d = deployment("dep-5b", "cached");
+  const d = publishedApp("dep-5b", "cached");
   const v = version({ "server.js": SERVER }, "node server.js");
   const applied = await provider.apply(d, v);
   const before = fake.statusReads();
@@ -430,7 +426,7 @@ test("resolveEndpoint caches the live answer instead of asking Porter on every r
 });
 
 test("the endpoint pointer is published only once the app is serving", async () => {
-  const d = deployment("dep-5c");
+  const d = publishedApp("dep-5c");
   const seenDuringExec: Array<StoredPorterDeployBody | null> = [];
   const rawExec = fake.client.sandboxes.raw.exec;
   fake.client.sandboxes.raw.exec = async (id, body, options) => {
@@ -444,7 +440,7 @@ test("the endpoint pointer is published only once the app is serving", async () 
 });
 
 test("destroy retires the body but keeps the data volume for the next apply", async () => {
-  const d = deployment("dep-6");
+  const d = publishedApp("dep-6");
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));
   writeFileSync(join(fake.volumeDir("qmt-app-dep-6-data"), "note.txt"), "survives");
   await provider.destroy(d);
@@ -456,7 +452,7 @@ test("destroy retires the body but keeps the data volume for the next apply", as
 });
 
 test("a body that vanished between list and terminate does not break destroy or redeploy", async () => {
-  const d = deployment("dep-7");
+  const d = publishedApp("dep-7");
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));
   const list = fake.client.sandboxes.list;
   fake.client.sandboxes.list = async (options) =>
@@ -489,7 +485,7 @@ test("without an apps domain a private app gets the host the cluster names", asy
     client: fake.client,
     store,
   });
-  const d = deployment("dep-8");
+  const d = publishedApp("dep-8");
   const endpoint = await bare.apply(d, version({ "server.js": SERVER }, "node server.js"));
   assert.deepEqual(fake.bodies().find((b) => b.phase === "running")!.networking, [{ port: appPort }]);
   assert.match(endpoint.host, /^qmt-app-dep-8-[a-z0-9]{5}\.fake\.test$/);
@@ -510,14 +506,14 @@ test("a cluster that names no host fails the deploy and leaves no body behind", 
     store,
   });
   await assert.rejects(
-    bare.apply(deployment("dep-8a"), version({ "server.js": SERVER }, "node server.js")),
+    bare.apply(publishedApp("dep-8a"), version({ "server.js": SERVER }, "node server.js")),
     /named no host for the app/,
   );
   assert.equal(fake.bodies().filter((b) => b.phase === "running").length, 0);
 });
 
 companyTest("a cluster-assigned hostname wins over the derived domain", async () => {
-  const d = deployment("dep-8b", "kept");
+  const d = publishedApp("dep-8b", "kept");
   const endpoint = await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));
   assert.equal(endpoint.host, "acme1-kept.apps.test");
   assert.equal(endpoint.publicUrl, `https://${endpoint.host}/`);
@@ -525,8 +521,8 @@ companyTest("a cluster-assigned hostname wins over the derived domain", async ()
   assert.match(await fetchText("/"), /^hello from/);
 });
 
-test("deployment names become DNS labels and ids become sandbox-safe names", async () => {
-  const d = deployment("dep-9", "My_App.v2");
+test("app names become DNS labels and ids become sandbox-safe names", async () => {
+  const d = publishedApp("dep-9", "My_App.v2");
   const endpoint = await asCompany(() => provider.apply(d, version({ "server.js": SERVER }, "node server.js")));
   assert.match(endpoint.host, /^acme1-my-app-v2-[0-9a-f]{6}\.apps\.test$/);
   const body = fake.bodies().find((b) => b.phase === "running")!;
@@ -538,7 +534,7 @@ test("a refused sandbox create surfaces the cluster's own error unchanged", asyn
   const refused = new Error("no private sandbox ingress is configured on this cluster");
   fake.client.sandboxes.create = () => Promise.reject(refused);
   await assert.rejects(
-    provider.apply(deployment("refused"), version({ "server.js": SERVER }, "node server.js")),
+    provider.apply(publishedApp("refused"), version({ "server.js": SERVER }, "node server.js")),
     (error) => error === refused,
   );
 });

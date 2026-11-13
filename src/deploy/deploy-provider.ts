@@ -1,4 +1,4 @@
-import type { Deployment, DeployEndpoint, DeploymentVersion } from "./deploy-store.ts";
+import type { PublishedApp, DeployEndpoint, AppVersion } from "./deploy-store.ts";
 
 export type { DeployEndpoint };
 
@@ -16,13 +16,13 @@ interface DeployLiveEdit {
 
 export interface DeployProvider {
   readonly profile: DeployProfile;
-  apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint>;
-  reconcile?(d: Deployment, version: DeploymentVersion, gitBundle: Uint8Array): Promise<DeployEndpoint>;
-  liveEdit?(d: Deployment, version: DeploymentVersion, edit: DeployLiveEdit): Promise<boolean>;
-  destroy(d: Deployment): Promise<void>;
-  setAlwaysOn?(d: Deployment, alwaysOn: boolean): Promise<void>;
-  resolveEndpoint?(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint | null>;
-  rotationDue?(d: Deployment): Promise<boolean>;
-  park?(d: Deployment): Promise<void>;
-  logs?(d: Deployment, opts: { tailLines: number }): Promise<string | null>;
+  apply(d: PublishedApp, version: AppVersion): Promise<DeployEndpoint>;
+  reconcile?(d: PublishedApp, version: AppVersion, gitBundle: Uint8Array): Promise<DeployEndpoint>;
+  liveEdit?(d: PublishedApp, version: AppVersion, edit: DeployLiveEdit): Promise<boolean>;
+  destroy(d: PublishedApp): Promise<void>;
+  setAlwaysOn?(d: PublishedApp, alwaysOn: boolean): Promise<void>;
+  resolveEndpoint?(d: PublishedApp, version: AppVersion): Promise<DeployEndpoint | null>;
+  rotationDue?(d: PublishedApp): Promise<boolean>;
+  park?(d: PublishedApp): Promise<void>;
+  logs?(d: PublishedApp, opts: { tailLines: number }): Promise<string | null>;
 }
