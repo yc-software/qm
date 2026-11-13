@@ -54,7 +54,7 @@ interface ScopeFile {
   createdAt: number;
   openable: boolean;
 }
-interface ScopeDeployment {
+interface ScopeApp {
   id: string;
   name: string;
   status: string;
@@ -71,7 +71,7 @@ interface ScopeResourcesView {
   files: ScopeFile[];
   webhooks: WebhookView[];
   crons: CronView[];
-  deployments: ScopeDeployment[];
+  apps: ScopeApp[];
   skills: ScopeSkill[];
   manageable: boolean;
 }
@@ -517,7 +517,7 @@ function scopeResourcesEmpty(scopeId: string): boolean {
     r.files.length === 0 &&
     r.webhooks.length === 0 &&
     r.crons.length === 0 &&
-    r.deployments.length === 0 &&
+    r.apps.length === 0 &&
     r.skills.length === 0,
   );
 }
@@ -834,7 +834,7 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
     r.files.length === 0 &&
     r.webhooks.length === 0 &&
     r.crons.length === 0 &&
-    r.deployments.length === 0 &&
+    r.apps.length === 0 &&
     r.skills.length === 0
   ) {
     return nothing;
@@ -859,7 +859,7 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
         : nothing
     }
     ${r.webhooks.length ? resourceGroup("Webhooks", r.webhooks.map(webhookRow)) : nothing}
-    ${r.deployments.length ? resourceGroup("Apps", r.deployments.map(deploymentRow)) : nothing}
+    ${r.apps.length ? resourceGroup("Apps", r.apps.map(appRow)) : nothing}
   `;
 }
 
@@ -903,9 +903,9 @@ async function deleteScopeSkill(id: string): Promise<void> {
 }
 
 function resourceGroup(label: string, rows: TemplateResult[]): TemplateResult {
-  const view = label === "Apps" ? "deploys" : label.toLowerCase();
+  const view = label.toLowerCase();
   const scope = contextsState.resourcesScope;
-  const supportsScopeLink = view === "files" || view === "deploys";
+  const supportsScopeLink = view === "files" || view === "apps";
   const href = `${UI_BASE}/${encodeURIComponent(view)}${scope && supportsScopeLink ? `?scope=${encodeURIComponent(scope)}` : ""}`;
   return html`
     <section class="context-panel context-resource-group">
@@ -1022,7 +1022,7 @@ function skillRow(s: ScopeSkill, manage = false): TemplateResult {
   `;
 }
 
-function deploymentRow(d: ScopeDeployment): TemplateResult {
+function appRow(d: ScopeApp): TemplateResult {
   return html`
     <div class="context-session-row context-resource-row">
       <span class="context-session-title" dir="auto">${d.name}</span>
@@ -1429,7 +1429,7 @@ async function loadScopeResources(scopeId: string): Promise<void> {
       files: r.files ?? [],
       webhooks: r.webhooks ?? [],
       crons: r.crons ?? [],
-      deployments: r.deployments ?? [],
+      apps: r.apps ?? [],
       skills: r.skills ?? [],
       manageable: r.manageable === true,
     };

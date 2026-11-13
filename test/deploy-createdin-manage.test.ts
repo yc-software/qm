@@ -84,7 +84,7 @@ const capFor = (actorId: string) =>
   );
 
 const gitPerm = async (base: string, id: string, actor: string): Promise<{ status: number; permission?: string }> => {
-  const r = await fetch(`${base}/v1/deployments/${encodeURIComponent(id)}/git-url`, {
+  const r = await fetch(`${base}/v1/apps/${encodeURIComponent(id)}/git-url`, {
     headers: { "x-agent-capability": await capFor(actor) },
   });
   if (r.status !== 200) return { status: r.status };
@@ -92,7 +92,7 @@ const gitPerm = async (base: string, id: string, actor: string): Promise<{ statu
 };
 
 const gitUrl = async (base: string, id: string, actor: string): Promise<string> => {
-  const r = await fetch(`${base}/v1/deployments/${encodeURIComponent(id)}/git-url`, {
+  const r = await fetch(`${base}/v1/apps/${encodeURIComponent(id)}/git-url`, {
     headers: { "x-agent-capability": await capFor(actor) },
   });
   if (r.status !== 200) assert.fail(`git URL failed (${r.status}): ${await r.text()}`);
@@ -176,7 +176,7 @@ test("principalGitPermission: an unrelated principal is denied (no access)", asy
   }
 });
 
-test("principalGitPermission: org-owned deployment is not manageable by membership (read only)", async () => {
+test("principalGitPermission: org-owned app is not manageable by membership (read only)", async () => {
   const f = await fixture();
   try {
     const d = await f.app.deploy({
@@ -268,7 +268,7 @@ test("canManage: a channel write grant follows a member into their DM", async ()
       permission: "write",
       grantedBy: "U1",
     });
-    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U3" }, scopeId("personal", "U3")), true);
+    assert.equal(await f.deploy.canManageApp(d.id, { actorId: "U3" }, scopeId("personal", "U3")), true);
   } finally {
     await f.close();
   }
@@ -285,7 +285,7 @@ test("an org write grant gives active org members git write and manage authority
       grantedBy: "U1",
     });
     assert.deepEqual(await gitPerm(f.base, d.id, "U9"), { status: 200, permission: "write" });
-    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U9" }, scopeId("personal", "U9")), true);
+    assert.equal(await f.deploy.canManageApp(d.id, { actorId: "U9" }, scopeId("personal", "U9")), true);
   } finally {
     await f.close();
   }
@@ -310,7 +310,7 @@ test("removed channel members keep stale-session read reach but lose write and m
 
     assert.equal((await gitPerm(f.base, d.id, "U2")).status, 403);
     assert.equal(await pushStatus(beforeRemovalUrl), 403, "a write URL minted before removal is revoked at push time");
-    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U2" }, scopeId("personal", "U2")), false);
+    assert.equal(await f.deploy.canManageApp(d.id, { actorId: "U2" }, scopeId("personal", "U2")), false);
 
     await f.acl.grant(tenant, {
       ownerScopeId: d.ownerScopeId,
@@ -320,7 +320,7 @@ test("removed channel members keep stale-session read reach but lose write and m
       grantedBy: "U1",
     });
     assert.equal((await gitPerm(f.base, d.id, "U2")).status, 403);
-    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U2" }, scopeId("personal", "U2")), false);
+    assert.equal(await f.deploy.canManageApp(d.id, { actorId: "U2" }, scopeId("personal", "U2")), false);
   } finally {
     await f.close();
   }
@@ -363,9 +363,9 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
         SECRET,
       ),
     };
-    const git = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`, { headers: bot });
+    const git = await fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`, { headers: bot });
     assert.equal(git.status === 200 ? ((await git.json()) as { permission: string }).permission : git.status, "read");
-    const archive = await fetch(`${f.base}/v1/deployments/${d.id}/archive`, {
+    const archive = await fetch(`${f.base}/v1/apps/${d.id}/archive`, {
       method: "POST",
       headers: bot,
       body: "{}",
@@ -380,7 +380,7 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
       name: "bot-app",
       createdInScope: scopeId("channel", CH),
     });
-    const ownGit = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(own.id)}/git-url`, { headers: bot });
+    const ownGit = await fetch(`${f.base}/v1/apps/${encodeURIComponent(own.id)}/git-url`, { headers: bot });
     assert.equal(((await ownGit.json()) as { permission: string }).permission, "write");
     const publish = (input: { name: string; renameFrom?: string; rollbackTo?: number }) =>
       f.deploy.deployOrUpdate({
@@ -392,11 +392,11 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
         files: [{ path: "server.js", data: "console.log('bot over the top')" }],
         ...input,
       });
-    await assert.rejects(publish({ name: "channel-app" }), /deployment name taken/);
+    await assert.rejects(publish({ name: "channel-app" }), /app name taken/);
     await assert.rejects(publish({ name: "bot-renamed", renameFrom: "channel-app" }), /not authorized/);
     await assert.rejects(publish({ name: "channel-app", rollbackTo: 1 }), /not authorized/);
-    assert.equal((await f.deploy.getDeployment(d.id))?.name, "channel-app");
-    assert.equal((await f.deploy.getDeployment(d.id))?.currentVersion, d.currentVersion);
+    assert.equal((await f.deploy.getApp(d.id))?.name, "channel-app");
+    assert.equal((await f.deploy.getApp(d.id))?.currentVersion, d.currentVersion);
   } finally {
     await f.close();
   }
@@ -424,10 +424,10 @@ test("bot work that runs as a shared system actor cannot republish, open up or s
       name: "ambient-app",
     });
     await assert.rejects(republish, /not authorized/);
-    await assert.rejects(f.deploy.setDeploymentPublic(own.id, true, asBot), /only the owner/);
-    await assert.rejects(f.deploy.shareDeployment(own.id, scopeId("personal", "U2"), "read", asBot), /only the owner/);
-    assert.equal((await f.deploy.getDeployment(own.id))?.currentVersion, own.currentVersion);
-    assert.deepEqual(await f.deploy.deploymentGrantees(own.id), []);
+    await assert.rejects(f.deploy.setAppPublic(own.id, true, asBot), /only the owner/);
+    await assert.rejects(f.deploy.shareApp(own.id, scopeId("personal", "U2"), "read", asBot), /only the owner/);
+    assert.equal((await f.deploy.getApp(own.id))?.currentVersion, own.currentVersion);
+    assert.deepEqual(await f.deploy.appGrantees(own.id), []);
   } finally {
     await f.close();
   }
@@ -436,7 +436,7 @@ test("bot work that runs as a shared system actor cannot republish, open up or s
 test("authority follows the person: a creation-channel member manages the app from their DM (web routes + share); a non-member may not", async () => {
   const { f, d } = await setup();
   try {
-    const rename = await fetch(`${f.base}/v1/deployments/${d.id}/name`, {
+    const rename = await fetch(`${f.base}/v1/apps/${d.id}/name`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": await capFor("U2") },
       body: JSON.stringify({ name: "renamed-from-dm" }),
@@ -444,18 +444,18 @@ test("authority follows the person: a creation-channel member manages the app fr
     assert.equal(rename.status, 200, await rename.text());
 
     await assert.rejects(
-      f.deploy.shareDeployment(d.id, scopeId("personal", "U3"), "read", { createdBy: "U2" }),
+      f.deploy.shareApp(d.id, scopeId("personal", "U3"), "read", { createdBy: "U2" }),
       /only the owner/,
     );
 
-    const denied = await fetch(`${f.base}/v1/deployments/${d.id}/archive`, {
+    const denied = await fetch(`${f.base}/v1/apps/${d.id}/archive`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": await capFor("U3") },
       body: "{}",
     });
     assert.equal(denied.status, 403);
     await assert.rejects(
-      f.deploy.shareDeployment(d.id, scopeId("org", "default-org"), "read", { createdBy: "U3" }),
+      f.deploy.shareApp(d.id, scopeId("org", "default-org"), "read", { createdBy: "U3" }),
       /only the owner/,
     );
   } finally {

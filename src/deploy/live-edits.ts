@@ -11,9 +11,9 @@ import {
   currentVersionOf,
   type DeployEndpoint,
   type DeployStore,
-  type Deployment,
-  type DeploymentDraft,
-  type DeploymentVersion,
+  type PublishedApp,
+  type AppDraft,
+  type AppVersion,
 } from "./deploy-store.ts";
 
 export const LIVE_EDIT_PUBLISH_DELAY_MS = 2 * 60_000;
@@ -37,9 +37,9 @@ interface LiveEditDeps {
   leaderLease: LeaderLease;
   publishDelayMs?: number;
   withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
-  applyVersion(id: string, version: DeploymentVersion): Promise<DeployEndpoint>;
+  applyVersion(id: string, version: AppVersion): Promise<DeployEndpoint>;
   markVersionRunning(id: string, version: number, endpoint: DeployEndpoint): Promise<void>;
-  withDeploymentEnv(d: Deployment, version: DeploymentVersion): Promise<DeploymentVersion>;
+  withAppEnv(d: PublishedApp, version: AppVersion): Promise<AppVersion>;
 }
 
 type AppFile = { path: string; data: Uint8Array };
@@ -49,7 +49,7 @@ type SavedSource =
   | { written: readonly AppFile[]; deletedPaths: readonly string[] };
 
 export interface SavedApp {
-  draft: DeploymentDraft | null;
+  draft: AppDraft | null;
   commit: string;
   tree: DeployGitTreeFile[];
 }
@@ -83,7 +83,7 @@ function devEntrypoint(files: readonly AppFile[]): string | undefined {
   return devScript.safeParse(parsed).success ? `${DEV_INSTALL} && npm run dev` : undefined;
 }
 
-function draftVersion(current: DeploymentVersion, draft: DeploymentDraft): DeploymentVersion {
+function draftVersion(current: AppVersion, draft: AppDraft): AppVersion {
   return { ...current, commit: draft.commit, entrypoint: draft.entrypoint };
 }
 
@@ -91,19 +91,19 @@ export function createLiveEdits(deps: LiveEditDeps) {
   const store = deps.deployStore;
   const publishDelayMs = deps.publishDelayMs ?? LIVE_EDIT_PUBLISH_DELAY_MS;
 
-  async function runningVersion(d: Deployment): Promise<DeploymentVersion | undefined> {
+  async function runningVersion(d: PublishedApp): Promise<AppVersion | undefined> {
     const current = currentVersionOf(d);
     const draft = current && deps.provider.liveEdit ? await store.draftOf(d.id) : null;
     return current && draft ? draftVersion(current, draft) : current;
   }
 
-  async function savedHeadOf(d: Deployment) {
+  async function savedHeadOf(d: PublishedApp) {
     const draft = await store.draftOf(d.id);
     const commit = draft?.commit ?? currentVersionOf(d)?.commit;
     return commit ? { draft, commit } : null;
   }
 
-  async function savedOf(d: Deployment): Promise<SavedApp | null> {
+  async function savedOf(d: PublishedApp): Promise<SavedApp | null> {
     const head = await savedHeadOf(d);
     return head ? { ...head, tree: await store.commitTreeOf(d.id, head.commit) } : null;
   }
@@ -158,7 +158,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
   }
 
   async function save(
-    before: Deployment,
+    before: PublishedApp,
     actor: string,
     source: SavedSource | SourceChange,
   ): Promise<LiveEditSaved | null> {
@@ -188,7 +188,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
     const [committed, edited] = await Promise.allSettled([
       next.commit(),
       deps
-        .withDeploymentEnv(before, target)
+        .withAppEnv(before, target)
         .then((version) => liveEdit(before, version, { files: changed, deletedPaths, restart })),
     ]);
     if (committed.status === "rejected")
@@ -200,7 +200,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
         : committed.reason;
     const now = Date.now();
     const publishAt = now + publishDelayMs;
-    const saved: DeploymentDraft = {
+    const saved: AppDraft = {
       deploymentId: before.id,
       commit: committed.value,
       entrypoint: target.entrypoint,

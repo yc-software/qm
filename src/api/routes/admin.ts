@@ -284,7 +284,7 @@ const routes: Route<ApiCtx>[] = [
     },
     {
       method: "GET",
-      path: "/v1/admin/deployments",
+      path: "/v1/admin/apps",
       auth: "either",
       admin: { privateRead: "always" },
       handle: listAdminArtifacts,

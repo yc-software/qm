@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deploymentCredentialSlugs } from "../src/deploy/deployment-credentials.ts";
+import { appCredentialSlugs } from "../src/deploy/app-credentials.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
@@ -38,7 +38,7 @@ test("a published app gets only enabled broker credentials that are switched on 
   await grant("disabled", ORG);
   await grant("no-secret", ORG);
   await grant("env-only", ORG);
-  const slugs = await deploymentCredentialSlugs(
+  const slugs = await appCredentialSlugs(
     tenant,
     [
       cred("acme-data"),

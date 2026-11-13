@@ -4,23 +4,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { testConfig } from "./support/test-config.ts";
-
-async function closedPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const { port } = server.address() as AddressInfo;
-  await new Promise<void>((r) => server.close(() => r()));
-  return port;
-}
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 test("wiring: an unreachable fail-open MCP memory provider still serves turns via the notebook floor", async () => {
-  const url = `http://127.0.0.1:${await closedPort()}`;
+  const url = `http://127.0.0.1:${await freePort()}`;
   const memoryProviderConfig = parseMemoryProviderConfig(
     JSON.stringify({
       providers: [

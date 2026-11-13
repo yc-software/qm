@@ -270,7 +270,7 @@ function personaRow(persona: PersonaView): TemplateResult {
           ${persona.description ? html`<span class="persona-row-description" dir="auto">${persona.description}</span>` : nothing}
         </span>
       </button>
-      <div class="deploy-row-actions persona-row-actions" aria-label=${`${persona.name} actions`}>
+      <div class="app-row-actions persona-row-actions" aria-label=${`${persona.name} actions`}>
         ${personaActions(persona, { edit: true })}
       </div>
     </div>
