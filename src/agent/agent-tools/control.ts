@@ -5,12 +5,10 @@ import { splitToScope } from "../../api/artifact-share.ts";
 import { errMessage } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { BOT_MODES } from "../../surface-cache/channel-policy-store.ts";
-import { WEBHOOK_SCHEMES, type WebhookScheme } from "../../webhooks/verifiers.ts";
+import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { listOrder, pageOf, previewText } from "./listing.ts";
 
-const GENERATED_SECRET_SCHEMES: readonly WebhookScheme[] = ["hmac-sha256", "token"];
-const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => !GENERATED_SECRET_SCHEMES.includes(scheme));
 const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
 
 export function controlPlaneTools(kit: ToolKit) {
@@ -21,8 +19,8 @@ export function controlPlaneTools(kit: ToolKit) {
     description:
       "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
       "create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). " +
-      `For ${SENDER_WEBHOOK_SCHEMES.join("/")} the user supplies the signing secret from the sender's settings; for ${GENERATED_SECRET_SCHEMES.join("/")} generate a strong random one. ` +
-      "token suits senders that cannot sign: they send the secret as `Authorization: Bearer <secret>`, or as `?token=<secret>` on the URL when they cannot set headers. " +
+      "For hmac-sha256 and token generate a strong random secret; for every other scheme the user supplies the sender's signing secret. " +
+      "token is for senders that cannot sign: they send the secret as `Authorization: Bearer <secret>`, or as `?token=<secret>` on the URL if they cannot set headers. " +
       "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
       "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
     parameters: Type.Object({

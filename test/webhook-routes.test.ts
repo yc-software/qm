@@ -344,6 +344,10 @@ test("a standard-webhooks webhook accepts a sender-signed request once and rejec
       action: "triage",
       verification: { scheme: "standard-webhooks", secret },
     });
+    await assert.rejects(
+      srv.built.app.createWebhook({ ...webhook, verification: { scheme: "standard-webhooks", secret: "not base64!" } }),
+      /base64 signing secret/,
+    );
     const sent = new Date();
     const eventBody = JSON.stringify({ type: "invoice.paid" });
     const deliver = (body: string) =>

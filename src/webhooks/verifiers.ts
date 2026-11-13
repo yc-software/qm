@@ -5,7 +5,7 @@ import { constantTimeEqual } from "../util/crypto.ts";
 
 export interface VerifierInput {
   secret?: string;
-  urlToken?: string;
+  presentedToken?: string;
   headers: Record<string, string | string[] | undefined>;
   rawBody: string;
 }
@@ -13,6 +13,7 @@ export interface VerifierInput {
 export interface Verifier {
   verify(input: VerifierInput): boolean;
   deliveryId(input: VerifierInput): string;
+  secretProblem?(secret: string): string | null;
   handshake?(input: VerifierInput, parsedBody: unknown): string | null;
 }
 
@@ -139,16 +140,9 @@ const linear: Verifier = {
   },
 };
 
-const BEARER_PREFIX = "bearer ";
-
 const token: Verifier = {
-  verify({ secret, headers, urlToken }) {
-    if (!secret) return false;
-    const authorization = header(headers, "authorization");
-    const presented = authorization?.toLowerCase().startsWith(BEARER_PREFIX)
-      ? authorization.slice(BEARER_PREFIX.length)
-      : urlToken;
-    return presented !== undefined && constantTimeEqual(presented, secret);
+  verify({ secret, presentedToken }) {
+    return Boolean(secret) && presentedToken !== undefined && constantTimeEqual(presentedToken, secret!);
   },
   deliveryId({ rawBody }) {
     return bodyHash(rawBody);
@@ -171,6 +165,14 @@ const standardWebhooks: Verifier = {
   },
   deliveryId({ headers, rawBody }) {
     return header(headers, "webhook-id") ?? bodyHash(rawBody);
+  },
+  secretProblem(secret) {
+    try {
+      new StandardWebhook(secret);
+      return null;
+    } catch {
+      return "a standard-webhooks secret is the sender's base64 signing secret, usually prefixed whsec_";
+    }
   },
 };
 

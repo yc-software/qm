@@ -5,6 +5,7 @@ import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
 import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
+import { bearerToken } from "../request-tenant.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -55,11 +56,10 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
       return sendJson(res, 413, { error: "payload_too_large", message: errMessage(e) });
     throw e;
   }
-  const urlToken = url.searchParams.get("token");
   const out = await deps.webhookReceiver.deliver(id, {
     headers: req.headers,
     rawBody,
-    ...(urlToken ? { urlToken } : {}),
+    presentedToken: bearerToken(req) ?? url.searchParams.get("token") ?? undefined,
   });
   if (out.status === 200) {
     res.writeHead(200, { "content-type": "text/plain" });

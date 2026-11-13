@@ -65,9 +65,12 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
     },
     async create(input) {
       assertNoEscalation(input);
-      if (!getVerifier(input.verification.scheme) || !input.verification.secret) {
-        throw new Error("webhook verification requires a supported signed scheme and secret");
+      const verifier = getVerifier(input.verification.scheme);
+      if (!verifier || !input.verification.secret) {
+        throw new Error("webhook verification requires a supported scheme and secret");
       }
+      const secretProblem = verifier.secretProblem?.(input.verification.secret);
+      if (secretProblem) throw new Error(secretProblem);
       if (
         input.filters?.some(
           (filter) => !filter.path.trim() || filter.in.length === 0 || filter.in.some((value) => !value.trim()),
