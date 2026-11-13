@@ -385,7 +385,7 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
       ],
     );
     for (const d of refused)
-      assert.equal((await deliveries.get(d.id))?.failedReason, "partner-chat: only non-empty text posts are supported");
+      assert.equal((await deliveries.get(d.id))?.failedReason, "partner-chat: only text or file posts are supported");
     assert.deepEqual(
       mirrored.map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text, m.self]),
       [

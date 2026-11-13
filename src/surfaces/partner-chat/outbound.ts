@@ -32,7 +32,7 @@ export function partnerChatSender(deps: {
       throw new UnsupportedDelivery(`partner-chat: account ${ref.account} is not bound to this workspace`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
     if (react || del || pin || edit || editRef || (!body && !d.attachments?.length))
-      throw new UnsupportedDelivery("partner-chat: only posts with text or files are supported");
+      throw new UnsupportedDelivery("partner-chat: only text or file posts are supported");
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
     if (thread !== undefined && !MESSAGE_ID.test(thread))
       throw new UnsupportedDelivery(`partner-chat: bad thread id ${thread}`);
