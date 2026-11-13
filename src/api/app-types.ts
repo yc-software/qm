@@ -182,6 +182,7 @@ interface ReachNowInput {
   delete?: { messageTs: string };
   edit?: { messageTs: string };
   currentDestination?: Destination;
+  turn?: { surface?: string; liveReplies?: boolean };
 }
 export type ReachNowResult =
   | {
@@ -530,6 +531,7 @@ export interface App {
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
   surfaceMirrored(kind: string): boolean;
+  chatSurfaces(): { kind: string; label: string; mark?: string }[];
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,

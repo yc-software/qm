@@ -1,10 +1,10 @@
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER } from "../../surfaces/partner-chat/protocol.ts";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER } from "../../surfaces/generic-chat/protocol.ts";
 import { headerValue, PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import type { BaseCtx, Route } from "./route.ts";
 
-async function partnerChatEvents(ctx: BaseCtx): Promise<void> {
+async function genericChatEvents(ctx: BaseCtx): Promise<void> {
   const { req, res, deps } = ctx;
-  if (!deps.partnerChatEvents) {
+  if (!deps.genericChatEvents) {
     req.resume();
     return sendJson(res, 404, { error: "not_found" });
   }
@@ -15,7 +15,7 @@ async function partnerChatEvents(ctx: BaseCtx): Promise<void> {
     if (e instanceof PayloadTooLargeError) return sendJson(res, 413, { error: "payload_too_large" });
     throw e;
   }
-  const out = await deps.partnerChatEvents(
+  const out = await deps.genericChatEvents(
     headerValue(req, TIMESTAMP_HEADER),
     headerValue(req, SIGNATURE_HEADER),
     rawBody,
@@ -23,12 +23,12 @@ async function partnerChatEvents(ctx: BaseCtx): Promise<void> {
   return sendJson(res, out.status, out.body);
 }
 
-export const partnerChatEventRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
+export const genericChatEventRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   {
     method: "POST",
-    path: "/v1/surfaces/partner-chat/events",
+    path: "/v1/surfaces/generic-chat/events",
     auth: "public",
     tenant: "none",
-    handle: partnerChatEvents,
+    handle: genericChatEvents,
   },
 ];

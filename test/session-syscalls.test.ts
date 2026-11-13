@@ -63,6 +63,7 @@ interface Rig {
 
 async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+  liveReplies?: true;
 }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
@@ -85,7 +86,14 @@ async function rig(opts?: {
   const room = await recordContext(
     sessions,
     await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack"),
-    { actor, conversation, surface: "slack", deliveryTarget: "D1", timezone: "America/Los_Angeles" },
+    {
+      actor,
+      conversation,
+      surface: "slack",
+      deliveryTarget: "D1",
+      timezone: "America/Los_Angeles",
+      ...(opts?.liveReplies ? { liveReplies: true } : {}),
+    },
   );
   await sessions.updateTitle(room.id, "dm with alex");
   await sessions.addParticipant(room.id, actor.id);
@@ -98,7 +106,11 @@ async function rig(opts?: {
       actor,
       deliveryTarget: "D1",
       timezone: "America/Los_Angeles",
-    } as Pick<OrchestratorInput, "surface" | "conversation" | "actor" | "deliveryTarget" | "timezone" | "readOnly">,
+      ...(opts?.liveReplies ? { liveReplies: true } : {}),
+    } as Pick<
+      OrchestratorInput,
+      "surface" | "conversation" | "actor" | "deliveryTarget" | "timezone" | "readOnly" | "liveReplies"
+    >,
   });
   return {
     mailbox,
@@ -149,7 +161,7 @@ test("side chats cannot launch subagents until opened as a full session", async 
 });
 
 test("open creates a child session with parent pointer, spawn meta, and a queued task run", async () => {
-  const r = await rig();
+  const r = await rig({ liveReplies: true });
   const out = await r.syscallsFor(r.room).open({ task: "build a personal website for alex", name: "website" });
   assert.ok(out.ok);
   const child = await freshSession(r.sessions, out.sessionId);
@@ -163,6 +175,7 @@ test("open creates a child session with parent pointer, spawn meta, and a queued
   const request = inFlight[0]!.request;
   assert.equal(request.conversation.threadRef, child.threadRef);
   assert.equal(request.deliveryTarget, "D1");
+  assert.equal(request.liveReplies, true);
   assert.match(request.text, /subagent-task/);
   assert.match(request.text, /build a personal website/);
 });

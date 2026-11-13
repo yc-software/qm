@@ -78,6 +78,8 @@ import {
   mergeFirstPage,
   rowIndicators,
   type RowIndicators,
+  chatSurfaceOf,
+  repliesAsViewer,
   surfaceOf,
   splitPinned,
   upsertSessions,
@@ -90,7 +92,7 @@ import { tip } from "./tooltip";
 import { chatWithPersonaId, personaEditable, personaGlyph, personaSeeds, viewPersona } from "./personas";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
-import { slackMark } from "./slack-mark";
+import { chatSurfaceMark } from "./surface-mark";
 import { icon } from "./icons";
 import { listPageTpl } from "./list-page";
 import {
@@ -226,7 +228,7 @@ let chatsPageQueryTimer: ReturnType<typeof setTimeout> | null = null;
 let chatsPageScope: string | null = null;
 let chatsPageQuery = "";
 let chatsPageStatus: ChatBrowseStatus = "active";
-let chatsPageSurface: "all" | "web" | "slack" = "all";
+let chatsPageSurface = "all";
 let chatsPageHost: HTMLElement | null = null;
 
 export function resetSessionsState(): void {
@@ -334,7 +336,7 @@ export function defaultSessionTitle(s: CoreSession): string {
   if (surface === "web") return "Web chat";
   if (s.type === "channel") return channelLabel(s) ?? "Channel";
   if (s.type === "group") return groupDmText(s.channelName) ?? s.channelName?.trim() ?? "Group DM";
-  return surface === "slack" ? "Direct message" : "Untitled chat";
+  return surface === "chat" ? "Direct message" : "Untitled chat";
 }
 
 function channelLabel(s: CoreSession): string | null {
@@ -446,7 +448,7 @@ export function renderList(): void {
       ${
         !sessionsLoading && !sessionsNotice && visible.length === 0
           ? html`<div class="empty" style="padding:16px">
-              ${sessionsState.list.length ? "Slack conversations hidden." : "No conversations yet."}
+              ${sessionsState.list.length ? "Only web conversations are shown." : "No conversations yet."}
             </div>`
           : ""
       }
@@ -891,13 +893,13 @@ export function drawChatsPage(): void {
             value: chatsPageSurface,
             ariaLabel: "Filter by surface",
             onSelect: (value) => {
-              chatsPageSurface = (value ?? "all") as typeof chatsPageSurface;
+              chatsPageSurface = value ?? "all";
               reloadChatsPage();
             },
             options: [
               { value: "all", label: "All surfaces" },
               { value: "web", label: "Web" },
-              { value: "slack", label: "Slack" },
+              ...(appState.me?.chatSurfaces ?? []).map(({ kind, label }) => ({ value: kind, label })),
             ],
           })}
         </div>
@@ -976,7 +978,7 @@ function isActiveRow(s: CoreSession): boolean {
 
 function chatPageRow(s: CoreSession): TemplateResult {
   const ind = rowIndicators(s, liveThreads());
-  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
+  const readOnly = !repliesAsViewer(s) && !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
     <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
@@ -994,7 +996,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
         >
         <span class="list-row-meta">
           ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
-          ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
+          ${chatSurfaceMark(s, 13, "surface surface-mark")}
           ${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}
           <span class="list-row-date">${listWhen(activityOf(s))}</span>
           <span class="chat-row-arrow" aria-hidden="true">${icon(ChevronRight, 16)}</span>
@@ -1134,15 +1136,13 @@ function armMidnightRefresh(): void {
 }
 
 function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
-  const surface = surfaceOf(s);
-  if (surface === "slack") return html`<span class="surface-glyph">${slackMark(12, true)}</span>`;
-  if (surface === "core") return html`<span class="surface-glyph">${icon(SquareTerminal, 12)}</span>`;
-  return nothing;
+  if (surfaceOf(s) === "core") return html`<span class="surface-glyph">${icon(SquareTerminal, 12)}</span>`;
+  return chatSurfaceMark(s, 12, "surface-glyph");
 }
 
 function rowContext(s: CoreSession): string | null {
   let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
-  if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
+  if (surfaceOf(s) === "chat") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
   return label && label !== sessionTitle(s) ? label : null;
 }
 
@@ -1155,7 +1155,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const untitledProjectChild = projectChild && !s.title?.trim();
   let title = sessionTitle(s);
   if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
-  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
+  const readOnly = !repliesAsViewer(s) && !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
   const ind = rowIndicators(s, liveThreads());
@@ -1169,7 +1169,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   }
   const ariaLabel = [
     title,
-    surface !== "web" ? surface : null,
+    chatSurfaceOf(s)?.label ?? (surface === "core" ? surface : null),
     context,
     working ? "agent is working" : null,
     s.awaitingInput ? "waiting for your reply" : null,
