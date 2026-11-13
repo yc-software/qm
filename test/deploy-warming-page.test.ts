@@ -5,6 +5,7 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return {
@@ -44,10 +45,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the app han
 });
 
 test("/d/ proxy serves the warming page to a browser navigation when the app refuses connections", async () => {
-  const upstream = createHttpServer(() => {});
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
-  await new Promise<void>((r) => upstream.close(() => r()));
+  const upstreamPort = await freePort();
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);

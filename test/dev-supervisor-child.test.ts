@@ -5,21 +5,11 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Child } from "../scripts/dev/supervisor/children.ts";
-import { portAvailable, portHolders, tcpPortOpen } from "../scripts/dev/lib/proc.ts";
+import { freePort, portAvailable, portHolders, tcpPortOpen } from "../scripts/dev/lib/proc.ts";
 import { sleep } from "../scripts/dev/lib/util.ts";
 import type { ChildSpec } from "../scripts/dev/lib/types.ts";
 
 const FAKE = join(import.meta.dirname, "../scripts/dev/test-helpers/fake-child.mjs");
-
-async function freeTcpPort(): Promise<number> {
-  return await new Promise((resolve) => {
-    const server = createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as { port: number }).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 function spec(lock: string, port: number, extraArgs: string[] = []): ChildSpec {
   return {
@@ -36,7 +26,7 @@ function spec(lock: string, port: number, extraArgs: string[] = []): ChildSpec {
 
 test("child starts, reports ready via log pattern, and stops with the port released", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
-  const port = await freeTcpPort();
+  const port = await freePort();
   const child = new Child(
     spec(lock, port),
     lock,
@@ -56,7 +46,7 @@ test("child starts, reports ready via log pattern, and stops with the port relea
 
 test("a crashed child is auto-restarted with backoff", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
-  const port = await freeTcpPort();
+  const port = await freePort();
   const crashes: number[] = [];
   const child = new Child(
     spec(lock, port, ["--crashAfter=1500"]),
@@ -77,7 +67,7 @@ test("a crashed child is auto-restarted with backoff", async () => {
 
 test("startup leaves occupied ports untouched and retries after they become free", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
-  const port = await freeTcpPort();
+  const port = await freePort();
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   const child = new Child(
@@ -123,7 +113,7 @@ test("port availability rejects IPv6 listeners", async () => {
 
 test("stop escalates to SIGKILL for a TERM-ignoring child", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
-  const port = await freeTcpPort();
+  const port = await freePort();
   const child = new Child(
     spec(lock, port, ["--ignoreTerm"]),
     lock,
@@ -141,7 +131,7 @@ test("stop escalates to SIGKILL for a TERM-ignoring child", async () => {
 
 test("port ownership excludes clients connected to the listener", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
-  const port = await freeTcpPort();
+  const port = await freePort();
   const child = new Child(
     spec(lock, port),
     lock,

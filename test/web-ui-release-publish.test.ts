@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const work = mkdtempSync(join(tmpdir(), "qm-web-release-"));
@@ -78,14 +78,6 @@ function publish(args: string[]): string {
   const id = /web UI release ([0-9a-f]{64}) is live/.exec(r.stdout)?.[1];
   assert.ok(id, r.stdout);
   return id;
-}
-
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
 }
 
 let core: ChildProcess | undefined;
