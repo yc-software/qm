@@ -6,31 +6,8 @@
 }
 .welcome-what {
   margin: 14px 0 0;
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
   line-height: 1.4;
-}
-.welcome-hero .welcome-what {
-  margin: 14px 0 0;
-  font-size: 12.5px;
-}
-.welcome-what button {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  cursor: pointer;
-  color: var(--muted-foreground);
-  opacity: 0.75;
-  text-decoration: underline color-mix(in srgb, currentcolor 38%, transparent);
-  text-underline-offset: 3px;
-  transition:
-    opacity 150ms,
-    color 150ms;
-}
-.welcome-what button:hover,
-.welcome-what button:focus-visible {
-  color: var(--foreground);
-  opacity: 1;
 }
 .welcome-about {
   --orange: #f26522;
@@ -64,7 +41,7 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--background);
-  font-size: 13px;
+  font-size: var(--font-13);
   line-height: 1.45;
   text-align: left;
   transition: opacity 500ms;
@@ -103,7 +80,7 @@
   border-radius: inherit;
 }
 .welcome-about .wb-qm {
-  font-size: 13.5px;
+  font-size: var(--font-13-5);
 }
 .welcome-about .wb-idle {
   flex: 1;
@@ -160,21 +137,31 @@
   animation: 0.8s linear infinite about-spin;
   display: inline-block;
 }
-.welcome-about [data-at]:not(.in):not(.keep) {
-  display: none !important;
+.welcome-about .cue {
+  animation: about-pop 420ms var(--ease) calc(var(--at) * var(--about-speed)) both;
 }
-.welcome-about .gone {
-  display: none !important;
+.welcome-about .cue.instant {
+  animation-duration: 1ms;
 }
-.welcome-about .typing-caret::after {
-  content: "";
+.welcome-about .leaves {
+  animation: about-leave 1ms calc(var(--out) * var(--about-speed)) forwards;
+}
+.welcome-about .cue.leaves {
+  animation:
+    about-pop 1ms calc(var(--at) * var(--about-speed)) both,
+    about-leave 1ms calc(var(--out) * var(--about-speed)) forwards;
+}
+.welcome-about .swap {
+  display: inline-grid;
+}
+.welcome-about .swap > * {
+  grid-area: 1 / 1;
+}
+.welcome-about .typed {
   display: inline-block;
-  width: 1.5px;
-  height: 1.05em;
-  margin-left: 1px;
-  background: currentcolor;
-  vertical-align: -0.15em;
-  animation: 0.9s steps(1) infinite about-caret;
+  white-space: nowrap;
+  animation: about-type calc(var(--dur) * var(--about-speed)) steps(var(--chars), end)
+    calc(var(--at) * var(--about-speed)) both;
 }
 .welcome-about .sl-main {
   flex: 1 1 0%;
@@ -208,7 +195,7 @@
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--font-13);
   line-height: 1.25;
 }
 .welcome-about .sl-h b {
@@ -230,7 +217,7 @@
   align-self: center;
 }
 .welcome-about .sl-t {
-  font-size: 13.5px;
+  font-size: var(--font-13-5);
   line-height: 1.45;
 }
 .welcome-about .mention {
@@ -249,10 +236,10 @@
   border-left: 3px solid var(--orange);
   border-radius: 8px;
   background: var(--sl-card);
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
 }
 .welcome-about .sl-card .ic {
-  font-size: 18px;
+  font-size: var(--font-18);
   line-height: 1;
 }
 .welcome-about .sl-card b {
@@ -297,7 +284,7 @@
   gap: 9px;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--font-13);
 }
 .welcome-about .wb-head b {
   font-weight: 600;
@@ -310,6 +297,7 @@
   color: var(--muted-foreground);
 }
 .welcome-about .wb-head .people {
+  position: relative;
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -319,7 +307,9 @@
   box-shadow: 0 0 0 2px var(--background);
 }
 .welcome-about .wb-head .joined {
-  margin-right: 12px;
+  position: absolute;
+  right: calc(100% + 12px);
+  white-space: nowrap;
   font-size: 11px;
   color: var(--muted-foreground);
 }
@@ -362,7 +352,7 @@
   background: var(--bubble);
   padding: 7px 12px;
   border-radius: 15px;
-  font-size: 13.5px;
+  font-size: var(--font-13-5);
 }
 .welcome-about .link-pill {
   display: flex;
@@ -381,7 +371,7 @@
   align-items: center;
   gap: 7px;
   color: var(--muted-foreground);
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
 }
 .welcome-about .wb-presence {
   height: 17px;
@@ -401,7 +391,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13.5px;
+  font-size: var(--font-13-5);
 }
 .welcome-about .wb-comp .txt {
   flex: 1 1 0%;
@@ -416,9 +406,9 @@
   opacity: 0.45;
   width: 22px;
   height: 22px;
-  border-radius: 50%;
-  background: var(--foreground);
-  color: var(--background);
+  border-radius: var(--radius-md);
+  background: var(--cta);
+  color: var(--cta-foreground);
   display: grid;
   place-items: center;
 }
@@ -456,11 +446,11 @@
   background: transparent;
   transition: background 300ms;
 }
-.welcome-about .mini-table .tr.flag {
-  background: color-mix(in srgb, var(--orange) 9%, var(--background));
+.welcome-about .mini-table .tr.flags {
+  animation: about-flag 300ms ease calc(var(--mark) * var(--about-speed)) both;
 }
-.welcome-about .mini-table .tr.flag span:last-child::before {
-  background: var(--orange);
+.welcome-about .mini-table .tr.flags span:last-child::before {
+  animation: about-flag-dot 300ms ease calc(var(--mark) * var(--about-speed)) both;
 }
 .welcome-about .drafts {
   display: flex;
@@ -475,13 +465,8 @@
   overflow: hidden;
   border-left: 1px solid var(--border);
   background: var(--sidebar);
-  transition:
-    width 700ms var(--ease),
-    opacity 500ms ease;
-}
-.welcome-about .wb-app.open {
-  width: 238px;
-  opacity: 1;
+  --open-width: 238px;
+  animation: about-open 700ms var(--ease) calc(var(--mark) * var(--about-speed)) both;
 }
 .welcome-about .wb-app-in {
   width: 238px;
@@ -520,7 +505,7 @@
   gap: 8px;
 }
 .welcome-about .app-card > b {
-  font-size: 13px;
+  font-size: var(--font-13);
   font-weight: 600;
 }
 .welcome-about .bars {
@@ -548,13 +533,10 @@
   height: 0;
   border-radius: 4px 4px 0 0;
   background: color-mix(in srgb, var(--foreground) 82%, var(--background));
-  transition: height 800ms var(--ease) var(--dl, 0ms);
+  animation: about-bar 800ms var(--ease) calc(var(--mark) * var(--about-speed) + var(--dl)) both;
 }
 .welcome-about .bars div:first-child i {
   background: var(--orange);
-}
-.welcome-about .wb-app.open .bars i {
-  height: var(--h);
 }
 .welcome-about .app-stats {
   display: grid;
@@ -570,7 +552,7 @@
 }
 .welcome-about .app-stats b {
   display: block;
-  font-size: 14px;
+  font-size: var(--font-14);
   color: var(--foreground);
   font-weight: 600;
 }
@@ -584,11 +566,11 @@
 }
 .welcome-about .tile > b {
   margin-top: 11px;
-  font-size: 13.5px;
+  font-size: var(--font-13-5);
   font-weight: 600;
 }
 .welcome-about .tile > span {
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
   line-height: 1.5;
   color: var(--muted-foreground);
 }
@@ -657,9 +639,6 @@
 .welcome-about[data-focus="web"] .dwin.slack {
   opacity: 0.55;
 }
-.welcome-about .dwin [data-at].in:not(.noanim) {
-  animation: about-pop 420ms var(--ease) both;
-}
 .welcome-about .dwin .wb-head {
   gap: 8px;
 }
@@ -667,8 +646,8 @@
   font-weight: 400;
   color: var(--muted-foreground);
 }
-.welcome-about .dwin .wb-app.open {
-  width: 210px;
+.welcome-about .dwin .wb-app {
+  --open-width: 210px;
 }
 .welcome-about .dwin .sl-msgs {
   mask-image: none;
@@ -737,7 +716,7 @@
   display: grid;
   place-items: center;
   background: var(--success);
-  color: rgb(255, 255, 255);
+  color: var(--background);
   --from: scale(0);
   animation: 6s infinite both;
 }
@@ -944,7 +923,7 @@
   color: var(--muted-foreground);
 }
 .welcome-about .wb-idle.real b {
-  font-size: 17px;
+  font-size: var(--font-17);
   font-weight: 500;
   letter-spacing: -0.01em;
   color: var(--foreground);
@@ -955,7 +934,7 @@
   padding: 10px 9px 8px 12px;
   border-radius: 14px;
   box-shadow: rgba(0, 0, 0, 0.07) 0 2px 10px;
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
 }
 .welcome-about .dwin .wb-comp .txt {
   flex: 0 0 100%;
@@ -977,12 +956,8 @@
   color: var(--muted-foreground);
 }
 .welcome-about .dwin .wb-comp .send {
-  opacity: 1;
   width: 23px;
   height: 23px;
-  border-radius: 6px;
-  background: rgb(154, 168, 184);
-  color: rgb(255, 255, 255);
 }
 .welcome-about .dwin .wb-head .from {
   white-space: nowrap;
@@ -992,7 +967,7 @@
   flex: 0 0 auto;
 }
 .welcome-about .sw {
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
 }
 .welcome-about .sw-strip {
   display: flex;
@@ -1040,10 +1015,10 @@
   color: var(--muted-foreground);
 }
 .welcome-about .sw-row.done em {
-  color: rgb(21, 128, 61);
+  animation: about-done 1ms calc(var(--mark) * var(--about-speed)) both;
 }
 .welcome-about .sw-row.bug em {
-  color: var(--orange);
+  animation: about-bug 1ms calc(var(--mark) * var(--about-speed)) both;
 }
 .welcome-about .qdraft {
   margin-top: 8px;
@@ -1062,7 +1037,7 @@
 .welcome-about .qdraft-b {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
   line-height: 1.45;
 }
 .welcome-about .qdraft {
@@ -1082,14 +1057,14 @@
 }
 .welcome-about .W-text h1 {
   margin: 0 0 14px;
-  font-size: 26px;
+  font-size: var(--font-26);
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.2;
 }
 .welcome-about .W-lead {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--font-15);
   line-height: 1.7;
   color: var(--muted-foreground);
 }
@@ -1114,7 +1089,7 @@
 }
 .welcome-about .W-figs figcaption {
   margin-top: 10px;
-  font-size: 13px;
+  font-size: var(--font-13);
   color: var(--muted-foreground);
 }
 .welcome-about .art-sw {
@@ -1199,9 +1174,46 @@
     transform: none;
   }
 }
-@keyframes about-caret {
-  50% {
+@keyframes about-leave {
+  to {
     opacity: 0;
+    visibility: hidden;
+  }
+}
+@keyframes about-type {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+}
+@keyframes about-flag {
+  to {
+    background: color-mix(in srgb, var(--orange) 9%, var(--background));
+  }
+}
+@keyframes about-flag-dot {
+  to {
+    background: var(--orange);
+  }
+}
+@keyframes about-done {
+  to {
+    color: var(--success);
+  }
+}
+@keyframes about-bug {
+  to {
+    color: var(--orange);
+  }
+}
+@keyframes about-open {
+  to {
+    width: var(--open-width);
+    opacity: 1;
+  }
+}
+@keyframes about-bar {
+  to {
+    height: var(--h);
   }
 }
 @keyframes about-mdhl {
@@ -1381,10 +1393,17 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+.welcome-about .dwin.settled * {
+  animation-delay: 0s !important;
+  animation-duration: 0s !important;
+}
 @media (prefers-reduced-motion: reduce) {
   .welcome-about .welcome-beat,
-  .welcome-about .dwin [data-at].in,
   .welcome-about .art * {
     animation: none !important;
+  }
+  .welcome-about .dwin * {
+    animation-delay: 0s !important;
+    animation-duration: 0s !important;
   }
 }
