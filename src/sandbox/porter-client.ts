@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { Porter, NotFoundError, SandboxError } from "porter-sandbox";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
 import type { ExecResult } from "./sandbox.ts";
+import { tempPathBeside } from "./exec-file-ops.ts";
 
 const MISSING_RC = 44;
 const READ_CHUNK = 256 * 1024;
@@ -214,7 +214,7 @@ export function createPorterExec(client: PorterClientLike, resolveId: (id: strin
   }
 
   async function writeAbsBytes(id: string, absPath: string, data: Uint8Array): Promise<void> {
-    const part = `${absPath}.${randomUUID().slice(0, 8)}.part`;
+    const part = `${tempPathBeside(absPath)}.part`;
     const b64 = Buffer.from(data).toString("base64");
     const mk = await execRaw(id, `mkdir -p "$(dirname ${shq(absPath)})" && : > ${shq(part)}`, 60);
     if (mk.code !== 0) throw new Error(`porter write ${absPath}: mkdir failed (${mk.code})`);

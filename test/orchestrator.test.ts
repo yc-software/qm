@@ -2105,6 +2105,21 @@ test("an attachment's name stays out of the screen's source labels", async () =>
   assert.equal(parts.find((part) => part.content === "quarterly numbers")?.source, "attachment");
 });
 
+test("an attachment name over the file name limit reaches the inbox at 255 bytes and the agent is told", async () => {
+  const { app, blobTransfer } = freshApp();
+  const blob = await blobTransfer.put(Buffer.from("notes"));
+  const file = {
+    name: `${"a".repeat(300)}.txt`,
+    mimetype: "text/plain",
+    sizeBytes: blob.sizeBytes,
+    blobId: blob.blobId,
+  };
+  const reply = (await app.turn(dm("read these", { attachments: [file, file] }))).reply ?? "";
+  const note = "saved under a shortened name to fit the 255-byte file name limit (the shared name was 304 bytes).";
+  assert.ok(reply.includes(`${"a".repeat(251)}.txt), ${note}`), reply);
+  assert.ok(reply.includes(`${"a".repeat(249)}-2.txt), ${note}`), reply);
+});
+
 test("a later turn removes same-conversation and expired transfer files", async () => {
   const built = freshApp();
   const { app, sandbox } = built;

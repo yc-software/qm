@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import { basename, extname } from "node:path";
+import { basename, parse } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
 import { isUserItem, type Item } from "../sessions/items.ts";
@@ -97,20 +97,17 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
   return VISION_MIME_TYPES.has(baseMime(attachment.mimetype || mimeFromName(attachment.name)));
 }
 
-const FILESYSTEM_NAME_BYTES = 255;
-const LONGEST_WRITER_TEMP_SUFFIX_BYTES = `.part.${randomUUID()}`.length;
-const NAME_MAX = FILESYSTEM_NAME_BYTES - LONGEST_WRITER_TEMP_SUFFIX_BYTES;
+const FILE_NAME_MAX_BYTES = 255;
 
-function fitName(stem: string, suffix: string): string {
-  const room = NAME_MAX - Buffer.byteLength(suffix);
-  return room > 0 ? clampUtf8(stem, room) + suffix : clampUtf8(stem + suffix, NAME_MAX);
+function fitName(stem: string, suffix: string, maxBytes: number): string {
+  const room = maxBytes - Buffer.byteLength(suffix);
+  return room > 0 ? clampUtf8(stem, room) + suffix : clampUtf8(stem + suffix, maxBytes);
 }
 
 export function safeAttachmentName(name: string): string {
   const base = basename(String(name ?? "").replace(/\\/g, "/")).trim();
   if (!base || /^\.+$/.test(base)) return "file";
-  const ext = extname(base);
-  return fitName(base.slice(0, base.length - ext.length), ext);
+  return base;
 }
 
 export function mimeFromName(name: string): string {
@@ -166,13 +163,17 @@ async function registerArtifact(
   }
 }
 
-function uniqueName(name: string, used: Set<string>): string {
-  if (!used.has(name)) return name;
-  const ext = extname(name);
-  const stem = name.slice(0, name.length - ext.length);
-  let n = 2;
-  while (used.has(fitName(stem, `-${n}${ext}`))) n++;
-  return fitName(stem, `-${n}${ext}`);
+function uniqueName(name: string, used: Set<string>, maxBytes = Number.POSITIVE_INFINITY) {
+  const original = parse(name);
+  const fitted = fitName(original.name, original.ext, maxBytes);
+  const { name: stem, ext } = parse(fitted);
+  let candidate = fitted;
+  let suffix = ext;
+  for (let n = 2; used.has(candidate); n++) {
+    suffix = `-${n}${ext}`;
+    candidate = fitName(stem, suffix, maxBytes);
+  }
+  return { name: candidate, cut: fitted !== name || Buffer.byteLength(stem + suffix) > maxBytes };
 }
 
 export function withoutAlreadyIngested(
@@ -201,13 +202,18 @@ export function inboundManifest(
   inboxDir = INBOX_DIR,
   unstaged?: Set<string>,
   sharer?: string,
+  shortened?: ReadonlyMap<string, number>,
 ): string {
   return metas
     .map((m) => {
       const where = unstaged?.has(m.name)
         ? `Files ID ${m.artifactId}, not yet on a computer: send it with {file_id: "${m.artifactId}"}, or choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)}`
         : `./${inboxDir}/${m.name}`;
-      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (${where}).`;
+      const cut = shortened?.get(m.name);
+      const note = cut
+        ? `, saved under a shortened name to fit the ${FILE_NAME_MAX_BYTES}-byte file name limit (the shared name was ${cut} bytes)`
+        : "";
+      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (${where})${note}.`;
     })
     .join("\n");
 }
@@ -261,6 +267,7 @@ export async function materializeInbound(
   blocked: string[];
   unscreened: string[];
   unstaged?: Set<string>;
+  shortened?: Map<string, number>;
 }> {
   let target: Promise<SandboxHandle | null> | undefined;
   const computer = () =>
@@ -269,6 +276,7 @@ export async function materializeInbound(
       throw e;
     }));
   const unstaged = new Set<string>();
+  const shortened = new Map<string, number>();
   const metas: AttachmentMeta[] = [];
   const images: InboundImage[] = [];
   const tooMany: string[] = [];
@@ -287,8 +295,10 @@ export async function materializeInbound(
       continue;
     }
     const bytes = await collectBlob(blob.stream);
-    const name = uniqueName(safeAttachmentName(a.name), usedNames);
+    const fullName = safeAttachmentName(a.name);
+    const { name, cut } = uniqueName(fullName, usedNames, FILE_NAME_MAX_BYTES);
     usedNames.add(name);
+    if (cut) shortened.set(name, Buffer.byteLength(fullName));
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
     const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
     if (screenText && textContent !== null) {
@@ -330,7 +340,16 @@ export async function materializeInbound(
       });
     }
   }
-  return { metas, images, tooMany, unavailable, blocked, unscreened, ...(unstaged.size ? { unstaged } : {}) };
+  return {
+    metas,
+    images,
+    tooMany,
+    unavailable,
+    blocked,
+    unscreened,
+    ...(unstaged.size ? { unstaged } : {}),
+    ...(shortened.size ? { shortened } : {}),
+  };
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";
@@ -429,7 +448,7 @@ export async function collectNamedOutbound(
         stored?.stream.destroy();
         continue;
       }
-      const name = uniqueName(safeAttachmentName(stored?.name ?? label), usedNames);
+      const { name } = uniqueName(safeAttachmentName(stored?.name ?? label), usedNames);
       usedNames.add(name);
       const mimetype = stored?.mimetype || mimeFromName(name);
       let blob;
