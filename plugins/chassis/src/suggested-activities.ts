@@ -8,7 +8,7 @@ export interface SuggestedActivity {
   source?: string;
 }
 
-export interface AppActivity extends SuggestedActivity {
+interface AppActivity extends SuggestedActivity {
   replaces?: string;
 }
 

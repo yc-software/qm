@@ -89,7 +89,7 @@ test("/onboard shows the welcome to a person who already has conversations", asy
     h.releaseSessions();
     await h.boot();
     assert.ok(h.sessionsState.list.length > 0);
-    assert.match(h.mainText(), /Welcome to QM!\s*What is this\?\s*Where to start/);
+    assert.match(h.mainText(), /Welcome to QM!\s*Where to start/);
     assert.equal(location.pathname, "/");
   } finally {
     await h.close();
