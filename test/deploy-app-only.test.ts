@@ -98,10 +98,10 @@ test("app-only gateway checks exact current personal read grants without inherit
     files: [],
     name: "org-app",
   });
-  app.canManageDeployment = async () => {
+  app.canManageApp = async () => {
     throw new Error("app-only must not consult management authority");
   };
-  app.effectiveDeploymentPermission = async () => {
+  app.effectiveAppPermission = async () => {
     throw new Error("app-only must not consult inherited permission");
   };
   const server = createApiServer(app, {
@@ -166,20 +166,20 @@ test("app-only gateway checks exact current personal read grants without inherit
     });
     assert.equal((await get("shared")).status, 403, "a write grant cannot confer app-only management access");
     assert.equal(upstreamHits, 0);
-    await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
+    await app.shareApp(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
     const granted = await get("shared", "/api/data", "POST");
     assert.equal(granted.status, 200, "read grants allow using the app, including its POST API");
     assert.equal(JSON.parse(granted.body).cookie, undefined, "gateway cookie never reaches app");
     assert.notEqual(JSON.parse(granted.body)["x-portal-identity"], "forged");
     assert.equal((await get("shared", "/__claw__/version")).status, 200, "request goes to app, never management shell");
-    assert.equal((await get("org-app")).status, 403, "grant is for one deployment only");
+    assert.equal((await get("org-app")).status, 403, "grant is for one app only");
     await identity.deactivate(guest, "manual");
     assert.equal((await get("shared")).status, 403, "manual deactivation overrides the current direct grant");
     await identity.reactivate(guest);
-    await app.shareDeployment(shared.id, scopeId("personal", guest), null, { createdBy: "owner@example.test" });
+    await app.shareApp(shared.id, scopeId("personal", guest), null, { createdBy: "owner@example.test" });
     assert.equal((await get("shared")).status, 403, "same session is refused immediately after revoke");
-    await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
-    await app.renameDeployment(shared.id, "renamed");
+    await app.shareApp(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
+    await app.renameApp(shared.id, "renamed");
     await app.deploy({
       ownerScopeId,
       createdBy: "owner@example.test",
@@ -189,9 +189,9 @@ test("app-only gateway checks exact current personal read grants without inherit
     });
     assert.equal((await get("shared")).status, 403, "reused name does not inherit old immutable-ID grant");
     assert.equal((await get("renamed")).status, 200, "same immutable app retains its grant after rename");
-    await app.archiveDeployment(shared.id);
+    await app.archiveApp(shared.id);
     assert.equal((await get("renamed")).status, 404, "archived app cannot be reached even with its grant");
-    await app.setDeploymentPublic("shared", true, { createdBy: "owner@example.test" });
+    await app.setAppPublic("shared", true, { createdBy: "owner@example.test" });
     const publicVisit = await get("shared");
     assert.equal(publicVisit.status, 200);
     assert.equal(JSON.parse(publicVisit.body)["x-portal-identity"], undefined, "public link access remains anonymous");

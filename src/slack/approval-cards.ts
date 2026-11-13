@@ -1,22 +1,19 @@
 import { clip, inlineCode } from "./util.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
-import { isObj } from "../util/objects.ts";
-import { isSystemActor } from "../types.ts";
+import { isSystemActor, type Destination, type TurnRequest } from "../types.ts";
+import { principalDestination } from "../reach/reach.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
-
-export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
-export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
-
-export interface PendingApproval {
-  requestId: string;
-  command: string;
-  reason: string;
-  purpose?: string;
-  summary?: string;
-  kind?: "approval" | "input";
-  grantModes?: { session: boolean; always: boolean };
-  originUrl?: string;
-}
+import {
+  APPROVAL_DECISION_LABEL,
+  type ApprovalDecisionRecord,
+  type CardButton,
+  type PendingApproval,
+  type ToolCallView,
+  approvalButtons,
+  replayableTurn,
+  argText,
+  toolCallView,
+} from "../surfaces/approval-cards.ts";
 
 export interface SlackApprovalMessage {
   text: string;
@@ -27,18 +24,13 @@ const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
 
-function button(
-  text: string,
-  actionId: ApprovalActionId,
-  value: string,
-  style?: "primary" | "danger",
-): Record<string, unknown> {
+export function slackButton(b: CardButton): Record<string, unknown> {
   return {
     type: "button",
-    text: { type: "plain_text", text },
-    action_id: actionId,
-    value,
-    ...(style ? { style } : {}),
+    text: { type: "plain_text", text: b.label },
+    action_id: b.actionId,
+    value: b.value,
+    ...(b.style ? { style: b.style } : {}),
   };
 }
 
@@ -54,6 +46,20 @@ export function approvalDeliveryRecipient(request: ApprovalRequester | undefined
   return author?.surface === "slack" && author.id ? author.id : id;
 }
 
+export function slackApprovalCardRoute(request: TurnRequest): Destination | undefined {
+  const actorId = request.actor.externalId;
+  const recipient = approvalDeliveryRecipient(request);
+  if (!actorId || !recipient) return undefined;
+  const origin = request.surfaceOrigin;
+  const threadTs = request.conversation?.kind === "dm" ? origin?.replyThread : undefined;
+  return {
+    ...principalDestination(actorId, actorId),
+    target: recipient,
+    ...(threadTs ? { threadTs } : {}),
+    ...(origin ? { account: { id: origin.author.account, workspace: origin.workspace } } : {}),
+  };
+}
+
 export interface ApprovalCardDestination {
   toDm: boolean;
   channelPointer: string;
@@ -65,38 +71,9 @@ export function approvalCardDestination(threadOnly: boolean): ApprovalCardDestin
     : { toDm: false, channelPointer: "" };
 }
 
-interface ToolCallView {
-  label: string;
-  tool?: string;
-  args: Record<string, unknown>;
-}
-
 const ARG_VALUE_MAX = 500;
 const DECISION_SUBJECT_MAX = 150;
 const DECISION_DETAIL_MAX = 1_500;
-
-function toolCallView(p: { command: string; summary?: string; kind?: string }): ToolCallView | null {
-  if (p.kind === "input" || !p.summary || !p.command.startsWith(`${p.summary} {`)) return null;
-  let params: unknown;
-  try {
-    params = JSON.parse(p.command.slice(p.summary.length + 1));
-  } catch {
-    return null;
-  }
-  if (!isObj(params) || Array.isArray(params)) return null;
-  if (
-    params.operation === "invoke" &&
-    typeof params.tool === "string" &&
-    isObj(params.arguments ?? {}) &&
-    !Array.isArray(params.arguments)
-  )
-    return { label: p.summary, tool: params.tool, args: (params.arguments ?? {}) as Record<string, unknown> };
-  return { label: p.summary, args: params };
-}
-
-function argText(value: unknown): string {
-  return typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
-}
 
 function argLines(args: Record<string, unknown>): string[] {
   return Object.entries(args).map(([key, value]) => {
@@ -157,36 +134,11 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     blocks.push({
       type: "actions",
       block_id: `${APPROVAL_BLOCK_PREFIX}${p.requestId || "unknown"}`.slice(0, 255),
-      elements: [
-        ...(longCommand && !shown
-          ? []
-          : [
-              button("Allow once", "hilo_allow_once", p.requestId, "primary"),
-              ...(p.grantModes?.session === false ? [] : [button("Allow session", "hilo_allow_session", p.requestId)]),
-              ...(p.grantModes?.always === false ? [] : [button("Allow always", "hilo_allow_always", p.requestId)]),
-            ]),
-        button("Deny", "hilo_deny", p.requestId, "danger"),
-      ],
+      elements: approvalButtons(p, !longCommand || shown).map(slackButton),
     });
   }
   return { text, blocks };
 }
-
-type ApprovalDecision = "deny" | "once" | "session" | "always";
-
-export interface ApprovalDecisionRecord {
-  decision: ApprovalDecision;
-  by?: string;
-  at: number;
-  state: "pending" | "done";
-}
-
-const DECISION_LABEL: Record<ApprovalDecision, string> = {
-  deny: "Denied",
-  once: "Allowed once",
-  session: "Allowed for this conversation",
-  always: "Allowed always",
-};
 
 function slackDate(at: number): string {
   const seconds = Math.floor(at / 1000);
@@ -204,9 +156,9 @@ function approvalDecisionLine(
   if (record.state === "pending")
     return record.decision === "deny"
       ? `:hourglass_flowing_sand: Denying · ${subject}…`
-      : `:hourglass_flowing_sand: ${DECISION_LABEL[record.decision]}${by} · ${subject} — running…`;
+      : `:hourglass_flowing_sand: ${APPROVAL_DECISION_LABEL[record.decision]}${by} · ${subject} — running…`;
   const icon = record.decision === "deny" ? "" : ":white_check_mark: ";
-  return `${icon}${DECISION_LABEL[record.decision]}${by} · ${subject} · ${slackDate(record.at)}`;
+  return `${icon}${APPROVAL_DECISION_LABEL[record.decision]}${by} · ${subject} · ${slackDate(record.at)}`;
 }
 
 function approvalDecisionDetail(p: { command: string; summary?: string; kind?: string }): string | null {
@@ -279,15 +231,7 @@ export function recoveredApprovalContext(
   if (!req || typeof req.actor?.externalId !== "string" || typeof req.text !== "string") return null;
   const kind = req.conversation?.kind;
   if (kind !== "dm" && kind !== "channel" && kind !== "group") return null;
-  const {
-    surface: _surface,
-    async: _async,
-    idempotencyKey: _idempotencyKey,
-    redeliveryKey: _redeliveryKey,
-    approval: _approval,
-    relayInput: _relayInput,
-    ...turn
-  } = req;
+  const turn = replayableTurn(req);
   const origin =
     typeof req.deliveryTarget === "string" && req.deliveryTarget
       ? parseDeliveryTarget(req.deliveryTarget)

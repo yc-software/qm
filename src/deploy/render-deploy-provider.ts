@@ -5,7 +5,7 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
 import type { DeployProvider } from "./deploy-provider.ts";
-import type { Deployment, DeploymentVersion, DeployEndpoint } from "./deploy-store.ts";
+import type { PublishedApp, AppVersion, DeployEndpoint } from "./deploy-store.ts";
 import type { RenderDeployArtifacts } from "./render-deploy-artifacts.ts";
 import { createRenderApi, list, RenderApiError } from "./render-api.ts";
 import { createRenderAppNetwork } from "./render-app-network.ts";
@@ -74,7 +74,7 @@ export interface RenderDeployProviderOptions {
   appRegion?: string;
   store: DurableMap<StoredRenderDeploy>;
   artifacts: RenderDeployArtifacts;
-  resources: { ensure(deploymentId: string, repair?: boolean): Promise<Record<string, string>> };
+  resources: { ensure(appId: string, repair?: boolean): Promise<Record<string, string>> };
   deployTimeoutMs?: number;
   pollIntervalMs?: number;
   fetchImpl?: typeof fetch;
@@ -90,13 +90,13 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
   const poll = opts.pollIntervalMs ?? 2_000;
   const locks = opts.advisoryLock ?? createNoopAdvisoryLock();
   const queue = createKeyedQueue();
-  const name = (d: Deployment) => `${prefix}-${d.id}`;
+  const name = (d: PublishedApp) => `${prefix}-${d.id}`;
   const path = (s: Service) => `/services/${encodeURIComponent(s.id)}`;
   const save = (r: StoredRenderDeploy) => opts.store.put(r.deploymentId, r);
   const network = createRenderAppNetwork({ ...opts, api, name });
   const endpoints = new LRUCache<string, DeployEndpoint>({ max: 500, ttl: 10_000 });
   const checks = new Map<string, Promise<DeployEndpoint | null>>();
-  const serialized = <T>(d: Deployment, run: () => Promise<T>) =>
+  const serialized = <T>(d: PublishedApp, run: () => Promise<T>) =>
     queue(d.id, () =>
       locks.withLock(`render-provider:${d.id}`, async () => {
         endpoints.delete(d.id);
@@ -117,10 +117,10 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
       throw new Error("Render app environment does not belong to the configured project");
   }
 
-  async function owned(service: Service, deployment: Deployment, record: StoredRenderDeploy): Promise<Service> {
-    await network.assertEnvironment(deployment, record.environmentId);
+  async function owned(service: Service, publishedApp: PublishedApp, record: StoredRenderDeploy): Promise<Service> {
+    await network.assertEnvironment(publishedApp, record.environmentId);
     if (
-      service.name !== name(deployment) ||
+      service.name !== name(publishedApp) ||
       service.ownerId !== opts.workspaceId ||
       service.environmentId !== record.environmentId ||
       service.type !== "web_service" ||
@@ -130,9 +130,11 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
       service.serviceDetails.disk.sizeGB < 1 ||
       service.serviceDetails.numInstances !== 1
     )
-      throw new Error(`Render app ${deployment.id} is not the expected gated service with a persistent disk at /data`);
+      throw new Error(
+        `Render app ${publishedApp.id} is not the expected gated service with a persistent disk at /data`,
+      );
     const marker = await api.request<{ value: string }>("GET", `${path(service)}/env-vars/${OWNER_MARKER}`);
-    if (marker?.value !== deployment.id) throw new Error("Render app service ownership does not match");
+    if (marker?.value !== publishedApp.id) throw new Error("Render app service ownership does not match");
     return service;
   }
 
@@ -141,16 +143,16 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
       ? api.request<Service>("GET", `/services/${encodeURIComponent(record.serviceId)}`, undefined, true)
       : Promise.resolve(null);
 
-  async function byName(deployment: Deployment, record: StoredRenderDeploy): Promise<Service | null> {
+  async function byName(publishedApp: PublishedApp, record: StoredRenderDeploy): Promise<Service | null> {
     const service = (
-      await list<Service>(api, "/services", "service", { name: name(deployment), ownerId: opts.workspaceId })
-    ).find((row) => row.name === name(deployment));
-    return service ? owned(service, deployment, record) : null;
+      await list<Service>(api, "/services", "service", { name: name(publishedApp), ownerId: opts.workspaceId })
+    ).find((row) => row.name === name(publishedApp));
+    return service ? owned(service, publishedApp, record) : null;
   }
 
-  async function find(deployment: Deployment, record: StoredRenderDeploy): Promise<Service | null> {
+  async function find(publishedApp: PublishedApp, record: StoredRenderDeploy): Promise<Service | null> {
     const service = await retained(record);
-    return service ? owned(service, deployment, record) : byName(deployment, record);
+    return service ? owned(service, publishedApp, record) : byName(publishedApp, record);
   }
 
   function hostOf(service: Service): string {
@@ -202,12 +204,12 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
   }
 
   async function finish(
-    deployment: Deployment,
+    publishedApp: PublishedApp,
     initial: StoredRenderDeploy & { pending: RenderPending },
   ): Promise<{ service: Service; record: StoredRenderDeploy; address: DeployEndpoint }> {
     const unconfirmed = (cause?: unknown) =>
-      new Error(`Render app ${deployment.id} has an unconfirmed deployment; retry to reconcile it`, { cause });
-    const service = await find(deployment, initial);
+      new Error(`Render app ${publishedApp.id} has an unconfirmed deployment; retry to reconcile it`, { cause });
+    const service = await find(publishedApp, initial);
     if (!service) throw unconfirmed();
     let record = initial;
     if (record.serviceId !== service.id) {
@@ -308,7 +310,7 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
     throw unconfirmed(probeFailure);
   }
 
-  async function check(deployment: Deployment, record: StoredRenderDeploy): Promise<DeployEndpoint | null> {
+  async function check(publishedApp: PublishedApp, record: StoredRenderDeploy): Promise<DeployEndpoint | null> {
     let service: Service | null;
     try {
       service = await retained(record);
@@ -317,10 +319,10 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
       swallow("render-deploy: check the app service", error);
       return endpoint(record.host, record.token);
     }
-    service ??= await byName(deployment, record);
+    service ??= await byName(publishedApp, record);
     if (!service || service.suspended === "suspended") return null;
     const host = hostOf(service);
-    if (host !== record.host) await opts.store.merge(deployment.id, { host });
+    if (host !== record.host) await opts.store.merge(publishedApp.id, { host });
     return endpoint(host, record.token);
   }
 
@@ -334,29 +336,29 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
     throw new Error("The previous Render deployment is still pending");
   }
 
-  async function apply(deployment: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
+  async function apply(publishedApp: PublishedApp, version: AppVersion): Promise<DeployEndpoint> {
     await validate();
-    let record = await opts.store.get(deployment.id);
+    let record = await opts.store.get(publishedApp.id);
     if (!record)
-      record = await opts.store.putIfAbsent(deployment.id, {
-        deploymentId: deployment.id,
+      record = await opts.store.putIfAbsent(publishedApp.id, {
+        deploymentId: publishedApp.id,
         appRegion: opts.appRegion ?? region,
         token: randomBytes(32).toString("base64url"),
         suspended: false,
       });
-    record = await network.ensure(deployment, record);
+    record = await network.ensure(publishedApp, record);
     if (record.pending?.version === version.version) {
-      const recovered = await finish(deployment, { ...record, pending: record.pending });
+      const recovered = await finish(publishedApp, { ...record, pending: record.pending });
       record = recovered.record;
       if (record.liveVersion === version.version) return recovered.address;
     }
-    let service = await find(deployment, record);
+    let service = await find(publishedApp, record);
     if (
       service &&
       service.suspended !== "suspended" &&
       !record.suspended &&
       record.liveVersion === version.version &&
-      deployment.appliedVersion !== version.version
+      publishedApp.appliedVersion !== version.version
     ) {
       const host = hostOf(service);
       if (record.host !== host) {
@@ -386,11 +388,11 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
         created =
           (await api.request<{ service: Service }>("POST", "/services", {
             type: "web_service",
-            name: name(deployment),
+            name: name(publishedApp),
             ownerId: opts.workspaceId,
             environmentId: record.environmentId,
             ...source,
-            envVars: [{ key: OWNER_MARKER, value: deployment.id }],
+            envVars: [{ key: OWNER_MARKER, value: publishedApp.id }],
             secretFiles: [],
             serviceDetails: {
               ...bootstrap,
@@ -404,19 +406,22 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
         if (error instanceof RenderApiError && error.rejected) throw error;
         failure = error;
       }
-      service = created?.service ?? (await find(deployment, record));
+      service = created?.service ?? (await find(publishedApp, record));
       if (!service) throw new Error("Render app bootstrap is unconfirmed; retry to reconcile it", { cause: failure });
       record = { ...record, serviceId: service.id };
       await save(record);
     }
     await settle(service);
-    const resources = await opts.resources.ensure(deployment.id, record.suspended || service.suspended === "suspended");
-    const artifact = await opts.artifacts.prepare(deployment, version);
+    const resources = await opts.resources.ensure(
+      publishedApp.id,
+      record.suspended || service.suspended === "suspended",
+    );
+    const artifact = await opts.artifacts.prepare(publishedApp, version);
     const readinessNonce = randomBytes(32).toString("base64url");
     const envVars = Object.entries({
       PORT: "8080",
       QM_RENDER_APP_TOKEN: record.token,
-      [OWNER_MARKER]: deployment.id,
+      [OWNER_MARKER]: publishedApp.id,
     }).map(([key, value]) => ({ key, value }));
     const secretFiles = [
       {
@@ -443,38 +448,38 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
       },
     };
     await save(submitted);
-    const live = await finish(deployment, submitted);
+    const live = await finish(publishedApp, submitted);
     return live.address;
   }
 
   return {
     profile: { managedScaleToZero: false, dataDir: "/data" },
-    apply: (deployment, version) => serialized(deployment, () => apply(deployment, version)),
-    async resolveEndpoint(deployment) {
-      if (deployment.status === "archived") return null;
-      const record = await opts.store.get(deployment.id);
+    apply: (publishedApp, version) => serialized(publishedApp, () => apply(publishedApp, version)),
+    async resolveEndpoint(publishedApp) {
+      if (publishedApp.status === "archived") return null;
+      const record = await opts.store.get(publishedApp.id);
       if (!record || record.suspended || record.liveVersion === undefined) return null;
-      const cached = endpoints.get(deployment.id);
+      const cached = endpoints.get(publishedApp.id);
       if (cached) return cached;
-      const running = checks.get(deployment.id);
+      const running = checks.get(publishedApp.id);
       if (running) return running;
-      const pending = check(deployment, record)
+      const pending = check(publishedApp, record)
         .then((address) => {
-          if (address) endpoints.set(deployment.id, address);
+          if (address) endpoints.set(publishedApp.id, address);
           return address;
         })
         .finally(() => {
-          if (checks.get(deployment.id) === pending) checks.delete(deployment.id);
+          if (checks.get(publishedApp.id) === pending) checks.delete(publishedApp.id);
         });
-      checks.set(deployment.id, pending);
+      checks.set(publishedApp.id, pending);
       return pending;
     },
-    destroy: (deployment) =>
-      serialized(deployment, async () => {
+    destroy: (publishedApp) =>
+      serialized(publishedApp, async () => {
         await validate();
-        const record = await opts.store.get(deployment.id);
+        const record = await opts.store.get(publishedApp.id);
         if (!record) return;
-        let service = await find(deployment, record);
+        let service = await find(publishedApp, record);
         if (service && service.suspended !== "suspended") await api.request("POST", `${path(service)}/suspend`);
         const deadline = Date.now() + timeout;
         while (service && service.suspended !== "suspended") {
@@ -482,12 +487,12 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
           await sleep(Math.max(1, poll));
           service = await retained(record);
         }
-        await opts.artifacts.revoke(deployment.id);
+        await opts.artifacts.revoke(publishedApp.id);
         await save({ ...record, suspended: true, pending: undefined });
       }),
-    async logs(deployment, { tailLines }) {
-      const record = await opts.store.get(deployment.id);
-      const service = record && (await find(deployment, record));
+    async logs(publishedApp, { tailLines }) {
+      const record = await opts.store.get(publishedApp.id);
+      const service = record && (await find(publishedApp, record));
       if (!service) return null;
       const query = new URLSearchParams({
         ownerId: opts.workspaceId,

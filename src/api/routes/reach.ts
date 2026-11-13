@@ -263,6 +263,10 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     ...(attachments?.length ? { attachments } : {}),
     ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
     ...(capability.destination ? { currentDestination: capability.destination } : {}),
+    turn: {
+      ...(capability.surface ? { surface: capability.surface } : {}),
+      liveReplies: capability.liveReplies === true,
+    },
   });
   if (!result.ok) {
     return sendJson(res, result.status, {

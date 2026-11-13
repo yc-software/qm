@@ -39,7 +39,7 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   const crons = { list: async () => [] };
   const webhooks = { list: async () => [] };
   const skills = { list: async () => [] };
-  const deploy = { listDeployments: async () => [] };
+  const deploy = { listApps: async () => [] };
   return createApp({
     acl,
     files,

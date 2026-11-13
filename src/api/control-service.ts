@@ -921,7 +921,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
         const invite =
           req.type === "deploy" && req.email !== undefined && permission === "read"
-            ? await app.inviteToDeployment(
+            ? await app.inviteToApp(
                 home.id,
                 req.email,
                 { createdBy: capability.actorId, botActor: capability.botActor },

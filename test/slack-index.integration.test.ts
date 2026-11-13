@@ -230,7 +230,7 @@ mock.module("@slack/web-api", {
 const { slackPluginConfigFromEnv, startSlackPlugin } = await import("../src/slack/index.ts");
 
 class FakeCore implements SlackCoreClient {
-  async decideDeploymentAccess(): Promise<string> {
+  async decideAppAccess(): Promise<string> {
     throw new Error("not used");
   }
   async inboxSlackMessage(): Promise<void> {}
