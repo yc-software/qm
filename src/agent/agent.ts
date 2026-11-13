@@ -101,6 +101,7 @@ export interface AgentTurnInput {
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
+  botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
@@ -198,7 +199,7 @@ export interface DetectResult {
 }
 
 export type SessionRoute = Partial<
-  Pick<AgentTurnInput, "scopeLabel" | "runtime" | "runtimePurpose" | "runtimePinned" | "providerKeys">
+  Pick<AgentTurnInput, "scopeLabel" | "runtime" | "runtimePurpose" | "runtimePinned" | "providerKeys" | "session">
 >;
 
 export interface CompactInput extends SessionRoute {

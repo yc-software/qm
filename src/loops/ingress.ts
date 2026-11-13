@@ -386,7 +386,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         return { status: 404, body: "Not found" };
       const verifier = getVerifier(source.kind === "slack" ? "slack" : "hmac-sha256")!;
       const input = { ...request, secret: source.secret };
-      if (!verifier.verify(input)) return { status: 401, body: "Invalid signature" };
+      if (verifier.verify(input) !== true) return { status: 401, body: "Invalid signature" };
       let payload: unknown;
       try {
         payload = JSON.parse(request.rawBody);

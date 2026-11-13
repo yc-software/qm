@@ -49,7 +49,16 @@ struct NativeInboxItem: Decodable, Identifiable {
     let context: [Context]?
     let sentChat: Bool?
     let images: [String]?
+
+    func readable(_ text: String) -> String {
+      source == "slack" ? SlackText.plain(text) : text
+    }
   }
+  struct Triage: Decodable {
+    let priority: String?
+    let groupId: String?
+  }
+  static let priorities = ["urgent", "high", "normal", "low"]
   let id: String
   let loopId: String
   let state: String
@@ -63,10 +72,14 @@ struct NativeInboxItem: Decodable, Identifiable {
   let actionKind: String?
   let actionResult: String?
   let updatedAt: Double
+  let triage: Triage?
   var title: String { sourcePayload.title ?? summary ?? "Review item" }
   var kind: String { source ?? sourcePayload.source ?? "generic" }
   var canReply: Bool { ["gmail", "slack"].contains(kind) }
   var handled: Bool { state == "actioned" || state == "dismissed" }
+  var priority: String { triage?.priority ?? "normal" }
+  var canReopen: Bool { state == "dismissed" }
+  var leadsGroup: Bool { !handled && triage?.groupId == id }
 }
 struct NativeInboxLoop: Decodable, Identifiable {
   struct Sync: Decodable {
@@ -77,10 +90,12 @@ struct NativeInboxLoop: Decodable, Identifiable {
   let id: String
   let name: String
   let source: String?
+  let sources: [String]?
   let selected: Bool?
-  let count: Int?
+  var count: Int?
   let syncCron: Sync?
   let ingestionActive: Bool?
+  let prioritize: Bool?
 }
 struct NativeInboxFeed: Decodable {
   let selected: [NativeInboxLoop]
@@ -88,6 +103,7 @@ struct NativeInboxFeed: Decodable {
   let items: [NativeInboxItem]
   let total: Int
   let nextCursor: String?
+  let filter: String
 }
 struct NativeInboxDetail: Decodable {
   let item: NativeInboxItem
@@ -100,18 +116,55 @@ final class InboxModel {
   var items: [NativeInboxItem] = []
   var selected: [NativeInboxLoop] = []
   var available: [NativeInboxLoop] = []
+  private(set) var total = 0
+  var loaded = false
+  private(set) var filter = "human"
   var nextCursor: String?
   var busy = false
   var error: String?
+  var notice: String?
   private let loader = LoadGuard()
   var loading: Bool { loader.loading }
   private var cursors: Set<String> = []
+  private var completedQuery = ""
+  private var requested = (view: "open", loop: "all")
+  static let filters = [
+    (id: "all", label: "All emails"), (id: "human", label: "Light filtering"),
+    (id: "triaged", label: "Heavy filtering"),
+  ]
   init(client: APIClient) { self.client = client }
+  func completed(view: String, loop: String) -> Bool { completedQuery == "\(view)|\(loop)" }
+  func showsEmptyState(view: String, loop: String) -> Bool {
+    items.isEmpty && loaded && error == nil && completed(view: view, loop: loop)
+  }
+  func filtersEmail(_ loop: String) -> Bool {
+    loop == "all" || selected.contains { $0.id == loop && $0.sources?.contains("gmail") == true }
+  }
+  func selectFilter(_ value: String) async {
+    struct Receipt: Decodable { let ok: Bool }
+    guard !busy, value != filter else { return }
+    busy = true
+    loader.cancel()
+    defer { busy = false }
+    do {
+      let receipt: Receipt = try await client.fetch(
+        "api/ui-state",
+        body: [
+          "key": "inbox-filter", "value": value,
+          "updatedAt": Int(Date().timeIntervalSince1970 * 1000),
+        ], method: "PUT")
+      await reload()
+      notice = receipt.ok ? nil : "Filter not saved. A newer filter was saved elsewhere."
+    } catch { notice = "Filter not saved. \(error.localizedDescription)" }
+  }
   func load(view: String, loop: String, reset: Bool = true, afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
     if !reset && (loading || nextCursor == nil) { return }
-    if reset { cursors = [] }
+    requested = (view, loop)
     let cursor = reset ? nil : nextCursor
+    let completing = "\(view)|\(loop)"
+    let refreshing = reset && !afterMutation && completing == completedQuery && !cursors.isEmpty
+    if reset && !refreshing { cursors = [] }
     var query: [URLQueryItem] = []
     if view != "open" { query.append(.init(name: "view", value: view)) }
     if loop != "all" { query.append(.init(name: "loopId", value: loop)) }
@@ -121,31 +174,81 @@ final class InboxModel {
     } apply: { result in
       selected = result.selected
       available = result.available
+      total = result.total
+      let fresh = Set(result.items.map(\.id))
+      let keeping = refreshing && result.nextCursor != nil && result.filter == filter
+      filter = result.filter
+      let later =
+        keeping ? items.suffix(from: (items.lastIndex { fresh.contains($0.id) } ?? -1) + 1) : []
       if reset { items = [] }
+      if reset && !keeping { cursors = [] }
       var ids = Set(items.map(\.id))
       items.append(contentsOf: result.items.filter { ids.insert($0.id).inserted })
+      items.append(contentsOf: later)
       if let cursor { cursors.insert(cursor) }
-      if let next = result.nextCursor, cursors.contains(next) {
-        nextCursor = nil
-        throw QMError.message("The inbox did not advance. Refresh to try again.")
+      if !keeping {
+        if let next = result.nextCursor, cursors.contains(next) {
+          nextCursor = nil
+          throw QMError.message("The inbox did not advance. Refresh to try again.")
+        }
+        nextCursor = result.nextCursor
       }
-      nextCursor = result.nextCursor
+      loaded = true
+      completedQuery = completing
       error = nil
     } failed: {
+      completedQuery = completing
       error = $0.localizedDescription
     }
   }
-  func select(_ loop: NativeInboxLoop) async {
+  func prioritizes(_ item: NativeInboxItem) -> Bool {
+    item.triage?.priority != nil
+      || selected.contains { $0.id == item.loopId && $0.prioritize == true }
+  }
+  func reload() async {
+    await load(view: requested.view, loop: requested.loop, afterMutation: true)
+  }
+  func groupSize(_ item: NativeInboxItem) -> Int {
+    guard item.leadsGroup, nextCursor == nil || items.last?.triage?.groupId != item.id else {
+      return 1
+    }
+    return max(1, items.count { !$0.handled && $0.triage?.groupId == item.id })
+  }
+  func openCount(_ loop: String) -> Int {
+    loop == "all" ? total : selected.first { $0.id == loop }?.count ?? 0
+  }
+  func reconcile(_ item: NativeInboxItem, wasHandled: Bool) {
+    guard item.handled != wasHandled else {
+      if let index = items.firstIndex(where: { $0.id == item.id }) { items[index] = item }
+      return
+    }
+    items.removeAll { $0.id == item.id }
+    let change = item.handled ? -1 : 1
+    total = max(0, total + change)
+    if let index = selected.firstIndex(where: { $0.id == item.loopId }) {
+      selected[index].count = max(0, (selected[index].count ?? 0) + change)
+    }
+  }
+  func enableSync(_ loop: NativeInboxLoop, view: String, active: String) async throws {
     guard !busy else { return }
     busy = true
     loader.cancel()
     defer { busy = false }
-    do {
-      var ids = selected.map(\.id)
-      if ids.contains(loop.id) { ids.removeAll { $0 == loop.id } } else { ids.append(loop.id) }
-      let _: MutationReceipt = try await client.fetch("api/inbox/selection", body: ["loopIds": ids])
-      await load(view: "open", loop: "all", afterMutation: true)
-    } catch { self.error = error.localizedDescription }
+    let _: MutationReceipt = try await client.fetch(
+      "api/inbox/sync-cron", body: ["enabled": true, "loopId": loop.id])
+    await load(view: view, loop: active, afterMutation: true)
+  }
+  func select(_ loop: NativeInboxLoop, view: String, active: String) async throws -> String {
+    guard !busy else { return active }
+    busy = true
+    loader.cancel()
+    defer { busy = false }
+    var ids = selected.map(\.id)
+    if ids.contains(loop.id) { ids.removeAll { $0 == loop.id } } else { ids.append(loop.id) }
+    let _: MutationReceipt = try await client.fetch("api/inbox/selection", body: ["loopIds": ids])
+    let next = active == "all" || ids.contains(active) ? active : "all"
+    await load(view: view, loop: next, afterMutation: true)
+    return next
   }
 }
 
@@ -155,6 +258,10 @@ struct NativeInboxView: View {
   @State private var view = "open"
   @State private var loop = "all"
   @State private var managing = false
+  @State private var opened: NativeInboxItem?
+  @State private var opening = false
+  @State private var refreshing = false
+  @State private var loadingMore = false
   @Environment(\.scenePhase) private var phase
   init(client: APIClient, user: String) {
     self.user = user
@@ -169,38 +276,77 @@ struct NativeInboxView: View {
       }.pickerStyle(.segmented)
       NavigationLink("Sent mail") { NativeSentMailView(client: model.client, user: user) }
       Picker("Source", selection: $loop) {
-        Text("All").tag("all")
-        ForEach(model.selected) { Text($0.name).tag($0.id) }
+        Text(model.loaded ? "All (\(model.openCount("all")))" : "All").tag("all")
+        ForEach(model.selected) { Text("\($0.name) (\(model.openCount($0.id)))").tag($0.id) }
       }
+      if view == "open" && model.filtersEmail(loop) {
+        Picker(
+          "Email filter",
+          selection: Binding(
+            get: { model.filter },
+            set: { value in Task { await model.selectFilter(value) } })
+        ) {
+          ForEach(InboxModel.filters, id: \.id) { Text($0.label).tag($0.id) }
+        }
+      }
+      if let notice = model.notice { Text(notice).foregroundStyle(QMTheme.warning) }
       if let error = model.error { Text(error).foregroundStyle(.red) }
+      if model.loading && !model.loaded && model.error == nil {
+        NativeCollectionLoading(label: "Loading inbox", symbol: "tray")
+      }
       ForEach(model.items) { item in
-        NavigationLink {
-          NativeInboxItemView(client: model.client, user: user, original: item)
+        NativeLinkRow {
+          opened = item
+          opening = true
         } label: {
           VStack(alignment: .leading, spacing: 7) {
             Text(item.title).font(.headline).lineLimit(2)
             if let from = item.sourcePayload.from { Text(from).font(.subheadline) }
-            Text(item.sourcePayload.snippet ?? item.parkedReason ?? item.summary ?? "").font(
+            Text(
+              item.sourcePayload.snippet.map(item.sourcePayload.readable) ?? item.parkedReason
+                ?? item.summary ?? ""
+            ).font(
               .subheadline
             ).foregroundStyle(.secondary).lineLimit(3)
-            Text("\(item.kind.capitalized) · \(item.state)").font(.caption)
-          }.padding(.vertical, 6)
+            Text(caption(item)).font(.caption)
+          }
         }
       }
       if model.nextCursor != nil {
-        Button("Load more") { Task { await model.load(view: view, loop: loop, reset: false) } }
-          .disabled(model.loading)
+        if loadingMore && model.loading {
+          NativeCollectionRefreshHeader(label: "Loading more inbox items")
+        }
+        Button("Load more") {
+          Task {
+            loadingMore = true
+            defer { loadingMore = false }
+            await model.load(view: view, loop: loop, reset: false)
+          }
+        }.disabled(model.loading)
       }
-      if model.items.isEmpty && !model.loading && model.error == nil {
+      if model.showsEmptyState(view: view, loop: loop) {
         ContentUnavailableView(
-          "You're caught up", systemImage: "tray",
-          description: Text("Items from your selected loops will appear here."))
+          view == "handled"
+            ? "No handled items"
+            : view == "sent"
+              ? "No sent actions" : loop == "all" ? "You're caught up" : "No open items",
+          systemImage: "tray",
+          description: Text(
+            view == "open" && model.filter == "triaged" && model.filtersEmail(loop)
+              ? "Choose Light filtering or All emails to see more."
+              : loop == "all"
+                ? "Items from your selected loops will appear here."
+                : "No items in this source match the selected status."))
       }
     }
     .navigationTitle("Inbox").scrollContentBackground(.hidden).background(QMTheme.paper)
-    .toolbar {
-      Button("Manage sources", systemImage: "line.3.horizontal.decrease") { managing = true }
-    }
+    .modifier(
+      NativeCollectionRefresh(
+        active: (refreshing || !model.completed(view: view, loop: loop)) && model.loading
+          && (model.loaded || (refreshing && model.error != nil)),
+        label: "Refreshing inbox")
+    )
+    .toolbar { Button("Manage sources", systemImage: "tray.2") { managing = true } }
     .task(id: "\(view)|\(loop)|\(phase == .active)") {
       guard phase == .active else { return }
       while !Task.isCancelled {
@@ -208,42 +354,80 @@ struct NativeInboxView: View {
         do { try await Task.sleep(for: .seconds(15)) } catch { return }
       }
     }
-    .refreshable { await model.load(view: view, loop: loop) }
+    .onChange(of: model.selected.map(\.id)) { _, sources in
+      if loop != "all" && !sources.contains(loop) { loop = "all" }
+    }
+    .refreshable { await refresh() }
+    .navigationDestination(isPresented: $opening) {
+      if let opened {
+        NativeInboxItemView(client: model.client, user: user, original: opened, inbox: model)
+          .id(opened.id)
+      }
+    }
     .sheet(
-      isPresented: $managing, onDismiss: { Task { await model.load(view: view, loop: loop) } },
-      content: { NativeInboxSources(model: model) })
+      isPresented: $managing, onDismiss: { Task { await refresh() } },
+      content: { NativeInboxSources(model: model, view: view, loop: $loop) })
+  }
+
+  private func refresh() async {
+    refreshing = true
+    defer { refreshing = false }
+    await model.load(view: view, loop: loop)
+  }
+
+  private func caption(_ item: NativeInboxItem) -> String {
+    var parts = [item.kind.capitalized, item.state]
+    if !item.handled && item.priority != "normal" { parts.append(item.priority.capitalized) }
+    let size = model.groupSize(item)
+    if size > 1 {
+      parts.append("Group of \(size)")
+    } else if !item.handled && item.triage?.groupId != nil {
+      parts.append("Grouped")
+    }
+    return parts.joined(separator: " · ")
   }
 }
 
 struct NativeInboxSources: View {
   @Bindable var model: InboxModel
+  let view: String
+  @Binding var loop: String
   @Environment(\.dismiss) private var dismiss
   @State private var error: String?
   var body: some View {
     NavigationStack {
       QMList {
         if let error = error ?? model.error { Text(error).foregroundStyle(.red) }
-        ForEach(model.available) { loop in
+        ForEach(model.available) { source in
           Button {
-            Task { await model.select(loop) }
+            Task { await toggle(source) }
           } label: {
             Label(
-              loop.name,
-              systemImage: model.selected.contains { $0.id == loop.id }
+              source.name,
+              systemImage: model.selected.contains { $0.id == source.id }
                 ? "checkmark.circle.fill" : "circle")
           }
         }
-        Section("Sync") {
-          ForEach(model.selected) { loop in
-            VStack(alignment: .leading, spacing: 6) {
-              Text(loop.name).font(.headline)
-              if let cron = loop.syncCron {
-                Text(cron.enabled ? "Scheduled sync on" : "Scheduled sync paused").font(.caption)
-                Button("Sync now") { Task { await sync(loop, run: true) } }
-              } else {
-                Button("Enable scheduled sync") { Task { await sync(loop, run: false) } }
+        if model.available.isEmpty {
+          if model.loading && !model.loaded && error == nil && model.error == nil {
+            NativeCollectionLoading(label: "Loading sources", symbol: "tray", rows: 3)
+          } else if model.loaded && error == nil && model.error == nil {
+            ContentUnavailableView("No sources available", systemImage: "tray")
+          }
+        }
+        ForEach(model.selected) { source in
+          Section(source.name) {
+            if source.source != nil && source.syncCron?.enabled != true {
+              Button("Turn on scheduled sync") {
+                Task {
+                  await attempt { try await model.enableSync(source, view: view, active: loop) }
+                }
               }
             }
+            if let cron = source.syncCron {
+              Button("Sync now") { Task { await sync(cron) } }
+            }
+            Button("Remove from Inbox", role: .destructive) { Task { await toggle(source) } }
           }
         }
       }
@@ -252,21 +436,24 @@ struct NativeInboxSources: View {
       }
     }
   }
-  private func sync(_ loop: NativeInboxLoop, run: Bool) async {
+  private func attempt(_ change: () async throws -> Void) async {
+    do {
+      try await change()
+      error = nil
+    } catch { self.error = error.localizedDescription }
+  }
+  private func toggle(_ source: NativeInboxLoop) async {
+    await attempt { loop = try await model.select(source, view: view, active: loop) }
+  }
+  private func sync(_ cron: NativeInboxLoop.Sync) async {
     guard !model.busy else { return }
     model.busy = true
     defer { model.busy = false }
-    do {
-      if run, let cron = loop.syncCron {
-        let _: MutationReceipt = try await model.client.fetch(
-          "api/crons/\(cron.id.apiComponent)/run", body: [:])
-      } else {
-        let _: MutationReceipt = try await model.client.fetch(
-          "api/inbox/sync-cron", body: ["enabled": true, "loopId": loop.id])
-      }
-      await model.load(view: "open", loop: "all", afterMutation: true)
-      error = nil
-    } catch { self.error = error.localizedDescription }
+    await attempt {
+      let _: MutationReceipt = try await model.client.fetch(
+        "api/crons/\(cron.id.apiComponent)/run", body: [:])
+      await model.load(view: view, loop: loop, afterMutation: true)
+    }
   }
 }
 
@@ -286,6 +473,7 @@ final class InboxDetailModel {
   var proposalAt: Double?
   private let loader = LoadGuard()
   let drafts: DraftStore
+  var loading: Bool { loader.loading }
   private var restored = false
   var draft: NativeInboxDraft {
     .init(text: text, to: to, cc: cc, subject: subject, proposalAt: proposalAt)
@@ -296,9 +484,15 @@ final class InboxDetailModel {
   private var savedSubject = ""
   var dirty: Bool { text != savedText || to != savedTo || cc != savedCC || subject != savedSubject }
   var path: String { "api/loops/\(item.loopId.apiComponent)/items/\(item.id.apiComponent)" }
-  init(client: APIClient, user: String, item: NativeInboxItem) {
+  var canPrioritize: Bool {
+    !item.handled && (inbox?.prioritizes(item) ?? (item.triage?.priority != nil))
+  }
+  var canUngroup: Bool { !item.handled && item.triage?.groupId != nil }
+  private let inbox: InboxModel?
+  init(client: APIClient, user: String, item: NativeInboxItem, inbox: InboxModel? = nil) {
     self.client = client
     self.item = item
+    self.inbox = inbox
     drafts = DraftStore(
       account: client.baseURL.absoluteString + user,
       thread: "native-inbox:\(item.loopId):\(item.id)")
@@ -320,10 +514,12 @@ final class InboxDetailModel {
     subject = savedSubject
     await load()
   }
-  func load() async {
+  func load(refreshSource: Bool = false) async {
     guard !busy, !dirty else { return }
     await loader.run {
-      try await client.fetch(path) as NativeInboxDetail
+      try await client.fetch(
+        path, query: refreshSource ? [.init(name: "refreshSource", value: "1")] : [])
+        as NativeInboxDetail
     } apply: { result in
       guard !dirty else { return }
       accept(result)
@@ -345,6 +541,7 @@ final class InboxDetailModel {
     }
   }
   func accept(_ result: NativeInboxDetail) {
+    inbox?.reconcile(result.item, wasHandled: item.handled)
     item = result.item
     outputs = result.outputs ?? outputs
     loaded = true
@@ -362,30 +559,39 @@ final class InboxDetailModel {
     await action(
       "followup", message: "Please draft a reply to this item for my review. Do not send it.")
   }
-  func action(_ kind: String, message: String? = nil) async -> Bool {
+  func archive() async -> Bool {
+    await action("dismiss", args: item.leadsGroup ? ["group": true] : [:])
+  }
+  func ungroup() async -> Bool {
+    guard canUngroup else { return false }
+    return await action("ungroup")
+  }
+  func reopen() async -> Bool {
+    guard item.canReopen else { return false }
+    return await action("reopen")
+  }
+  func action(_ kind: String, args: [String: Any] = [:], message: String? = nil) async -> Bool {
     guard loaded, !busy else { return false }
     busy = true
     loader.cancel()
     defer { busy = false }
     do {
       var body: [String: Any] = ["kind": kind]
+      var args = args
       if kind == "send" || kind == "edit" {
-        var args: [String: Any] = [
-          "proposal": [
-            "body": text,
-            "to": to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              ? [] : [to.trimmingCharacters(in: .whitespacesAndNewlines)],
-            "cc": cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              ? [] : [cc.trimmingCharacters(in: .whitespacesAndNewlines)], "subject": subject,
-          ]
+        args["proposal"] = [
+          "body": text,
+          "to": to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? [] : [to.trimmingCharacters(in: .whitespacesAndNewlines)],
+          "cc": cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? [] : [cc.trimmingCharacters(in: .whitespacesAndNewlines)], "subject": subject,
         ]
         if let proposalAt { args["expectedProposalAt"] = proposalAt }
-        body["args"] = args
       }
+      if !args.isEmpty { body["args"] = args }
       if let message { body = ["message": message] }
-      let result: NativeInboxDetail = try await client.fetch(
-        path + (message == nil ? "/action" : "/followup"), body: body)
-      accept(result)
+      accept(try await client.fetch(path + (message == nil ? "/action" : "/followup"), body: body))
+      if args["group"] != nil { await inbox?.reload() }
       error = nil
       persistDraft()
       return true
@@ -414,18 +620,24 @@ struct NativeInboxItemView: View {
   let user: String
   @State private var model: InboxDetailModel
   @Environment(\.scenePhase) private var phase
+  @Environment(\.dismiss) private var dismiss
   @State private var sending = false
   @State private var discarding = false
   @State private var output: NativeLoopOutput?
   @State private var note = ""
   @State private var decision = "ship"
-  init(client: APIClient, user: String, original: NativeInboxItem) {
+  @State private var refreshing = false
+  init(client: APIClient, user: String, original: NativeInboxItem, inbox: InboxModel? = nil) {
     self.user = user
-    _model = State(initialValue: InboxDetailModel(client: client, user: user, item: original))
+    _model = State(
+      initialValue: InboxDetailModel(client: client, user: user, item: original, inbox: inbox))
   }
   var body: some View {
     QMForm {
       summarySection
+      if !model.loaded && model.loading && model.error == nil {
+        NativeParagraphLoading(label: "Loading item")
+      }
       contextSection
       draftSection
       proposedActionsSection
@@ -434,28 +646,44 @@ struct NativeInboxItemView: View {
         Text(error).foregroundStyle(.red)
         Text("Your unsaved draft is still here.").font(.caption)
       }
-      Button("Refresh item") { Task { await model.load() } }.disabled(model.dirty)
+      Button("Refresh item") { Task { await refresh() } }.disabled(model.dirty)
       if model.dirty {
         Button("Discard local edits and load latest", role: .destructive) { discarding = true }
       }
     }
     .disabled(model.busy).navigationTitle("Inbox item").navigationBarTitleDisplayMode(.inline)
+    .modifier(
+      NativeCollectionRefresh(
+        active: refreshing && model.loading && (model.loaded || model.error != nil),
+        label: "Refreshing item")
+    )
     .task(id: phase == .active) {
       guard phase == .active else { return }
       while !Task.isCancelled {
         await model.load()
         do { try await Task.sleep(for: .seconds(10)) } catch { return }
       }
-    }.refreshable { await model.load() }
+    }.refreshable { await refresh() }
     .onChange(of: model.followup) { model.persistDraft() }
     .onChange(of: phase) { if phase != .active { model.persistDraft() } }
     .onChange(of: model.draft) { model.persistDraft() }
     .onDisappear { model.persistDraft() }
     .confirmationDialog("Discard your local edits?", isPresented: $discarding) {
-      Button("Discard and reload", role: .destructive) { Task { await model.discardDraft() } }
+      Button("Discard and reload", role: .destructive) {
+        Task {
+          refreshing = true
+          defer { refreshing = false }
+          await model.discardDraft()
+        }
+      }
     }
     .confirmationDialog("Send this reply?", isPresented: $sending) {
-      Button("Send reply") { Task { _ = await model.action("send") } }
+      Button("Send reply") {
+        Task {
+          if model.dirty, !(await model.action("edit")) { return }
+          _ = await model.action("send")
+        }
+      }
     } message: {
       Text(
         model.item.kind == "gmail"
@@ -467,13 +695,19 @@ struct NativeInboxItemView: View {
     }
   }
 
+  private func refresh() async {
+    refreshing = true
+    defer { refreshing = false }
+    await model.load(refreshSource: true)
+  }
+
   private var summarySection: some View {
     Section {
       Text(model.item.title).font(.headline)
       if let from = model.item.sourcePayload.from { Text(from) }
       if let detail = model.item.sourcePayload.fromDetail { Text(detail).font(.caption) }
       if let summary = model.item.summary { Text(summary) }
-      if let reason = model.item.parkedReason { Text(reason).foregroundStyle(.orange) }
+      if let reason = model.item.parkedReason { Text(reason).foregroundStyle(QMTheme.warning) }
       if let raw = model.item.sourcePayload.externalUrl,
         let url = NativeModelConnection.httpsURL(raw)
       {
@@ -483,9 +717,30 @@ struct NativeInboxItemView: View {
         Button("Draft a follow-up reply") { Task { _ = await model.action("reply") } }.disabled(
           !model.loaded || model.dirty)
       }
-      Button(model.item.handled ? "Reopen" : "Archive") {
-        Task { _ = await model.action(model.item.handled ? "reopen" : "dismiss") }
-      }.disabled(!model.loaded || model.dirty)
+      if model.canPrioritize {
+        Picker(
+          "Priority",
+          selection: Binding(
+            get: { model.item.priority },
+            set: { value in
+              Task { _ = await model.action("prioritize", args: ["priority": value]) }
+            })
+        ) {
+          ForEach(NativeInboxItem.priorities, id: \.self) { Text($0.capitalized).tag($0) }
+        }.disabled(!model.loaded || model.dirty)
+      }
+      if model.item.canReopen {
+        Button("Reopen") { Task { _ = await model.reopen() } }.disabled(
+          !model.loaded || model.dirty)
+      } else if !model.item.handled {
+        Button(model.item.leadsGroup ? "Archive group" : "Archive") {
+          Task { if await model.archive() { dismiss() } }
+        }.disabled(!model.loaded || model.dirty)
+      }
+      if model.canUngroup {
+        Button("Remove from group") { Task { _ = await model.ungroup() } }.disabled(
+          !model.loaded || model.dirty)
+      }
     }
   }
 
@@ -495,7 +750,7 @@ struct NativeInboxItemView: View {
         index, message in
         VStack(alignment: .leading, spacing: 6) {
           Text(message.author).font(.caption.bold())
-          Text(message.text).textSelection(.enabled)
+          Text(model.item.sourcePayload.readable(message.text)).textSelection(.enabled)
           ForEach(Array((message.images ?? []).indices), id: \.self) { image in
             NativeInboxImage(client: model.client, path: model.path, context: index, index: image)
           }
@@ -507,7 +762,7 @@ struct NativeInboxItemView: View {
       if let snippet = model.item.sourcePayload.snippet,
         model.item.sourcePayload.context?.isEmpty != false
       {
-        Text(snippet).textSelection(.enabled)
+        Text(model.item.sourcePayload.readable(snippet)).textSelection(.enabled)
       }
     }
   }
@@ -544,7 +799,7 @@ struct NativeInboxItemView: View {
             Text(candidate.title).font(.headline)
             if let summary = candidate.summary { Text(summary) }
             Text(candidate.state).font(.caption)
-            if candidate.state == "ready" {
+            if candidate.reviewable {
               Button("Review action") {
                 output = candidate
                 note = ""
@@ -594,7 +849,7 @@ struct NativeInboxItemView: View {
         if let summary = candidate.summary { Text(summary) }
         LabeledContent("Action", value: candidate.shipAction)
         Picker("Decision", selection: $decision) {
-          Text("Approve action").tag("ship")
+          Text(candidate.approveLabel).tag("ship")
           Text("Request changes").tag("return")
         }
         TextField("Review note", text: $note, axis: .vertical)
@@ -606,11 +861,16 @@ struct NativeInboxItemView: View {
           Button("Cancel") { output = nil }.disabled(model.busy)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button(decision == "ship" ? "Approve" : "Return") {
+          Button {
             Task {
               await model.decide(candidate, decision: decision, note: note)
               if model.error == nil { output = nil }
             }
+          } label: {
+            NativeActionLabel(
+              title: decision == "ship" ? "Approve" : "Return",
+              busyTitle: decision == "ship" ? "Approving…" : "Returning…", busy: model.busy,
+              compact: true)
           }.disabled(
             model.busy
               || (decision == "return"

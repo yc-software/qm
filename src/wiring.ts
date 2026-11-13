@@ -199,6 +199,7 @@ import {
   type CanManageScope,
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
+import { ambientWakeReaches, withAmbientWakes } from "./resolution/ambient-wake.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createRegistryMemoryService } from "./memory/registry-memory.ts";
@@ -1552,6 +1553,7 @@ export function buildApp(
       requested,
       hydrateModelCatalog,
       route.runtimePurpose,
+      route.session?.runtime?.modelId,
     );
   const resolveSessionRuntime = async (route: SessionRoute): Promise<RuntimeChoice> => {
     if (!route.runtimePinned || !route.runtime?.modelId) return resolveRequestedRuntime(route, route.runtime);
@@ -1658,9 +1660,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          ...(processes && supportsProcessSessions(sandbox)
-            ? { processes, stopProcess: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
-            : {}),
+          ...(processes ? { processes, sweepProcesses: () => processReaper!.sweepNow() } : {}),
           authorize: async (claims) => {
             await identity.refresh();
             return (
@@ -2098,9 +2098,10 @@ export function buildApp(
     }
     return broker;
   };
+  const canActInScope = withAmbientWakes(canWriteScope, config.externalSlackPolicies);
   const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
     const scope = resolution.scopeFor(request.conversation, request.actor);
-    if (!(await canWriteScope(request.actor.id, scope))) throw new Error("session actor no longer has scope access");
+    if (!(await canActInScope(request, scope))) throw new Error("session actor no longer has scope access");
     const ref = request.conversation.channelRef;
     if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
     const version = await projects.version(ref);
@@ -2142,7 +2143,8 @@ export function buildApp(
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
-    authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
+    authorize: (target, request) => canActInScope(request, target.scopeId),
+    reaches: (target, request, from) => ambientWakeReaches(sessions, request, target, from),
     conversations: {
       search: (input) => app.searchConversations(input),
       list: (viewer) => app.listSessions(viewer),
@@ -2881,6 +2883,7 @@ export function buildApp(
         ...(supportsProcessSessions(sandbox)
           ? {
               kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
+              claimOwed: swarms?.claimOwedStops,
               afterSweep: createJobComputerSweep({
                 resources: sandboxResources,
                 sandbox,

@@ -370,10 +370,7 @@ test("a Slack bot's stop on its own live run leaves a person's queued turn and s
     text,
     origin: { kind: "human" as const },
   });
-  const { run: queued } = await built.runs.enqueue({
-    sessionId: threadRef,
-    request: personRequest(threadRef, "and then the notes"),
-  });
+  const queued = await built.app.turn(mention("@bot and then the notes", channel, root));
   const child = await built.sessions.getOrCreateByThread(
     "agent:main:subagent:person-child",
     "channel",
@@ -391,7 +388,7 @@ test("a Slack bot's stop on its own live run leaves a person's queued turn and s
     {
       stopped: stop.stopped ?? false,
       bot: (await built.signals.takePending(fromBot.runId!)).map((signal) => signal.kind),
-      queued: (await built.runs.get(queued.id))?.status,
+      queued: (await built.runs.get(queued.runId!))?.status,
       child: (await built.signals.takePending(childRun.id)).map((signal) => signal.kind),
     },
     { stopped: true, bot: ["abort"], queued: "pending", child: [] },
@@ -1057,6 +1054,7 @@ function automationWakeRun(
   built: ReturnType<typeof freshApp>,
   threadRef: string,
   modelAccount: ModelAccount = "company",
+  botActor = false,
 ) {
   return built.runs.enqueue({
     sessionId: threadRef,
@@ -1067,6 +1065,7 @@ function automationWakeRun(
       text: "Another conversation handed you a task.",
       origin: { kind: "automation" },
       modelAccount,
+      ...(botActor ? { botActor } : {}),
     },
   });
 }
@@ -1115,6 +1114,23 @@ test("signalRun: a steer the live turn can't take runs as its own turn instead o
     "a retry is one turn",
   );
   assert.deepEqual(await built.signals.takePending(run.id), []);
+});
+
+test("a person's Steer into a bot's hand-off stops the bot's turn and runs their message as their own turn", async () => {
+  const built = freshApp();
+  const { run } = await automationWakeRun(built, "web:U1:bot", "openai", true);
+  assert.ok(await built.runs.claimById(run.id, "worker", 30_000));
+  const typed = (await built.app.turn(web("set Beta as the default", "web:U1:bot", "steer"))).runId!;
+  assert.equal((await built.app.signalRun(run.id, { kind: "steer", text: "x" })).reason, "not_steerable");
+  const steer = { kind: "steer" as const, queuedRunId: typed, request: web("", "web:U1:bot") };
+  assert.deepEqual(await built.app.signalRun(run.id, steer, "U1"), { accepted: false, reason: "queued_started" });
+  const direct = { kind: "steer" as const, text: "and the notes", request: web("and the notes", "web:U1:bot") };
+  assert.ok(
+    (await built.app.signalRun(run.id, direct, "U1")).queuedRunId,
+    "a Steer from the canvas runs as their own turn",
+  );
+  assert.equal((await built.signals.takePending(run.id)).map((s) => s.kind).join(), "abort,abort,abort");
+  assert.equal((await built.runs.get(typed))?.status, "pending", "the person's message is kept and runs next");
 });
 
 test("signalRun: sending a queued bare stop now stops the live run and spends the queued row", async () => {
