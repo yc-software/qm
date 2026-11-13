@@ -2,6 +2,7 @@ import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
 import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
 import { parseSuggestedActivities, type SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
+import { parseWelcomeProfile } from "../../../plugins/chassis/src/welcome-profile.ts";
 import { orgId } from "../../config.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -50,7 +51,7 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, workspaceUrl, auth, branding] = await Promise.all([
+  const [permissions, workspaceUrl, auth, branding, welcomeProfile] = await Promise.all([
     permissionsOf(ctx, user),
     app
       .directoryMeta()
@@ -58,6 +59,10 @@ async function me(ctx: ApiCtx): Promise<void> {
       .catch(swallowAs("web: /me directory meta", null)),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
+    deps.config
+      ?.getWelcomeProfileDurable()
+      .then(parseWelcomeProfile)
+      .catch(swallowAs("web: /me welcome profile", undefined)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
@@ -76,6 +81,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     impersonatedBy: actor.imp ?? null,
     displayName: actor.n?.trim() || null,
     ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
+    ...(welcomeProfile ? { welcomeProfile } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
     ...(config.suggestedActivities.length && !generated ? { suggestedActivities: config.suggestedActivities } : {}),
     permissions,

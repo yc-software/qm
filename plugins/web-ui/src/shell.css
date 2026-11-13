@@ -3597,6 +3597,18 @@ qm-markdown .tok-in {
   letter-spacing: -0.1px;
   overflow-wrap: anywhere;
 }
+.suggested-activity-title:has(+ .suggested-activity-note) {
+  flex: 1;
+  min-width: 0;
+}
+.suggested-activity-note {
+  flex: none;
+  font-size: var(--font-12-5);
+  white-space: nowrap;
+}
+.suggested-activity-note.is-new {
+  color: var(--primary);
+}
 .dark .suggested-activity-title {
   color: rgb(94 112 130);
 }

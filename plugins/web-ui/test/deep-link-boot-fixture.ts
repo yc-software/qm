@@ -312,3 +312,41 @@ function sessionPage(all: CoreSession[], params: URLSearchParams) {
     nextCursor: rows.length > limit && last ? `${activity(last)}.${last.id}` : null,
   };
 }
+
+export const runtimeConfig = {
+  scopeId: "personal:tester",
+  models: ["test-model"],
+  modelCatalog: {
+    "test-model": {
+      id: "test-model",
+      name: "Test",
+      label: "Test",
+      buttonLabel: "Test",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 10000,
+      maxTokens: 1000,
+    },
+  },
+  effective: { modelId: "test-model" },
+  orgDefault: { modelId: "test-model", revision: 1 },
+  scopeOverride: null,
+  upgradeAvailable: false,
+};
+
+export function stubMotion(): () => void {
+  Object.defineProperty(window.Element.prototype, "getAnimations", { configurable: true, value: () => [] });
+  Object.defineProperty(window.Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ cancel() {}, currentTime: 0 }),
+  });
+  const matrixDescriptor = Object.getOwnPropertyDescriptor(globalThis, "DOMMatrix");
+  Object.defineProperty(globalThis, "DOMMatrix", { configurable: true, value: class {} });
+  return () => {
+    if (matrixDescriptor) Object.defineProperty(globalThis, "DOMMatrix", matrixDescriptor);
+    else Reflect.deleteProperty(globalThis, "DOMMatrix");
+  };
+}

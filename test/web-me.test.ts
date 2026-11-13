@@ -10,6 +10,7 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const config = testConfig({ signingSecret: "web-me-signing-secret-0123456789abcdef" });
@@ -109,4 +110,22 @@ test("with suggestion generation on, /me leaves the fallback suggestions to the 
   const body = await me(browserSessionCookie("bob@example.com"), generating);
   assert.equal(body.suggestedActivitiesGeneration, true);
   assert.equal(body.suggestedActivities, undefined);
+});
+
+test("/me carries the company's stored welcome profile, reduced to the ideas the welcome shows", async () => {
+  const welcomeProfiles = testMap<{ scopeId: ScopeId; profile: unknown }>();
+  const store = testConfigStore(orgId(), { welcomeProfiles });
+  const at = await serve({ config: store });
+  const cookie = browserSessionCookie("bob@example.com");
+  assert.equal("welcomeProfile" in (await me(cookie, at)), false);
+  const ideas = [{ id: "crm", icon: "📇", title: "Track the harbor pilots", src: "from your goals" }];
+  const connectors = { gmail: [{ id: "g1", icon: "📥", title: "Find replies I owe", replaces: "crm" }] };
+  const scope = orgScope() as ScopeId;
+  await welcomeProfiles.put(scope, { scopeId: scope, profile: { company: "Tidewater", ideas, connectors } });
+  assert.deepEqual((await me(cookie, at)).welcomeProfile, { ideas, connectors });
+  await welcomeProfiles.put(scope, {
+    scopeId: scope,
+    profile: { ideas: [{ id: "crm", title: "No icon" }], connectors },
+  });
+  assert.equal("welcomeProfile" in (await me(cookie, at)), false);
 });

@@ -1,4 +1,5 @@
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+import type { WelcomeProfile } from "../../chassis/src/welcome-profile.ts";
 
 export type AuthMode = "portal" | "dev";
 
@@ -8,6 +9,7 @@ export interface Me {
   companyName?: string | null;
   workspace?: string | null;
   welcomeCohort?: string;
+  welcomeProfile?: WelcomeProfile;
   suggestedActivities?: SuggestedActivity[];
   suggestedActivitiesGeneration?: boolean;
   individualModelAuth?: boolean;

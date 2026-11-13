@@ -7,7 +7,7 @@ export interface SuggestedActivity {
   icon: string;
 }
 
-function validIcon(value: string): boolean {
+export function validIcon(value: string): boolean {
   if ([...activityIcons, "yc"].includes(value)) return true;
   return (
     value.length <= 32 &&

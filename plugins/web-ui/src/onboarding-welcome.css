@@ -292,3 +292,50 @@ qm-onboarding-welcome {
   opacity: 0.5;
   cursor: default;
 }
+
+.welcome-content.welcome-profile {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.welcome-hero {
+  text-align: center;
+  margin-bottom: clamp(26px, 4.5vh, 46px);
+}
+.welcome-hero p {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.welcome-content .welcome-hero h1 {
+  margin: 0;
+  font-size: clamp(30px, 3.3vw, 48px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+.welcome-section {
+  margin-bottom: clamp(20px, 3vh, 32px);
+  text-align: center;
+}
+.welcome-section + .welcome-section {
+  margin-top: clamp(40px, 7vh, 72px);
+}
+.welcome-section h2 {
+  margin: 0 0 12px;
+  font-size: clamp(19px, 1.75vw, 25px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.welcome-section .suggested-activities {
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+.welcome-profile > :not(.welcome-hero, .welcome-section, .connection-preview-label) {
+  max-width: 480px;
+  margin-inline: auto;
+}
+@container chat (min-width: 471px) {
+  .message-stack.empty-stack:has(.welcome-profile) {
+    width: min(var(--content-w), 100%);
+  }
+}

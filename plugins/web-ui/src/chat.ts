@@ -1500,6 +1500,7 @@ export function createChatSurface(
             .me=${appState.me}
             .animateWelcome=${animate}
             .onMoreIdeas=${showWelcomeIdeas}
+            .onIdea=${(prompt: string) => chatState.agent && ctx.composer.fillSuggestedPrompt(prompt, chatState.agent)}
             .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
           ></qm-onboarding-welcome>
