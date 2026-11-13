@@ -7,6 +7,7 @@ test("a partner-chat conversation opens as a transcript named for its surface, w
   const session = {
     ...SESSION,
     type: "dm" as const,
+    createdAt: 1,
     threadRef: "partner-chat:7001:dm:301",
     surface: "partner-chat",
     canContinue: false,
