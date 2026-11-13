@@ -8,6 +8,7 @@ export interface WakeMessage {
   authorName?: string;
   authorId?: string;
   text?: string;
+  files?: string[];
   mentions?: Record<string, string>;
   trigger?: boolean;
 }
@@ -44,6 +45,7 @@ function tagMessage(m: WakeMessage, trigger = !!m.trigger): string {
         ...(trigger ? { trigger: true } : {}),
       },
       m.text ?? "",
+      m.files,
     )
   );
 }

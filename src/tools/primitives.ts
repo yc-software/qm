@@ -804,6 +804,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               undefined,
               undefined,
               input.memoryGb,
+              undefined,
+              !deps.botActor,
             );
             await deps.provisionResource(record.id);
             return record;

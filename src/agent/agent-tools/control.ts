@@ -9,7 +9,6 @@ import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { listOrder, pageOf, previewText } from "./listing.ts";
 
-const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
 
 export function controlPlaneTools(kit: ToolKit) {
@@ -20,7 +19,7 @@ export function controlPlaneTools(kit: ToolKit) {
     description:
       "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
       "create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). " +
-      `For ${SENDER_WEBHOOK_SCHEMES.join("/")} the user supplies the signing secret from the sender's settings; for hmac-sha256 generate a strong random one. ` +
+      "For hmac-sha256 and token (senders that cannot sign) generate a strong random secret; for every other scheme the user supplies the sender's signing secret. " +
       "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
       "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
     parameters: Type.Object({
@@ -36,7 +35,7 @@ export function controlPlaneTools(kit: ToolKit) {
         Type.Object(
           {
             scheme: Type.Union(WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme))),
-            secret: Type.String({ description: "The signing secret." }),
+            secret: Type.String({ description: "The signing secret or token." }),
           },
           { description: "create: request authentication." },
         ),
@@ -83,11 +82,15 @@ export function controlPlaneTools(kit: ToolKit) {
             return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
 
           const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
+          const tokenUse =
+            r.webhook.verification.scheme === "token"
+              ? "\nThe sender sends the secret as `Authorization: Bearer <secret>`, or adds `?token=<secret>` to the URL if it cannot set headers."
+              : "";
           return recordResult(
             callId,
             { tool: "webhook", id: r.webhook.id, url: r.url, secretShown: !!r.secret },
             text(
-              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}\nIt won't fire until the sender is pointed at this URL.`,
+              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}${tokenUse}\nIt won't fire until the sender is pointed at this URL.`,
             ),
           );
         }
@@ -331,7 +334,8 @@ export function controlPlaneTools(kit: ToolKit) {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "file")
-      description = "Share a Files record by ID (upload a sandbox path with POST /v1/files/uploads first).";
+      description =
+        "Share a Files record by ID (upload a sandbox path with the helper from GET /v1/files/upload-client first).";
     if (type === "deploy")
       description =
         "Change access to an app you own: `public`, or toScope/email for signed-in access (external emails view-only).";

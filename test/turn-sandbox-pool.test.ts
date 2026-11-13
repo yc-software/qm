@@ -6,7 +6,14 @@ import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "
 const OWN = "personal:alice";
 
 function fixture(
-  over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[]; botActor?: true } = {},
+  over: {
+    holdKeepsWarm?: boolean | Error;
+    live?: string[] | Error;
+    teardownFails?: string[];
+    botActor?: true;
+    external?: true;
+    defaultOwners?: string[];
+  } = {},
 ) {
   const provisions: Array<ProvisionOptions | undefined> = [];
   const teardowns: Array<[string, TeardownOptions]> = [];
@@ -65,7 +72,7 @@ function fixture(
     },
     get: async (id: string) => resource(id),
     notePersonUse: mock.fn(async (id: string) => resource(id)),
-    resolve: async () => resource(`box-${++n}`),
+    resolve: async () => resource(`box-${++n}`, over.defaultOwners?.shift()),
     hold: async (id: string) => {
       if (holdFailures.delete(id)) throw new Error(`hold failed: ${id}`);
     },
@@ -95,7 +102,12 @@ function fixture(
       isCurrentSharedScopeMember: async () => true,
       errors: { record: (_t: unknown, event: { code: string; message: string }) => errors.push(event) },
     },
-    input: { origin: { kind: "user" }, runId: "run-1", botActor: over.botActor },
+    input: {
+      origin: { kind: "user" },
+      runId: "run-1",
+      botActor: over.botActor,
+      ...(over.external ? { surfaceOrigin: { audience: "external" } } : {}),
+    },
     actor: { id: "alice", type: "internal" },
     session: { id: "s" },
     resolution: { writableScopeId: OWN, readOnlyScopeIds: ["org:global"], orgScopeId: "org:global" },
@@ -344,6 +356,17 @@ test("reopening a computer under a different egress policy releases it once", as
   await f.turn.reclaimBox();
   assert.equal(f.tornDown.length, 1);
   assert.equal(f.tornDown[0], narrowed);
+});
+
+test("an external turn opens the default computer its own-computer check read", async () => {
+  const f = fixture({ external: true, defaultOwners: [OWN, "channel:elsewhere"] });
+  await f.turn.provision();
+  assert.deepEqual(
+    f.provisions.map((opts) => opts?.sandboxId),
+    ["box-1"],
+  );
+  const foreign = fixture({ external: true, defaultOwners: ["channel:elsewhere"] });
+  await assert.rejects(foreign.turn.provision(), /requires its own sandbox/);
 });
 
 test("a Slack bot's turn cannot open a background job's computer it didn't make", async () => {
