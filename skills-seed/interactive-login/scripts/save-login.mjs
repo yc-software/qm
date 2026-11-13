@@ -14,6 +14,7 @@ if (!AGENT_API_URL || !AGENT_API_TOKEN) {
   console.error("AGENT_API_URL and AGENT_API_TOKEN must be set");
   process.exit(2);
 }
+const reason = (error) => [error.message, error.cause?.code, error.cause?.message].filter(Boolean).join(": ");
 const headers = { "x-agent-capability": AGENT_API_TOKEN, "content-type": "application/json" };
 const ticketFile = `${resolve(dir)}.ticket`;
 
@@ -22,7 +23,7 @@ if (rest.includes("--start")) {
     method: "POST",
     headers,
     body: JSON.stringify({ service }),
-  }).catch((error) => ({ ok: false, status: 0, text: async () => error.cause?.message ?? error.message }));
+  }).catch((error) => ({ ok: false, status: 0, text: async () => reason(error) }));
   if (!response.ok) {
     console.error(
       `no sign-in ticket (${response.status}): ${await response.text()}; a new login still saves, but replacing an existing ${service} login needs the save to run in the person's own turn`,
@@ -70,7 +71,7 @@ const response = await fetch(`${AGENT_API_URL}/v1/keychain/credentials`, {
     ...(loginTicket ? { loginTicket } : {}),
   }),
 }).catch((error) => {
-  console.error(`keychain save failed: ${error.cause?.message ?? error.message}; run this again to retry`);
+  console.error(`keychain save failed: ${reason(error)}; run this again to retry`);
   process.exit(1);
 });
 const text = await response.text();

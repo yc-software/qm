@@ -194,7 +194,10 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
     if (!signedIn && !(await livePersonTurn(ctx))) return;
     meta = await kc.save(input);
   }
-  if (signedIn) await deps.secretDrops!.redeem(ticketId!);
+  if (signedIn) {
+    const spent = await deps.secretDrops!.redeem(ticketId!);
+    if (!spent.ok) console.warn(`[keychain] loginTicket for ${service} was spent by another save: ${spent.reason}`);
+  }
   audit(
     { deps, tenant },
     {
