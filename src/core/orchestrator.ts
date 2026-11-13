@@ -20,6 +20,7 @@ import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
+  doesBotWork,
   isOwnerFire,
   keepsBotLimits,
   ownsSessionContext,
@@ -551,7 +552,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (subagentRefusal) return subagentRefusal;
       const storedSession = delegatedSession ?? (await deps.sessions.getByThread(conversation.threadRef));
       const botRequest = input.botActor;
-      if (storedSession && keepsBotLimits(storedSession)) input = { ...input, botActor: true };
+      if (doesBotWork(delegatedSession, input) || (storedSession && keepsBotLimits(storedSession)))
+        input = { ...input, botActor: true };
       const personConversationTurn =
         isPersonAuthored(input.origin.kind) &&
         !sessionTurn &&
