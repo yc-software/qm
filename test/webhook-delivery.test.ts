@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { WEBHOOK_CLAIM_MS, webhookSender, webhookSigningKey } from "../src/delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { Delivery } from "../src/types.ts";
 import { withTenant } from "../src/tenants/context.ts";
@@ -108,4 +109,18 @@ test("the webhook sender signs with a key core does not accept and reports refus
   assert.notEqual(req.headers.get("x-signature"), signRequest(secret, ts, canonical));
   assert.deepEqual(await post(), { refused: "receiver returned HTTP 422: binding unknown" });
   await assert.rejects(post(), /HTTP 401/, "an auth failure is retried, not refused");
+});
+
+test("a delivery its receiver keeps refusing is retried with growing gaps and delivered once the receiver recovers", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const store = createDeliveryStore();
+  const attempts: number[] = [];
+  const send = async () => (attempts.push(Date.now()) < 6 ? Promise.reject(new Error("HTTP 401")) : undefined);
+  const relay = createDeliveryRelay(store, { type: "webhook", claimMs: 40, send });
+  t.after(() => relay.stop());
+  const d = await store.enqueue({ destination: { type: "webhook", target: "t" }, text: "x", idempotencyKey: "k" });
+  relay.start();
+  await until(async () => (await store.get(d.id))?.deliveredAt !== null, 5_000);
+  const gaps = attempts.slice(1).map((at, i) => at - attempts[i]!);
+  assert.ok(gaps.at(-1)! >= 4 * gaps[0]!, `gaps grow: ${gaps.join(", ")}ms`);
 });
