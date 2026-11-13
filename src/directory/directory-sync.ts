@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { SLACK } from "../surfaces/registry.ts";
 import {
   normDirectoryQuery,
   type ChannelMembership,
@@ -252,20 +253,19 @@ export function createDirectorySync(deps: {
 
       return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
         await client.query(
-          "DELETE FROM directory_group_members WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))",
-          [orgId, listedIds],
+          `WITH dropped AS (
+             DELETE FROM directory_groups WHERE org_id = $1 AND surface = $3 AND NOT (group_id = ANY($2::text[]))
+             RETURNING group_id)
+           DELETE FROM directory_group_members WHERE org_id = $1 AND group_id IN (SELECT group_id FROM dropped)`,
+          [orgId, listedIds, SLACK],
         );
-        await client.query("DELETE FROM directory_groups WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))", [
-          orgId,
-          listedIds,
-        ]);
         if (listedIds.length) {
           await client.query(
-            `INSERT INTO directory_groups (org_id, group_id, roster_known)
-             SELECT $1, * FROM unnest($2::text[], $3::boolean[])
+            `INSERT INTO directory_groups (org_id, group_id, roster_known, surface)
+             SELECT $1, *, $4::text FROM unnest($2::text[], $3::boolean[])
              ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET
                roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
-            [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
+            [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId)), SLACK],
           );
         }
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = ANY($2::text[])", [
@@ -282,15 +282,26 @@ export function createDirectorySync(deps: {
       });
     },
 
-    async upsertGroup(groupId, principalIds) {
+    async upsertGroup(groupId, principalIds, surface) {
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
       await withPgTransaction(await pool(), async (client) => {
+        const unchanged = async () => {
+          const roster = await client.query(
+            `SELECT m.principal_id FROM directory_group_members m
+               JOIN directory_groups g ON g.org_id = m.org_id AND g.group_id = m.group_id AND g.roster_known
+              WHERE m.org_id = $1 AND m.group_id = $2`,
+            [orgId, groupId],
+          );
+          return roster.rows.length === ids.length && roster.rows.every((r) => ids.includes(String(r.principal_id)));
+        };
+        if (await unchanged()) return;
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
+        if (await unchanged()) return;
         await client.query(
-          `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
+          `INSERT INTO directory_groups (org_id, group_id, roster_known, surface) VALUES ($1, $2, TRUE, $3)
            ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
-          [orgId, groupId],
+          [orgId, groupId, surface],
         );
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
         await client.query(
@@ -298,12 +309,9 @@ export function createDirectorySync(deps: {
            SELECT $1, $2, * FROM unnest($3::text[])`,
           [orgId, groupId, ids],
         );
-        const all = await client.query("SELECT group_id, principal_id FROM directory_group_members WHERE org_id = $1", [
-          orgId,
-        ]);
         await client.query(
-          "UPDATE directory_sync SET groups_hash = $2, updated_at = $3 WHERE org_id = $1 AND groups_hash IS NOT NULL",
-          [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
+          "UPDATE directory_sync SET groups_hash = '', updated_at = $2 WHERE org_id = $1 AND groups_hash IS NOT NULL",
+          [orgId, Date.now()],
         );
       });
     },

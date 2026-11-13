@@ -173,6 +173,13 @@ END $tenants_for_email$`,
   },
   PRINCIPAL_USER_TENANTS,
   EMAIL_USER_TENANTS,
+  {
+    id: "directory/store/0011-group-surface",
+    statements: [
+      "ALTER TABLE directory_groups ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+      "ALTER TABLE directory_groups ALTER COLUMN surface DROP DEFAULT",
+    ],
+  },
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
@@ -431,16 +438,17 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
     },
 
-    async resolveGroupByParticipants(participants) {
+    async resolveGroupByParticipants(participants, surface) {
       const key = groupParticipantsKey(participants);
       if (!key) return { kind: "none" };
       const rows = await q(
-        `SELECT group_id FROM directory_group_members
-         WHERE org_id = $1
-         GROUP BY group_id
-         HAVING string_agg(DISTINCT principal_id, ',' ORDER BY principal_id) = $2
+        `SELECT m.group_id FROM directory_group_members m
+         JOIN directory_groups g ON g.org_id = m.org_id AND g.group_id = m.group_id AND g.surface = $3
+         WHERE m.org_id = $1
+         GROUP BY m.group_id
+         HAVING string_agg(DISTINCT m.principal_id, ',' ORDER BY m.principal_id) = $2
          LIMIT 1`,
-        [orgId, key],
+        [orgId, key, surface],
       );
       return rows.length ? { kind: "one", groupId: rows[0]!.group_id as string } : { kind: "none" };
     },

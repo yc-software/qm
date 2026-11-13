@@ -1,20 +1,33 @@
 import { swallow } from "../util/errors.ts";
-import { sleep, type GoalNoticeView } from "./lib.ts";
-import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import type { TurnRequest, TurnResult } from "../types.ts";
+import { sleep } from "../util/async.ts";
+import type { GoalNoticeView } from "./turn-presenters.ts";
+import type { Delivery, TurnRequest, TurnResult } from "../types.ts";
 import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 
-class SlackTurnFailure extends Error {
+class TurnFailure extends Error {
   constructor(message: string, cause: unknown) {
     super(message, { cause });
   }
 }
 
-export function slackFailureText(err: unknown): string {
-  return err instanceof SlackTurnFailure ? err.message : GENERIC_FAILURE_TEXT;
+export function turnFailureText(err: unknown): string {
+  return err instanceof TurnFailure ? err.message : GENERIC_FAILURE_TEXT;
 }
 
 export type CoreTurnBody = Omit<TurnRequest, "surface">;
+
+export interface RunHooks {
+  onReplying?(): void;
+  onFirstBlock?(text: string): void;
+  onSurfacePosted?(): void;
+  onGoal?(goal: GoalNoticeView): void | Promise<void>;
+}
+
+export interface TurnCore {
+  submitTurn(body: CoreTurnBody): Promise<TurnResult>;
+  waitRun(runId: string, hooks?: RunHooks): Promise<TurnResult | null>;
+  ackRunDelivery(runId: string): Promise<void>;
+}
 
 interface TurnHooks {
   deferDeliveryAck?: boolean;
@@ -33,8 +46,28 @@ export interface TurnFlow {
 }
 
 const ACK_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
+const RUN_RECOVERY_GRACE_MS = 15_000;
 
-export function createTurnFlow(core: SlackCoreClient): TurnFlow {
+export function drivenLive(request: Pick<TurnRequest, "liveReplies" | "approval">): boolean {
+  return request.liveReplies === true && !request.approval;
+}
+
+export function runDeliveryId(d: Pick<Delivery, "idempotencyKey">): string | undefined {
+  return d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
+}
+
+export function liveRunHoldsDelivery(
+  inFlightRuns: Pick<TurnFlow["inFlightRuns"], "has">,
+  d: Pick<Delivery, "idempotencyKey" | "createdAt">,
+): boolean {
+  const runId = runDeliveryId(d);
+  if (!runId) return false;
+  return (
+    inFlightRuns.has(runId) || (typeof d.createdAt === "number" && Date.now() - d.createdAt < RUN_RECOVERY_GRACE_MS)
+  );
+}
+
+export function createTurnFlow(core: TurnCore, label: string): TurnFlow {
   const inFlightRunPins = new Map<string, number>();
   const inFlightRuns = {
     add: (runId: string): void => void inFlightRunPins.set(runId, (inFlightRunPins.get(runId) ?? 0) + 1),
@@ -55,7 +88,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
         } catch (err) {
           if (attempt >= ACK_RETRY_DELAYS_MS.length) {
             console.error(
-              `[slack-plugin] delivery ack failed for run ${runId} (giving up — the poller re-delivers unacked runs):`,
+              `[${label}] delivery ack failed for run ${runId} (giving up — the poller re-delivers unacked runs):`,
               (err as Error).message,
             );
             return;
@@ -67,14 +100,14 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
   }
 
   function coreFailure(err: unknown): Error {
-    swallow("slack: core call", err);
+    swallow(`${label}: core call`, err);
     if ((err as { code?: string })?.code === "run_stalled") {
-      return new SlackTurnFailure(
+      return new TurnFailure(
         "this request is taking unusually long — I'm still on it and will post the result here as soon as it finishes",
         err,
       );
     }
-    return new SlackTurnFailure(GENERIC_FAILURE_TEXT, err);
+    return new TurnFailure(GENERIC_FAILURE_TEXT, err);
   }
 
   async function callCore(body: CoreTurnBody, hooks: TurnHooks = {}): Promise<TurnResult> {
@@ -121,7 +154,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
       inFlightRuns.delete(runId);
     }
     if (result) return result;
-    throw new SlackTurnFailure("the agent finished without producing a reply", undefined);
+    throw new TurnFailure("the agent finished without producing a reply", undefined);
   }
 
   return { callCore, inFlightRuns, ackRunDelivery };

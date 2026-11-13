@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createApprovals } from "../src/slack/approvals.ts";
-import { createTurnFlow } from "../src/slack/turn-flow.ts";
+import { createTurnFlow } from "../src/surfaces/turn-flow.ts";
 import { createThreadTracker } from "../src/slack/lib.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
@@ -53,7 +53,7 @@ function fixture() {
         : null;
     },
   } as unknown as SlackCoreClient;
-  const flow = createTurnFlow(core);
+  const flow = createTurnFlow(core, "slack");
   const directory = {
     classifyActor: async (_client: any, userId: string) => ({ externalId: userId, displayName: userId }),
     classifyUserCached: async (_client: any, userId: string) => ({ actor: { externalId: userId } }),

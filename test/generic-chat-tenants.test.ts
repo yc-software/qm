@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import type { App } from "../src/api/app-types.ts";
-import { createPartnerChatInbound } from "../src/surfaces/partner-chat/inbound.ts";
-import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
-import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
+import { createGenericChatInbound } from "../src/surfaces/generic-chat/inbound.ts";
+import { createGenericChatClient } from "../src/surfaces/generic-chat/client.ts";
+import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
+import { signGenericChat } from "../src/surfaces/generic-chat/protocol.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
 
-const secret = "partner-chat-shared-secret-0123456789abcdef";
+const secret = "generic-chat-shared-secret-0123456789abcdef";
 
-describeTwoTenants("partner chat on a shared host", (db) => {
+describeTwoTenants("generic chat on a shared host", (db) => {
   const handledIn: (string | undefined)[] = [];
   const app = {
     tenantFor: (...key: Parameters<App["tenantFor"]>) => tenantLookup(db.app).tenantFor(...key),
@@ -20,8 +21,22 @@ describeTwoTenants("partner chat on a shared host", (db) => {
   const surfaceCache = { readMessages: async () => [] };
   const isInternalEmail = async () => true;
   const unansweredReply = async () => {};
-  const inbound = createPartnerChatInbound({ secret, app, surfaceCache, isInternalEmail, unansweredReply });
-  const send = partnerChatSender({ url: "https://chat.example", secret, app, fetch: async () => Response.json({}) });
+  const client = createGenericChatClient({ url: "https://chat.example", secret, fetch: async () => Response.json({}) });
+  const stageBlob = async () => ({ blobId: "" });
+  const inbound = createGenericChatInbound({
+    registerGroup: async () => {},
+    secret,
+    client,
+    stageBlob,
+    turns: { start: async () => {} },
+    app,
+    surfaceCache,
+    isInternalEmail,
+    unansweredReply,
+    onAction: async () => {},
+  });
+  const blobs = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
+  const send = genericChatSender({ app, client, blobs });
 
   async function deliver(account: string): Promise<number> {
     const ada = { id: "5", email: "ada@x.test" };
@@ -29,7 +44,7 @@ describeTwoTenants("partner chat on a shared host", (db) => {
     const message = { id: "1001", user: { id: "5" }, body: "hello there", created_at: "2026-11-02T20:00:00Z" };
     const raw = JSON.stringify({ event_id: "ev-1", type: "message.created", account, chat, message });
     const ts = String(Math.floor(Date.now() / 1000));
-    return (await inbound.handle(ts, signPartnerChat(secret, ts, raw), raw)).status;
+    return (await inbound.handle(ts, signGenericChat(secret, ts, raw), raw)).status;
   }
 
   function post(account: string) {
