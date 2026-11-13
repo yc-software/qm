@@ -781,8 +781,7 @@ export function createTurnMethods(
       if (route.kind === "turn") {
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
-        const stopsBot = route.reason === "bot-turn" && !signal.remark;
-        if (stopsBot && signal.queuedRunId) {
+        if (route.reason === "bot-turn" && signal.queuedRunId) {
           await stopRun(run, false, true);
           return { accepted: false, reason: "queued_started" };
         }
@@ -791,12 +790,12 @@ export function createTurnMethods(
           ...request,
           text: signal.text ?? "",
           ...(signal.ts ? { idempotencyKey: `signal-turn:${runId}:${signal.ts}` } : {}),
-          midTurn: "queue",
+          midTurn: route.reason === "bot-turn" && !signal.remark ? "steer" : "queue",
           async: true,
         });
-        if (!own.runId) return { accepted: false, reason: own.reason ?? own.status };
-        if (stopsBot) await stopRun(run, false, true);
-        return { accepted: true, queuedRunId: own.runId };
+        return own.runId
+          ? { accepted: true, queuedRunId: own.runId }
+          : { accepted: false, reason: own.reason ?? own.status };
       }
       const outbound = {
         ...signal,
