@@ -23,7 +23,7 @@ function anthropicToolResult(input: Record<string, unknown>): Response {
     {
       type: "content_block_start",
       index: 0,
-      content_block: { type: "tool_use", id: "t", name: "browser_result", input: {} },
+      content_block: { type: "tool_use", id: "t", name: "structured_result", input: {} },
     },
     { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } },
     { type: "content_block_stop", index: 0 },
@@ -114,7 +114,7 @@ test("browser requests run on the person's own Claude key, as their session does
   );
   assert.equal(calls[0]?.host, "api.anthropic.com");
   assert.equal(calls[0]?.headers.get("x-api-key"), "personal-claude-key");
-  assert.deepEqual(calls[0]?.body.tool_choice, { type: "tool", name: "browser_result" });
+  assert.deepEqual(calls[0]?.body.tool_choice, { type: "tool", name: "structured_result" });
   assert.match(JSON.stringify(calls[0]?.body.system), /Browse safely/);
   assert.match(JSON.stringify(calls[0]?.body.messages), /"media_type":"image\/png"/);
 
