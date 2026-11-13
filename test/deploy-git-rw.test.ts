@@ -78,7 +78,7 @@ async function gitUrl(base: string, appId: string, permission: "read" | "write")
     exp: Date.now() + 60_000,
   });
   const url = new URL(`/v1/apps/${encodeURIComponent(appId)}/git`, base);
-  url.username = "deployment";
+  url.username = "app";
   url.password = token;
   return url.toString();
 }

@@ -239,7 +239,7 @@ export function createAppMethods(
         exp: Date.now() + (opts.ttlMs ?? 60 * 60 * 1000),
       });
       const url = new URL(`/v1/apps/${encodeURIComponent(d.id)}/git`, opts.baseUrl);
-      url.username = "deployment";
+      url.username = "app";
       url.password = token;
       return { url: url.toString(), permission };
     },

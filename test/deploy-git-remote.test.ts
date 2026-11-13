@@ -64,7 +64,7 @@ async function fixture(): Promise<{
 async function authedGitUrl(base: string, appId: string, permission: "read" | "write" = "read"): Promise<string> {
   const token = await mintDeployGitAccess(SECRET, { deploymentId: appId, permission, exp: Date.now() + 60_000 });
   const url = new URL(`/v1/apps/${encodeURIComponent(appId)}/git`, base);
-  url.username = "deployment";
+  url.username = "app";
   url.password = token;
   return url.toString();
 }
