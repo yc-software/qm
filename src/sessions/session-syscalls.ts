@@ -150,6 +150,9 @@ export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<S
   return viewer.botActor !== true || session.spawnMeta?.botActor === true;
 }
 
+export const keepsBotLimits = (session: Pick<Session, "threadRef" | "spawnMeta" | "forkedFrom">): boolean =>
+  session.spawnMeta?.botActor === true && (isSubagentThreadRef(session.threadRef) || session.forkedFrom !== undefined);
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {

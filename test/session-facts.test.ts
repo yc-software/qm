@@ -6,7 +6,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { sessionContextOf } from "../src/sessions/session-syscalls.ts";
-import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, type Session, type SpawnMeta } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { TurnSurfaceOrigin } from "../src/surfaces/contract.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -204,4 +204,32 @@ test("the session facts copy skips runs an earlier release stored as JSON jsonb 
     await raw.end();
     await runtime.close?.();
   }
+});
+
+test("the fork marker migration marks every fork that descends from a bot-started subagent", async () => {
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const record: SpawnMeta = { surface: "web", conversation: { kind: "dm", threadRef: "t", audience: [actor] }, actor };
+  const session = async (threadRef: string, meta?: SpawnMeta, from?: Session) => {
+    const s = await sessions.getOrCreateByThread(threadRef, "channel", scope);
+    if (meta) await sessions.setSpawnMeta(s.id, meta);
+    if (from) await sessions.updateForkProvenance(s.id, { forkedFrom: { sessionId: from.id }, forkBoundarySeq: 0 });
+    return s;
+  };
+  const marked = { ...record, botActor: true };
+  const bot = await session("agent:main:subagent:bot", marked);
+  const turned = await session("web:U1:turned", record, bot);
+  const unturned = await session("web:U1:unturned", undefined, turned);
+  const personFork = await session("web:U1:person", undefined, await session("agent:main:subagent:person", record));
+  const slackFork = await session("web:U1:slack", record, await session("C1:bot", marked));
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  const id = "sessions/store/0063-fork-bot-marker";
+  for (let run = 0; run < 2; run++) {
+    await raw.query("DELETE FROM qm_schema_migrations WHERE id = $1", [id]);
+    await applyPgMigrations(raw, SESSION_MIGRATIONS.filter((m) => m.id === id).map(definePgMigration));
+  }
+  await raw.end();
+  const stored = (s: Session) => sessions.get(s.id).then((found) => found?.spawnMeta);
+  const forks = [turned, unturned, personFork, slackFork];
+  assert.deepEqual(await Promise.all(forks.map(stored)), [marked, marked, undefined, record]);
 });

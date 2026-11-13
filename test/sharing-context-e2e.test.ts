@@ -171,16 +171,19 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     return provision(owner, opts);
   };
   b.runtime.start();
-  const childTurn = async (text: string, expectedStatus: "ok" | "refused" | "failed" = "ok") => {
+  const childTurn = async (
+    text: string,
+    expectedStatus: "ok" | "refused" | "failed" = "ok",
+    threadRef = child.threadRef,
+  ) => {
     const { run } = await b.runs.enqueue({
-      sessionId: child.threadRef,
+      sessionId: threadRef,
       maxAttempts: 1,
       request: {
         ...parent.request,
-        conversation: { ...parent.request.conversation, threadRef: child.threadRef },
+        conversation: { ...parent.request.conversation, threadRef },
         origin: parent.request.origin,
-        delegatingRunId: parent.id,
-        sessionSenderId: parentSession.id,
+        ...(threadRef === child.threadRef ? { delegatingRunId: parent.id, sessionSenderId: parentSession.id } : {}),
         text,
       },
     });
@@ -221,6 +224,10 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   assert.match(await childTurn(read), /no file/);
   await childTurn(cred, "failed");
   await childTurn(own, "failed");
+  const fork = (await b.app.forkSession(child.id, "U1"))!.session.threadRef;
+  assert.match(await childTurn(read, "ok", fork), /no file/);
+  await childTurn(cred, "failed", fork);
+  await childTurn(own, "failed", fork);
   const refusals = (await b.errors.list(testTenant)).map((e) => e.message).join("\n");
   assert.match(
     refusals,

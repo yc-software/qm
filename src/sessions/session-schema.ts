@@ -590,6 +590,23 @@ const HUMAN_PROMPT_INDEX: PgMigrationDefinition = {
   ],
 };
 
+const FORK_BOT_MARKER: PgMigrationDefinition = {
+  id: "sessions/store/0063-fork-bot-marker",
+  statements: [
+    `WITH RECURSIVE marked(id, meta) AS (
+       SELECT id, spawn_meta::jsonb FROM sessions
+        WHERE starts_with(thread_ref, 'agent:main:subagent:') AND spawn_meta::jsonb @> '{"botActor": true}'
+       UNION
+       SELECT f.id, COALESCE(f.spawn_meta::jsonb || '{"botActor": true}', m.meta)
+         FROM sessions f JOIN marked m ON f.forked_from_session_id = m.id
+     )
+     UPDATE sessions s SET spawn_meta = m.meta::text
+       FROM marked m
+      WHERE s.id = m.id AND s.forked_from_session_id IS NOT NULL
+        AND (s.spawn_meta IS NULL OR NOT s.spawn_meta::jsonb @> '{"botActor": true}')`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -611,6 +628,7 @@ export const SESSION_MIGRATIONS = [
   DROP_ITEMS_TARGET_SEQ,
   DROP_PARTICIPANT_WINDOWS,
   HUMAN_PROMPT_INDEX,
+  FORK_BOT_MARKER,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (
