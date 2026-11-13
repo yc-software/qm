@@ -73,7 +73,7 @@ test("a fully migrated database skips the base schema and drops the retired obje
     );
     await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
     await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, session_id TEXT, kind TEXT, variant TEXT,
-      text TEXT, search TSVECTOR, target_seq BIGINT, author TEXT, body JSONB, created_at TIMESTAMPTZ,
+      text TEXT, search TSVECTOR, target_seq BIGINT, author TEXT, body JSONB, created_at TIMESTAMPTZ, hidden BOOLEAN,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query(
       "CREATE FUNCTION forbid_direct_delete() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN OLD; END'",
@@ -114,7 +114,7 @@ test("a fully migrated database skips the base schema and drops the retired obje
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ["seq", "tenant_id", "session_id", "kind", "variant", "text", "search", "author", "body", "created_at"],
+      ["seq", "tenant_id", "session_id", "kind", "variant", "text", "search", "author", "body", "created_at", "hidden"],
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);

@@ -994,14 +994,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     method === "POST" &&
     (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))
   ) {
-    return proxyToUpstream(
-      req,
-      res,
-      { baseUrl: CORE, path: pathname, search: url.search },
-      pathname.startsWith("/v1/loop-ingress/")
-        ? [...FORWARD_WEBHOOK_HEADERS, "authorization"]
-        : FORWARD_WEBHOOK_HEADERS,
-    );
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
+      ...FORWARD_WEBHOOK_HEADERS,
+      "authorization",
+    ]);
   }
 
   const consentBounce = (): void => {

@@ -25,7 +25,7 @@ export interface WebhookView {
   url: string;
 }
 
-type WebhookScheme = "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
+type WebhookScheme = "hmac-sha256" | "github" | "slack" | "stripe" | "linear" | "token" | "standard-webhooks";
 
 const WEBHOOK_SCHEMES: Array<{ value: WebhookScheme; label: string; guidance: string }> = [
   {
@@ -52,6 +52,17 @@ const WEBHOOK_SCHEMES: Array<{ value: WebhookScheme; label: string; guidance: st
     value: "linear",
     label: "Linear",
     guidance: "Use the webhook signing secret shown by Linear. Payloads older than one minute are rejected.",
+  },
+  {
+    value: "token",
+    label: "Token (no signature)",
+    guidance:
+      "For senders that cannot sign. Send the secret as Authorization: Bearer <secret>, or add ?token=<secret> to the URL when the sender cannot set headers.",
+  },
+  {
+    value: "standard-webhooks",
+    label: "Standard Webhooks",
+    guidance: "Use the whsec_ signing secret from the sender. Requests older than five minutes are rejected.",
   },
 ];
 
@@ -420,7 +431,7 @@ function webhookForm() {
         <span class="hint webhook-scheme-guidance">${WEBHOOK_SCHEMES[0]!.guidance}</span>
       </label>
       <label
-        >Signing secret <span class="hint">(leave blank to auto-generate)</span>
+        >Secret <span class="hint">(leave blank to auto-generate)</span>
         <div class="copyrow">
           <input type="text" name="secret" placeholder="auto-generated if blank" />
           <button type="button" class="btn" @click=${fillGeneratedSecret}>Generate</button>
@@ -544,11 +555,9 @@ function showWebhookCreated(w: WebhookView, url: string): void {
         ${
           secret && secret !== "***"
             ? html`<div class="field">
-                <label>Signing secret</label>
+                <label>Secret</label>
                 ${copyRow(secret)}
-                <div class="hint">
-                  Configure your sender to sign requests with this secret (scheme: ${w.verification.scheme}).
-                </div>
+                <div class="hint">${WEBHOOK_SCHEMES.find((s) => s.value === w.verification.scheme)?.guidance}</div>
               </div>`
             : html`<div class="field">
                 <div class="hint">No signing secret for scheme <code>${w.verification.scheme}</code>.</div>

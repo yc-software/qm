@@ -14,7 +14,7 @@ import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { audit, personalCapability, resolveCapabilityDestination } from "./shared.ts";
+import { audit, livePersonTurn, personalCapability, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
@@ -193,7 +193,9 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
   return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
 }, true);
 
-const deleteCredential = keychainRoute(async ({ res, deps, tenant, params }, kc, { actorId, scopeId }) => {
+const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
+  const { res, deps, tenant, params } = ctx;
+  if (!(await livePersonTurn(ctx))) return;
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
   if (ok)
@@ -208,7 +210,9 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   return sendJson(res, 200, { grants: [...byId.values()] });
 });
 
-const revokeGrant = keychainRoute(async ({ res, deps, tenant, params }, kc, { actorId, scopeId }) => {
+const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
+  const { res, deps, tenant, params } = ctx;
+  if (!(await livePersonTurn(ctx))) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
   if (ok)
@@ -424,7 +428,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "DELETE",
     path: "/v1/keychain/credentials/:id",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "either",
     handle: deleteCredential,
@@ -433,7 +437,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/keychain/grants/:id/revoke",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "either",
     handle: revokeGrant,

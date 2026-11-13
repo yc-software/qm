@@ -484,6 +484,7 @@ export interface PendingApprovalRecord {
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
+  homeChannel?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

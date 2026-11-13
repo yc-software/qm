@@ -58,15 +58,14 @@ test("a machine that already matches costs one probe and no transfer", async () 
   assert.deepEqual(io.writes, []);
 });
 
-test("a stale machine gets every file staged under a shared nonce, chmodded, moved atomically, and re-probed", async () => {
+test("a stale machine gets every file staged beside its target, chmodded, moved atomically, and re-probed", async () => {
   const install = createLayerToolInstaller(() => FILES);
   const io = fakeIo({ probe: 1 });
   await install(io);
   assert.equal(io.writes.length, 2);
   const [bin, lib] = io.writes;
-  assert.match(bin!.abs, /^\/usr\/local\/bin\/acme\.staged-[0-9a-f]{8}$/);
-  const nonce = bin!.abs.slice(-8);
-  assert.equal(lib!.abs, `/usr/local/lib/acme/lib.mjs.staged-${nonce}`);
+  assert.ok(bin!.abs.startsWith("/usr/local/bin/.qm-"), bin!.abs);
+  assert.ok(lib!.abs.startsWith("/usr/local/lib/acme/.qm-"), lib!.abs);
   assert.equal(bin!.data, SCRIPT);
   assert.equal(lib!.data, LIB);
   assert.equal(io.scripts[1], "mkdir -p '/usr/local/bin' '/usr/local/lib/acme'");

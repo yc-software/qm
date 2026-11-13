@@ -251,6 +251,7 @@ export interface InboundScreenTurn {
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
   conversation: OrchestratorInput["conversation"];
+  homeChannelName: string | undefined;
   scopeId: ScopeId;
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   screenInbound: boolean;
@@ -279,6 +280,7 @@ export function screenedFields(
     surface?: string;
     conversation: { kind: string };
   },
+  homeChannel: string | undefined,
 ) {
   const dm = request.conversation.kind === "dm";
   const destinations = (request.deliveryCandidates ?? []).map((c) => c.label);
@@ -288,6 +290,7 @@ export function screenedFields(
     place: {
       ...shownPlace(request.surface, request.gatewayContext, dm),
       ...(destinations.length ? { destinations } : {}),
+      ...(homeChannel ? { homeChannel } : {}),
     },
     overheard: request.overheard ?? [],
     attachments: request.attachments ?? [],
@@ -297,7 +300,7 @@ export function screenedFields(
 
 async function buildInboundScreen(turn: InboundScreenTurn) {
   const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
-  const screened = screenedFields(input);
+  const screened = screenedFields(input, turn.homeChannelName);
   const blobTransfer = deps.blobTransfer;
   let overheard: OverheardEntryPayload[] = [];
   if (screenInbound) {

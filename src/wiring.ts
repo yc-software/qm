@@ -371,7 +371,12 @@ import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
-import { createSwarmStore, STAMP_SWARM_COMPUTERS_MIGRATION, type SwarmStorage } from "./swarms/swarm-store.ts";
+import {
+  createSwarmStore,
+  MARK_SWARM_FORUMS_PERSON_USED_MIGRATION,
+  STAMP_SWARM_COMPUTERS_MIGRATION,
+  type SwarmStorage,
+} from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
@@ -1665,9 +1670,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          ...(processes && supportsProcessSessions(sandbox)
-            ? { processes, stopProcess: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
-            : {}),
+          ...(processes ? { processes, sweepProcesses: () => processReaper!.sweepNow() } : {}),
           authorize: async (claims) => {
             await identity.refresh();
             return (
@@ -2016,6 +2019,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
     statements: [
@@ -2922,6 +2926,7 @@ export function buildApp(
         ...(supportsProcessSessions(sandbox)
           ? {
               kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
+              claimOwed: swarms?.claimOwedStops,
               afterSweep: createJobComputerSweep({
                 resources: sandboxResources,
                 sandbox,

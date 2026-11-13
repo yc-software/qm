@@ -368,6 +368,7 @@ export interface App {
     pins?: SessionPinView[];
     goal?: GoalView;
     runtime?: TurnRuntime;
+    latestPromptAt?: number;
   } | null>;
   canViewSessionSnapshot(sessionId: string, principalId: string): Promise<boolean>;
   getSessionItemForViewer(sessionId: string, principalId: string, seq: number): Promise<{ item: Item } | null>;

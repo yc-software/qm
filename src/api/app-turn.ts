@@ -455,6 +455,10 @@ export function createTurnMethods(
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
+        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer" && live?.run) {
+          const botTurn = live.run;
+          await withCurrentProjectRoster(() => stopRun(botTurn, false, true));
+        }
         if (live?.run && route.kind !== "turn") {
           const target = live.run;
           const steerTs =
@@ -778,6 +782,10 @@ export function createTurnMethods(
       if (route.kind === "turn") {
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
+        if (route.reason === "bot-turn" && (signal.queuedRunId || request)) {
+          await stopRun(run, false, true);
+          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
+        }
         if (signal.queuedRunId || !request) return { accepted: false, reason: "not_steerable", why: route.reason };
         const own = await methods.turn({
           ...request,

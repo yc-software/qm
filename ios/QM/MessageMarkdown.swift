@@ -5,6 +5,8 @@ struct MessageMarkdown: View {
   let text: String
   let client: APIClient
   var files: [DeliveredFile] = []
+  var textScale: Double = 1
+  var textColor: Color? = nil
   @State private var copiedCode: String?
   @State private var previewFile: DeliveredFile?
 
@@ -14,9 +16,9 @@ struct MessageMarkdown: View {
       .markdownInlineImageProvider(WorkspaceInlineImages(client: client, files: files))
       .id(files.map { "\($0.name ?? ""):\($0.artifactId ?? "")" }.sorted())
       .markdownTextStyle(\.text) {
-        ForegroundColor(QMTheme.ink)
+        ForegroundColor(textColor ?? QMTheme.ink)
         BackgroundColor(.clear)
-        FontSize(.em(1))
+        FontSize(.em(textScale))
       }
       .markdownBlockStyle(\.codeBlock) { configuration in
         VStack(alignment: .leading, spacing: 0) {
@@ -78,7 +80,7 @@ struct MessageMarkdown: View {
       .environment(
         \.openURL,
         OpenURLAction { url in
-          if let file = FilePreviewResource.attachment(url, files: files) {
+          if let file = FilePreviewResource.attachment(url, baseURL: client.baseURL, files: files) {
             previewFile = file
             return .handled
           }
