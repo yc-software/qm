@@ -688,7 +688,8 @@ export function createChatSurface(
     const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
-    if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
+    const unused = hasWelcomeScreen(me) && !sessionsState.list.some((session) => session.id);
+    if (!sessionId && me && !unused && (scopeId === null || scopeId === `personal:${me.user}`)) {
       void loadGeneratedActivities(me, () => {
         if (appState.me === me && chatState.agent === agent && !chatState.sessionId) drawActiveChat(agent);
       });

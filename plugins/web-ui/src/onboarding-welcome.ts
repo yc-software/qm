@@ -13,7 +13,7 @@ import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
 import { suggestedActivities } from "./suggested-activities";
-import { welcomeIdeaRows } from "./welcome-ideas";
+import { welcomeActivities } from "./welcome-ideas";
 
 interface ConnectedAccount {
   id: string;
@@ -21,7 +21,7 @@ interface ConnectedAccount {
   missingScopes?: string[];
 }
 import type { Me } from "./shell-state";
-import type { WelcomeProfile } from "../../chassis/src/welcome-profile.ts";
+import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
 import "./onboarding-welcome.css";
 import "./onboarding-slack";
 import "./slack-account";
@@ -440,33 +440,29 @@ export class OnboardingWelcome extends LitElement {
       this.authorizing = "";
     }
   }
-  private profileIntro(profile: WelcomeProfile, name: string | undefined, toolkits: string[]) {
+  private seededIntro(seeds: ActivitySeeds, name: string | undefined, toolkits: string[]) {
     const cohort = this.me?.welcomeCohort;
     const names = new Map(this.services.map((service) => [service.id, service.name]));
-    const rows = welcomeIdeaRows(
-      profile,
+    const { activities, fresh } = welcomeActivities(
+      seeds,
       [
         ...(this.workspaceConnected ? [{ id: "slack", name: "Slack" }] : []),
         ...[...new Set(toolkits)].map((id) => ({ id, name: names.get(id) ?? id })),
       ],
       ["", "success"].includes(this.connectionOutcome) ? (this.retryService?.id ?? "") : "",
     );
-    const notes = new Map(rows.map((row) => [row.activity.id, row.note]));
     return html`<div class="welcome-hero welcome-beat" style="--welcome-delay:0ms">
         <p>${name ? `Hi ${name}!` : "Hi there!"}</p>
         <h1>${cohort ? `Welcome to ${cohort}!` : "Welcome to QM"}</h1>
       </div>
       <div class="welcome-section welcome-beat" style="--welcome-delay:300ms">
         <h2>Where to start</h2>
-        ${suggestedActivities(
-          rows.map((row) => row.activity),
-          {
-            onSelect: (activity) => this.onIdea?.(activity.prompt),
-            redraw: () => this.requestUpdate(),
-            count: rows.length,
-            note: (activity) => notes.get(activity.id),
-          },
-        )}
+        ${suggestedActivities(activities, {
+          onSelect: (activity) => this.onIdea?.(activity.prompt),
+          redraw: () => this.requestUpdate(),
+          count: activities.length,
+          fresh,
+        })}
       </div>
       <div class="welcome-section welcome-beat" style="--welcome-delay:600ms">
         <h2>Connect your accounts</h2>
@@ -503,8 +499,8 @@ export class OnboardingWelcome extends LitElement {
     }
     const name = this.me?.displayName?.trim().split(/\s+/)[0];
     const cohort = this.me?.welcomeCohort;
-    const profile = this.setupOnly ? undefined : this.me?.welcomeProfile;
-    const paced = Boolean(cohort) && !profile;
+    const seeds = this.setupOnly ? undefined : this.me?.welcome;
+    const paced = Boolean(cohort) && !seeds;
     const serviceName = this.retryService?.name ?? "App";
     const connected = this.preview
       ? previewConnections(this.previewUser())
@@ -535,11 +531,11 @@ export class OnboardingWelcome extends LitElement {
         detail: "We couldn’t confirm an active connection yet. Try checking again, or restart authorization.",
       },
     }[this.connectionOutcome];
-    return html`<section class="welcome-content ${profile ? "welcome-profile" : ""}">
+    return html`<section class="welcome-content ${seeds ? "welcome-seeded" : ""}">
       ${this.preview ? html`<div class="connection-preview-label">Connection preview · No accounts are linked <button @click=${() => resetPreview(this.previewUser())}>Reset</button></div>` : nothing}
-      ${profile ? this.profileIntro(profile, name, connected) : nothing}
+      ${seeds ? this.seededIntro(seeds, name, connected) : nothing}
       ${
-        this.setupOnly || profile
+        this.setupOnly || seeds
           ? nothing
           : html`<h1 class="welcome-beat" style="--welcome-delay:0ms">${name ? `Hi, ${name}.` : "Hi there."}</h1>
               ${

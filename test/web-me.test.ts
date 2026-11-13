@@ -1,7 +1,10 @@
 import "./support/auto-fake-sprites.ts";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { webMeConfig } from "../src/api/routes/web-me.ts";
@@ -10,7 +13,6 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const config = testConfig({ signingSecret: "web-me-signing-secret-0123456789abcdef" });
@@ -112,20 +114,29 @@ test("with suggestion generation on, /me leaves the fallback suggestions to the 
   assert.equal(body.suggestedActivities, undefined);
 });
 
-test("/me carries the company's stored welcome profile, reduced to the ideas the welcome shows", async () => {
-  const welcomeProfiles = testMap<{ scopeId: ScopeId; profile: unknown }>();
-  const store = testConfigStore(orgId(), { welcomeProfiles });
-  const at = await serve({ config: store });
+test("/me carries a company's activity seeds from the deployment layer, and they replace the deployment-wide list", async () => {
+  const layer = mkdtempSync(join(tmpdir(), "qm-seeds-"));
+  after(() => rmSync(layer, { recursive: true, force: true }));
+  mkdirSync(join(layer, "activity-seeds"));
+  const seeded = webMeConfig({ DEPLOYMENT_LAYER: layer, WEB_UI_SUGGESTED_ACTIVITIES: JSON.stringify(activities) });
+  const web = { events: {} as never, me: seeded, shell: { release: async () => undefined } as never };
+  const at = await serve({ web });
   const cookie = browserSessionCookie("bob@example.com");
-  assert.equal("welcomeProfile" in (await me(cookie, at)), false);
-  const ideas = [{ id: "crm", icon: "📇", title: "Track the harbor pilots", src: "from your goals" }];
-  const connectors = { gmail: [{ id: "g1", icon: "📥", title: "Find replies I owe", replaces: "crm" }] };
-  const scope = orgScope() as ScopeId;
-  await welcomeProfiles.put(scope, { scopeId: scope, profile: { company: "Tidewater", ideas, connectors } });
-  assert.deepEqual((await me(cookie, at)).welcomeProfile, { ideas, connectors });
-  await welcomeProfiles.put(scope, {
-    scopeId: scope,
-    profile: { ideas: [{ id: "crm", title: "No icon" }], connectors },
-  });
-  assert.equal("welcomeProfile" in (await me(cookie, at)), false);
+  const before = await me(cookie, at);
+  assert.equal("welcome" in before, false);
+  assert.deepEqual(before.suggestedActivities, activities);
+  const idea = { id: "crm", icon: "📇", title: "Track the harbor pilots", prompt: "Track the harbor pilots" };
+  const seeds = {
+    activities: [{ ...idea, source: "from your goals" }],
+    apps: {
+      gmail: [{ id: "g1", icon: "📥", title: "Find replies I owe", prompt: "Find replies I owe", replaces: "crm" }],
+    },
+  };
+  const file = join(layer, "activity-seeds", `${orgId()}.json`);
+  writeFileSync(file, JSON.stringify({ company: "Tidewater", ...seeds }));
+  const seededMe = await me(cookie, at);
+  assert.deepEqual(seededMe.welcome, seeds);
+  assert.deepEqual(seededMe.suggestedActivities, seeds.activities);
+  writeFileSync(file, JSON.stringify({ activities: [{ id: "crm", title: "No icon", prompt: "No icon" }] }));
+  assert.equal("welcome" in (await me(cookie, at)), false);
 });
