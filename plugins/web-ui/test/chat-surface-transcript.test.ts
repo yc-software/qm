@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 import { item } from "./item-fixture.ts";
 
-test("a partner-chat conversation opens as a transcript named for its surface, with replies left to that surface", async () => {
+test("a generic-chat conversation opens as a transcript named for its surface, with replies left to that surface", async () => {
   const session = {
     ...SESSION,
     type: "dm" as const,
     createdAt: 1,
-    threadRef: "partner-chat:7001:dm:301",
-    surface: "partner-chat",
+    threadRef: "generic-chat:7001:dm:301",
+    surface: "generic-chat",
     canContinue: false,
   };
   const h = await harness({

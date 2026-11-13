@@ -8,13 +8,13 @@ import { reactionDetectGuidance, reactionInstruction } from "../reactions.ts";
 import { createRunWaiter } from "../run-wait.ts";
 import { HANDOFF_INSTRUCTION, runSurfaceTurn, type SurfaceTurnBody } from "../turn-driver.ts";
 import { createTurnFlow, drivenLive, liveRunHoldsDelivery, runDeliveryId } from "../turn-flow.ts";
-import { PARTNER_CHAT, type PartnerChatRef } from "./protocol.ts";
-import { createPartnerChatTransport, type PartnerChatTransportDeps } from "./transport.ts";
+import { GENERIC_CHAT, type GenericChatRef } from "./protocol.ts";
+import { createGenericChatTransport, type GenericChatTransportDeps } from "./transport.ts";
 
 const ACK_PICKS = [...CURATED_ACK_EMOJI, ...DEFAULT_ACK_REACTIONS];
 
-export interface PartnerChatTurn {
-  where: PartnerChatRef;
+export interface GenericChatTurn {
+  where: GenericChatRef;
   authorId: string;
   trigger: string;
   body: SurfaceTurnBody;
@@ -22,9 +22,9 @@ export interface PartnerChatTurn {
   synthetic?: boolean;
 }
 
-export type PartnerChatTurns = ReturnType<typeof createPartnerChatTurns>;
+export type GenericChatTurns = ReturnType<typeof createGenericChatTurns>;
 
-function gatewayContext(where: PartnerChatRef, chatName: string | undefined): GatewayContext {
+function gatewayContext(where: GenericChatRef, chatName: string | undefined): GatewayContext {
   const hostIds = { chat: where.chat, ...(where.thread ? { thread: where.thread } : {}) };
   const reactions = { instructions: reactionInstruction("", false), reactionGuidance: reactionDetectGuidance("") };
   if (where.kind === "dm") return { location: "a direct message with the user", hostIds, ...reactions };
@@ -37,8 +37,8 @@ function gatewayContext(where: PartnerChatRef, chatName: string | undefined): Ga
   };
 }
 
-export function createPartnerChatTurns(
-  deps: PartnerChatTransportDeps & {
+export function createGenericChatTurns(
+  deps: GenericChatTransportDeps & {
     app: Pick<
       App,
       "turn" | "ackDeliveryByKey" | "getRun" | "setRunDeliveryState" | "ingestSurfaceEvents" | "readSurfaceMessages"
@@ -50,11 +50,11 @@ export function createPartnerChatTurns(
 ) {
   const flow = createTurnFlow(
     {
-      submitTurn: (body) => deps.app.turn({ ...body, surface: PARTNER_CHAT }),
+      submitTurn: (body) => deps.app.turn({ ...body, surface: GENERIC_CHAT }),
       waitRun: createRunWaiter({ runs: deps.runs, turnStream: deps.turnStream, getRun: (id) => deps.app.getRun(id) }),
       ackRunDelivery: (runId) => deps.app.ackDeliveryByKey(`run:${runId}`),
     },
-    PARTNER_CHAT,
+    GENERIC_CHAT,
   );
   const reportEditRef = async (runId: string, editRef: string): Promise<void> => {
     if (!(await deps.app.setRunDeliveryState(runId, { editRef }))) throw new Error(`run ${runId} not found`);
@@ -66,12 +66,12 @@ export function createPartnerChatTurns(
     return flow.inFlightRuns.has(runId) || drivenLive((await deps.runs.get(runId))?.request ?? {});
   }
 
-  function start(turn: PartnerChatTurn): Promise<void> {
+  function start(turn: GenericChatTurn): Promise<void> {
     const { where, body } = turn;
     const label = `chat=${where.chat} at=${turn.trigger}`;
-    const transport = createPartnerChatTransport(deps, turn);
+    const transport = createGenericChatTransport(deps, turn);
     return new Promise<void>((resolve, reject) => {
-      const done = runSurfaceTurn({ flow, label: PARTNER_CHAT, reportEditRef }, transport, {
+      const done = runSurfaceTurn({ flow, label: GENERIC_CHAT, reportEditRef }, transport, {
         kind: where.kind === "dm" ? "dm" : "channel",
         trigger: turn.trigger,
         where: label,
@@ -90,7 +90,7 @@ export function createPartnerChatTurns(
         onRejected: (reason) => reject(new Error(reason)),
       });
       done.then(resolve, reject);
-      done.catch(reportFailureAs("partner-chat: turn", undefined, label));
+      done.catch(reportFailureAs("generic-chat: turn", undefined, label));
     });
   }
 

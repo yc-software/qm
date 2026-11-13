@@ -3,14 +3,14 @@ import { hmacHex } from "../../webhooks/verifiers.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
 import type { CachedMessage, SurfaceCache } from "../../surface-cache/types.ts";
 
-export const PARTNER_CHAT = "partner-chat";
+export const GENERIC_CHAT = "generic-chat";
 
 const MAX_CLOCK_SKEW_S = 300;
 const MESSAGE_ID_WIDTH = 20;
 
 const ID = /^[A-Za-z0-9_-]+$/;
 const id = z.string().regex(ID);
-export const partnerChatMessageIdSchema = z.string().regex(/^\d{1,20}$/);
+export const genericChatMessageIdSchema = z.string().regex(/^\d{1,20}$/);
 const user = z.object({
   id,
   email: z.string().optional(),
@@ -18,7 +18,7 @@ const user = z.object({
   bot: z.boolean().optional(),
 });
 const file = z.object({
-  id: partnerChatMessageIdSchema,
+  id: genericChatMessageIdSchema,
   name: z.string().min(1),
   content_type: z.string().min(1),
   size_bytes: z.number().int().nonnegative().optional(),
@@ -29,9 +29,9 @@ const eventSchema = z.object({
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
   chat: z.object({ id, kind: z.enum(["group", "dm"]), name: z.string().optional(), members: z.array(user) }),
-  thread_id: partnerChatMessageIdSchema.nullish(),
+  thread_id: genericChatMessageIdSchema.nullish(),
   message: z.object({
-    id: partnerChatMessageIdSchema,
+    id: genericChatMessageIdSchema,
     user,
     body: z.string(),
     mentions_agent: z.boolean().default(false),
@@ -53,13 +53,13 @@ const reactionEventSchema = eventSchema.extend({
   reaction: z.object({ name: z.string().min(1), user }),
 });
 
-export type PartnerChatUser = z.infer<typeof user>;
-export type PartnerChatEvent = z.infer<typeof eventSchema>;
-export type PartnerChatFile = z.infer<typeof file>;
-export type PartnerChatReactionEvent = z.infer<typeof reactionEventSchema>;
-export type PartnerChatActionEvent = z.infer<typeof actionEventSchema>;
+export type GenericChatUser = z.infer<typeof user>;
+export type GenericChatEvent = z.infer<typeof eventSchema>;
+export type GenericChatFile = z.infer<typeof file>;
+export type GenericChatReactionEvent = z.infer<typeof reactionEventSchema>;
+export type GenericChatActionEvent = z.infer<typeof actionEventSchema>;
 
-export interface PartnerChatRef {
+export interface GenericChatRef {
   account: string;
   kind: "group" | "dm";
   chat: string;
@@ -70,21 +70,21 @@ export const TIMESTAMP_HEADER = "x-agent-app-request-timestamp";
 export const SIGNATURE_HEADER = "x-agent-app-signature";
 export const ACCOUNT_HEADER = "x-agent-app-account";
 
-export function signPartnerChat(secret: string, timestamp: string, rawBody: string): string {
+export function signGenericChat(secret: string, timestamp: string, rawBody: string): string {
   return `v0=${hmacHex(secret, `v0:${timestamp}:${rawBody}`)}`;
 }
 
-export function signPartnerChatRequest(
+export function signGenericChatRequest(
   secret: string,
   timestamp: string,
   account: string,
   path: string,
   rawBody: string,
 ): string {
-  return signPartnerChat(secret, timestamp, `${account}:${path}:${rawBody}`);
+  return signGenericChat(secret, timestamp, `${account}:${path}:${rawBody}`);
 }
 
-export function verifyPartnerChat(
+export function verifyGenericChat(
   secret: string,
   timestamp: string | undefined,
   signature: string | undefined,
@@ -93,23 +93,23 @@ export function verifyPartnerChat(
 ): boolean {
   if (!timestamp || !/^\d+$/.test(timestamp) || Math.abs(nowMs / 1000 - Number(timestamp)) > MAX_CLOCK_SKEW_S)
     return false;
-  return constantTimeEqual(signature ?? "", signPartnerChat(secret, timestamp, rawBody));
+  return constantTimeEqual(signature ?? "", signGenericChat(secret, timestamp, rawBody));
 }
 
 const inboundSchema = z.discriminatedUnion("type", [eventSchema, actionEventSchema, reactionEventSchema]);
 
-export function parsePartnerChatEvent(raw: unknown) {
+export function parseGenericChatEvent(raw: unknown) {
   return inboundSchema.safeParse(raw);
 }
 
-export function partnerChatRef(c: PartnerChatRef): string {
-  return [PARTNER_CHAT, c.account, c.kind, c.chat, ...(c.thread ? [c.thread] : [])].join(":");
+export function genericChatRef(c: GenericChatRef): string {
+  return [GENERIC_CHAT, c.account, c.kind, c.chat, ...(c.thread ? [c.thread] : [])].join(":");
 }
 
-export function parsePartnerChatRef(ref: string): PartnerChatRef | null {
+export function parseGenericChatRef(ref: string): GenericChatRef | null {
   const [surface, account, kind, chat, thread, ...rest] = ref.split(":");
   if (
-    surface !== PARTNER_CHAT ||
+    surface !== GENERIC_CHAT ||
     !account ||
     !chat ||
     !ID.test(account) ||
@@ -121,12 +121,12 @@ export function parsePartnerChatRef(ref: string): PartnerChatRef | null {
   return { account, kind, chat, ...(thread ? { thread } : {}) };
 }
 
-export function chatContainer(c: Pick<PartnerChatRef, "account" | "kind" | "chat">): string {
-  return partnerChatRef({ account: c.account, kind: c.kind, chat: c.chat });
+export function chatContainer(c: Pick<GenericChatRef, "account" | "kind" | "chat">): string {
+  return genericChatRef({ account: c.account, kind: c.kind, chat: c.chat });
 }
 
-export function partnerChatContainer(target: string): string {
-  const ref = parsePartnerChatRef(target);
+export function genericChatContainer(target: string): string {
+  const ref = parseGenericChatRef(target);
   return ref ? chatContainer(ref) : target;
 }
 
@@ -134,11 +134,11 @@ function messageIdSuffix(messageId: string): string {
   return `.${messageId.padStart(MESSAGE_ID_WIDTH, "0")}`;
 }
 
-export function partnerChatTs(createdAt: string, messageId: string): string {
+export function genericChatTs(createdAt: string, messageId: string): string {
   return `${Math.floor(Date.parse(createdAt) / 1000)}${messageIdSuffix(messageId)}`;
 }
 
-export function partnerChatMessageId(ref: string): string {
+export function genericChatMessageId(ref: string): string {
   const dot = ref.indexOf(".");
   return dot < 0 ? ref : ref.slice(dot + 1).replace(/^0+(?=.)/, "");
 }
@@ -149,9 +149,9 @@ export async function findMessage(
   messageId: string,
   opts: { self?: true; includeDeleted?: true } = {},
 ): Promise<CachedMessage | undefined> {
-  if (!partnerChatMessageIdSchema.safeParse(messageId).success) return undefined;
+  if (!genericChatMessageIdSchema.safeParse(messageId).success) return undefined;
   const [hit] = await cache.readMessages(container, {
-    surface: PARTNER_CHAT,
+    surface: GENERIC_CHAT,
     tsSuffix: messageIdSuffix(messageId),
     ...(opts.self ? { self: true } : {}),
     ...(opts.includeDeleted ? { includeDeleted: true } : {}),

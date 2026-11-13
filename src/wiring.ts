@@ -419,14 +419,15 @@ import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
-import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
-import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
-import { PARTNER_CHAT_CLAIM_MS, createPartnerChatClient } from "./surfaces/partner-chat/client.ts";
-import { partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
-import { createPartnerChatTurns } from "./surfaces/partner-chat/turns.ts";
-import { createPartnerChatApprovals, partnerChatApprovalCardRoute } from "./surfaces/partner-chat/approvals.ts";
-import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
-import { PARTNER_CHAT } from "./surfaces/partner-chat/protocol.ts";
+import { createGenericChatSurface } from "./surfaces/generic-chat/adapter.ts";
+import { createGenericChatInbound } from "./surfaces/generic-chat/inbound.ts";
+import { GENERIC_CHAT_CLAIM_MS, createGenericChatClient } from "./surfaces/generic-chat/client.ts";
+import { genericChatSender } from "./surfaces/generic-chat/outbound.ts";
+import { createGenericChatTurns } from "./surfaces/generic-chat/turns.ts";
+import { createGenericChatApprovals, genericChatApprovalCardRoute } from "./surfaces/generic-chat/approvals.ts";
+import { createGenericChatNotices, genericChatRunNotice } from "./surfaces/generic-chat/notices.ts";
+import { GENERIC_CHAT } from "./surfaces/generic-chat/protocol.ts";
+import { GENERIC_CHAT_RENAME } from "./surfaces/generic-chat/migration.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -516,7 +517,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
-  partnerChatEvents?: ServerDeps["partnerChatEvents"];
+  genericChatEvents?: ServerDeps["genericChatEvents"];
   loopIngress: LoopIngressService;
   admin: AdminService;
   budget: BudgetTracker | undefined;
@@ -2082,7 +2083,7 @@ export function buildApp(
   });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
     slack: slackApprovalCardRoute,
-    [PARTNER_CHAT]: partnerChatApprovalCardRoute,
+    [GENERIC_CHAT]: genericChatApprovalCardRoute,
   });
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
@@ -2190,12 +2191,12 @@ export function buildApp(
   const surfaces = createSurfaceRegistry({
     surfaces: [
       createSlackSurface({ deliveries }),
-      ...(config.partnerChat
+      ...(config.genericChat
         ? [
-            createPartnerChatSurface({
+            createGenericChatSurface({
               deliveries,
               surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
-              ...(config.partnerChat.label ? { label: config.partnerChat.label } : {}),
+              ...(config.genericChat.label ? { label: config.genericChat.label } : {}),
             }),
           ]
         : []),
@@ -2302,7 +2303,7 @@ export function buildApp(
     deliveries,
     recoveryAdminUrlFor,
     sessions,
-    partnerChatRunNotice,
+    genericChatRunNotice,
   );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
@@ -2378,6 +2379,7 @@ export function buildApp(
   const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
+  pgArtifactMap.pool.registerMigration(GENERIC_CHAT_RENAME);
   const providerKeys = directProviderAvailability;
   const subagentMail = {
     sessions,
@@ -2574,50 +2576,50 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
-  const partnerChatClient = config.partnerChat ? createPartnerChatClient(config.partnerChat) : null;
-  const partnerChatTurns = partnerChatClient
-    ? createPartnerChatTurns({
+  const genericChatNotices = config.genericChat ? createGenericChatNotices({ deliveries }) : null;
+  const genericChatClient = config.genericChat ? createGenericChatClient(config.genericChat) : null;
+  const genericChatTurns = genericChatClient
+    ? createGenericChatTurns({
         app,
-        client: partnerChatClient,
+        client: genericChatClient,
         blobs: slackCore,
         runs,
         turnStream,
         pickAckEmoji: slackCore.pickAckEmoji,
       })
     : null;
-  const partnerChatInbound =
-    partnerChatNotices && partnerChatClient && partnerChatTurns && config.partnerChat
-      ? createPartnerChatInbound({
-          secret: config.partnerChat.secret,
-          client: partnerChatClient,
+  const genericChatInbound =
+    genericChatNotices && genericChatClient && genericChatTurns && config.genericChat
+      ? createGenericChatInbound({
+          secret: config.genericChat.secret,
+          client: genericChatClient,
           stageBlob: slackCore.stageBlob,
           app,
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
-          unansweredReply: partnerChatNotices.unanswered,
-          turns: partnerChatTurns,
-          registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, PARTNER_CHAT),
-          onAction: createPartnerChatApprovals({
-            client: partnerChatClient,
+          unansweredReply: genericChatNotices.unanswered,
+          turns: genericChatTurns,
+          registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, GENERIC_CHAT),
+          onAction: createGenericChatApprovals({
+            client: genericChatClient,
             app,
             ...(keychainApprovals ? { keychainApprovals } : {}),
           }).invoke,
         })
       : null;
-  const partnerChatDelivery =
-    partnerChatClient && partnerChatTurns
+  const genericChatDelivery =
+    genericChatClient && genericChatTurns
       ? createDeliveryRelay(deliveries, {
-          type: PARTNER_CHAT,
-          send: partnerChatSender({
-            client: partnerChatClient,
+          type: GENERIC_CHAT,
+          send: genericChatSender({
+            client: genericChatClient,
             blobs: slackCore,
             app,
             ...(keychainApprovals ? { keychainApprovals } : {}),
           }),
           fail: (id, reason) => app.failDelivery(id, reason),
-          claimMs: PARTNER_CHAT_CLAIM_MS,
-          held: partnerChatTurns.held,
+          claimMs: GENERIC_CHAT_CLAIM_MS,
+          held: genericChatTurns.held,
         })
       : null;
   const webhookDelivery = createDeliveryRelay(deliveries, {
@@ -3072,7 +3074,7 @@ export function buildApp(
       runResultSweeper.start();
       approvalDeliverySweeper.start();
       webTranscriptSweeper.start();
-      partnerChatDelivery?.start();
+      genericChatDelivery?.start();
       webhookDelivery.start();
     };
     if (backgroundStopping)
@@ -3111,7 +3113,7 @@ export function buildApp(
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
       webTranscriptSweeper.stop(),
-      partnerChatDelivery?.stop(),
+      genericChatDelivery?.stop(),
       preemptionSweeper.stop(),
       worker.stopClaims(),
     ];
@@ -3238,7 +3240,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
-    ...(partnerChatInbound ? { partnerChatEvents: partnerChatInbound.handle } : {}),
+    ...(genericChatInbound ? { genericChatEvents: genericChatInbound.handle } : {}),
     loopIngress,
     admin,
     errors,
@@ -3386,7 +3388,7 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
-    ...(built.partnerChatEvents ? { partnerChatEvents: built.partnerChatEvents } : {}),
+    ...(built.genericChatEvents ? { genericChatEvents: built.genericChatEvents } : {}),
     loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,

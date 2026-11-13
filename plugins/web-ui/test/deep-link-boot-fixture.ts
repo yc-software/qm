@@ -144,7 +144,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         permissions: [],
         chatSurfaces: [
           { kind: "slack", label: "Slack" },
-          { kind: "partner-chat", label: "Community chat" },
+          { kind: "generic-chat", label: "Community chat" },
         ],
         ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
       });

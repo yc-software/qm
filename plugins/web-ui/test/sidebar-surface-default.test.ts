@@ -45,10 +45,10 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
         createdAt: 4,
       },
       {
-        id: "partner",
-        threadRef: "partner-chat:7001:dm:301",
+        id: "generic",
+        threadRef: "generic-chat:7001:dm:301",
         scopeId: "personal:tester",
-        surface: "partner-chat",
+        surface: "generic-chat",
         title: "Data room checklist",
         createdAt: 1.2,
       },
@@ -84,7 +84,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
         permissions: [],
         chatSurfaces: [
           { kind: "slack", label: "Slack" },
-          { kind: "partner-chat", label: "Community chat" },
+          { kind: "generic-chat", label: "Community chat" },
         ],
       };
       shell.mountShell();
@@ -93,14 +93,14 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
         [...document.querySelectorAll<HTMLElement>("#sidebar-body .session-row")].map((row) => row.dataset.sessionId);
       const slackRow = () => document.querySelector('[data-session-id="slack"]');
       const groupRow = () => document.querySelector('[data-session-id="group"]');
-      const partnerRow = () => document.querySelector('[data-session-id="partner"]');
-      assert.deepEqual(rowIds(), stored === "1" ? ["web"] : ["web", "slack", "group", "partner"]);
+      const genericRow = () => document.querySelector('[data-session-id="generic"]');
+      assert.deepEqual(rowIds(), stored === "1" ? ["web"] : ["web", "slack", "group", "generic"]);
       if (stored !== "1") {
         assert.ok(slackRow()?.querySelector(".slack-mark"));
         assert.ok(groupRow()?.querySelector(".slack-mark"));
         assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /Slack/);
-        assert.ok(partnerRow()?.querySelector(".surface-glyph svg:not(.slack-mark)"));
-        assert.match(partnerRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /Community chat/);
+        assert.ok(genericRow()?.querySelector(".surface-glyph svg:not(.slack-mark)"));
+        assert.match(genericRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /Community chat/);
       }
       assert.equal(document.querySelector('[data-view="inbox"]'), null);
       assert.equal(document.querySelector('[data-view="calendar"]'), null);
@@ -111,7 +111,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       assert.equal(sidebar.sessionsState.webOnly, true);
       sidebar.setWebOnly(false);
       await sidebar.refreshSessions();
-      assert.deepEqual(rowIds(), ["web", "slack", "group", "partner"]);
+      assert.deepEqual(rowIds(), ["web", "slack", "group", "generic"]);
       assert.ok(slackRow()?.querySelector(".slack-mark"));
       assert.equal(slackRow()?.querySelector(".ro-lock"), null);
       assert.doesNotMatch(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /read-only/);

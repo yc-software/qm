@@ -1,23 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { App } from "../src/api/app-types.ts";
-import { createPartnerChatClient } from "../src/surfaces/partner-chat/client.ts";
-import { createPartnerChatInbound } from "../src/surfaces/partner-chat/inbound.ts";
-import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
-import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
-import { createPartnerChatTransport } from "../src/surfaces/partner-chat/transport.ts";
+import { createGenericChatClient } from "../src/surfaces/generic-chat/client.ts";
+import { createGenericChatInbound } from "../src/surfaces/generic-chat/inbound.ts";
+import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
+import { signGenericChat } from "../src/surfaces/generic-chat/protocol.ts";
+import { createGenericChatTransport } from "../src/surfaces/generic-chat/transport.ts";
 import { runSurfaceTurn } from "../src/surfaces/turn-driver.ts";
 import type { TurnFlow } from "../src/surfaces/turn-flow.ts";
 import type { Delivery, TurnRequest } from "../src/types.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
-const SECRET = "partner-chat-test-secret-0123456789abcdef";
+const SECRET = "generic-chat-test-secret-0123456789abcdef";
 const tenantFor = async () => TEST_TENANT;
 
 function chatHost(respond: (path: string, body: Record<string, unknown>) => Response) {
   const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
-  const client = createPartnerChatClient({
+  const client = createGenericChatClient({
     url: "https://chat.example",
     secret: SECRET,
     fetch: async (url, init) => {
@@ -34,7 +34,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
     Response.json({ url: `https://storage.example/${String(body.file_id)}` }),
   );
   const turns: TurnRequest[] = [];
-  const inbound = createPartnerChatInbound({
+  const inbound = createGenericChatInbound({
     registerGroup: async () => {},
     secret: SECRET,
     client,
@@ -73,7 +73,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
   });
   const ts = String(Math.floor(Date.now() / 1000));
   for (const raw of [JSON.stringify(event()), JSON.stringify(event(2))])
-    assert.equal((await inbound.handle(ts, signPartnerChat(SECRET, ts, raw), raw)).status, 200);
+    assert.equal((await inbound.handle(ts, signGenericChat(SECRET, ts, raw), raw)).status, 200);
   assert.deepEqual(calls.slice(2), [
     { path: "/agent_app/files/url", body: { file_id: "31" } },
     { path: "/agent_app/files/url", body: { file_id: "32" } },
@@ -96,7 +96,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
 function sending(respond: Parameters<typeof chatHost>[0]) {
   const host = chatHost(respond);
   const stored: Array<{ url: string; fields: Record<string, string> }> = [];
-  const send = partnerChatSender({
+  const send = genericChatSender({
     client: host.client,
     app: {
       tenantFor,
@@ -125,7 +125,7 @@ function sending(respond: Parameters<typeof chatHost>[0]) {
         {
           id: "d1",
           idempotencyKey: "k1",
-          destination: { type: "partner-chat", target: "partner-chat:7001:group:88:1001" },
+          destination: { type: "generic-chat", target: "generic-chat:7001:group:88:1001" },
           text,
           attachments,
         } as Delivery,
@@ -203,7 +203,7 @@ test("a live turn shows typing, posts its status, then posts the reply with its 
         : { message_id: body.client_message_id === "run:r1" ? "44" : "43" },
     ),
   );
-  const transport = createPartnerChatTransport(
+  const transport = createGenericChatTransport(
     {
       client,
       app: { readSurfaceMessages: async () => [], ingestSurfaceEvents: async () => ({ upserted: 1 }) },
@@ -227,7 +227,7 @@ test("a live turn shows typing, posts its status, then posts the reply with its 
     },
   };
   await runSurfaceTurn(
-    { flow, label: "partner-chat", reportEditRef: async (runId, ref) => void editRefs.push([runId, ref]) },
+    { flow, label: "generic-chat", reportEditRef: async (runId, ref) => void editRefs.push([runId, ref]) },
     transport,
     {
       kind: "dm",

@@ -9,11 +9,11 @@ import {
   type BlobSource,
   type ProcessedInbound,
 } from "../attachments.ts";
-import type { PartnerChatClient } from "./client.ts";
-import { partnerChatMessageIdSchema, type PartnerChatFile, type PartnerChatRef } from "./protocol.ts";
+import type { GenericChatClient } from "./client.ts";
+import { genericChatMessageIdSchema, type GenericChatFile, type GenericChatRef } from "./protocol.ts";
 
-export interface PartnerChatUploads {
-  client: PartnerChatClient;
+export interface GenericChatUploads {
+  client: GenericChatClient;
   blobs: BlobSource;
   storageFetch?: AddressFetch;
 }
@@ -24,12 +24,12 @@ const UPLOAD_FAILED = "I couldn't attach the file(s). Try again in a moment.";
 const storageUrl = z.string().startsWith("https://");
 const downloadSchema = z.object({ url: storageUrl });
 const uploadSchema = z.object({
-  file_id: partnerChatMessageIdSchema,
+  file_id: genericChatMessageIdSchema,
   upload: z.object({ url: storageUrl, fields: z.record(z.string(), z.string()) }),
 });
 
-async function fetchPartnerChatFile(
-  client: PartnerChatClient,
+async function fetchGenericChatFile(
+  client: GenericChatClient,
   account: string,
   fileId: string,
   send: AddressFetch = publicFetch,
@@ -38,10 +38,10 @@ async function fetchPartnerChatFile(
   return responseBytes(await send(url, { signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS) }));
 }
 
-export function stagePartnerChatFiles(
-  client: PartnerChatClient,
+export function stageGenericChatFiles(
+  client: GenericChatClient,
   account: string,
-  files: readonly PartnerChatFile[],
+  files: readonly GenericChatFile[],
   stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
   author?: string,
   send: AddressFetch = publicFetch,
@@ -53,15 +53,15 @@ export function stagePartnerChatFiles(
       mimetype: f.content_type,
       ...(f.size_bytes === undefined ? {} : { size: f.size_bytes }),
     })),
-    (f) => fetchPartnerChatFile(client, account, f.id, send),
+    (f) => fetchGenericChatFile(client, account, f.id, send),
     stage,
     () => author,
   );
 }
 
 async function uploadFiles(
-  deps: PartnerChatUploads,
-  where: Pick<PartnerChatRef, "account" | "chat">,
+  deps: GenericChatUploads,
+  where: Pick<GenericChatRef, "account" | "chat">,
   attachments: readonly OutgoingAttachment[],
 ): Promise<string[]> {
   const send = deps.storageFetch ?? publicFetch;
@@ -83,21 +83,21 @@ async function uploadFiles(
       body: form,
       signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
     });
-    if (!res.ok) throw new Error(`partner-chat file storage refused ${name}: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`generic-chat file storage refused ${name}: HTTP ${res.status}`);
     fileIds.push(file_id);
   }
   return fileIds;
 }
 
-export async function uploadPartnerChatFiles(
-  deps: PartnerChatUploads,
-  where: Pick<PartnerChatRef, "account" | "chat">,
+export async function uploadGenericChatFiles(
+  deps: GenericChatUploads,
+  where: Pick<GenericChatRef, "account" | "chat">,
   attachments: readonly OutgoingAttachment[],
 ): Promise<{ fileIds?: string[]; failureNote?: string }> {
   try {
     return { fileIds: await uploadFiles(deps, where, attachments) };
   } catch (e) {
-    console.error(`[partner-chat] file upload failed in chat ${where.chat}: ${errMessage(e)}`);
+    console.error(`[generic-chat] file upload failed in chat ${where.chat}: ${errMessage(e)}`);
     return { failureNote: UPLOAD_FAILED };
   }
 }

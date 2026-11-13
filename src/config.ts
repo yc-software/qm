@@ -118,7 +118,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  partnerChat?: { url: string; secret: string; label?: string };
+  genericChat?: { url: string; secret: string; label?: string };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -483,8 +483,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const slackEventsPort =
     env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
-  if (Boolean(env.PARTNER_CHAT_URL?.trim()) !== Boolean(env.PARTNER_CHAT_SECRET?.trim()))
-    throw new Error("PARTNER_CHAT_URL and PARTNER_CHAT_SECRET must be set together");
+  if (Boolean(env.GENERIC_CHAT_URL?.trim()) !== Boolean(env.GENERIC_CHAT_SECRET?.trim()))
+    throw new Error("GENERIC_CHAT_URL and GENERIC_CHAT_SECRET must be set together");
   if (
     slackEventsPort !== undefined &&
     (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)
@@ -598,12 +598,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
-    ...(env.PARTNER_CHAT_URL?.trim() && env.PARTNER_CHAT_SECRET?.trim()
+    ...(env.GENERIC_CHAT_URL?.trim() && env.GENERIC_CHAT_SECRET?.trim()
       ? {
-          partnerChat: {
-            url: env.PARTNER_CHAT_URL.trim(),
-            secret: env.PARTNER_CHAT_SECRET.trim(),
-            ...(env.PARTNER_CHAT_LABEL?.trim() ? { label: env.PARTNER_CHAT_LABEL.trim() } : {}),
+          genericChat: {
+            url: env.GENERIC_CHAT_URL.trim(),
+            secret: env.GENERIC_CHAT_SECRET.trim(),
+            ...(env.GENERIC_CHAT_LABEL?.trim() ? { label: env.GENERIC_CHAT_LABEL.trim() } : {}),
           },
         }
       : {}),

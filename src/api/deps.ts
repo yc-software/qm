@@ -121,7 +121,7 @@ export interface ServerDeps {
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
   slackEventsPort?: number;
-  partnerChatEvents?: (
+  genericChatEvents?: (
     timestamp: string | undefined,
     signature: string | undefined,
     rawBody: string,

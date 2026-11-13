@@ -358,9 +358,9 @@ test("inbound Linear webhooks reach the core with their signature header", async
   assert.equal(body.headers["linear-signature"], "abc123");
 });
 
-test("partner-chat events reach the core with only their body and signature headers", async () => {
+test("generic-chat events reach the core with only their body and signature headers", async () => {
   const payload = JSON.stringify({ type: "message.created" });
-  const r = await fetch(`${base}/v1/surfaces/partner-chat/events?x=1`, {
+  const r = await fetch(`${base}/v1/surfaces/generic-chat/events?x=1`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -374,7 +374,7 @@ test("partner-chat events reach the core with only their body and signature head
   });
   assert.equal(r.status, 200);
   const body = (await r.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
-  assert.equal(body.url, "/v1/surfaces/partner-chat/events");
+  assert.equal(body.url, "/v1/surfaces/generic-chat/events");
   assert.equal(body.cookie, null);
   assert.deepEqual(
     Object.fromEntries(
@@ -396,7 +396,7 @@ test("partner-chat events reach the core with only their body and signature head
       "x-extra": undefined,
     },
   );
-  assert.equal((await fetch(`${base}/v1/surfaces/partner-chat/events`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/surfaces/generic-chat/events`)).status, 404);
 });
 
 test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", async () => {

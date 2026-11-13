@@ -1,13 +1,13 @@
 import { trimTrailingSlashes } from "../../util/text.ts";
-import { ACCOUNT_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, signPartnerChatRequest } from "./protocol.ts";
+import { ACCOUNT_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, signGenericChatRequest } from "./protocol.ts";
 
 const REQUEST_TIMEOUT_MS = 15_000;
-export const PARTNER_CHAT_CLAIM_MS = 4 * REQUEST_TIMEOUT_MS;
+export const GENERIC_CHAT_CLAIM_MS = 4 * REQUEST_TIMEOUT_MS;
 
-export class PartnerChatHttpError extends Error {
+export class GenericChatHttpError extends Error {
   readonly status: number;
   constructor(status: number, reason: string) {
-    super(`partner-chat ${status}: ${reason}`);
+    super(`generic-chat ${status}: ${reason}`);
     this.status = status;
   }
 }
@@ -21,9 +21,9 @@ function parseJson(text: string): Record<string, unknown> {
   }
 }
 
-export type PartnerChatClient = ReturnType<typeof createPartnerChatClient>;
+export type GenericChatClient = ReturnType<typeof createGenericChatClient>;
 
-export function createPartnerChatClient(deps: {
+export function createGenericChatClient(deps: {
   url: string;
   secret: string;
   fetch?: typeof fetch;
@@ -46,7 +46,7 @@ export function createPartnerChatClient(deps: {
         "content-type": "application/json",
         [ACCOUNT_HEADER]: account,
         [TIMESTAMP_HEADER]: timestamp,
-        [SIGNATURE_HEADER]: signPartnerChatRequest(deps.secret, timestamp, account, path, body),
+        [SIGNATURE_HEADER]: signGenericChatRequest(deps.secret, timestamp, account, path, body),
       },
       body,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -54,7 +54,7 @@ export function createPartnerChatClient(deps: {
     const reply = await res.text();
     const parsed = parseJson(reply);
     if (!res.ok)
-      throw new PartnerChatHttpError(
+      throw new GenericChatHttpError(
         res.status,
         typeof parsed.error === "string" ? parsed.error : reply.slice(0, 200) || res.statusText,
       );

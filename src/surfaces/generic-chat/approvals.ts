@@ -25,9 +25,9 @@ import {
   type PendingApproval,
 } from "../approval-cards.ts";
 import type { SurfaceAction } from "../contract.ts";
-import type { PartnerChatClient } from "./client.ts";
-import { editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
-import { PARTNER_CHAT, parsePartnerChatRef } from "./protocol.ts";
+import type { GenericChatClient } from "./client.ts";
+import { editGenericChatMessage, postGenericChatMessage } from "./messages.ts";
+import { GENERIC_CHAT, parseGenericChatRef } from "./protocol.ts";
 
 type ApprovalSubject = Pick<PendingApproval, "command" | "summary" | "kind">;
 
@@ -36,12 +36,12 @@ interface Card {
   actions: SurfaceAction[];
 }
 
-export interface PartnerChatCard extends Card {
+export interface GenericChatCard extends Card {
   key: string;
   resolved?: true;
 }
 
-export interface PartnerChatActionClick {
+export interface GenericChatActionClick {
   eventId: string;
   account: string;
   kind: "group" | "dm";
@@ -134,20 +134,20 @@ function keychainCard(view: KeychainApprovalView): Card {
   };
 }
 
-export function partnerChatApprovalCardRoute(request: TurnRequest): Destination | undefined {
-  const ref = request.deliveryTarget ? parsePartnerChatRef(request.deliveryTarget) : null;
+export function genericChatApprovalCardRoute(request: TurnRequest): Destination | undefined {
+  const ref = request.deliveryTarget ? parseGenericChatRef(request.deliveryTarget) : null;
   if (!ref || !request.liveReplies || isSystemActor(request.actor.externalId)) return undefined;
   return {
-    type: PARTNER_CHAT,
+    type: GENERIC_CHAT,
     target: request.deliveryTarget!,
     account: { id: ref.account, workspace: ref.account },
   };
 }
 
-export async function partnerChatCard(
+export async function genericChatCard(
   deps: { app: Pick<App, "getApproval">; keychainApprovals?: Pick<KeychainApprovals, "card"> },
   d: Pick<Delivery, "destination" | "idempotencyKey">,
-): Promise<PartnerChatCard | null | undefined> {
+): Promise<GenericChatCard | null | undefined> {
   const { commandApprovalId, keychainAskId } = d.destination;
   if (commandApprovalId) {
     const record = await deps.app.getApproval(commandApprovalId);
@@ -166,19 +166,19 @@ export async function partnerChatCard(
   return undefined;
 }
 
-export function createPartnerChatApprovals(deps: {
-  client: PartnerChatClient;
+export function createGenericChatApprovals(deps: {
+  client: GenericChatClient;
   app: Pick<App, "turn" | "getApproval" | "ingestSurfaceEvents" | "readSurfaceMessages">;
   keychainApprovals?: Pick<KeychainApprovals, "decide">;
 }) {
-  async function invoke(click: PartnerChatActionClick): Promise<void> {
+  async function invoke(click: GenericChatActionClick): Promise<void> {
     const parsed = parseAction(click.actionId);
     if (!parsed) return;
     const where = { account: click.account, kind: click.kind, chat: click.chat };
     const settle = (card: Card): Promise<void> =>
-      editPartnerChatMessage(deps, where, click.messageId, card.body, card.actions);
+      editGenericChatMessage(deps, where, click.messageId, card.body, card.actions);
     const tell = async (text: string): Promise<void> => {
-      await postPartnerChatMessage(
+      await postGenericChatMessage(
         deps,
         { ...where, ...(click.thread ? { thread: click.thread } : {}) },
         { text, idempotencyKey: `action:${click.eventId}`, recipientUserId: click.userId },
@@ -189,14 +189,14 @@ export function createPartnerChatApprovals(deps: {
     if (command) {
       const record = await deps.app.getApproval(parsed.value);
       const request = record?.request;
-      const ref = request?.deliveryTarget ? parsePartnerChatRef(request.deliveryTarget) : null;
+      const ref = request?.deliveryTarget ? parseGenericChatRef(request.deliveryTarget) : null;
       if (!record || !request || ref?.account !== click.account || ref.chat !== click.chat)
         return settle({ body: `_${APPROVAL_EXPIRED}_`, actions: [] });
       if (!samePerson(request.actor.externalId, click.actor.externalId)) return tell(APPROVAL_REQUESTER_ONLY);
       const decision = approvalDecision(command);
       const queued = await deps.app.turn({
         ...replayableTurn(request),
-        surface: PARTNER_CHAT,
+        surface: GENERIC_CHAT,
         actor: click.actor,
         approval: {
           requestId: parsed.value,
@@ -204,7 +204,7 @@ export function createPartnerChatApprovals(deps: {
           ...(decision !== "deny" ? { scope: decision } : {}),
         },
         async: true,
-        idempotencyKey: `partner-chat:action:${click.eventId}`,
+        idempotencyKey: `generic-chat:action:${click.eventId}`,
       });
       if (!queued.runId && queued.status === "pending_approval")
         return tell(

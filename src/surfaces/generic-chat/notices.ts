@@ -6,7 +6,7 @@ import type { Destination, TurnResult } from "../../types.ts";
 
 import { AWAITING_APPROVAL } from "../approval-cards.ts";
 import { drivenLive } from "../turn-flow.ts";
-import { PARTNER_CHAT } from "./protocol.ts";
+import { GENERIC_CHAT } from "./protocol.ts";
 
 function noticeText(result: Partial<TurnResult>, cards = false): string | undefined {
   if (result.status === "pending_approval")
@@ -16,9 +16,9 @@ function noticeText(result: Partial<TurnResult>, cards = false): string | undefi
   return undefined;
 }
 
-export function partnerChatRunNotice(run: Run): string | undefined {
+export function genericChatRunNotice(run: Run): string | undefined {
   if (
-    run.request.surface !== PARTNER_CHAT ||
+    run.request.surface !== GENERIC_CHAT ||
     run.request.origin.kind !== "human" ||
     drivenLive(run.request) ||
     !run.result
@@ -27,7 +27,7 @@ export function partnerChatRunNotice(run: Run): string | undefined {
   return noticeText(run.result, run.request.liveReplies === true);
 }
 
-export function createPartnerChatNotices(deps: { deliveries: DeliveryStore }) {
+export function createGenericChatNotices(deps: { deliveries: DeliveryStore }) {
   return {
     async unanswered(result: Partial<TurnResult>, destination: Destination, idempotencyKey: string): Promise<void> {
       const text = noticeText(result);

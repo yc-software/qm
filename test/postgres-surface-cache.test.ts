@@ -481,15 +481,15 @@ test("pg surface-cache: a ts suffix read finds only that message in the keyed co
   try {
     const at = (s: number, id: number) => `${s}.${String(id).padStart(20, "0")}`;
     await cache.ingest([
-      { surface: "partner-chat", container: "pc:1", ts: at(100, 7), text: "seven", self: true },
-      { surface: "partner-chat", container: "pc:1", ts: at(100, 17), text: "seventeen" },
-      { surface: "partner-chat", container: "pc:1", ts: at(200, 70), text: "seventy" },
-      { surface: "partner-chat", container: "pc:2", ts: at(300, 7), text: "other chat" },
+      { surface: "generic-chat", container: "pc:1", ts: at(100, 7), text: "seven", self: true },
+      { surface: "generic-chat", container: "pc:1", ts: at(100, 17), text: "seventeen" },
+      { surface: "generic-chat", container: "pc:1", ts: at(200, 70), text: "seventy" },
+      { surface: "generic-chat", container: "pc:2", ts: at(300, 7), text: "other chat" },
     ]);
     const find = (suffix: string, self?: boolean) =>
       cache
         .readMessages("pc:1", {
-          surface: "partner-chat",
+          surface: "generic-chat",
           tsSuffix: suffix,
           ...(self === undefined ? {} : { self }),
           noFallback: true,

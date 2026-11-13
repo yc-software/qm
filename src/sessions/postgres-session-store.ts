@@ -23,13 +23,7 @@ import { createSessionParticipants, participantSessionsSql } from "./session-par
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { TENANT } from "./items.ts";
-import {
-  PARTNER_CHAT_TENANT,
-  SLACK_TENANTS,
-  SLACK_BRIDGE_TENANT,
-  TENANT_LOOKUPS,
-  tenantLookup,
-} from "../tenants/lookup.ts";
+import { SLACK_TENANTS, SLACK_BRIDGE_TENANT, TENANT_LOOKUPS, tenantLookup } from "../tenants/lookup.ts";
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
@@ -68,7 +62,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     TENANT_LOOKUPS,
     SLACK_TENANTS,
     SLACK_BRIDGE_TENANT,
-    PARTNER_CHAT_TENANT,
   ]);
   const { pool, q } = db;
 
