@@ -26,7 +26,7 @@ import {
 } from "../approval-cards.ts";
 import type { SurfaceAction } from "../contract.ts";
 import type { PartnerChatClient } from "./client.ts";
-import { postPartnerChatMessage, setPartnerChatMessageActions } from "./messages.ts";
+import { editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
 import { parsePartnerChatRef } from "./protocol.ts";
 
 const DETAIL_MAX = 12_000;
@@ -47,6 +47,7 @@ export interface PartnerChatCard extends Card {
 export interface PartnerChatActionClick {
   eventId: string;
   account: string;
+  kind: "group" | "dm";
   chat: string;
   thread?: string;
   messageId: string;
@@ -166,28 +167,21 @@ export async function partnerChatCard(
 
 export function createPartnerChatApprovals(deps: {
   client: PartnerChatClient;
-  app: Pick<App, "turn" | "getApproval">;
+  app: Pick<App, "turn" | "getApproval" | "ingestSurfaceEvents" | "readSurfaceMessages">;
   keychainApprovals?: Pick<KeychainApprovals, "decide">;
 }) {
   async function invoke(click: PartnerChatActionClick): Promise<void> {
     const parsed = parseAction(click.actionId);
     if (!parsed) return;
+    const where = { account: click.account, kind: click.kind, chat: click.chat };
     const settle = (card: Card): Promise<void> =>
-      setPartnerChatMessageActions(deps.client, {
-        account: click.account,
-        chat: click.chat,
-        messageId: click.messageId,
-        ...card,
-      });
+      editPartnerChatMessage(deps, where, click.messageId, card.body, card.actions);
     const tell = async (text: string): Promise<void> => {
-      await postPartnerChatMessage(deps.client, {
-        account: click.account,
-        chat: click.chat,
-        ...(click.thread ? { thread: click.thread } : {}),
-        body: text,
-        clientMessageId: `action:${click.eventId}`,
-        recipientUserId: click.userId,
-      });
+      await postPartnerChatMessage(
+        deps,
+        { ...where, ...(click.thread ? { thread: click.thread } : {}) },
+        { text, idempotencyKey: `action:${click.eventId}`, recipientUserId: click.userId },
+      );
     };
 
     const command = APPROVAL_ACTION_IDS.find((id) => id === parsed.actionId);

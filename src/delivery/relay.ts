@@ -12,7 +12,12 @@ export function refusedStatus(status: number): boolean {
 
 export function createDeliveryRelay(
   deliveries: DeliveryStore,
-  { type, send, claimMs }: { type: string; send: Send; claimMs: number },
+  {
+    type,
+    send,
+    claimMs,
+    fail = (id, reason) => deliveries.fail(id, reason, Date.now()),
+  }: { type: string; send: Send; claimMs: number; fail?: (id: string, reason: string) => Promise<unknown> },
 ) {
   let stopped = true;
   const inFlight = new Set<Promise<void>>();
@@ -26,7 +31,7 @@ export function createDeliveryRelay(
       return null;
     });
     if (outcome === null) return;
-    if (outcome) await deliveries.fail(d.id, outcome.refused, Date.now());
+    if (outcome) await fail(d.id, outcome.refused);
     else await deliveries.ack(d.id, Date.now());
     pass();
   };

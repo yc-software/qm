@@ -16,9 +16,15 @@ const user = z.object({
   name: z.string().optional(),
   bot: z.boolean().optional(),
 });
+const file = z.object({
+  id: messageId,
+  name: z.string().min(1),
+  content_type: z.string().min(1),
+  size_bytes: z.number().int().nonnegative().optional(),
+});
 const eventSchema = z.object({
   event_id: z.string().min(1),
-  type: z.enum(["message.created", "message.updated", "message.deleted", "action.invoked"]),
+  type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
   chat: z.object({ id, kind: z.enum(["group", "dm"]), name: z.string().optional(), members: z.array(user) }),
   thread_id: messageId.nullish(),
@@ -28,13 +34,28 @@ const eventSchema = z.object({
     body: z.string(),
     mentions_agent: z.boolean().default(false),
     app_post: z.boolean().default(false),
+    files: z.array(file).default([]),
     created_at: z.iso.datetime({ offset: true }),
   }),
-  action: z.object({ id: z.string().regex(ACTION_ID), user }).optional(),
+});
+
+const actionEventSchema = eventSchema.extend({
+  protocol: z.literal(2),
+  type: z.literal("action.invoked"),
+  action: z.object({ id: z.string().regex(ACTION_ID), user }),
+});
+
+const reactionEventSchema = eventSchema.extend({
+  protocol: z.literal(2),
+  type: z.enum(["reaction.added", "reaction.removed"]),
+  reaction: z.object({ name: z.string().regex(/^[a-z0-9_+'-]{1,64}$/), user }),
 });
 
 export type PartnerChatUser = z.infer<typeof user>;
 export type PartnerChatEvent = z.infer<typeof eventSchema>;
+export type PartnerChatFile = z.infer<typeof file>;
+export type PartnerChatReactionEvent = z.infer<typeof reactionEventSchema>;
+export type PartnerChatActionEvent = z.infer<typeof actionEventSchema>;
 
 export interface PartnerChatRef {
   account: string;
@@ -75,6 +96,14 @@ export function verifyPartnerChat(
 
 export function parsePartnerChatEvent(raw: unknown) {
   return eventSchema.safeParse(raw);
+}
+
+export function parsePartnerChatActionEvent(raw: unknown) {
+  return actionEventSchema.safeParse(raw);
+}
+
+export function parsePartnerChatReactionEvent(raw: unknown) {
+  return reactionEventSchema.safeParse(raw);
 }
 
 export function partnerChatRef(c: PartnerChatRef): string {

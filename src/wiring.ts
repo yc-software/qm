@@ -2578,6 +2578,8 @@ export function buildApp(
     partnerChatNotices && partnerChatClient && config.partnerChat
       ? createPartnerChatInbound({
           secret: config.partnerChat.secret,
+          client: partnerChatClient,
+          stageBlob: slackCore.stageBlob,
           app,
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
@@ -2594,9 +2596,11 @@ export function buildApp(
         type: "partner-chat",
         send: partnerChatSender({
           client: partnerChatClient,
+          blobs: slackCore,
           app,
           ...(keychainApprovals ? { keychainApprovals } : {}),
         }),
+        fail: (id, reason) => app.failDelivery(id, reason),
         claimMs: PARTNER_CHAT_CLAIM_MS,
       })
     : null;

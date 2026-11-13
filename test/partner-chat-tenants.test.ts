@@ -21,12 +21,20 @@ describeTwoTenants("partner chat on a shared host", (db) => {
   const surfaceCache = { readMessages: async () => [] };
   const isInternalEmail = async () => true;
   const unansweredReply = async () => {};
-  const onAction = async () => {};
-  const inbound = createPartnerChatInbound({ secret, app, surfaceCache, isInternalEmail, unansweredReply, onAction });
-  const send = partnerChatSender({
+  const client = createPartnerChatClient({ url: "https://chat.example", secret, fetch: async () => Response.json({}) });
+  const stageBlob = async () => ({ blobId: "" });
+  const inbound = createPartnerChatInbound({
+    secret,
+    client,
+    stageBlob,
     app,
-    client: createPartnerChatClient({ url: "https://chat.example", secret, fetch: async () => Response.json({}) }),
+    surfaceCache,
+    isInternalEmail,
+    unansweredReply,
+    onAction: async () => {},
   });
+  const blobs = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
+  const send = partnerChatSender({ app, client, blobs });
 
   async function deliver(account: string): Promise<number> {
     const ada = { id: "5", email: "ada@x.test" };
