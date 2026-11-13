@@ -284,6 +284,16 @@ export function createSwarmService(deps: {
     if (!botLostSwarm(before))
       void deps.sweepProcesses?.().catch(swallowAs("swarm: sweep the jobs of a bot that lost the swarm", null));
   };
+  const notePersonUse = async (computer: Pick<SandboxResource, "swarmId">): Promise<void> => {
+    const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
+    if (!swarm?.template.botActor) return;
+    const used = swarm.personUsedComputers
+      ? swarm
+      : await store.update(swarm.id, (current) => {
+          current.personUsedComputers = true;
+        });
+    await cutOffBot(swarm, used, "because a person used the swarm's computers");
+  };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
     ...(member.sessionId ? { sessionUrl: `/web-ui/s/${encodeURIComponent(member.sessionId)}` } : {}),
@@ -558,6 +568,8 @@ export function createSwarmService(deps: {
                   ? await provision("Swarm board", member.forumSandboxId)
                   : await step(() => deps.sandboxes.access(swarm!.ownerId, member.forumSandboxId!));
               if (forum.ownerScopeId !== swarm.scopeId) throw new Error("forum scope mismatch");
+              if (forum.id !== swarm.board?.sandboxId && (!forum.personUsed || forum.swarmId))
+                await step(async () => notePersonUse(await deps.sandboxes.notePersonUse(forum.id)));
             }
             await provision("Swarm worker", member.id);
             const session = await step(() =>
@@ -921,16 +933,7 @@ export function createSwarmService(deps: {
       const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
       return !!swarm && botMayDirect(swarm, turn.actorId);
     },
-    async notePersonUse(computer) {
-      const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
-      if (!swarm?.template.botActor) return;
-      const used = swarm.personUsedComputers
-        ? swarm
-        : await store.update(swarm.id, (current) => {
-            current.personUsedComputers = true;
-          });
-      await cutOffBot(swarm, used, "because a person used the swarm's computers");
-    },
+    notePersonUse,
     async claimOwedStops() {
       const { processes } = deps;
       if (!processes) return [];

@@ -28,7 +28,9 @@ a Slack bot's turn is kept off a person's swarm computers. Releases from before 
 field leave it unset; `durable-map/swarms/0040-stamp-computers` stamps the computers of
 existing swarms once at startup. Drain an older release's cores and workers before
 upgrading from it, because a computer the older release provisions after that migration
-stays unmarked.
+stays unmarked. A computer a person's swarm takes as its forum counts as used by a person;
+`durable-map/swarms/0041-mark-forums-person-used` marks the forums of existing
+swarms the same way once at startup and needs the same drain first.
 
 ## Agent API
 
@@ -272,7 +274,9 @@ cannot watch them, and a watch it armed while it could stops reading the job's o
 When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and the process reaper sweeps right away: it stops the background jobs those turns started on the swarm's board and worker computers and marks them reaped. The reaper is the only thing that stops them, and one sweep runs at a time across instances. If a sweep was already running, a job it missed waits for the next periodic sweep (`PROCESS_REAPER_INTERVAL_MS`, 30 seconds by default). A stop that fails, or that a restart interrupts, is retried on the next sweep too.
 A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
 why a swarm a bot starts never takes one, from the bot or from a person: every computer in
-a swarm a bot starts belongs to the swarm. A person's own swarm can still take one.
+a swarm a bot starts belongs to the swarm. A person's own swarm can still take one, and
+taking it counts as a person using that computer, so from then on a Slack bot's turn can
+no longer use it, even when the bot made it.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
