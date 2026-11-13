@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
-import { X } from "lucide";
+import { ArrowUpRight, X } from "lucide";
 import { icon } from "./icons";
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
@@ -125,6 +125,7 @@ export function suggestedActivities(
                 >
                 <span class="suggested-activity-title">${activity.title}</span>
                 ${activity.source ? html`<span class="suggested-activity-note ${fresh?.has(activity.id) ? "is-new" : ""}">${fresh?.has(activity.id) ? "New · " : ""}${activity.source}</span>` : nothing}
+                ${onDismiss ? nothing : html`<span class="suggested-activity-go" aria-hidden="true">${icon(ArrowUpRight, 13)}</span>`}
               </button>
               ${
                 onDismiss
