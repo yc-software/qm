@@ -16,6 +16,7 @@ import { type Item, proseText } from "./items.ts";
 import {
   ANCESTOR_STOP,
   assertAudienceCompatible,
+  doesBotWork,
   isSidebarSession,
   isSubagentThreadRef,
   PARENT_INTERRUPT,
@@ -193,7 +194,7 @@ async function parentTurn(
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
-    ...(meta.botActor || source.botActor || child.spawnMeta?.botActor ? { botActor: true } : {}),
+    ...(meta.botActor || doesBotWork(child, source) ? { botActor: true } : {}),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,

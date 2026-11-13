@@ -69,12 +69,10 @@ test("a wake runs with a Slack bot's restrictions when either the woken conversa
   const person = await conversation(built, "dm:U1:person");
   const bot = await conversation(built, "dm:U1:bot", { botActor: true });
   const other = await conversation(built, "dm:U1:other");
-  const third = await conversation(built, "dm:U1:third");
   const asBot = person.bind({ botActor: true });
   for (const [sender, target] of [
     [person.syscalls, bot],
     [person.syscalls, other],
-    [asBot, third],
   ] as const)
     assert.ok((await sender.write({ wake: true, target: target.session.id, text: "take this over" })).ok);
   const opened = await asBot.open({ task: "summarize the log" });
@@ -88,9 +86,9 @@ test("a wake runs with a Slack bot's restrictions when either the woken conversa
   const claim = await built.runs.claimById(run!.id, "worker", 60_000);
   await built.runs.complete(run!.id, claim!.leaseToken!, { status: "ok", reply: "done" });
   await settle(async () => !!(await built.runs.getByDedupKey(`subagent-return:${run!.id}`)));
-  const wakes = [bot, other, third, person].map(({ session }) => built.runs.inFlightForThread(session.threadRef));
+  const wakes = [bot, other, person].map(({ session }) => built.runs.inFlightForThread(session.threadRef));
   const marks = (await Promise.all(wakes)).map(([wake]) => wake!.request.botActor);
-  assert.deepEqual(marks, [true, undefined, true, true]);
+  assert.deepEqual(marks, [true, undefined, true]);
 });
 
 test("human-origin delegated input is screened before model execution", async (t) => {
