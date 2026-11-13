@@ -76,3 +76,11 @@ test("text before a tool call in a completed message is still recorded as narrat
   assert.equal(messages.length, 1);
   assert.equal(messages[0]!.variant, "narration");
 });
+
+test("a turn that ends on the message carrying its tool call does not repeat that message's text as the reply", () => {
+  const sink = recorderSink();
+  sink.steps.assistant(assistantMessage("toolUse", true));
+  assert.equal(sink.steps.narrated("Let me look that up."), true);
+  sink.steps.assistant(assistantMessage("stop", false));
+  assert.equal(sink.steps.narrated("Let me look that up."), false);
+});

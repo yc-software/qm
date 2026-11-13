@@ -84,6 +84,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
   const executing = new Map<string, NewItem>();
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
   let last: ReplayStep | undefined;
+  let lastNarration = "";
   let streamingStep: string | undefined;
   const write = (item: NewItem) => persist(() => turn.emit(item));
   const steppedCall = (item: NewItem, call: { step: ReplayStep; block: ToolCall }): NewItem => {
@@ -92,6 +93,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
   };
   const flush = (mark?: { retracted: string } | { prodded: string }): void => {
     if (!pending) return;
+    lastNarration = pending.parts.map(({ block }) => (block.type === "text" ? block.text : "")).join("");
     for (const { index, block } of pending.parts) {
       const { text, ...rest } = block;
       const fields = stepFields({ ...pending.step, index });
@@ -138,6 +140,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     },
     assistant(message: AssistantMessage): void {
       flush();
+      lastNarration = "";
       const { api, provider, model, stopReason } = message;
       const step: ReplayStep = { id: streamingStep ?? randomUUID(), api, provider, model, stopReason };
       streamingStep = undefined;
@@ -172,6 +175,9 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     settleResults(): void {
       for (const item of executing.values()) write(item);
       executing.clear();
+    },
+    narrated(reply: string): boolean {
+      return !pending && Boolean(reply) && lastNarration.trim() === reply;
     },
     closing(reply: string): StepFields | null {
       const closing = pending;
