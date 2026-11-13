@@ -31,8 +31,15 @@ const eventSchema = z.object({
   }),
 });
 
+const reactionEventSchema = eventSchema.extend({
+  protocol: z.literal(2),
+  type: z.enum(["reaction.added", "reaction.removed"]),
+  reaction: z.object({ name: z.string().regex(/^[a-z0-9_+'-]{1,64}$/), user }),
+});
+
 export type PartnerChatUser = z.infer<typeof user>;
 export type PartnerChatEvent = z.infer<typeof eventSchema>;
+export type PartnerChatReactionEvent = z.infer<typeof reactionEventSchema>;
 
 export interface PartnerChatRef {
   account: string;
@@ -73,6 +80,10 @@ export function verifyPartnerChat(
 
 export function parsePartnerChatEvent(raw: unknown) {
   return eventSchema.safeParse(raw);
+}
+
+export function parsePartnerChatReactionEvent(raw: unknown) {
+  return reactionEventSchema.safeParse(raw);
 }
 
 export function partnerChatRef(c: PartnerChatRef): string {

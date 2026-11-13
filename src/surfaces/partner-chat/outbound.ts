@@ -4,6 +4,7 @@ import type { Tenant } from "../../tenants/context.ts";
 import type { Delivery } from "../../types.ts";
 import { PartnerChatHttpError, type PartnerChatClient } from "./client.ts";
 import { partnerChatMessageId, partnerChatRef, partnerChatTs, parsePartnerChatRef } from "./protocol.ts";
+import { UnknownPartnerChatReaction, addPartnerChatReaction } from "./reactions.ts";
 
 const MESSAGE_ID = /^\d+$/;
 const SELF_AUTHOR = "self";
@@ -24,7 +25,13 @@ export function partnerChatSender(deps: {
     if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
       throw new UnsupportedDelivery(`partner-chat: account ${ref.account} is not bound to this workspace`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
-    if (react || del || pin || edit || editRef || !body)
+    if (react) {
+      const messageId = partnerChatMessageId(react.messageTs);
+      if (!MESSAGE_ID.test(messageId)) throw new UnsupportedDelivery(`partner-chat: bad message id ${messageId}`);
+      await addPartnerChatReaction(deps.client, { account: ref.account, chat: ref.chat, messageId }, react.emoji);
+      return;
+    }
+    if (del || pin || edit || editRef || !body)
       throw new UnsupportedDelivery("partner-chat: only non-empty text posts are supported");
     if (d.attachments?.length)
       console.log(`[partner-chat] delivery ${d.id} posts its text without ${d.attachments.length} attachment(s)`);
@@ -66,7 +73,7 @@ export function partnerChatSender(deps: {
     try {
       await deliver(d, tenant);
     } catch (e) {
-      if (e instanceof UnsupportedDelivery) return { refused: e.message };
+      if (e instanceof UnsupportedDelivery || e instanceof UnknownPartnerChatReaction) return { refused: e.message };
       if (e instanceof PartnerChatHttpError && refusedStatus(e.status)) return { refused: e.message };
       throw e;
     }
