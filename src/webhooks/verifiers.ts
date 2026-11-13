@@ -1,15 +1,17 @@
 import { createHash, createHmac } from "node:crypto";
+import { Webhook as StandardWebhook, WebhookVerificationError } from "standardwebhooks";
 import type { Webhook } from "../triggers/types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
 export interface VerifierInput {
   secret?: string;
+  presentedToken?: string;
   headers: Record<string, string | string[] | undefined>;
   rawBody: string;
 }
 
 export interface Verifier {
-  verify(input: VerifierInput): boolean;
+  verify(input: VerifierInput): boolean | string;
   deliveryId(input: VerifierInput): string;
   handshake?(input: VerifierInput, parsedBody: unknown): string | null;
 }
@@ -137,7 +139,51 @@ const linear: Verifier = {
   },
 };
 
-const VERIFIERS: Record<WebhookScheme, Verifier> = { github, slack, stripe, linear, "hmac-sha256": hmacSha256 };
+const token: Verifier = {
+  verify({ secret, presentedToken }) {
+    if (!secret) return false;
+    if (presentedToken === undefined) return "no token presented";
+    return constantTimeEqual(presentedToken, secret) || "token does not match";
+  },
+  deliveryId({ rawBody }) {
+    return bodyHash(rawBody);
+  },
+};
+
+const standardWebhooks: Verifier = {
+  verify({ secret, headers, rawBody }) {
+    if (!secret) return false;
+    const webhook = new StandardWebhook(secret);
+    try {
+      webhook.verify(
+        rawBody,
+        {
+          "webhook-id": header(headers, "webhook-id") ?? "",
+          "webhook-timestamp": header(headers, "webhook-timestamp") ?? "",
+          "webhook-signature": header(headers, "webhook-signature") ?? "",
+        },
+        { jsonParse: false },
+      );
+      return true;
+    } catch (e) {
+      if (e instanceof WebhookVerificationError) return e.message;
+      throw e;
+    }
+  },
+  deliveryId({ headers, rawBody }) {
+    return header(headers, "webhook-id") ?? bodyHash(rawBody);
+  },
+};
+
+const VERIFIERS: Record<WebhookScheme, Verifier> = {
+  github,
+  slack,
+  stripe,
+  linear,
+  "hmac-sha256": hmacSha256,
+  token,
+  "standard-webhooks": standardWebhooks,
+};
 
 export type WebhookScheme = Webhook["verification"]["scheme"];
 
