@@ -1,7 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import type { Agent, RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeControl } from "../src/agent/runtime-types.ts";
@@ -11,9 +9,6 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
@@ -21,7 +16,6 @@ import type { Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
 import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -30,24 +24,20 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import {
-  testAdvisoryLock,
-  testConfigStore,
-  testDatabaseUrl,
-  testDeployBackings,
-  testMap,
-} from "./support/test-database.ts";
+import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const bot: Principal = { id: "B1", type: "internal", displayName: "Release bot" };
+const alice: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 
 test("subagents a Slack bot's turns open and message keep the bot marker and its limits", async () => {
-  const threadRef = "slack:dm:bot-subagent";
+  const threadRef = "slack:C1:bot-subagent";
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const runtimes = new Map<string, RuntimeControl | undefined>();
   const actAsActor: Array<boolean | undefined> = [];
+  const apps: string[] = [];
   const agent: Agent = {
     async runTurn(turn) {
       runtimes.set(turn.session.threadRef, turn.runtimeControl);
@@ -68,7 +58,7 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
         }).find((t) => t.name === "subagents")!.execute as unknown as (id: string, input: unknown) => Promise<unknown>;
         const [child] = await sessions.childrenOf(turn.session.id);
         await open(
-          `call-${runtimes.size}`,
+          `call-${actAsActor.length}`,
           child
             ? { action: "send_message", target: child.id, text: "how many errors were in the log?" }
             : { action: "open", task: "summarize the deploy log" },
@@ -80,8 +70,13 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const config = testConfigStore("org");
+  const deps = orchestratorTestDeps();
+  await deps.directory.replaceChannels(
+    [{ channelId: "C1", name: "eng" }],
+    [bot, alice].map((p) => ({ channelId: "C1", principalId: p.id })),
+  );
   const orchestrator = createOrchestrator({
-    ...orchestratorTestDeps(),
+    ...deps,
     config,
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-opus-5" },
@@ -96,16 +91,10 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
     auditLog,
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
-    deploy: createDeployService({
-      ...singleProcessDeps(),
-      deployStore: createDeployStore(testDeployBackings()),
-      provider: createDockerDeployProvider(),
-      deployDir: join(tmpdir(), "bot-subagent-delegation-deploy"),
-      auditLog,
-      acl,
-    }),
     acl,
+    deploy: {} as never,
     deliveries: createDeliveryStore(),
+    users: { record: async () => true, markApps: async (ids: readonly string[]) => apps.push(...ids) },
     sessionSyscalls: createSessionSyscalls({
       advisoryLock: testAdvisoryLock(),
       sessions,
@@ -129,7 +118,7 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   const request: OrchestratorInput = {
     surface: "slack",
     actor: bot,
-    conversation: { kind: "dm", threadRef, audience: [bot] },
+    conversation: { kind: "channel", channelRef: "C1", threadRef, audience: [bot, alice] },
     origin: { kind: "human", messageTs: "1700000000.000100" },
     botActor: true,
     text: "summarize the deploy log",
@@ -149,13 +138,16 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   assert.equal(childRuns.length, 2, "the bot's second turn messaged its idle subagent");
   await execute(childRuns[0]!);
   assert.equal(childRuns[0]!.request.botActor, true);
-  assert.deepEqual(actAsActor, [false, false, false, false], "every turn the bot started or messaged");
-  assert.deepEqual(await runtimes.get(threadRef)!(active, { action: "set", model: "Astra", lifetime: "task" }), {
-    ok: false,
-    error: "live_actor_required",
-  });
-  assert.deepEqual(await runtimes.get(child.threadRef)!(active, { action: "set", model: "Astra", lifetime: "task" }), {
-    ok: false,
-    error: "live_actor_required",
-  });
+  const fromAlice = { ...next, actor: alice, botActor: undefined, text: "and the warnings?" };
+  await execute((await runs.enqueue({ sessionId: threadRef, request: fromAlice, maxAttempts: 1 })).run);
+  await execute((await runs.list({ threadRef: child.threadRef, limit: 1 }))[0]!);
+  const web = { ...fromAlice, surface: "web", conversation: { ...request.conversation, threadRef: child.threadRef } };
+  await execute((await runs.enqueue({ sessionId: child.threadRef, request: web, maxAttempts: 1 })).run);
+  assert.deepEqual(actAsActor, [false, false, false, false, true, false, false], "every turn in the bot's subagent");
+  assert.deepEqual(apps, ["B1", "B1"], "a person's turn in the bot's subagent never marks the person as an app");
+  for (const ref of [threadRef, child.threadRef])
+    assert.deepEqual(await runtimes.get(ref)!(active, { action: "set", model: "Astra", lifetime: "task" }), {
+      ok: false,
+      error: "live_actor_required",
+    });
 });

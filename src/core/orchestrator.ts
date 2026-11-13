@@ -554,6 +554,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const { delegatedSession, refusal: subagentRefusal } = await admitSubagentSession(deps, conversation, actor);
       if (subagentRefusal) return subagentRefusal;
+      const botRequest = input.botActor;
+      if (delegatedSession?.spawnMeta?.botActor) input = { ...input, botActor: true };
       const { managedRosterIsCurrent, withManagedRosterVersion } = createManagedRoster(
         deps,
         input,
@@ -1013,7 +1015,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
-      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
+      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, botRequest);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const wakingChild =
