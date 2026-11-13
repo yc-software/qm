@@ -63,3 +63,6 @@ export function canView(view: View): boolean {
   if (view === "inbox" || view === "calendar") return can("inbox");
   return true;
 }
+
+export const hasWelcomeScreen = (me: Me | null | undefined): boolean =>
+  Boolean(me?.welcomeCohort || me?.welcomeProfile);

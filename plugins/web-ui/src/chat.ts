@@ -183,6 +183,7 @@ import {
 import { icon } from "./icons";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { hasWelcomeScreen } from "./shell-state";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
@@ -707,7 +708,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof itemsToMessages>,
   ): boolean {
-    if (ctx.inbox || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
+    if (ctx.inbox || hasWelcomeScreen(appState.me) || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
       !shouldStartProactiveOpener({
         started: proactiveOpenerStarted,
@@ -1711,7 +1712,7 @@ export function createChatSurface(
     const showWelcome =
       !ctx.inbox &&
       !editingApp &&
-      (appState.me?.welcomeCohort
+      (appState.me && hasWelcomeScreen(appState.me)
         ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
         : isNewUser && !messages.length);
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
@@ -1729,7 +1730,7 @@ export function createChatSurface(
       !ctx.inbox &&
       emptyChat &&
       !editingApp &&
-      !(isNewUser && appState.me?.welcomeCohort) &&
+      !(isNewUser && hasWelcomeScreen(appState.me)) &&
       !glanceTier &&
       (!ctx.pane || tier === "full") &&
       !chatState.sessionId &&
