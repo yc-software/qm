@@ -440,13 +440,15 @@ export function createMcpToolService(opts: {
       const def = (await loaded()).snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
-      if (args.operation !== "invoke") return false;
+      if (args.operation !== "invoke" || typeof args.tool !== "string") return false;
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
         refuseOutsideAudience(server, principalId, audienceScopeId, actAsActor);
-        return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
+        const entry = (await catalogTools(server, principalId)).find((t) => t.name === args.tool);
+        return entry ? mcpToolNeedsApproval(server, entry.annotations) : false;
       } catch (e) {
+        if (e instanceof SignInRequired) return false;
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }

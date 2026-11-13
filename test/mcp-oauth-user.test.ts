@@ -146,6 +146,28 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   assert.deepEqual(auth(), ["Bearer alice-token", "Bearer alice-token"]);
 });
 
+test("a catalog the caller has not connected answers with its sign-in link instead of an approval error", async (t) => {
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({
+    fetch: loopbackFetch,
+    servers: store,
+    userTokens: {
+      connectorAccessToken: async () => null,
+      connectorTokenStatus: async () => ({ connected: false }),
+    },
+    signInUrl: (id) => `https://qm.example/connect/${id}/self-connect`,
+  });
+  t.after(() => {
+    service.close();
+    setPublicOAuthClients([]);
+  });
+  await store.put(oauthServer({ catalog: true }));
+  await service.refresh();
+  const invoke = { operation: "invoke", tool: "search", arguments: {} };
+  assert.equal(await service.needsApproval("orders", invoke, "internal:alice"), false);
+  assert.match(await service.call("orders", invoke, "internal:alice"), /\[Connect Orders\]/);
+});
+
 test("stored oauth-user tools survive a restart but stay hidden from callers whose connection needs repair", async (t) => {
   const store = createMcpServerStore(testMap<McpServer>());
   await store.put(oauthServer({ tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] }));

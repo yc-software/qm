@@ -4762,7 +4762,7 @@ test("a failing approval check returns its error to the model and offers no card
     current: {
       ...fakeToolContext(),
       mcpToolNeedsApproval: async () => {
-        throw new Error("Unknown Records tool: nope. Search for it first.");
+        throw new Error("MCP server records is not available");
       },
       callMcpTool: async () => {
         ran = true;
@@ -4774,8 +4774,8 @@ test("a failing approval check returns its error to the model and offers no card
   };
   const catalog = catalogTools(ref).find((t) => t.name === "records");
   assert.match(
-    textOut(await call(catalog, { operation: "invoke", tool: "nope" })),
-    /could not check whether this call needs approval: Unknown Records tool: nope/,
+    textOut(await call(catalog, { operation: "invoke", tool: "lookup" })),
+    /could not check whether this call needs approval: MCP server records is not available/,
   );
   assert.equal(ran, false);
   assert.deepEqual(ref.pendingApprovals, []);
