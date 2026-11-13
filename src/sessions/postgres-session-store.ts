@@ -2,7 +2,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { scopeId, type Session, type SessionType, type ScopeId } from "../types.ts";
+import type { Session, SessionType, ScopeId } from "../types.ts";
 import type {
   NewSessionPin,
   SessionPin,
@@ -22,7 +22,7 @@ import { createSessionAdminReads } from "./session-admin-reads.ts";
 import { createSessionParticipants, participantSessionsSql } from "./session-participants.ts";
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
-import { TENANT } from "./items.ts";
+import { authoredUserTurn, TENANT } from "./items.ts";
 import {
   PARTNER_CHAT_TENANT,
   SLACK_TENANTS,
@@ -336,11 +336,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Boolean(rows[0]?.present);
     },
 
-    async personHasSessions(principalIds): Promise<boolean> {
+    async personHasAuthoredTurns(principalIds): Promise<boolean> {
       const rows = await q(
-        `SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = ANY($1))
-             OR EXISTS(SELECT 1 FROM participants WHERE principal_id = ANY($2)) AS present`,
-        [principalIds.map((id) => scopeId("personal", id)), principalIds],
+        `SELECT EXISTS(SELECT 1 FROM items
+                        WHERE tenant_id = ${TENANT} AND author = ANY($1) AND ${authoredUserTurn("items")}) AS present`,
+        [principalIds],
       );
       return Boolean(rows[0]?.present);
     },

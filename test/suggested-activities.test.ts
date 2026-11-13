@@ -51,7 +51,7 @@ function fixture(used = true) {
   });
   const deps = {
     store,
-    sessions: used ? { ...sessions, personHasSessions: async () => true } : sessions,
+    sessions: used ? { ...sessions, personHasAuthoredTurns: async () => true } : sessions,
     crons,
     enabled: true,
     now: () => time,
@@ -104,13 +104,15 @@ test("normal personal cron produces durable suggestions without a notification d
   assert.deepEqual(await restarted.get("alice", []), { activities, pending: false });
 });
 
-test("someone who has not used QM yet gets the seeds and no generation job until their first session", async () => {
+test("someone who has not sent QM a message gets the seeds and no generation job until they do", async () => {
   const f = fixture(false);
   const person = `newcomer-${Date.now()}`;
+  const dm = await f.sessions.getOrCreateByThread(`web:${person}:first`, "dm", scopeId("personal", person));
+  await f.sessions.append({ sessionId: dm.id }, { kind: "AgentMessage", text: "A delivery for you" });
   assert.deepEqual(await f.service.get(person, activities), { activities, pending: false });
   assert.deepEqual(await f.crons.list(), []);
   assert.equal(await f.store.get(person), null);
-  await f.sessions.getOrCreateByThread(`web:${person}:first`, "dm", scopeId("personal", person));
+  await f.sessions.append({ sessionId: dm.id }, { kind: "UserMessage", text: "hi", author: person });
   assert.equal((await f.service.get(person, activities)).pending, true);
   await f.settle();
   const cron = (await f.crons.list())[0]!;
@@ -120,6 +122,8 @@ test("someone who has not used QM yet gets the seeds and no generation job until
   const speaker = `speaker-${Date.now()}`;
   const channel = await f.sessions.getOrCreateByThread(`slack:C1:${speaker}`, "channel", scopeId("channel", "C1"));
   await f.sessions.addParticipant(channel.id, speaker);
+  assert.equal((await f.service.get(speaker, activities)).pending, false);
+  await f.sessions.append({ sessionId: channel.id }, { kind: "UserMessage", text: "hey", author: speaker });
   assert.equal((await f.service.get(speaker, activities)).pending, true);
 });
 
