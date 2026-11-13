@@ -468,7 +468,7 @@ export interface App {
   authorizesCapabilityScope(
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
-  openFileForViewer(tenant: Tenant, id: string, principalId: string, botActor?: boolean): Promise<OpenedFile | null>;
+  openFileForViewer(tenant: Tenant, id: string, principalId: string, botActor: boolean): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(
     tenant: Tenant,
@@ -485,7 +485,7 @@ export interface App {
   moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
   getSoul(
     scopeId: ScopeId,
-    reader?: { actorId: string; botActor: boolean },
+    reader: { actorId: string; botActor: boolean },
   ): {
     scopeId: ScopeId;
     soul: string | null;
@@ -615,8 +615,8 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string, botActor?: boolean): Promise<SkillResolution[]>;
-  canManageSkill(skill: Skill, principalId: string, botActor?: boolean): Promise<boolean>;
+  listVisibleSkills(principalId: string, botActor: boolean): Promise<SkillResolution[]>;
+  canManageSkill(skill: Skill, principalId: string, botActor: boolean): Promise<boolean>;
   updateOwnedSkill(
     id: string,
     principalId: string,

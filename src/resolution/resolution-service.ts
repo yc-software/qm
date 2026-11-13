@@ -14,8 +14,8 @@ export interface ResolutionService {
     tenant: Tenant,
     conversation: Conversation,
     actor: Principal,
-    external?: boolean,
-    botActor?: boolean,
+    external: boolean,
+    botActor: boolean,
   ): Promise<Resolution>;
 }
 
@@ -54,10 +54,9 @@ export function createResolutionService(
 
   return {
     scopeFor,
-    async resolve(tenant, conversation, actor, external = false, botActor = false): Promise<Resolution> {
+    async resolve(tenant, conversation, actor, external, botActor): Promise<Resolution> {
       const scope = scopeFor(conversation, actor);
       const isDm = conversation.kind === "dm";
-      const scopeContext = !external && loadsScopeContext(actor.id, scope, botActor);
       const liveConfigScopes = new Set<ScopeId>([orgScope, scope, scopeId("personal", actor.id)]);
       for (const principal of conversation.audience) {
         liveConfigScopes.add(scopeId("personal", principal.id));
@@ -70,7 +69,7 @@ export function createResolutionService(
         : [orgScope, ...((isDm ? actor.teamIds : conversation.teamIds) ?? []).map((tid) => scopeId("team", tid))];
 
       const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
-      const scopeSoul = scopeContext ? config.getSoul(scope) : null;
+      const scopeSoul = external || !loadsScopeContext(actor.id, scope, botActor) ? null : config.getSoul(scope);
       const systemPrompt = composeSoul(orgSoul, scopeSoul);
 
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
@@ -88,9 +87,9 @@ export function createResolutionService(
         deniedHosts: audienceDeniedFloor(conversation.audience, config, orgScope, scope),
       };
 
-      const grantedHandles = scopeContext
-        ? await acl.handlesForAudience(tenant, conversation.audience, scope, orgScope, entitledScopes)
-        : [];
+      const grantedHandles = external
+        ? []
+        : await acl.handlesForAudience(tenant, conversation.audience, scope, orgScope, entitledScopes(botActor));
 
       return {
         writableScopeId: scope,

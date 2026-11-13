@@ -256,7 +256,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async readFileArtifact(artifactId, viewerId) {
-      const opened = await deps.app.openFileForViewer(ambientTenant(), artifactId, viewerId);
+      const opened = await deps.app.openFileForViewer(ambientTenant(), artifactId, viewerId, false);
       if (!opened) throw new Error(`file artifact ${artifactId} not found (or not visible to ${viewerId})`);
       return buffer(opened.stream);
     },

@@ -616,7 +616,9 @@ export function createMockAgent(): Agent {
           }
         }
         await record({ kind: "ToolCall", tool: "attach", body: { files: paths } });
-        const r = await turn.tools.attach(paths);
+        const r = await turn.tools.attach(
+          paths.map((p) => (p.startsWith("file_id:") ? { file_id: p.slice("file_id:".length) } : p)),
+        );
         await record({ kind: "ToolResult", tool: "attach", body: r.ok ? { ok: true, files: r.files } : { ok: false } });
         usedTool = true;
         if (tag === "!attachsilent ") silent = turn.replyOptional === true;

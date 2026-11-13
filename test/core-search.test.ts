@@ -75,18 +75,23 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
   await built.app.ingestSurfaceEvents([
     { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
     { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
+    { container: "D-ALICE", ts: "3", text: "pelican launch dm", kind: "dm", members: [principals[0]!.id] },
   ]);
-  const fileId = "0123456789abcdef0123456789abcdef";
-  await built.files.put({
-    id: fileId,
-    ownerScopeId: scopeId("personal", principals[0]!.id),
-    createdBy: principals[0]!.id,
-    name: "notes.txt",
-    path: artifactPath(fileId, "notes.txt"),
-    mimetype: "text/plain",
-    data: Buffer.from("the launch codename is pelican"),
-    direction: "in",
-  });
+  const [fileId, orgFileId] = ["0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"];
+  for (const [id, ownerScopeId] of [
+    [fileId, scopeId("personal", principals[0]!.id)],
+    [orgFileId, scopeId("org", "default-org")],
+  ] as const)
+    await built.files.put({
+      id,
+      ownerScopeId,
+      createdBy: principals[0]!.id,
+      name: `${id}.txt`,
+      path: artifactPath(id, `${id}.txt`),
+      mimetype: "text/plain",
+      data: Buffer.from("the launch codename is pelican"),
+      direction: "in",
+    });
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
@@ -116,8 +121,8 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     assert.equal(ok.status, 200);
     const body = (await ok.json()) as { hits: Array<{ id: string }> };
     assert.deepEqual(
-      body.hits.map((hit) => hit.id),
-      ["C1:1"],
+      body.hits.map((hit) => hit.id).sort(),
+      ["C1:1", orgFileId],
       "a message or file only one participant can see is never returned to the shared conversation",
     );
 
@@ -134,8 +139,12 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
       ((await (await post(await token(undefined, dm))).json()) as { hits: Array<{ id: string }> }).hits
         .map((hit) => hit.id)
         .sort();
-    assert.deepEqual(await inDm({}), [fileId, "C-ALICE:2", "C1:1"]);
-    assert.deepEqual(await inDm({ botActor: true }), [], "bot work in a person's DM gets none of their files or Slack");
+    assert.deepEqual(await inDm({}), [fileId, "C-ALICE:2", "C1:1", "D-ALICE:3", orgFileId]);
+    assert.deepEqual(
+      await inDm({ botActor: true }),
+      ["C-ALICE:2", "C1:1", orgFileId],
+      "bot work in a person's DM keeps rooms and org files but loses their own files and DM",
+    );
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

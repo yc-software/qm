@@ -881,13 +881,13 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, false)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
   const archivedChecks = await Promise.all(
     (await app.listSkills())
       .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId) })),
+      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId, false) })),
   );
   const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
   const visible = resolved.flatMap((row) => [
@@ -908,7 +908,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
       pack: r.skill.pack,
       assetCount: r.skill.manifest.files?.length ?? 0,
       requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId),
+      editable: await app.canManageSkill(r.skill, principalId, false),
     })),
   );
   return sendJson(res, 200, { skills });
@@ -1418,7 +1418,7 @@ async function getSoul(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "scopeId and principalId required" });
   if (!(await app.belongsToScope(principalId, scopeIdVal as ScopeId)))
     return sendJson(res, 403, { error: "forbidden" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId));
+  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId, { actorId: principalId, botActor: false }));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {

@@ -61,6 +61,7 @@ import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { deliverAddressedReply, interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
@@ -337,7 +338,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   const orchestrator: Orchestrator = {
     async screenSecuritySteer({ tenant, payload, actor, conversation, sessionId, verifiedSwarm }) {
-      const resolution = await deps.resolution.resolve(tenant, conversation, actor);
+      const resolution = await deps.resolution.resolve(tenant, conversation, actor, false, false);
       const { screening } = resolution.securityPolicy;
       if (screening === "off") return "allow";
       const scopeLabel = deps.resolution.scopeFor(conversation, actor);
@@ -759,7 +760,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const livePersonTurn = liveAuthorTurn && input.botActor !== true;
       const useMemory =
-        !external && input.skipMemory !== true && !(input.botActor && scopeId === personalScope(actor.id));
+        !external && input.skipMemory !== true && loadsScopeContext(actor.id, scopeId, input.botActor === true);
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
       const personaTurn =
@@ -1578,6 +1579,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resolution,
           provision,
           provisionResource,
+          botActor: input.botActor === true,
         });
         const surfaceToolDeps = createSurfaceToolDeps({
           tenant,

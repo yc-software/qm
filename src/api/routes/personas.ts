@@ -56,7 +56,7 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
     result.value.access.map(async (grant) => ({ ...grant, label: await granteeLabel(ctx, grant.scopeId) })),
   );
   const home = `persona:${result.value.id}`;
-  const skills = (await ctx.app.listVisibleSkills(principalId))
+  const skills = (await ctx.app.listVisibleSkills(principalId, ctx.capability?.botActor === true))
     .flatMap((row) => (row.skill?.scopeId === home ? [row.skill] : []))
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));

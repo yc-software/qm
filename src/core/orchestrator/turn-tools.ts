@@ -169,25 +169,27 @@ export function createArtifactAccess(turn: {
   resolution: TurnResolution;
   provision: TurnSandboxes["provision"];
   provisionResource: TurnSandboxes["provisionResource"];
+  botActor: boolean;
 }) {
-  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource } = turn;
+  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource, botActor } = turn;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
-  const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
+  const mayReadArtifact = async (artifact: FileArtifact, storedById = false): Promise<boolean> => {
+    const libraryReach = storedById && botActor;
     if (
       conversation.audience.every((principal) =>
-        principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
+        principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId, libraryReach),
       )
     )
       return true;
-    let handles = fresh ? undefined : readableHandles;
+    let handles = storedById ? undefined : readableHandles;
     handles ??= await deps.acl.handlesForAudience(
       tenant,
       conversation.audience,
       scopeId,
       resolution.orgScopeId,
-      entitledScopes,
+      entitledScopes(libraryReach),
     );
-    if (!fresh) readableHandles = handles;
+    if (!storedById) readableHandles = handles;
     return handles.some((handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id);
   };
   const provisionOutbound = (sandboxId?: string) =>

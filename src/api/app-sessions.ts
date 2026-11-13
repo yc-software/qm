@@ -518,7 +518,7 @@ export function createSessionMethods(
     },
 
     listFilesForViewer(tenant, principalId, opts, inScope, botActor) {
-      return filesForViewer(tenant, principalId, opts, inScope, botActor);
+      return filesForViewer(tenant, principalId, botActor === true, opts, inScope);
     },
 
     async uploadFileForViewer(tenant, principalId, input) {
@@ -944,7 +944,7 @@ export function createSessionMethods(
     async listScopeResources(tenant, principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
       const [page, allCrons, allWebhooks, allDeployments, allSkills] = await Promise.all([
-        filesForViewer(tenant, principalId, undefined, scope),
+        filesForViewer(tenant, principalId, false, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
         deps.deploy.listDeployments(),
@@ -953,7 +953,7 @@ export function createSessionMethods(
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
       while (cursor) {
-        const next = await filesForViewer(tenant, principalId, { limit: 200, cursor }, scope);
+        const next = await filesForViewer(tenant, principalId, false, { limit: 200, cursor }, scope);
         files.push(...next.owned, ...next.shared);
         cursor = next.nextCursor;
       }
@@ -1336,7 +1336,7 @@ export function createSessionMethods(
     getSoul(scopeIdValue, reader) {
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
-      const readable = !reader || loadsScopeContext(reader.actorId, scopeIdValue, reader.botActor);
+      const readable = loadsScopeContext(reader.actorId, scopeIdValue, reader.botActor);
       const soul = readable ? deps.config.getSoul(scopeIdValue) : null;
       return {
         scopeId: scopeIdValue,

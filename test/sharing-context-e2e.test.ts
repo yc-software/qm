@@ -140,22 +140,35 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", extra), /no file/);
   await b.config.setSoul("personal:U1", "OWN_SOUL_U1");
   await b.skill("personal:U1", "own-helper", "OWN_SKILL");
-  const ref = await b.file("personal:U2", "granted.txt", "GRANTED_TO_U1");
-  await b.acl.grant(
-    tenant,
-    { ownerScopeId: "personal:U2", ref, granteeScopeId: "personal:U1", permission: "read", grantedBy: "U2" },
-    "U2",
-  );
+  for (const [name, granteeScopeId] of [
+    ["granted.txt", "personal:U1"],
+    ["org.txt", "org:default-org"],
+  ] as const) {
+    const ref = await b.file("personal:U2", name, `GRANTED_${name}`);
+    await b.acl.grant(
+      tenant,
+      { ownerScopeId: "personal:U2", ref, granteeScopeId, permission: "read", grantedBy: "U2" },
+      "U2",
+    );
+  }
+  const ownFile = await b.file("personal:U1", "own.txt", "OWN_FILE_U1");
+  assert.equal(await b.turn(`!attach file_id:${ownFile}`, false, "U1"), "");
   assert.match(
     await b.turn("!sysprompt", false, "U1", { origin: { kind: "automation" } }),
-    /OWN_SOUL_U1[\s\S]*shared with you[\s\S]*own-helper/,
+    /OWN_SOUL_U1[\s\S]*2 files are shared with you[\s\S]*own-helper/,
   );
-  const personal = /OWN_MEMORY_U1|OWN_SOUL_U1|shared with you|own-helper/;
+  const personal = /OWN_MEMORY_U1|OWN_SOUL_U1|2 files are shared|own-helper/;
   for (const origin of [{ kind: "human" }, { kind: "automation" }] as const) {
-    const bot = { botActor: true, origin, conversation: { kind: "dm", threadRef: "dm:U1:bot-work" } } as const;
+    const bot = {
+      botActor: true,
+      origin,
+      conversation: { kind: "dm", threadRef: `dm:U1:bot-${origin.kind}` },
+    } as const;
     assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", bot), personal);
-    assert.match(await b.turn("!read shared/granted.txt", false, "U1", bot), /no file/);
+    assert.equal(await b.turn("!read shared/", false, "U1", bot), "shared/org.txt");
+    assert.equal(await b.turn("!read shared/org.txt", false, "U1", bot), "GRANTED_org.txt");
     assert.match(await b.turn("!skill own-helper", false, "U1", bot), /no skill file/);
+    assert.match(await b.turn(`!attach file_id:${ownFile}`, false, "U1", bot), /not found/);
   }
   await b.directory.replace(
     ["U1", "U2", "U3"].map((principalId) => ({ principalId, displayName: principalId, type: "internal" })),

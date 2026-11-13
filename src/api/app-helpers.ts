@@ -415,9 +415,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function filesForViewer(
     tenant: Tenant,
     principalId: string,
+    botActor: boolean,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
-    botActor = false,
   ): Promise<FileListPage> {
     const myScopes = await currentResourceScopesForViewer(principalId, botActor);
     const handles = await deps.acl.handlesFor(tenant, myScopes);
@@ -436,7 +436,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     };
   }
 
-  async function currentResourceScopesForViewer(principalId: string, botActor = false): Promise<ScopeId[]> {
+  async function currentResourceScopesForViewer(principalId: string, botActor: boolean): Promise<ScopeId[]> {
     const actor = deps.identity?.classify(principalId);
     if (actor && !deps.identity?.isInternal(actor)) return [];
     const scopes = new Set<ScopeId>([
@@ -634,7 +634,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function canManageSkill(
     skill: Pick<Skill, "scopeId" | "createdBy">,
     principalId: string,
-    botActor = false,
+    botActor: boolean,
   ): Promise<boolean> {
     return (
       loadsScopeContext(principalId, skill.scopeId, botActor) &&
