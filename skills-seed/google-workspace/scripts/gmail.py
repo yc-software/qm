@@ -101,7 +101,7 @@ def call(method: str, path: str, body: dict | None = None, query: dict | None = 
         sys.exit(f"gmail api {status} on {method} {path}: non-json response: {text[:500]}")
 
 
-def batch_get(paths: dict[str, str]) -> list[tuple[str, int, str]]:
+def batch_get(paths: dict[str, str]) -> dict[str, tuple[int, str]]:
     request = EmailMessage(policy=SMTP)
     request["Content-Type"] = "multipart/mixed"
     for key, path in paths.items():
@@ -115,12 +115,17 @@ def batch_get(paths: dict[str, str]) -> list[tuple[str, int, str]]:
     boundary = text.lstrip().split("\n", 1)[0].strip().removeprefix("--")
     reply = message_from_string(f'Content-Type: multipart/mixed; boundary="{boundary}"\n\n{text}')
     if not reply.is_multipart():
-        sys.exit(f"gmail api {status} on POST batch: non-multipart response: {text[:500]}")
-    results = []
-    for part in reply.get_payload():
-        status_line, _, rest = part.get_payload().lstrip().partition("\n")
-        key = part["Content-ID"].strip().strip("<>").removeprefix("response-")
-        results.append((key, int(status_line.split()[1]), message_from_string(rest).get_payload()))
+        sys.exit(f"gmail api {status} on POST batch: non-multipart response: {text}")
+    results = {}
+    try:
+        for part in reply.get_payload():
+            status_line, _, rest = part.get_payload().lstrip().partition("\n")
+            key = part["Content-ID"].strip().strip("<>").removeprefix("response-")
+            results[key] = (int(status_line.split()[1]), message_from_string(rest).get_payload())
+    except (AttributeError, IndexError, ValueError) as error:
+        sys.exit(f"gmail api {status} on POST batch: unreadable part ({error!r}): {text}")
+    if results.keys() != paths.keys():
+        sys.exit(f"gmail api {status} on POST batch: reply does not cover the requested messages: {text}")
     return results
 
 
@@ -132,15 +137,19 @@ def message_metadata(ids: list[str]) -> dict[str, dict]:
         limited: dict[str, str] = {}
         for start in range(0, len(pending), BATCH_SIZE):
             chunk = pending[start:start + BATCH_SIZE]
-            for mid, status, body in batch_get({m: f"{USER_PATH}/messages/{m}?{query}" for m in chunk}):
-                if status == 200:
-                    found[mid] = json.loads(body)
-                elif status == 429:
+            replies = batch_get({m: f"{USER_PATH}/messages/{m}?{query}" for m in chunk})
+            for mid, (status, body) in replies.items():
+                if status == 429:
                     limited[mid] = body
-                else:
-                    sys.exit(f"gmail api {status} on GET messages/{mid}: {body[:500]}")
+                    continue
+                if status != 200:
+                    sys.exit(f"gmail api {status} on GET messages/{mid}: {body}")
+                try:
+                    found[mid] = json.loads(body)
+                except ValueError:
+                    sys.exit(f"gmail api {status} on GET messages/{mid}: non-json response: {body}")
         if len(limited) == len(pending):
-            sys.exit(f"gmail api 429 on GET messages/{pending[0]}: {limited[pending[0]][:500]}")
+            sys.exit(f"gmail api 429 on GET messages/{pending[0]}: {limited[pending[0]]}")
         pending = list(limited)
     return found
 
