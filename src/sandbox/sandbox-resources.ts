@@ -25,6 +25,7 @@ import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
+import { msOf } from "../sessions/items.ts";
 
 export interface SandboxResource {
   id: string;
@@ -58,6 +59,57 @@ export interface SandboxAccessPlan {
 export interface SandboxDefault {
   sandboxId: string | null;
 }
+
+export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
+  id: "durable-map/sandbox_defaults/0040-clear-bot-set-defaults",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('items') IS NULL OR to_regclass('runs') IS NULL OR to_regclass('sessions') IS NULL
+         OR to_regclass('audit_log') IS NULL OR to_regclass('sandbox_defaults') IS NULL
+         OR to_regclass('sandbox_resources') IS NULL THEN
+        RETURN;
+      END IF;
+      WITH tool_sets AS MATERIALIZED (
+        SELECT c.tenant_id, c.session_id, ${msOf("res.created_at")} AS at, c.body ->> 'sandbox_id' AS sandbox_id,
+               r.id AS run_id, r.session_id AS thread_ref,
+               CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb ->> 'botActor' = 'true' END AS bot
+          FROM items c
+          JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
+                        AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
+          LEFT JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.turn_id::text
+         WHERE c.kind = 'ToolCall' AND c.tool = 'sandbox' AND c.body ->> 'action' = 'set_default'
+           AND res.is_error IS NOT TRUE
+      ), events AS (
+        SELECT t.tenant_id, COALESCE(sr.json ->> 'ownerScopeId', s.scope_id) AS scope, t.at, t.sandbox_id, t.bot,
+               t.run_id, t.thread_ref
+          FROM tool_sets t
+          JOIN sessions s ON s.tenant_id = t.tenant_id AND s.id = t.session_id
+          LEFT JOIN sandbox_resources sr ON sr.tenant_id = t.tenant_id AND sr.id = t.sandbox_id
+        UNION ALL
+        SELECT tenant_id, scope_label, at, NULLIF(resource, 'null'), false, NULL, NULL
+          FROM audit_log WHERE action = 'sandbox.default'
+      ), latest AS (
+        SELECT DISTINCT ON (d.tenant_id, d.id) d.tenant_id, d.id, d.json ->> 'sandboxId' AS sandbox_id,
+               e.sandbox_id AS set_id, e.bot, e.run_id, e.thread_ref
+          FROM sandbox_defaults d JOIN events e ON e.tenant_id = d.tenant_id AND e.scope = d.id
+         ORDER BY d.tenant_id, d.id, e.at DESC, e.bot IS TRUE
+      ), cleared AS (
+        UPDATE sandbox_defaults d SET json = '{"sandboxId": null}'::jsonb
+          FROM latest l WHERE l.bot AND l.set_id = l.sandbox_id AND d.tenant_id = l.tenant_id AND d.id = l.id
+        RETURNING l.tenant_id, l.id, l.sandbox_id, l.run_id, l.thread_ref
+      ), versions AS (
+        UPDATE durable_map_versions SET v = v + 1
+         WHERE tbl = 'sandbox_defaults' AND tenant_id IN (SELECT tenant_id FROM cleared)
+      )
+      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
+      SELECT tenant_id, ${msOf("now()")}, 'system:migration', 'sandbox.default', 'null', id,
+             jsonb_build_object('runId', run_id, 'threadRef', thread_ref, 'previousSandboxId', sandbox_id,
+                                'botActor', true)::text
+        FROM cleared;
+    END $$`,
+  ],
+};
 
 interface SandboxProviderProfile {
   name: SandboxBackendName;

@@ -62,6 +62,7 @@ import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/br
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
+  CLEAR_BOT_SET_DEFAULTS_MIGRATION,
   createSandboxResources,
   type SandboxResource,
   type SandboxDefault,
@@ -2011,6 +2012,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(CLEAR_BOT_SET_DEFAULTS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
     statements: [
