@@ -7,6 +7,7 @@ import { parseIntoClientConfig } from "pg-connection-string";
 import { boundTenant, explicitTenantId, pinTenant, type Tenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { tracePoolCheckout, untraced } from "../../plugins/chassis/src/error-reporting.ts";
 
 export type { Pool, PoolClient };
 
@@ -157,15 +158,15 @@ async function pipelinedTransaction(
 ): Promise<QueryResult> {
   const settled = await withAbort(() => {
     const statements = [
-      client.query("BEGIN"),
-      ...(settings.length ? [client.query(settingsQuery(settings))] : []),
+      untraced(() => client.query("BEGIN")),
+      ...(settings.length ? [untraced(() => client.query(settingsQuery(settings)))] : []),
       client.query({ text, values }),
     ];
-    return Promise.allSettled(signal ? statements : [...statements, client.query("COMMIT")]);
+    return Promise.allSettled(signal ? statements : [...statements, untraced(() => client.query("COMMIT"))]);
   }, signal);
   if (signal) {
     signal.throwIfAborted();
-    settled.push(...(await Promise.allSettled([client.query("COMMIT")])));
+    settled.push(...(await Promise.allSettled([untraced(() => client.query("COMMIT"))])));
   }
   const failed = settled.find((outcome) => outcome.status === "rejected");
   if (failed) throw failed.reason;
@@ -196,7 +197,7 @@ function cancelThenClose(pg: typeof import("pg").default, client: PoolClient): v
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
   try {
-    await client.query("ROLLBACK");
+    await untraced(() => client.query("ROLLBACK"));
     return undefined;
   } catch (error) {
     swallow(context, error);
@@ -214,14 +215,14 @@ async function runPgTransaction<T>(
   tenant: string | undefined,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  const client = await pool.connect();
+  const client = await tracePoolCheckout(() => pool.connect());
   let rollbackError: Error | undefined;
   try {
     const settings = tenantSettings(tenant);
-    await client.query("BEGIN");
-    if (settings.length) await client.query(settingsQuery(settings));
+    await untraced(() => client.query("BEGIN"));
+    if (settings.length) await untraced(() => client.query(settingsQuery(settings)));
     const result = await fn(client);
-    await client.query("COMMIT");
+    await untraced(() => client.query("COMMIT"));
     return result;
   } catch (error) {
     rollbackError = await rollbackOrReport(client, "pg-pool: rollback transaction");
@@ -588,7 +589,7 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
     signal?.throwIfAborted();
-    const connecting = p.connect();
+    const connecting = tracePoolCheckout(() => p.connect());
     let client: PoolClient;
     try {
       client = await withAbort(() => connecting, signal);

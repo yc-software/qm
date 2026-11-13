@@ -395,6 +395,32 @@ export function startPhase(op: string): Phase | undefined {
   return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
 }
 
+export function untraced<T>(work: () => T): T {
+  return client && tracing ? client.suppressTracing(work) : work();
+}
+
+export async function tracePoolCheckout<T>(checkout: () => Promise<T>): Promise<T> {
+  if (!client || !tracing || !client.getActiveSpan()) return checkout();
+  const sdk = client;
+  const started = performance.now();
+  const record = (failed: boolean): void => {
+    const seconds = (performance.now() - started) / 1000;
+    if (!failed && seconds < IDLE_CHECKOUT_SECONDS) return;
+    const end = Date.now() / 1000;
+    const span = sdk.startInactiveSpan({ op: "db", name: POOL_CHECKOUT, startTime: end - seconds, onlyIfParent: true });
+    if (failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
+    span.end(end);
+  };
+  try {
+    const checkedOut = await sdk.suppressTracing(checkout);
+    record(false);
+    return checkedOut;
+  } catch (error) {
+    record(true);
+    throw error;
+  }
+}
+
 export interface DispatchTrace {
   modelRequest(): void;
   firstToken(): void;

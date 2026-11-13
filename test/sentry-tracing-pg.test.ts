@@ -12,6 +12,7 @@ import {
   tracePhase,
   traceQueued,
 } from "../plugins/chassis/src/error-reporting.ts";
+import { configurePgPooling, createPgPool, withPgTransaction } from "../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";
@@ -121,6 +122,36 @@ test(
     }
   },
 );
+
+test("a pooled query is one span, and its checkout is a span only when it waited", { skip }, async () => {
+  configurePgPooling({ queryMax: 1 });
+  const store = createPgPool(URL!);
+  const bounded = { timeoutMs: 5_000 };
+  try {
+    await store.q("SELECT 1");
+    await traceQueued(undefined, "pooled-run", {}, async () => {
+      for (let i = 0; i < 300; i++) await store.q("SELECT $1::int", [i], bounded);
+      await Promise.all([
+        store.q("SELECT pg_sleep(0.05)", [], bounded),
+        store.q("UPDATE pg_settings SET setting = setting WHERE false", [], bounded),
+      ]);
+      await withPgTransaction(await store.pool(), (client) => client.query("SELECT 2"));
+      await tracePhase("step.persist", async () => undefined);
+    });
+    const run = await arrived("pooled-run");
+    const db: Record<string, any>[] = run.spans.filter((sent: { op: string }) => sent.op === "db");
+    const checkouts = db.filter((sent) => sent.description === "pg-pool.connect");
+    const statements = db.filter((sent) => sent.description !== "pg-pool.connect").map((sent) => sent.description);
+    assert.deepEqual([...new Set(statements)].sort(), ["SELECT", "UPDATE"]);
+    assert.equal(statements.length, 303);
+    assert.ok(checkouts.length < 30, `${checkouts.length} checkouts recorded for 303 queries`);
+    assert.ok(checkouts.some((sent) => sent.timestamp - sent.start_timestamp >= 0.02));
+    assert.ok(run.spans.some((sent: { op: string }) => sent.op === "step.persist"));
+  } finally {
+    await store.close();
+    configurePgPooling({});
+  }
+});
 
 test("a truncated run keeps every sent span's parent even when parent and child start together", async () => {
   await traceQueued(undefined, "tied-run", {}, async () => {
