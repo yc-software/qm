@@ -274,7 +274,7 @@ struct SearchView: View {
 enum NativeResourceTarget {
   case skill(SkillsModel, NativeSkill)
   case cron(CronsModel, NativeCron)
-  case app(NativeDeployment)
+  case app(NativeApp)
   case webhook(WebhooksModel, NativeWebhook)
   case project(ProjectsModel, WorkspaceContext)
 
@@ -301,9 +301,9 @@ enum NativeResourceTarget {
       try loaded(model.error)
       return (model.owned + model.shared).first { $0.id == hit.id }.map { .cron(model, $0) }
     case .deploys:
-      struct Found: Decodable { let deployment: NativeDeployment? }
+      struct Found: Decodable { let deployment: NativeApp? }
       let found: Found = try await client.fetch(
-        "api/deployments/\(hit.id.apiComponent)", accepting: [404])
+        "api/apps/\(hit.id.apiComponent)", accepting: [404])
       return found.deployment.map { .app($0) }
     case .webhooks:
       let model = WebhooksModel(client: client)

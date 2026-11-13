@@ -252,7 +252,7 @@ struct NativeAppDetail: View {
       Text("Existing links will stop working. They do not redirect to the new URL.")
     }
     .confirmationDialog(
-      app.status == "archived" ? "Restore this deployment?" : "Archive this deployment?",
+      app.status == "archived" ? "Restore this app?" : "Archive this app?",
       isPresented: $archive
     ) {
       Button(

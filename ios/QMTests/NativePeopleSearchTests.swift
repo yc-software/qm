@@ -335,8 +335,8 @@ final class NativePeopleSearchTests: XCTestCase {
               {"id":"c1","ownerScopeId":"group:p1","owner":"bob","schedule":{},"enabled":true}]}
             """)
       ],
-      "GET /api/deployments/d1": [.init(body: #"{"deployment":{"id":"d1"}}"#)],
-      "GET /api/deployments/gone": [.init(status: 404, body: #"{"error":"not_found"}"#)],
+      "GET /api/apps/d1": [.init(body: #"{"deployment":{"id":"d1"}}"#)],
+      "GET /api/apps/gone": [.init(status: 404, body: #"{"error":"not_found"}"#)],
       "GET /api/webhooks": [
         .init(
           body: """
