@@ -209,6 +209,7 @@ export function createMcpToolService(opts: {
     servers: Map<string, McpServer>;
     catalogs: LRUCache<string, Promise<RemoteTool[]>>;
     loadedAt?: number;
+    version?: string;
     pending?: Promise<void>;
   }>(() => ({
     clients: new Map(),
@@ -379,6 +380,7 @@ export function createMcpToolService(opts: {
 
   async function load(state: ReturnType<typeof tenantState>): Promise<void> {
     state.catalogs.clear();
+    const version = await opts.servers.version();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
@@ -387,6 +389,7 @@ export function createMcpToolService(opts: {
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
     state.servers = new Map(servers.map((s) => [s.id, s]));
+    state.version = version;
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -412,12 +415,21 @@ export function createMcpToolService(opts: {
     return state;
   }
 
+  async function upToDate(): Promise<ReturnType<typeof tenantState>> {
+    const state = await loaded();
+    if (closed) return state;
+    const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
+    if (version !== state.version)
+      await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+    return state;
+  }
+
   async function toolDefsFor(
     principalId?: string,
     audienceScopeId?: ScopeId,
     turn?: AttestingTurn,
   ): Promise<McpToolDescriptor[]> {
-    const { snapshot, perUserServers: gated, servers } = await loaded();
+    const { snapshot, perUserServers: gated, servers } = await upToDate();
     const current = snapshot.filter((t) => servesTurn(servers.get(t.serverId)!, principalId, audienceScopeId, turn));
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));

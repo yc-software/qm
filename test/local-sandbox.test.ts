@@ -2,7 +2,6 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
-import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,21 +14,12 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
 let daemon: ChildProcess;
 let daemonPort = 0;
-
-async function freePort(): Promise<number> {
-  return new Promise((res) => {
-    const s = createServer();
-    s.listen(0, "127.0.0.1", () => {
-      const p = (s.address() as AddressInfo).port;
-      s.close(() => res(p));
-    });
-  });
-}
 
 before(async () => {
   daemonPort = await freePort();

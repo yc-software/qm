@@ -49,6 +49,7 @@ export interface McpServerStore {
   put(server: McpServer): Promise<void>;
   delete(id: string): Promise<void>;
   onChange(listener: () => void): () => void;
+  version(): Promise<string>;
 }
 
 export function createMcpServerStore(backing: DurableMap<McpServer>): McpServerStore {
@@ -68,5 +69,6 @@ export function createMcpServerStore(backing: DurableMap<McpServer>): McpServerS
       listeners.emit();
     },
     onChange: (listener) => listeners.add(listener),
+    version: () => backing.version(),
   };
 }
