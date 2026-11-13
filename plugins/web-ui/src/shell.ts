@@ -1095,6 +1095,7 @@ export async function boot(): Promise<void> {
   markDesktopEmbed(appEditEmbed);
   const prefillRoute = wanted === null || wanted === "new";
   const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
+  const onboard = wanted === "onboard" && !wantedSession;
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   let transcriptUnavailable = false;
@@ -1163,7 +1164,7 @@ export async function boot(): Promise<void> {
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
   const restoreLast = viewIntent || !(await openNewChatFetch);
   if (restoreLast) loadPersistedSplit();
-  if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null) {
+  if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null && !onboard) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {
       if (viewIntent && restoredCanvasNeedsSessionList()) await sessions;
     });
@@ -1174,7 +1175,7 @@ export async function boot(): Promise<void> {
     if (!viewIntent) await restore;
   }
 
-  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
+  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider && !onboard;
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
@@ -1219,6 +1220,13 @@ export async function boot(): Promise<void> {
     saveDraft(newChatDraftKey(appState.me.user), prefill);
     exitSplitIfActive();
     mainConversation().newChat();
+    return;
+  }
+
+  if (onboard) {
+    history.replaceState(null, "", deepLinkPath(UI_BASE, "chats", null));
+    exitSplitIfActive();
+    mainConversation().newChat(undefined, true);
     return;
   }
 

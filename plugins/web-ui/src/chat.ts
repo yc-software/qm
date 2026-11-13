@@ -339,6 +339,7 @@ export function createChatSurface(
     earlierCount: 0,
     loadingEarlier: false,
     forkSession: null as CoreSession | null,
+    welcomeThread: null as string | null,
     inheritedMessages: [] as ReturnType<typeof itemsToMessages>,
     inheritedExpanded: false,
     inheritedLoaded: false,
@@ -528,11 +529,12 @@ export function createChatSurface(
     connectedConnectors.clear();
   }
 
-  function newChat(context?: { scopeId: string; name: string | null }): string {
+  function newChat(context?: { scopeId: string; name: string | null }, welcome = false): string {
     appState.currentView = "chats";
     renderSidebarTop();
     const user = appState.me?.user ?? "anon";
     const threadRef = `web:${user}:${crypto.randomUUID()}`;
+    chatState.welcomeThread = welcome ? threadRef : null;
     const carried = storedDraft(newChatDraftKey(user));
     if (carried) saveDraft(threadRef, carried);
     ctx.composer.resetComposer();
@@ -1717,9 +1719,10 @@ export function createChatSurface(
     const showWelcome =
       !ctx.inbox &&
       !editingApp &&
-      (appState.me && hasWelcomeScreen(appState.me)
-        ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
-        : isNewUser && !messages.length);
+      (chatState.welcomeThread === chatState.threadRef ||
+        (appState.me && hasWelcomeScreen(appState.me)
+          ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
+          : isNewUser && !messages.length));
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
     if (messages.length) {
@@ -1736,6 +1739,7 @@ export function createChatSurface(
       emptyChat &&
       !editingApp &&
       !(isNewUser && hasWelcomeScreen(appState.me)) &&
+      !(showWelcome && appState.me?.welcome) &&
       !glanceTier &&
       (!ctx.pane || tier === "full") &&
       !chatState.sessionId &&

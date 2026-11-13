@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness, runtimeConfig, stubMotion } from "./deep-link-boot-fixture.ts";
+import { harness, runtimeConfig, SESSION, stubMotion } from "./deep-link-boot-fixture.ts";
 import { welcomeActivities } from "../src/welcome-ideas.ts";
 
 const idea = (id: string, icon: string, title: string) => ({ id, icon, title, prompt: title });
@@ -72,4 +72,27 @@ test("activities from the app a person just connected are marked new, and the li
     ],
   );
   assert.deepEqual([...shown.fresh], ["g1"]);
+});
+
+test("/onboard shows the welcome to a person who already has conversations", async () => {
+  const welcome = { activities: [idea("crm", "📇", "Build a tracker for the harbor pilots")], apps: {} };
+  const h = await harness({
+    path: "/onboard",
+    listSessions: [{ ...SESSION, createdAt: 1 }],
+    api: (path) => {
+      if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [], welcome });
+      return path.startsWith("/api/runtime-config") ? Response.json(runtimeConfig) : undefined;
+    },
+  });
+  const restoreMotion = stubMotion();
+  try {
+    h.releaseSessions();
+    await h.boot();
+    assert.ok(h.sessionsState.list.length > 0);
+    assert.match(h.mainText(), /Welcome to QM!\s*What is this\?\s*Where to start/);
+    assert.equal(location.pathname, "/");
+  } finally {
+    await h.close();
+    restoreMotion();
+  }
 });
