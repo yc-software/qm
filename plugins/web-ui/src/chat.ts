@@ -1729,6 +1729,7 @@ export function createChatSurface(
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
     const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
+    const seededWelcome = showWelcome && !messages.length && Boolean(appState.me?.welcome);
     const showSuggestions =
       !ctx.inbox &&
       emptyChat &&
@@ -1825,7 +1826,8 @@ export function createChatSurface(
             </section>
             <div class="chat-bottom-dock">
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
-              ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
+              ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}
+              ${seededWelcome && !ctx.composer.state.draft ? nothing : ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
             </div>
           </div>

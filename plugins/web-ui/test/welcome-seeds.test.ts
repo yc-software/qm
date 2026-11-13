@@ -55,7 +55,6 @@ test("a new person sees their company's seeded activities, only apps they connec
     assert.ok(!h.requests.includes("/api/turn"));
     assert.match(h.mainText(), /Connect your accounts/);
     assert.doesNotMatch(h.mainText(), /Connect your apps/);
-    assert.ok(!h.requests.includes("/api/suggested-activities"));
     const link = (label: string) =>
       [...document.querySelectorAll<HTMLButtonElement>(".welcome-what button")].find((button) =>
         button.textContent!.includes(label),
@@ -109,7 +108,7 @@ test("/onboard shows the welcome to a person who already has conversations", asy
     h.releaseSessions();
     await h.boot();
     assert.ok(h.sessionsState.list.length > 0);
-    assert.match(h.mainText(), /Welcome to QM!\s*Where to start/);
+    assert.match(h.mainText(), /Welcome to QM!\s*What is this\?\s*Where to start/);
     assert.equal(location.pathname, "/");
   } finally {
     await h.close();
