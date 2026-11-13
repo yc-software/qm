@@ -448,6 +448,7 @@ export interface App {
     principalId: string,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
+    botActor?: boolean,
   ): Promise<FileListPage>;
   uploadFileForViewer(
     tenant: Tenant,
@@ -467,7 +468,7 @@ export interface App {
   authorizesCapabilityScope(
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
-  openFileForViewer(tenant: Tenant, id: string, principalId: string): Promise<OpenedFile | null>;
+  openFileForViewer(tenant: Tenant, id: string, principalId: string, botActor?: boolean): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(
     tenant: Tenant,
@@ -482,7 +483,10 @@ export interface App {
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
   moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
-  getSoul(scopeId: ScopeId): {
+  getSoul(
+    scopeId: ScopeId,
+    reader?: { actorId: string; botActor: boolean },
+  ): {
     scopeId: ScopeId;
     soul: string | null;
     soulVersion: number;
@@ -495,7 +499,7 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string },
+    opts?: { allowSharedScope?: boolean; botActor?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
@@ -611,18 +615,18 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string): Promise<SkillResolution[]>;
-  canManageSkill(skill: Skill, principalId: string): Promise<boolean>;
+  listVisibleSkills(principalId: string, botActor?: boolean): Promise<SkillResolution[]>;
+  canManageSkill(skill: Skill, principalId: string, botActor?: boolean): Promise<boolean>;
   updateOwnedSkill(
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
@@ -644,6 +648,7 @@ export interface App {
     principalId: string;
     id: string;
     liveActor?: boolean;
+    botActor?: boolean;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;

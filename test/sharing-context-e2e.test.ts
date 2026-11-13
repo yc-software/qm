@@ -100,6 +100,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
       data: Buffer.from(data),
       direction: "out",
     });
+    return id;
   };
   const filePath = (ownerScopeId: string, name: string) =>
     `shared/open-${ownerScopeId.replace(":", "-")}/${fileIds.get(`${ownerScopeId}/${name}`)}/${name}`;
@@ -137,7 +138,36 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
   for (const extra of [{ origin: { kind: "automation" } }, { botActor: true }] as const)
     assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", extra), /no file/);
-  assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", { botActor: true }), /OWN_MEMORY_U1/);
+  await b.config.setSoul("personal:U1", "OWN_SOUL_U1");
+  await b.skill("personal:U1", "own-helper", "OWN_SKILL");
+  const ref = await b.file("personal:U2", "granted.txt", "GRANTED_TO_U1");
+  await b.acl.grant(
+    tenant,
+    { ownerScopeId: "personal:U2", ref, granteeScopeId: "personal:U1", permission: "read", grantedBy: "U2" },
+    "U2",
+  );
+  assert.match(
+    await b.turn("!sysprompt", false, "U1", { origin: { kind: "automation" } }),
+    /OWN_SOUL_U1[\s\S]*shared with you[\s\S]*own-helper/,
+  );
+  const personal = /OWN_MEMORY_U1|OWN_SOUL_U1|shared with you|own-helper/;
+  for (const origin of [{ kind: "human" }, { kind: "automation" }] as const) {
+    const bot = { botActor: true, origin, conversation: { kind: "dm", threadRef: "dm:U1:bot-work" } } as const;
+    assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", bot), personal);
+    assert.match(await b.turn("!read shared/granted.txt", false, "U1", bot), /no file/);
+    assert.match(await b.turn("!skill own-helper", false, "U1", bot), /no skill file/);
+  }
+  await b.directory.replace(
+    ["U1", "U2", "U3"].map((principalId) => ({ principalId, displayName: principalId, type: "internal" })),
+  );
+  await b.memory.capture("channel:C1", ["ROOM_FROM_U1"], Date.now(), undefined, {
+    mode: "automatic",
+    sensitivity: "ordinary",
+    inheritedFacts: [],
+    conversationScopeId: "personal:U1",
+  });
+  assert.match(await b.turn("!memorysearch ROOM_FROM_U1", true), /ROOM_FROM_U1/);
+  assert.doesNotMatch(await b.turn("!memorysearch ROOM_FROM_U1", true, "U1", { botActor: true }), /ROOM_FROM_U1/);
   const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
   assert.equal(await b.turn(own, true), "(exit 0)");
   await b.turn(own, true, "U1", { botActor: true });

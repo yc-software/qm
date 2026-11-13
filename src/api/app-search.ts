@@ -156,5 +156,8 @@ export function createSearchMethods(
     options,
   );
   const conversations = createCoreSearch([conversationsBackend], options);
-  return { search: core.search, searchConversations: conversations.search };
+  return {
+    search: (input) => (input.botActor ? conversations : core).search(input),
+    searchConversations: conversations.search,
+  };
 }

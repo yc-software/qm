@@ -11,7 +11,7 @@ import { triggerBlocksSharedSkill } from "./artifact-share.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { entitledScopes } from "../resolution/context-filter.ts";
+import { entitledScopes, loadsScopeContext } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
@@ -21,6 +21,7 @@ export async function skillVisibilityContext(
   h: AppHelpers,
   principalId: string,
   homes: readonly ScopeId[],
+  botActor = false,
 ) {
   const actor = deps.identity.classify(principalId);
   const sharedHomes = [
@@ -31,11 +32,13 @@ export async function skillVisibilityContext(
       }),
     ),
   ];
-  const accessibleScopes = new Set(await h.currentResourceScopesForViewer(principalId));
+  const accessibleScopes = new Set(await h.currentResourceScopesForViewer(principalId, botActor));
   const member = sharedHomes.map((sid) => (accessibleScopes.has(sid) ? sid : null));
   const shared = member.filter((sid): sid is ScopeId => sid !== null);
   const teams = (actor.teamIds ?? []).map((t) => scopeId("team", t));
-  const ordered = [...new Set([scopeId("personal", principalId), ...shared, ...teams, scopeId("org", orgIdOf())])];
+  const ordered = [
+    ...new Set([scopeId("personal", principalId), ...shared, ...teams, scopeId("org", orgIdOf())]),
+  ].filter((scope) => loadsScopeContext(principalId, scope, botActor));
   const entitled = (p: Principal, sess: ScopeId, org: ScopeId) => [
     ...entitledScopes(p, sess, org),
     ...accessibleScopes,
@@ -51,7 +54,9 @@ export async function skillVisibilityContext(
         entitled,
       )
       .catch(() => [])
-  ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
+  )
+    .filter((g) => loadsScopeContext(principalId, g.granteeScopeId, botActor))
+    .map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
   return { ordered, granted };
 }
 
@@ -262,21 +267,22 @@ export function createSkillMethods(
     archiveSkill(id) {
       return deps.skills.archive(id);
     },
-    async listVisibleSkills(principalId) {
+    async listVisibleSkills(principalId, botActor) {
       const { ordered, granted } = await skillVisibilityContext(
         deps,
         h,
         principalId,
         (await deps.skills.list()).map((s) => s.scopeId),
+        botActor,
       );
       return deps.skills.visibleFor(ordered, granted);
     },
-    canManageSkill(skill, principalId) {
-      return canManageSkill(skill, principalId);
+    canManageSkill(skill, principalId, botActor) {
+      return canManageSkill(skill, principalId, botActor);
     },
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || !(await canManageSkill(skill, principalId))) return null;
+      if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -300,7 +306,8 @@ export function createSkillMethods(
     },
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId))) return null;
+      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId, opts?.botActor)))
+        return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -442,10 +449,10 @@ export function createSkillMethods(
         return published;
       });
     },
-    async deleteOwnedSkill({ principalId, id, liveActor }) {
+    async deleteOwnedSkill({ principalId, id, liveActor, botActor }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
-      if (!(await canManageSkill(skill, principalId))) return "forbidden";
+      if (!(await canManageSkill(skill, principalId, botActor))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);
       h.recordAudit({

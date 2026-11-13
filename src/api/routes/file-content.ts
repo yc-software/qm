@@ -32,7 +32,12 @@ function viewerOf(ctx: ApiCtx): string | null {
 async function openForViewer(ctx: ApiCtx) {
   const viewer = viewerOf(ctx);
   if (!viewer) return null;
-  const opened = await ctx.app.openFileForViewer(tenantOf(ctx), ctx.params.id!, viewer);
+  const opened = await ctx.app.openFileForViewer(
+    tenantOf(ctx),
+    ctx.params.id!,
+    viewer,
+    ctx.capability?.botActor === true,
+  );
   if (!opened) sendJson(ctx.res, 404, { error: "not_found" });
   return opened;
 }

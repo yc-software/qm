@@ -582,7 +582,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const admissionRefusal = await admitAudienceAndBudget(tenant, deps, conversation, actor, surface, external);
       if (admissionRefusal) return admissionRefusal;
 
-      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external);
+      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external, input.botActor === true);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
       const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
       const audienceScopeId =
@@ -805,6 +805,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
+        botActor: input.botActor === true,
         notebookOnly,
         memory: deps.memory,
         files: deps.files,

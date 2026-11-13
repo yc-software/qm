@@ -7,7 +7,7 @@ import { shownFacts } from "../memory/recall-delta.ts";
 import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { entitledScopes } from "./context-filter.ts";
+import { entitledScopes, loadsScopeContext } from "./context-filter.ts";
 import { swallowAs } from "../util/errors.ts";
 import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
@@ -32,6 +32,7 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   acl: Pick<AclStore, "sharedOfKindForAudience">;
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
+  botActor: boolean;
   notebookOnly?: boolean;
   memory: MemoryService;
   files: FileArtifactStore;
@@ -164,28 +165,30 @@ export async function resolveTurnContext(input: ContextInput) {
       const sharingSources = input.external
         ? []
         : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+      const scopeContext = loadsScopeContext(input.actor.id, input.targetScope, input.botActor);
       const skillScopes = [
         ...new Set([
-          memoryScopeId,
+          ...(scopeContext ? [memoryScopeId] : []),
           ...resolution.readOnlyScopeIds.filter((scope) => scope !== resolution.orgScopeId),
           ...sharingSources,
           ...(!input.external ? [resolution.orgScopeId] : []),
         ]),
       ];
-      const grantedSkills: GrantedSkillRef[] = input.external
-        ? []
-        : (
-            await input.acl
-              .sharedOfKindForAudience(
-                input.tenant,
-                "skill",
-                input.audience,
-                input.targetScope,
-                resolution.orgScopeId,
-                entitledScopes,
-              )
-              .catch(swallowAs("context: skill grants for audience", []))
-          ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));
+      const grantedSkills: GrantedSkillRef[] =
+        input.external || !scopeContext
+          ? []
+          : (
+              await input.acl
+                .sharedOfKindForAudience(
+                  input.tenant,
+                  "skill",
+                  input.audience,
+                  input.targetScope,
+                  resolution.orgScopeId,
+                  entitledScopes,
+                )
+                .catch(swallowAs("context: skill grants for audience", []))
+            ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));
       return {
         skills:
           (await input.skills?.visibleFor(

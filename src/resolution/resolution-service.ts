@@ -4,13 +4,19 @@ import { composePolicy, defaultOrgPolicy } from "../policy/command-policy.ts";
 import type { ScopedConfigStore } from "./config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
-import { entitledScopes } from "./context-filter.ts";
+import { entitledScopes, loadsScopeContext } from "./context-filter.ts";
 import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
 import type { Tenant } from "../tenants/context.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
-  resolve(tenant: Tenant, conversation: Conversation, actor: Principal, external?: boolean): Promise<Resolution>;
+  resolve(
+    tenant: Tenant,
+    conversation: Conversation,
+    actor: Principal,
+    external?: boolean,
+    botActor?: boolean,
+  ): Promise<Resolution>;
 }
 
 export function conversationScope(
@@ -48,9 +54,10 @@ export function createResolutionService(
 
   return {
     scopeFor,
-    async resolve(tenant, conversation, actor, external = false): Promise<Resolution> {
+    async resolve(tenant, conversation, actor, external = false, botActor = false): Promise<Resolution> {
       const scope = scopeFor(conversation, actor);
       const isDm = conversation.kind === "dm";
+      const scopeContext = !external && loadsScopeContext(actor.id, scope, botActor);
       const liveConfigScopes = new Set<ScopeId>([orgScope, scope, scopeId("personal", actor.id)]);
       for (const principal of conversation.audience) {
         liveConfigScopes.add(scopeId("personal", principal.id));
@@ -63,16 +70,17 @@ export function createResolutionService(
         : [orgScope, ...((isDm ? actor.teamIds : conversation.teamIds) ?? []).map((tid) => scopeId("team", tid))];
 
       const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
-      const scopeSoul = external ? null : config.getSoul(scope);
+      const scopeSoul = scopeContext ? config.getSoul(scope) : null;
       const systemPrompt = composeSoul(orgSoul, scopeSoul);
 
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
       const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope), screening);
-      const sharingPosture = external
-        ? "isolated"
-        : await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
+      const sharingPosture =
+        external || botActor
+          ? "isolated"
+          : await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
 
       const egress = {
@@ -80,9 +88,9 @@ export function createResolutionService(
         deniedHosts: audienceDeniedFloor(conversation.audience, config, orgScope, scope),
       };
 
-      const grantedHandles = external
-        ? []
-        : await acl.handlesForAudience(tenant, conversation.audience, scope, orgScope, entitledScopes);
+      const grantedHandles = scopeContext
+        ? await acl.handlesForAudience(tenant, conversation.audience, scope, orgScope, entitledScopes)
+        : [];
 
       return {
         writableScopeId: scope,

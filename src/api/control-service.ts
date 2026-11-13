@@ -32,6 +32,7 @@ import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../typ
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -762,7 +763,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     readSoul(capability) {
-      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId);
+      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId, {
+        actorId: capability.actorId,
+        botActor: capability.botActor === true,
+      });
       return { effectiveSoul, soul, soulVersion };
     },
 
@@ -770,6 +774,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,
+          botActor: capability.botActor === true,
           expectedVersion,
           sessionId: capability.sessionId,
         });
@@ -795,6 +800,15 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             req.type === "file"
               ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
+        };
+      if (
+        (req.type === "file" || req.type === "skill") &&
+        !loadsScopeContext(capability.actorId, home.ownerScopeId, capability.botActor === true)
+      )
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move a person's own files or skills",
         };
 
       const target = await resolveArtifactTarget(app, req);

@@ -362,6 +362,66 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(got.effectiveSoul.includes("Private U8 instruction."), false);
   });
 
+  it("keeps a person's own soul, files and skills from a Slack bot's work in their name", async () => {
+    const own = scopeId("personal", "U5");
+    await built.config.setSoul(own, "U5 private instruction.");
+    const bytes = async function* (text: string) {
+      yield Buffer.from(text);
+    };
+    const file = async (owner: string) =>
+      (await built.app.uploadFileForViewer(testTenant, owner, { name: "n.txt", data: bytes(owner) }))!.id;
+    const skill = async (principalId: string) =>
+      (await built.app.createOwnedSkill({ principalId, name: `s-${principalId}`, description: "d", body: "b" }))!.id;
+    const [mine, theirs, mySkill, theirSkill] = [
+      await file("U5"),
+      await file("U6"),
+      await skill("U5"),
+      await skill("U6"),
+    ];
+    for (const ref of [theirs, `skill:${theirSkill}`]) {
+      const grant = { ownerScopeId: scopeId("personal", "U6"), ref, granteeScopeId: own, permission: "read" } as const;
+      await built.acl.grant(testTenant, { ...grant, grantedBy: "U6" }, "U6");
+    }
+    const as = async (botActor: boolean) => ({
+      "x-agent-capability": await capFor("U5", own, botActor ? { botActor } : {}),
+    });
+    const reads = [
+      `/v1/files/${mine}/content`,
+      `/v1/files/${theirs}/content`,
+      `/v1/skills/${mySkill}`,
+      `/v1/skills/${theirSkill}`,
+    ];
+    const statuses = async (botActor: boolean) =>
+      Promise.all(reads.map(async (path) => (await get(path, await as(botActor))).status));
+    assert.deepEqual(await statuses(false), [200, 200, 200, 200]);
+    assert.deepEqual(await statuses(true), [404, 404, 404, 404]);
+    const bot = await as(true);
+    assert.deepEqual(await (await get("/v1/files", bot)).json(), { owned: [], shared: [] });
+    assert.equal(((await (await get("/v1/soul", bot)).json()) as { soul: string | null }).soul, null);
+    const writes = [
+      await post("/v1/soul", { content: "bot rewrite" }, bot),
+      await post("/v1/skills", { name: "bot-skill", description: "d", body: "b" }, bot),
+      await fetch(`${base}/v1/skills/${mySkill}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", ...bot },
+        body: JSON.stringify({ body: "bot" }),
+      }),
+      await del(`/v1/skills/${mySkill}`, bot),
+    ];
+    assert.deepEqual(
+      writes.map((res) => res.status),
+      [403, 403, 404, 403],
+    );
+    await built.app.deleteOwnedSkill({ principalId: "U5", id: mySkill });
+    assert.equal((await post(`/v1/skills/${mySkill}/restore`, {}, bot)).status, 404);
+    assert.equal(built.config.getSoul(own), "U5 private instruction.");
+    const share = await createControlService(built.app).shareArtifact(
+      { type: "file", id: mine, scope: scopeId("channel", "C") },
+      { actorId: "U5", scopeId: own, botActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+    );
+    assert.equal(share.ok ? "shared" : share.code, "forbidden");
+  });
+
   it("rejects an invalid/expired token with 401", async () => {
     assert.equal(
       (await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "x" }, { "x-agent-capability": "garbage" }))

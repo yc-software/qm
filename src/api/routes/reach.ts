@@ -224,7 +224,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         : sandbox!.provision(envScope));
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
-        app.openFileForViewer(tenantOf(ctx), id, capability.actorId),
+        app.openFileForViewer(tenantOf(ctx), id, capability.actorId, capability.botActor === true),
       );
       const bad = [
         ...r.missing.map((p) => `${p} (not found)`),

@@ -76,6 +76,17 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
     { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
   ]);
+  const fileId = "0123456789abcdef0123456789abcdef";
+  await built.files.put({
+    id: fileId,
+    ownerScopeId: scopeId("personal", principals[0]!.id),
+    createdBy: principals[0]!.id,
+    name: "notes.txt",
+    path: artifactPath(fileId, "notes.txt"),
+    mimetype: "text/plain",
+    data: Buffer.from("the launch codename is pelican"),
+    direction: "in",
+  });
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
@@ -83,12 +94,13 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const token = async (members?: typeof principals) =>
+  const token = async (members?: typeof principals, dm?: { botActor?: true }) =>
     mintCapabilityToken(
       {
         actorId: principals[0]!.id,
-        scopeId: scopeId("channel", "C1"),
+        scopeId: dm ? scopeId("personal", principals[0]!.id) : scopeId("channel", "C1"),
         ...(members ? { members } : {}),
+        ...dm,
         exp: Date.now() + CAPABILITY_TTL_MS,
       },
       secret,
@@ -102,11 +114,11 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
   try {
     const ok = await post(await token(principals));
     assert.equal(ok.status, 200);
-    const body = (await ok.json()) as { hits: Array<{ id: string; backend: string }> };
+    const body = (await ok.json()) as { hits: Array<{ id: string }> };
     assert.deepEqual(
-      body.hits.filter((hit) => hit.backend === "slack").map((hit) => hit.id),
+      body.hits.map((hit) => hit.id),
       ["C1:1"],
-      "a message only one participant can see is never returned to the shared conversation",
+      "a message or file only one participant can see is never returned to the shared conversation",
     );
 
     const missing = await post(await token());
@@ -117,62 +129,16 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     assert.equal(events.length, 1, "a fail-closed request runs no search and records none");
     assert.match(events[0]!.detail ?? "", /"principals":\["alice@example.com","bob@example.com"\]/);
     assert.doesNotMatch(events[0]!.detail ?? "", /pelican/, "query text is not copied into the audit log");
+
+    const inDm = async (dm: { botActor?: true }) =>
+      ((await (await post(await token(undefined, dm))).json()) as { hits: Array<{ id: string }> }).hits
+        .map((hit) => hit.id)
+        .sort();
+    assert.deepEqual(await inDm({}), [fileId, "C-ALICE:2", "C1:1"]);
+    assert.deepEqual(await inDm({ botActor: true }), [], "bot work in a person's DM gets none of their files or Slack");
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
-});
-
-test("file backend applies the principal visibility intersection to real file rows", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-files-")) }));
-  const id = "0123456789abcdef0123456789abcdef";
-  await built.files.put({
-    id,
-    ownerScopeId: scopeId("personal", principals[0]!.id),
-    createdBy: principals[0]!.id,
-    name: "notes.txt",
-    path: artifactPath(id, "notes.txt"),
-    mimetype: "text/plain",
-    data: Buffer.from("the launch codename is pelican"),
-    direction: "in",
-  });
-
-  const mine = await built.app.search({ query: "pelican", principals: [principals[0]!] });
-  assert.deepEqual(
-    mine.hits.filter((hit) => hit.backend === "files").map((hit) => hit.id),
-    [id],
-  );
-
-  const shared = await built.app.search({ query: "pelican", principals });
-  assert.deepEqual(
-    shared.hits.filter((hit) => hit.backend === "files"),
-    [],
-    "a file private to one participant is excluded from a shared principal floor",
-  );
-});
-
-test("slack backend intersects private-channel visibility across all principals", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-slack-")) }));
-  await built.directory.replaceChannels(
-    [
-      { channelId: "C-SHARED", name: "shared", isPrivate: true },
-      { channelId: "C-ALICE", name: "alice-only", isPrivate: true },
-    ],
-    [
-      { channelId: "C-SHARED", principalId: principals[0]!.id },
-      { channelId: "C-SHARED", principalId: principals[1]!.id },
-      { channelId: "C-ALICE", principalId: principals[0]!.id },
-    ],
-  );
-  await built.app.ingestSurfaceEvents([
-    { container: "C-SHARED", ts: "1", text: "pelican launch shared", kind: "channel" },
-    { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
-  ]);
-
-  const hits = await built.app.search({ query: "pelican", principals });
-  assert.deepEqual(
-    hits.hits.filter((hit) => hit.backend === "slack").map((hit) => hit.id),
-    ["C-SHARED:1"],
-  );
 });
 
 test("file search retains common artifact identities when viewers own different copies", async () => {
