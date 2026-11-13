@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -134,10 +135,13 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
   await b.config.clearSharingPosture("personal:U1");
   assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
-  assert.match(
-    await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { origin: { kind: "automation" } }),
-    /no file/,
-  );
+  for (const extra of [{ origin: { kind: "automation" } }, { botActor: true }] as const)
+    assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", extra), /no file/);
+  assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", { botActor: true }), /OWN_MEMORY_U1/);
+  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
+  assert.equal(await b.turn(own, true), "(exit 0)");
+  await b.turn(own, true, "U1", { botActor: true });
+  assert.ok((await b.errors.list(testTenant)).some((e) => /sandbox access is no longer authorized/.test(e.message)));
 });
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
@@ -167,9 +171,10 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     return provision(owner, opts);
   };
   b.runtime.start();
-  const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok") => {
+  const childTurn = async (text: string, expectedStatus: "ok" | "refused" | "failed" = "ok") => {
     const { run } = await b.runs.enqueue({
       sessionId: child.threadRef,
+      maxAttempts: 1,
       request: {
         ...parent.request,
         conversation: { ...parent.request.conversation, threadRef: child.threadRef },
@@ -205,15 +210,21 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     secret: "fixture-secret",
     envKey: "DELEGATED_TEST_TOKEN",
   });
-  assert.equal(
-    await childTurn(
-      `!execute ${JSON.stringify({
-        command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available',
-        credentials: [credentialHandle(credential)],
-      })}`,
-    ),
-    "available",
+  const cred = `!execute ${JSON.stringify({ command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available', credentials: [credentialHandle(credential)] })}`;
+  assert.equal(await childTurn(cred), "available");
+  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
+  assert.equal(await childTurn(own), "(exit 0)");
+  const delegation = (await b.sessions.get(child.id))!.spawnMeta!;
+  await b.sessions.setSpawnMeta(child.id, { ...delegation, botActor: true });
+  assert.match(await childTurn(read), /no file/);
+  await childTurn(cred, "failed");
+  await childTurn(own, "failed");
+  const refusals = (await b.errors.list(testTenant)).map((e) => e.message).join("\n");
+  assert.match(
+    refusals,
+    /credential handle is not available[\s\S]*sandbox access is no longer authorized|sandbox access is no longer authorized[\s\S]*credential handle is not available/,
   );
+  await b.sessions.setSpawnMeta(child.id, delegation);
   assert.deepEqual(await b.keychain!.grantsForScope("channel:C1", { includePersonGrants: true }), []);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);
@@ -559,9 +570,10 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     "clean",
   );
   let deniedTurn = 0;
-  const denied = (origin: TurnRequest["origin"] = { kind: "human" }) =>
+  const denied = (origin: TurnRequest["origin"] = { kind: "human" }, botActor = false) =>
     b.failure(onScratch("true"), true, "U1", {
       origin,
+      botActor,
       conversation: {
         kind: "channel",
         channelRef: "C1",
@@ -585,6 +597,9 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.match(await denied({ kind: "automation" }), /credential handle is not available on this turn/);
   assert.match(await denied({ kind: "ambient" }), /credential handle is not available on this turn/);
   assert.match(await denied({ kind: "ambient", live: false }), /credential handle is not available on this turn/);
+  for (const origin of [{ kind: "human" }, { kind: "automation", useOwnerKeychain: true }] as const)
+    assert.match(await denied(origin, true), /credential handle is not available on this turn/);
+  assert.match(await b.failure(onScratch("true"), false, "U1", { botActor: true }), /handle is not available/);
   const firstTurn = (channelRef: string, origin: TurnRequest["origin"] = { kind: "human" }) =>
     b.turn(selected(), true, "U1", {
       origin,

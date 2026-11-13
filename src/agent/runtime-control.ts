@@ -1,12 +1,7 @@
 import type { RuntimeChoice } from "./agent.ts";
 import type { RuntimeService } from "./runtime-types.ts";
 import type { App } from "../api/app.ts";
-import {
-  runtimeConfigBody,
-  validateRuntimeChoice,
-  webuiModelEnabled,
-  type RuntimeDeps,
-} from "../api/runtime-config.ts";
+import { runtimeConfigBody, validateRuntimeChoice, type RuntimeDeps } from "../api/runtime-config.ts";
 import { personAtKeyboard } from "../api/artifact-share.ts";
 import { parseScopeId } from "../types.ts";
 
@@ -66,7 +61,6 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
         };
       modelId = matches[0]!;
     }
-    if (!(await webuiModelEnabled({ deps }, modelId, purpose))) return { ok: false, error: "model_not_enabled" };
     const choice: RuntimeChoice = {
       modelId,
       effortLevel: request.effort ?? active.effortLevel ?? "auto",

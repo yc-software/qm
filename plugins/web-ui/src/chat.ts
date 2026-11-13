@@ -74,6 +74,7 @@ import {
   type IconNode,
 } from "lucide";
 import {
+  APPROVAL_GONE_MESSAGE,
   messageText,
   continuableMessages,
   hasRecordedRunReply,
@@ -85,7 +86,6 @@ import {
   activeRunForThread,
   stopThreadRun,
   api,
-  approvalBlocksComposer,
   approvalDecidableDuringRun,
   createRunSlot,
   hasLiveRun,
@@ -208,7 +208,8 @@ import {
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   markWorking,
-  surfaceOf,
+  chatSurfaceOf,
+  repliesAsViewer,
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
@@ -885,6 +886,7 @@ export function createChatSurface(
     try {
       const threadRef = chatState.threadRef;
       const runId = await resolveApproval(decision);
+      if (!runId && agent === chatState.agent) ctx.composer.state.error = APPROVAL_GONE_MESSAGE;
       if (runId && chatState.normalStreamFn && chatState.onWork)
         await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId, undefined, () => {
           releaseSubmission();
@@ -934,10 +936,6 @@ export function createChatSurface(
       }
     }
     return unresolvedApprovals([...byId.values()]);
-  }
-
-  function hasUnresolvedApproval(): boolean {
-    return activePendingApprovals().some(approvalBlocksComposer);
   }
 
   async function syncPendingApprovals(
@@ -1317,9 +1315,11 @@ export function createChatSurface(
     resetBackgroundPanel();
     const host = document.createElement("div");
     host.className = "custom-chat readonly-chat";
+    const chatSurface = chatSurfaceOf(s);
     const priorReply = sameSession ? container.querySelector<SlackReply>("qm-slack-reply") : null;
-    const slackReply =
-      surfaceOf(s) === "slack" ? (priorReply ?? (document.createElement("qm-slack-reply") as SlackReply)) : null;
+    const slackReply = repliesAsViewer(s)
+      ? (priorReply ?? (document.createElement("qm-slack-reply") as SlackReply))
+      : null;
     if (slackReply) {
       slackReply.sessionId = s.id;
       slackReply.user = appState.me?.user ?? "";
@@ -1333,10 +1333,10 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack", shownMessages)}
+            ${chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)}
             <div class="readonly-banner">
               ${
-                surfaceOf(s) === "slack"
+                slackReply
                   ? html`Replies are sent to this Slack conversation as
                     you.${
                       sessionSlackUrl(s)
@@ -1349,7 +1349,7 @@ export function createChatSurface(
                           >`
                         : nothing
                     }`
-                  : "This conversation is read-only here."
+                  : `This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}`
               }
             </div>
             ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
@@ -1474,8 +1474,7 @@ export function createChatSurface(
       Boolean(chatState.pendingSend) ||
       Boolean(ctx.composer.state.draft) ||
       Boolean(ctx.composer.state.attachments.length) ||
-      ctx.composer.state.processingFiles ||
-      hasUnresolvedApproval()
+      ctx.composer.state.processingFiles
     );
   }
 
@@ -2113,7 +2112,7 @@ export function createChatSurface(
     }
     if (role === "approval-decision") {
       const decision = message as unknown as HistoryApprovalDecision;
-      let label = "Approval denied";
+      let label = decision.declined === "expired" ? "Approval expired" : "Approval denied";
       if (decision.approved) {
         const labels: Record<string, string> = {
           once: "Approved once",
@@ -2382,7 +2381,7 @@ export function createChatSurface(
   }
 
   function isReadOnlySlackView(): boolean {
-    return !chatState.agent && chatState.forkSession !== null && surfaceOf(chatState.forkSession) === "slack";
+    return !chatState.agent && chatState.forkSession?.surface === "slack";
   }
 
   function assistantDisplayText(text: string): string {
@@ -3888,7 +3887,6 @@ export function createChatSurface(
     setTurnRuntime,
     requestBackgroundPanel,
     activePendingApprovals,
-    hasUnresolvedApproval,
     resolveCommandApproval,
     approvalSummaryView,
     notePendingSessionOnSend,

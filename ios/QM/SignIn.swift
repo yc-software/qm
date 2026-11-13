@@ -5,10 +5,7 @@ import CryptoKit
 final class SignIn {
   private let authentication: WebAuthentication
 
-  init(
-    authentication: WebAuthentication = WebAuthentication(
-      callbackScheme: "qm-desktop", prefersEphemeralSession: false)
-  ) {
+  init(authentication: WebAuthentication = WebAuthentication(callbackScheme: "qm-desktop")) {
     self.authentication = authentication
   }
   private var attemptID: UUID?

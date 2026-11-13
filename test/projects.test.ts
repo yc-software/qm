@@ -37,6 +37,9 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
+const asMember = { actorId: "member" };
+const asOwner = { actorId: "owner" };
+
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
   const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "p1", now: () => at++ });
@@ -77,10 +80,10 @@ test("session lists check each project once per request and observe membership c
       reads++;
       return list(...args);
     };
-    assert.equal((await built.app.listSessions("member")).length, 50);
+    assert.equal((await built.app.listSessions(asMember)).length, 50);
     assert.equal(reads, 1);
     await built.projects.removeMember(project.id, "owner", "member");
-    assert.deepEqual(await built.app.listSessions("member"), []);
+    assert.deepEqual(await built.app.listSessions(asMember), []);
     assert.equal(reads, 2);
   } finally {
     await built.runtime.stop();
@@ -111,7 +114,7 @@ test("batched loop administration preserves scope rules and observes membership 
       { owner: "other", ownerScopeId: "channel:C_PUBLIC" },
       { owner: "member", ownerScopeId: "group:unknown" },
     ] as Loop[];
-    const member = { actorId: "member" };
+    const member = asMember;
     const expected = await Promise.all(cases.map((loop) => canAdministerLoop(built.app, loop, member)));
     assert.deepEqual(expected, [true, true, false, true, true, false, false]);
     const getMany = built.directory.getMany.bind(built.directory);
@@ -508,12 +511,12 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(((await renamed.json()) as { project: { name: string } }).project.name, "Launch Renamed");
   assert.equal(await built.projects.name(groupRef), "Launch Renamed");
 
-  assert.ok((await built.app.listSessions("member")).some((session) => session.id === first.id));
+  assert.ok((await built.app.listSessions(asMember)).some((session) => session.id === first.id));
   assert.equal(
     (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
     (await built.sessions.get(first.id))?.title,
   );
-  assert.match(JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.items), /secret-before-join/);
+  assert.match(JSON.stringify((await built.app.getSessionForViewer(first.id, asMember))?.items), /secret-before-join/);
   assert.equal(await built.app.managesScope("member", scope), true);
   assert.ok(await built.app.listScopeResources(tenant, "member", scope));
   assert.deepEqual(await built.app.listSessionApprovals(pendingBeforeJoin.sessionId!, "member"), []);
@@ -560,7 +563,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   });
   assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "ok");
   assert.equal((await turn("owner", "web:owner:first", "Simulate four-way title outage after joining")).status, "ok");
-  assert.ok((await built.app.listSessions("member")).some((session) => session.id === first.id));
+  assert.ok((await built.app.listSessions(asMember)).some((session) => session.id === first.id));
   const latestRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
   assert.match(JSON.stringify(latestRequest.promptEnvelope), /secret-before-join/);
   assert.match(JSON.stringify(latestRequest.promptEnvelope), /after joining/);
@@ -585,19 +588,19 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(regenerated?.title, "secret-before-join");
   assert.equal((await built.sessions.get(first.id))?.title ?? null, globalTitle);
   assert.equal(
-    (await built.app.listSessions("member")).find((session) => session.id === first.id)?.title,
+    (await built.app.listSessions(asMember)).find((session) => session.id === first.id)?.title,
     regenerated.title,
   );
-  assert.equal((await built.app.listSessions("owner")).find((session) => session.id === first.id)?.title, globalTitle);
+  assert.equal((await built.app.listSessions(asOwner)).find((session) => session.id === first.id)?.title, globalTitle);
   assert.equal(await built.app.regenerateTitle(first.id, "outsider"), null);
-  assert.ok(await built.app.updateSession(first.id, "owner", { title: "Owner-only project title" }));
+  assert.ok(await built.app.updateSession(first.id, asOwner, { title: "Owner-only project title" }));
   assert.equal((await built.sessions.get(first.id))?.title ?? null, globalTitle);
   assert.equal(
-    (await built.app.listSessions("member")).find((session) => session.id === first.id)?.title,
+    (await built.app.listSessions(asMember)).find((session) => session.id === first.id)?.title,
     regenerated.title,
   );
   assert.equal(
-    (await built.app.listSessions("owner")).find((session) => session.id === first.id)?.title,
+    (await built.app.listSessions(asOwner)).find((session) => session.id === first.id)?.title,
     "Owner-only project title",
   );
   const unchangedAdd = await built.app.addProjectMember(project.id, "owner", "member");
@@ -646,12 +649,12 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(racingFork);
   assert.equal(addedDuringFork.status, "ok");
   assert.equal(racingFork.session.id, copyingSessionId);
-  const ownerForkView = await built.app.getSessionForViewer(racingFork.session.id, "owner");
-  const memberForkView = await built.app.getSessionForViewer(racingFork.session.id, "member");
+  const ownerForkView = await built.app.getSessionForViewer(racingFork.session.id, asOwner);
+  const memberForkView = await built.app.getSessionForViewer(racingFork.session.id, asMember);
   assert.match(JSON.stringify(ownerForkView?.items), /after joining/);
   assert.match(JSON.stringify(memberForkView?.items), /after joining/);
   assert.match(
-    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, "outsider"))?.items),
+    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, { actorId: "outsider" }))?.items),
     /after joining/,
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
@@ -734,8 +737,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(await built.app.managesScope("member", scope), false);
   assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "denied");
   assert.equal(await built.app.listScopeResources(tenant, "member", scope), null);
-  assert.ok(!(await built.app.listSessions("member")).some((session) => session.scopeId === scope));
-  assert.equal(await built.app.getSessionForViewer(first.id, "member"), null);
+  assert.ok(!(await built.app.listSessions(asMember)).some((session) => session.scopeId === scope));
+  assert.equal(await built.app.getSessionForViewer(first.id, asMember), null);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");
   assert.equal(await built.app.pendingApprovalForThread(removableApprovalThread), null);
   const memberRows = async () =>
@@ -824,7 +827,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     const result = await turn;
     assert.equal(result.status, "refused");
     assert.match(result.reason ?? "", /membership changed/);
-    const lateView = await built.app.getSessionForViewer(session.id, "late-member");
+    const lateView = await built.app.getSessionForViewer(session.id, { actorId: "late-member" });
     assert.ok(lateView);
     assert.match(JSON.stringify(lateView.items), /old-roster-prompt/);
     assert.equal(lateView.items.some(isAgentReply), false);
@@ -978,11 +981,11 @@ test("a member added to a Project inherits the chats that predate them", async (
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
 
-  const listed = await built.app.listSessions("member");
+  const listed = await built.app.listSessions(asMember);
   const row = listed.find((entry) => entry.id === session.id);
   assert.ok(row, "a chat that predates the member must appear in their conversation list");
   assert.equal(row.title, "Pre-join chat", "the joiner sees the chat's real title, not a blanked one");
-  const view = await built.app.getSessionForViewer(session.id, "member");
+  const view = await built.app.getSessionForViewer(session.id, asMember);
   assert.match(JSON.stringify(view?.items), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
 
   assert.equal(
@@ -1024,8 +1027,8 @@ test("leaving a Project still cuts off everything after the member left", async 
       .status,
     "ok",
   );
-  assert.equal(await built.app.getSessionForViewer(session.id, "member"), null);
-  assert.deepEqual(await built.app.listSessions("member"), []);
+  assert.equal(await built.app.getSessionForViewer(session.id, asMember), null);
+  assert.deepEqual(await built.app.listSessions(asMember), []);
 });
 test("linking a just-created channel refreshes the surface directory and retries", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-fresh-chan-")) }));
@@ -1139,7 +1142,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(linkedProject.members.find((m) => m.principalId === "chan-pal")?.viaChannel, true);
   assert.equal(linkedProject.members.find((m) => m.principalId === "member")?.viaChannel, undefined);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
-  assert.ok((await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
+  assert.ok((await built.app.listSessions({ actorId: "chan-pal" })).some((s) => s.scopeId === scope));
 
   await built.app.upsertChannels(channels, [
     { channelId: "C-SECRET", principalId: "member" },
@@ -1174,7 +1177,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(await built.projects.slackChannel(groupRef), undefined);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), false);
   assert.equal(await built.projects.membership(groupRef, "member"), true);
-  assert.ok(!(await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
+  assert.ok(!(await built.app.listSessions({ actorId: "chan-pal" })).some((s) => s.scopeId === scope));
 });
 
 test("a project can add a signed-in principal on a deployment whose directory is never populated", async () => {

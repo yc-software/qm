@@ -174,7 +174,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   assert.equal((await defaults.get("personal:alice"))?.sandboxId, null);
   await assert.rejects(
     router.provision("personal:alice"),
-    /sandbox list, create, set_default, then retry before reporting blocked/,
+    /get one as the sandbox tool describes, then retry before reporting blocked/,
   );
   const explicit = await router.provision("personal:alice", { sandboxId: record.id });
   assert.equal(explicit.resourceId, record.id);
@@ -217,6 +217,43 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.equal((await router.computerStatus!("personal:alice")).machine, record.backingScopeId);
   await router.restartComputer!("personal:alice");
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
+});
+
+test("a person's use of a computer outlasts a failed first boot and a retry it races", async () => {
+  const booting = Promise.withResolvers<void>();
+  const boot = Promise.withResolvers<void>();
+  const { options, records } = fixture((backend) => {
+    const provision = backend.provision.bind(backend);
+    backend.provision = async (id, opts) => {
+      if (id === "sandbox-c1") {
+        booting.resolve();
+        await boot.promise;
+      }
+      return provision(id, opts);
+    };
+  }, []);
+  let markOnRead = "";
+  const resources = createSandboxResources({
+    ...options,
+    records: {
+      ...records,
+      async get(id) {
+        const found = await records.get(id);
+        if (id === markOnRead) await records.update(id, (current) => ({ ...current, personUsed: true }));
+        return found;
+      },
+    },
+  });
+  const creating = resources.create("alice", "channel:team", "local", "computer", "c1");
+  await booting.promise;
+  await resources.notePersonUse("c1");
+  boot.reject(new Error("boot failed"));
+  await assert.rejects(creating, /boot failed/);
+  const failed = (await records.get("c1"))!;
+  assert.equal(failed.personUsed, true);
+  await records.put("c2", { ...failed, id: "c2", backingScopeId: "sandbox-c2", personUsed: undefined });
+  markOnRead = "c2";
+  assert.equal((await resources.create("alice", "channel:team", "local", "computer", "c2")).personUsed, true);
 });
 
 const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
@@ -538,15 +575,6 @@ test("boot activation freezes legacy scope adoption before a new session arrives
   assert.deepEqual(provisioned, []);
 });
 
-test("a turn running as a Slack bot's work retires only the computers its actor created", async () => {
-  const { resources } = fixture();
-  const record = await resources.create("alice", "channel:team", "local");
-  const ambient = await resources.create("system:ambient:acme", "personal:system:ambient:acme", "local");
-  await assert.rejects(resources.retire("admin", record.id, true), /retire only a computer it created/);
-  await assert.rejects(resources.retire("system:ambient:acme", ambient.id, true), /retire only a computer it created/);
-  await resources.retire("alice", record.id, true);
-});
-
 test("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {
   const { resources, backend, provisioned } = fixture();
   await resources.initialize();
@@ -655,8 +683,7 @@ test("retirement waits for background startup to commit its live registry row", 
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
-      if ((await registry.liveByScope(record.ownerScopeId)).some((r) => r.sandboxId === record.id))
-        throw new Error("live background work");
+      if ((await registry.listLive()).some((r) => r.sandboxId === record.id)) throw new Error("live background work");
     },
   });
   const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: "local" });

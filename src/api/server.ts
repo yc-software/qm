@@ -32,7 +32,14 @@ import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
-import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import {
+  armBodyDeadline,
+  PayloadTooLargeError,
+  readRawBody,
+  refuseImpersonated,
+  sendJson,
+  verifyOrReject,
+} from "./http.ts";
 import {
   findRoute,
   run,
@@ -47,13 +54,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import {
-  apiAlias,
-  appHostRequest,
-  browserIdentity,
-  browserSessionTenant,
-  withBrowserActor,
-} from "./browser-session.ts";
+import { apiAlias, appHostRequest, browserIdentity, browserSessionTenant, withRouteActor } from "./browser-session.ts";
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const ADMIN_WRITE_NEEDS_PERSON =
@@ -238,7 +239,7 @@ async function gate(
           return null;
         }
       }
-    } else if (!requiredAud) {
+    } else if (route && !requiredAud) {
       sendJson(res, 403, { error: "forbidden", message: "capability token not valid for this route" });
       return null;
     }
@@ -256,12 +257,16 @@ async function gate(
   ) {
     return null;
   }
+  if (!route) return { body: {}, capability, actor: null };
   let body: unknown = {};
   if (raw) {
     try {
       body = JSON.parse(raw);
     } catch {
-      sendJson(res, 400, { error: "bad_request", message: "invalid JSON body" });
+      sendJson(res, 400, {
+        error: "bad_request",
+        message: "invalid JSON body; GET /v1/apis lists the available calls and their bodies",
+      });
       return null;
     }
   }
@@ -289,7 +294,7 @@ async function gate(
         return null;
       }
       if ((route?.browser === "self" || route?.admin) && signedIn.imp) {
-        sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
+        refuseImpersonated(res);
         return null;
       }
       actor = signedIn;
@@ -323,7 +328,7 @@ async function gate(
           sendJson(res, 401, { error: "unauthorized", message });
           return null;
         }
-        if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
+        if (browser) body = withRouteActor(route?.actor, req, url, body, actor.p);
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
         const fields = [field, ...(browser && !route?.admin ? ["query.principalId", "body.principalId"] : [])];
         const claimed = [
@@ -338,6 +343,7 @@ async function gate(
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;
         }
+        body = withRouteActor(field, req, url, body, actorId);
       }
     }
   }
@@ -434,7 +440,10 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         await run(found.route, found.params, ctx);
         return;
       }
-      sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      sendJson(res, 404, {
+        error: "not_found",
+        message: `no route ${base.method} ${base.pathname}; GET /v1/apis lists the available calls`,
+      });
     } catch (err) {
       respondError(req, res, err);
     }

@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../src/core/documents.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,8 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { createTurnHandler } from "../src/slack/turn-handler.ts";
+import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -313,7 +316,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
     "source run keeps its assistant output for audit/origin",
   );
   assert.equal(
-    (await built.app.listSessions("U1")).some((s) => s.id === source!.id),
+    (await built.app.listSessions({ actorId: "U1" })).some((s) => s.id === source!.id),
     false,
     "background cron source run is not a normal participant chat",
   );
@@ -360,7 +363,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   assert.equal(events[0]!.id, pending[0]!.id);
   assert.equal(events[0]!.provenance?.sourceSessionId, pending[0]!.provenance?.sourceSessionId);
 
-  const visibleToSender = await built.app.listSessions("U-carol");
+  const visibleToSender = await built.app.listSessions({ actorId: "U-carol" });
   assert.equal(
     visibleToSender.some((s) => s.threadRef === events[0]!.provenance?.sourceThreadRef),
     false,
@@ -864,32 +867,34 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     captured = opts;
     return realProvision(owner, opts);
   };
-  const actor = { externalId: "B-LEGACY", isBot: true };
-  const res = await app.turn(
-    channel("!run echo bot", {
-      actor,
-      botActor: true,
-      origin: { kind: "human" },
-      conversation: {
-        kind: "channel",
-        threadRef: "ch:C1:bot",
-        channelRef: "C1",
-        isPrivate: true,
-        audience: [actor],
-        publishMembers: [actor],
-      },
-    }),
-  );
-  assert.equal(res.status, "ok");
-  for (const token of [
-    captured!.env!.AGENT_API_TOKEN,
-    captured!.env!.AGENT_OAUTH_CONSENT_TOKEN,
-    captured!.egressToken,
-  ]) {
-    const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
-    assert.equal(claims?.botActor, true);
-    assert.equal(claims?.liveActor, true);
-    assert.deepEqual(claims?.members, [{ id: "B-LEGACY", type: "internal" }]);
+  for (const actor of [{ externalId: "B-LEGACY", isBot: true }, { externalId: "admin-alice" }]) {
+    const res = await app.turn(
+      channel("!run echo bot", {
+        actor,
+        botActor: true,
+        origin: { kind: "human" },
+        conversation: {
+          kind: "channel",
+          threadRef: `ch:C-${actor.externalId}:bot`,
+          channelRef: `C-${actor.externalId}`,
+          isPrivate: true,
+          audience: [actor],
+          publishMembers: [actor],
+        },
+      }),
+    );
+    assert.equal(res.status, "ok");
+    for (const token of [
+      captured!.env!.AGENT_API_TOKEN,
+      captured!.env!.AGENT_OAUTH_CONSENT_TOKEN,
+      captured!.egressToken,
+    ]) {
+      const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
+      assert.equal(claims?.botActor, true);
+      assert.equal(claims?.liveActor, true);
+      assert.deepEqual(claims?.members, [{ id: actor.externalId, type: "internal" }]);
+      assert.equal(claims?.memory?.orgWrite, undefined);
+    }
   }
 });
 
@@ -1516,10 +1521,10 @@ test("a turn's credential token says whether it may act as its actor in a shared
     assert.equal((await app.turn(request)).status, "ok");
     return (await verifyCapabilityToken(executed!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!.actAsActor;
   };
+  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
   assert.equal(await actAsActor(channel(ask)), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "ambient", live: true } })), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "automation" } })), true);
-  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
 });
 
 for (const hours of [undefined, "72", "0", "none"]) {
@@ -1598,8 +1603,13 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     ...extra,
   });
 
-  assert.equal((await app.turn(fire())).status, "ok");
+  assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
+
+  captured = undefined;
+  assert.equal((await app.turn(fire())).status, "ok");
+  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, true, "an owner's fire attests the owner's authority");
   assert.equal(claims!.triggered, true, "but it still records that nobody is at the keyboard");
   assert.equal(claims!.memory?.orgWrite, undefined, "org-notebook write stays off for automated turns");
@@ -1608,11 +1618,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     fire({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire-2" } }),
   );
   assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
-
-  captured = undefined;
-  assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
-  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
 
   captured = undefined;
   const unmarked = await app.turn(
@@ -2079,6 +2084,40 @@ test("turn-private transfer files are removed after staging", async () => {
   assert.equal(cleanupAttempts, 3);
   await settle(async () => (await sandbox.listDir(usedHandle!, TURN_FILES_DIR)).length === 0);
   assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
+});
+
+test("an attachment's name stays out of the screen's source labels", async () => {
+  const parts: Array<{ source: string; content: string }> = [];
+  const screener: SecurityScreener = {
+    provider: "spy",
+    async classify({ payload }) {
+      parts.push(...(JSON.parse(payload) as typeof parts));
+      return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };
+    },
+  };
+  const { app, blobTransfer } = freshApp({ securityPosture: "auto" }, screener);
+  const blob = await blobTransfer.put(Buffer.from("quarterly numbers"));
+  await app.turn(
+    dm("summarize", {
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  assert.equal(parts.find((part) => part.content === "quarterly numbers")?.source, "attachment");
+});
+
+test("an attachment name over the file name limit reaches the inbox at 255 bytes and the agent is told", async () => {
+  const { app, blobTransfer } = freshApp();
+  const blob = await blobTransfer.put(Buffer.from("notes"));
+  const file = {
+    name: `${"a".repeat(300)}.txt`,
+    mimetype: "text/plain",
+    sizeBytes: blob.sizeBytes,
+    blobId: blob.blobId,
+  };
+  const reply = (await app.turn(dm("read these", { attachments: [file, file] }))).reply ?? "";
+  const note = "saved under a shortened name to fit the 255-byte file name limit (the shared name was 304 bytes).";
+  assert.ok(reply.includes(`${"a".repeat(251)}.txt), ${note}`), reply);
+  assert.ok(reply.includes(`${"a".repeat(249)}-2.txt), ${note}`), reply);
 });
 
 test("a later turn removes same-conversation and expired transfer files", async () => {
@@ -2709,6 +2748,36 @@ test("the situational conversationHeader rides in the <environment> block, not a
   assert.doesNotMatch(userText, /<environment>/);
 });
 
+test("Slack names people set reach the screen as data, never in the trusted conversation header", async () => {
+  const parts: Array<{ source: string; content: string }> = [];
+  const screener: SecurityScreener = {
+    provider: "spy",
+    classify: async ({ payload }) => {
+      parts.push(...(JSON.parse(payload) as typeof parts));
+      return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };
+    },
+  };
+  const { app } = freshApp({ securityPosture: "auto" }, screener);
+  const directory = { classifyUserCached: async () => ({ actor: { displayName: "Starter Name" } }) };
+  const ids = { botUserId: "UBOT", ownBotId: "BBOT" };
+  const raw = [{ ts: "1.000", thread_ts: "1.000", user: "U2", text: "kickoff" }];
+  const serializer = createConversationSerializer({ ids, directory, readHistory: async () => ({ raw }) } as never);
+  const callCore = (turn: Omit<TurnRequest, "surface">) => app.turn({ ...turn, surface: "slack" });
+  const deps = { flow: { callCore }, directory, mirror: {}, serializer, ids, threads: { mark() {} } };
+  const files = [{ id: "F1", name: "Upload Name.key", size: 2e9, url_private: "https://files.slack.com/F1" }];
+  const prefetched = { actor: internalActor, info: { name: "channel-name" }, audience: [internalActor] };
+  const inc = { kind: "channel", channel: "C1", userId: "U1", rawText: "recap?", threadTs: "1.000", ts: "2.000" };
+  const run = (extra: object) =>
+    createTurnHandler(deps as never).handleIncoming({ ...inc, unprompted: true, prefetched, ...extra } as never, {});
+  await run({ files });
+  for (const name of ["channel-name", "Starter Name", "Upload Name.key"]) {
+    const holders = parts.filter((part) => part.content.includes(name)).map((part) => part.source);
+    assert.ok(holders.length && !holders.includes("conversation-header"), `${name} screened as ${holders}`);
+  }
+  await run({ kind: "dm", channel: "D1", threadTs: undefined, rawText: "hi", files: [] });
+  assert.equal(parts.filter((part) => part.source === "conversation-metadata").length, 1);
+});
+
 test("a reply in a thread the agent STARTED chimes in, even as a bare statement (deploy-notification-reply bug)", async () => {
   const { app } = freshApp();
   const bare = await app.turn(channel("looks good to me", { origin: { kind: "ambient" } }));
@@ -2825,22 +2894,21 @@ test("a command-approval card that fails terminally settles the approval as decl
   assert.notEqual(follow.status, "pending_approval");
 });
 
-test("a pending command approval blocks unrelated follow-up input in the same thread", async () => {
+test("a pending command approval doesn't hold up follow-up input in the same thread", async () => {
   const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
 
-  const blocked = await app.turn(dm("actually, what were we doing?"));
-  assert.equal(blocked.status, "pending_approval");
-  assert.equal(blocked.sessionId, first.sessionId);
-  assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending.requestId);
+  const followUp = await app.turn(dm("actually, what were we doing?"));
+  assert.equal(followUp.status, "ok");
+  assert.equal(followUp.sessionId, first.sessionId);
 
   const found = await app.getSession(first.sessionId!);
   assert.equal(
     found!.items.some((e) => isUserItem(e) && (e.text ?? "").includes("what were we doing")),
-    false,
-    "the blocked follow-up is not appended as a forked user turn",
+    true,
+    "the follow-up runs in the same conversation",
   );
 
   const approved = await app.turn(
@@ -2991,65 +3059,23 @@ test("only the requester can approve or deny a collected approval; a bystander i
   assert.equal(approved.status, "ok", "the bystander's clicks left the requester's approval intact");
 });
 
-test("a pending approval stops blocking its thread once the requester is deactivated", async () => {
-  const { app, identity } = await withCommandRules(freshApp());
-  const bystander = { externalId: "U2" };
-  const first = await app.turn(channel("!run git push --force origin main"));
-  assert.equal(first.status, "pending_approval");
-
-  const blocked = await app.turn(
-    channel("what's the hold-up?", {
-      actor: bystander,
-      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bystander] },
-    }),
-  );
-  assert.equal(blocked.status, "pending_approval");
-
-  await identity.deactivate("U1");
-  const after = await app.turn(
-    channel("hello again?", {
-      actor: bystander,
-      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bystander] },
-    }),
-  );
-  assert.equal(after.status, "ok", "a departed requester's approval no longer wedges the conversation");
-
-  await identity.reactivate("U1");
-  const reactivated = await app.turn(
-    channel("still with me?", {
-      actor: bystander,
-      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bystander] },
-    }),
-  );
-  assert.equal(reactivated.status, "pending_approval", "the returned requester's approval seals the thread again");
-  assert.equal(reactivated.pendingApprovals, undefined, "and still reveals nothing to the bystander");
-
-  const resumed = await app.turn(
-    channel("!run git push --force origin main", {
-      approval: { requestId: first.pendingApprovals![0]!.requestId, approved: true },
-    }),
-  );
-  assert.equal(resumed.status, "ok", "the approval waited for its requester instead of being destroyed");
-});
-
-test("a blocked thread hides the requester's pending command from everyone else", async () => {
+test("a pending command in a channel thread doesn't hold up anyone's follow-ups or leak to them", async () => {
   const { app } = await withCommandRules(freshApp());
   const first = await app.turn(channel("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
 
   const overheard = await app.turn(channel("what's the hold-up?", { actor: { externalId: "U2" } }));
-  assert.equal(overheard.status, "pending_approval");
+  assert.equal(overheard.status, "ok");
   assert.equal(overheard.pendingApprovals, undefined, "requestIds and commands never reach a non-requester");
-  assert.doesNotMatch(overheard.reason ?? "", /git push/);
 
   const nudge = await app.turn(channel("any progress?"));
-  assert.equal(nudge.status, "pending_approval");
-  assert.equal(
-    nudge.pendingApprovals?.[0]?.requestId,
-    pending.requestId,
-    "the requester still sees their own pending approval re-presented",
+  assert.equal(nudge.status, "ok");
+
+  const approved = await app.turn(
+    channel("!run git push --force origin main", { approval: { requestId: pending.requestId, approved: true } }),
   );
+  assert.equal(approved.status, "ok", "the card is still approvable after the follow-ups");
 });
 
 test("a session approval covers the whole rule: a different command matching it runs without re-prompting", async () => {
@@ -3493,6 +3519,10 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     }),
   );
   assert.equal(secondFlagged.status, "ok", "a session grant covers later flags in the same session");
+  const unread = await grantApp.app.turn(
+    dm("x".repeat(MAX_DOCUMENT_TEXT_CHARS + 1), { surface: "monitor", origin: { kind: "automation" } }),
+  );
+  assert.equal(unread.status, "pending_approval", "a session grant does not cover input the screen never read");
   assert.ok(
     (await grantApp.auditLog.events(tenant)).some((event) => event.action === "security_posture.flag_allowed_by_grant"),
   );
@@ -3522,15 +3552,14 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
 
   const bounced = await built.app.turn(requestB);
   assert.equal(bounced.status, "pending_approval");
-  assert.equal(bounced.pendingApprovals![0]!.requestId, idA, "the gate re-presents A's card, records nothing for B");
+  const idB = bounced.pendingApprovals![0]!.requestId;
+  assert.notEqual(idB, idA, "B's flag gets its own request id instead of overwriting A's record");
 
   const crossed = await built.app.turn({
     ...requestB,
     approval: { requestId: idA, approved: true },
   });
   assert.equal(crossed.status, "pending_approval", "A's approval cannot release B's content");
-  const idB = crossed.pendingApprovals![0]!.requestId;
-  assert.notEqual(idB, idA, "B's flag gets its own request id instead of overwriting A's record");
 
   const crossedAgain = await built.app.turn({
     ...requestB,
@@ -3855,20 +3884,39 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   );
 });
 
-test("Auto fails open when bounded screening omits oversize content, flagging it unscreened to the model", async () => {
+test("Auto holds input too long to screen until a person allows it, then runs it marked unscreened, and withholds an attachment too long to screen", async () => {
   const built = freshApp();
-  const padded = `please note ${"x".repeat(9_000)} and also ${"y".repeat(9_000)} thanks`;
+  const padded = `please note ${"x".repeat(MAX_DOCUMENT_TEXT_CHARS)} thanks`;
+  const request = dm(padded, { surface: "monitor", origin: { kind: "automation" } });
 
-  const result = await built.app.turn(dm(padded, { surface: "monitor", origin: { kind: "automation" } }));
-  assert.equal(result.status, "ok");
-  const oversize = (await built.auditLog.events(tenant)).find(
-    (event) => event.action === "security_posture.input_failed_open",
+  const held = await built.app.turn(request);
+  assert.equal(held.status, "pending_approval");
+  assert.match(held.pendingApprovals?.[0]?.reason ?? "", /too long for the security screen to read/);
+  assert.deepEqual(held.pendingApprovals?.[0]?.grantModes, { session: false, always: false });
+  assert.equal(
+    built.modelCalls.some((call) => call.model === "mock"),
+    false,
   );
-  assert.match(oversize?.detail ?? "", /"cause":"oversize-input"/);
-  const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
-    .reverse()
-    .find((rec) => rec.model !== "mock-security");
-  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
+  const approval = { requestId: held.pendingApprovals![0]!.requestId, approved: true };
+  const allowed = await built.app.turn({ ...request, approval });
+  assert.equal(allowed.status, "ok");
+  const replay = (await built.sessions.listLlmRequests(allowed.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(JSON.stringify(replay?.promptEnvelope), /NOT security-screened/);
+
+  const blob = await built.blobTransfer.put(Buffer.from(padded));
+  const attached = await built.app.turn(
+    dm("summarize this", {
+      conversation: { kind: "dm", threadRef: "dm:U1:t2" },
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  const main = (await built.sessions.listLlmRequests(attached.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(
+    JSON.stringify(main?.promptEnvelope),
+    /notes\.txt \(too long for the security screen to read, over \d+ characters\) — withheld by the external-data security screen/,
+  );
+  const withheld = (await built.auditLog.events(tenant)).find((event) => event.resource === "inbound_file");
+  assert.match(withheld?.detail ?? "", /"source":\["notes\.txt"\]/);
 });
 
 test("an Auto-downgraded turn is quarantined from later full-authority model history", async () => {
@@ -4123,7 +4171,7 @@ test("collect-mode: skipped approval notes do not block later user input", async
   assert.match(next.reply ?? "", /You said: thanks/);
 });
 
-test("a turn that PAUSED on an approval blocks the thread even when it carried reply text", async () => {
+test("a turn that PAUSED on an approval keeps a blocking card even when it carried reply text", async () => {
   const { app } = freshApp();
   const res = await app.turn(dm("!paused-approval git push --force origin main"));
   assert.equal(res.status, "ok", "the preamble reply is still delivered");
@@ -4132,9 +4180,8 @@ test("a turn that PAUSED on an approval blocks the thread even when it carried r
   assert.ok(pending, "the pause surfaces its approval");
   assert.equal(pending!.blocksInput, true, "reply text must not launder the gate away");
 
-  const blocked = await app.turn(dm("unrelated follow-up"));
-  assert.equal(blocked.status, "pending_approval", "the thread is genuinely gated until the human decides");
-  assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending!.requestId);
+  const followUp = await app.turn(dm("unrelated follow-up"));
+  assert.equal(followUp.status, "ok", "the card never holds up the next message");
 });
 
 test("execute and write provision a sandbox that is released after the turn", async () => {
@@ -4787,6 +4834,31 @@ test("enforced screening flags strict-posture inbound data before model executio
     approval: { requestId: first.pendingApprovals![0]!.requestId, approved: true },
   });
   assert.equal(approved.status, "ok");
+});
+
+for (const [what, change] of [
+  ["place it shows", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK, moved" } } }],
+  ["file notes it carries", { inboundNotes: ["note"] }],
+] satisfies Array<[string, Partial<TurnRequest>]>) {
+  test(`an approved replay of held input is screened again when the ${what} changed`, async () => {
+    const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
+    const request = dm("hello", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK" } } });
+    const first = await built.app.turn(request);
+    assert.equal(first.status, "pending_approval");
+    const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
+    assert.equal((await built.app.turn({ ...request, ...change, approval })).status, "pending_approval");
+  });
+}
+
+test("an approved replay of held input goes through when it resends its file notes with details keys in another order", async () => {
+  const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
+  const request = dm("hello", {
+    gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK", id: "1" } },
+    inboundNotes: ["note"],
+  });
+  const first = await built.app.turn(request);
+  const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
+  assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
 });
 
 for (const failure of ["error", "timeout"] as const) {

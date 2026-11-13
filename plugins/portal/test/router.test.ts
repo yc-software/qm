@@ -358,9 +358,26 @@ test("inbound Linear webhooks reach the core with their signature header", async
   assert.equal(body.headers["linear-signature"], "abc123");
 });
 
-test("partner-chat events reach the core with only their body and signature headers", async () => {
+test("inbound token and Standard Webhooks requests reach the core with their credentials", async () => {
+  const sent = {
+    authorization: "Bearer hook-token",
+    "webhook-id": "msg_1",
+    "webhook-timestamp": "1",
+    "webhook-signature": "v1,abc",
+  };
+  const r = await fetch(`${base}/v1/webhooks/incoming/wh_token?token=hook-token`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...sent },
+    body: "{}",
+  });
+  const body = (await r.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(body.url, "/v1/webhooks/incoming/wh_token?token=hook-token");
+  for (const [name, value] of Object.entries(sent)) assert.equal(body.headers[name], value);
+});
+
+test("generic-chat events reach the core with only their body and signature headers", async () => {
   const payload = JSON.stringify({ type: "message.created" });
-  const r = await fetch(`${base}/v1/surfaces/partner-chat/events?x=1`, {
+  const r = await fetch(`${base}/v1/surfaces/generic-chat/events?x=1`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -374,7 +391,7 @@ test("partner-chat events reach the core with only their body and signature head
   });
   assert.equal(r.status, 200);
   const body = (await r.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
-  assert.equal(body.url, "/v1/surfaces/partner-chat/events");
+  assert.equal(body.url, "/v1/surfaces/generic-chat/events");
   assert.equal(body.cookie, null);
   assert.deepEqual(
     Object.fromEntries(
@@ -396,7 +413,7 @@ test("partner-chat events reach the core with only their body and signature head
       "x-extra": undefined,
     },
   );
-  assert.equal((await fetch(`${base}/v1/surfaces/partner-chat/events`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/surfaces/generic-chat/events`)).status, 404);
 });
 
 test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", async () => {

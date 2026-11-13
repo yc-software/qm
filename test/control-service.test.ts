@@ -613,9 +613,9 @@ test("cron list / get / patch / delete / run round-trip with owner authz", async
   const { built, control } = setup();
   const updateCron = built.app.updateCron.bind(built.app);
   let updateCalls = 0;
-  built.app.updateCron = async (id, patch) => {
+  built.app.updateCron = async (id, patch, by) => {
     updateCalls += 1;
-    return updateCron(id, patch);
+    return updateCron(id, patch, by);
   };
   const created = await control.createCron(
     { title: "orig", schedule: { everyMs: 3_600_000 }, action: "do x" },
@@ -698,7 +698,7 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
   const before = await control.getCron(id, claims("U9"));
   assert.equal(before.ok, false, "no visibility yet — get stays forbidden");
 
-  await built.app.setCronDestination(id, { type: "principal", target: "U9" });
+  await built.app.setCronDestination(id, { type: "principal", target: "U9" }, { actorId: "U1" });
   const seen = await control.getCron(id, claims("U9"));
   assert.ok(seen.ok, `a viewer in the visible set can read: ${JSON.stringify(seen)}`);
   assert.equal(seen.ok ? seen.cron.id : "", id);
@@ -892,7 +892,7 @@ test("noteCron rejects empty, over-cap (counted in code points), and marker-forg
   assert.equal(long.ok, false);
   assert.equal(long.ok ? "" : long.code, "bad_request");
   assert.match(long.ok ? "" : long.message, /401 chars.*cap is 400/);
-  assert.match(long.ok ? "" : long.message, /Files via the available Files API, verify success/);
+  assert.match(long.ok ? "" : long.message, /Files with the upload helper listed in GET \/v1\/apis, verify success/);
   assert.match(long.ok ? "" : long.message, /put the file ID in the note/);
   assert.match(long.ok ? "" : long.message, /GET \/v1\/files\/:id\/content/);
   assert.match(long.ok ? "" : long.message, /If publication is unavailable/);
@@ -951,7 +951,7 @@ test("noteCron refuses crons whose fires never read notes — archived, one-shot
   assert.match(loopNote.ok ? "" : loopNote.message, /don't read shift-change notes/);
   for (const result of [oneShotNote, bangNote, loopNote]) {
     assert.ok(!result.ok);
-    assert.match(result.message, /Files via the available Files API and verify success/);
+    assert.match(result.message, /Files with the upload helper listed in GET \/v1\/apis and verify success/);
     assert.match(result.message, /file ID in the consuming workflow/);
     assert.match(result.message, /GET \/v1\/files\/:id\/content/);
     assert.match(result.message, /cannot recover it from a note/);

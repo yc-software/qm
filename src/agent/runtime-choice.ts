@@ -9,7 +9,7 @@ import {
   modelUnavailableReason,
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
-import type { Agent, AgentTurnInput, CompactInput, RuntimeChoice, SessionRoute } from "./agent.ts";
+import type { Agent, AgentTurnInput, RuntimeChoice, SessionRoute } from "./agent.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { governGoal, type GoalGovernorInput } from "./goal.ts";
 import { infrequentCronTurn, turnRuntimePurpose } from "../core/turn-options.ts";
@@ -72,6 +72,7 @@ export async function resolveRuntimeChoice(
   requested?: Partial<RuntimeChoice>,
   hydrateModelCatalog?: () => Promise<unknown>,
   purpose?: TurnRuntimePurpose,
+  sessionModelId?: string,
 ): Promise<RuntimeChoice> {
   if (purpose === "infrequentCron") scope = orgScopeId;
   const [orgStored, scopedStored, orgLegacy, scopedLegacy, purposeRuntime] = await Promise.all([
@@ -82,7 +83,13 @@ export async function resolveRuntimeChoice(
     purpose ? config.getPurposeRuntimeDurable(purpose) : undefined,
   ]);
   if (hydrateModelCatalog) {
-    const candidates = [requested?.modelId, purposeRuntime?.modelId, scopedStored?.modelId, orgStored?.modelId];
+    const candidates = [
+      requested?.modelId,
+      purposeRuntime?.modelId,
+      sessionModelId,
+      scopedStored?.modelId,
+      orgStored?.modelId,
+    ];
     if (candidates.some((modelId) => modelId && !resolveModel(modelId))) await hydrateModelCatalog();
   }
   if (purposeRuntime) {
@@ -100,7 +107,12 @@ export async function resolveRuntimeChoice(
   if (purpose === "cron")
     requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };
   const configuredOrg: RuntimeChoice = orgStored ? storedChoice(orgStored) : { modelId: orgLegacy ?? fallback.modelId };
-  const configuredId = requested?.modelId ?? scopedStored?.modelId ?? scopedLegacy ?? configuredOrg.modelId;
+  const sessionStored =
+    sessionModelId && modelSupported(sessionModelId) && !modelUnavailableReason(sessionModelId)
+      ? { modelId: sessionModelId }
+      : undefined;
+  const configuredId =
+    requested?.modelId ?? sessionStored?.modelId ?? scopedStored?.modelId ?? scopedLegacy ?? configuredOrg.modelId;
   const unavailableReason = modelUnavailableReason(configuredId);
   if (unavailableReason) throw new NonRetryableTurnError(`${configuredId}: ${unavailableReason}`);
   const safeFallback = modelSupported(fallback.modelId) ? fallback : { modelId: defaultModel(fallback.modelId) };
@@ -108,6 +120,7 @@ export async function resolveRuntimeChoice(
   let inherited: RuntimeChoice = org;
   if (scopedStored) inherited = storedChoice(scopedStored);
   else if (scopedLegacy) inherited = { modelId: scopedLegacy };
+  if (sessionStored && requested?.modelId === undefined) inherited = sessionStored;
   const choice = { ...inherited, ...requested };
   if (!modelSupported(choice.modelId)) {
     if (requested?.modelId) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
@@ -121,16 +134,14 @@ export function withResolvedRuntime(
   resolve: (input: AgentTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
   resolveSession: (route: SessionRoute) => Promise<RuntimeChoice>,
 ): Agent {
-  const compactHistory = agent.compactHistory?.bind(agent);
+  const resolved = <I extends SessionRoute, R>(call: ((input: I) => Promise<R>) | undefined) =>
+    call && (async (input: I) => call({ ...input, runtime: await resolveSession(input) }));
+  const compactHistory = resolved(agent.compactHistory?.bind(agent));
+  const shouldRespond = resolved(agent.shouldRespond?.bind(agent));
   return {
     ...agent,
-    ...(compactHistory
-      ? {
-          async compactHistory(input: CompactInput) {
-            return compactHistory({ ...input, runtime: await resolveSession(input) });
-          },
-        }
-      : {}),
+    ...(compactHistory ? { compactHistory } : {}),
+    ...(shouldRespond ? { shouldRespond } : {}),
     async runTurn(input) {
       let routedBy: string | undefined;
       const choice = await resolve(input, (ruleId) => {

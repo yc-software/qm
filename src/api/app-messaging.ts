@@ -28,9 +28,10 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { editableIn } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
 
-import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
+import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
@@ -90,6 +91,7 @@ export function createMessagingMethods(
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
   | "surfaceMirrored"
+  | "chatSurfaces"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -176,19 +178,25 @@ export function createMessagingMethods(
     if (error) throw new Error(error);
   };
 
+  const auditCron = (action: string, cron: Pick<Cron, "id" | "ownerScopeId">, by: CronEditor) =>
+    h.recordAudit({
+      at: Date.now(),
+      principalId: by.actorId,
+      action,
+      resource: cron.id,
+      scopeLabel: cron.ownerScopeId,
+      ...(by.runId || by.botActor
+        ? { detail: JSON.stringify({ runId: by.runId, botActor: by.botActor || undefined }) }
+        : {}),
+    });
+
   return {
     async createCron(input, trial) {
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
       await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
-      h.recordAudit({
-        at: Date.now(),
-        principalId: cron.createdBy,
-        action: "cron_create",
-        resource: cron.id,
-        scopeLabel: cron.ownerScopeId,
-      });
+      auditCron("cron_create", cron, { actorId: cron.createdBy, botActor: cron.botActor });
       return cron;
     },
     getCron(id) {
@@ -219,50 +227,29 @@ export function createMessagingMethods(
         });
       return { owned, visible };
     },
-    async updateCron(id, patch, trial) {
+    async updateCron(id, patch, by, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
       const updated = await deps.crons.update(id, patch);
-      h.recordAudit({
-        at: Date.now(),
-        principalId: patch.owner ?? before.owner,
-        action: "cron_update",
-        resource: id,
-        scopeLabel: before.ownerScopeId,
-      });
+      auditCron("cron_update", before, by);
       return updated;
     },
-    async deleteCron(id) {
+    async deleteCron(id, by) {
       const before = await deps.crons.get(id);
       await deps.crons.delete(id);
-      if (before)
-        h.recordAudit({
-          at: Date.now(),
-          principalId: before.owner,
-          action: "cron_delete",
-          resource: id,
-          scopeLabel: before.ownerScopeId,
-        });
+      if (before) auditCron("cron_delete", before, by);
     },
     setCronEnabled(id, enabled) {
       return deps.crons.setEnabled(id, enabled);
     },
-    async setCronFireNote(id, note) {
+    async setCronFireNote(id, note, by) {
       const before = await deps.crons.get(id);
       if (!before) return "missing";
       const outcome = await deps.crons.setFireNote(id, note);
-      if (outcome === "applied") {
-        h.recordAudit({
-          at: Date.now(),
-          principalId: note.by ?? before.owner,
-          action: "cron_note",
-          resource: id,
-          scopeLabel: before.ownerScopeId,
-        });
-      }
+      if (outcome === "applied") auditCron("cron_note", before, by);
       return outcome;
     },
     async setCronRuntime(id, runtime) {
@@ -271,17 +258,11 @@ export function createMessagingMethods(
       await validateRuntime({ ...before, runtime });
       return deps.crons.update(id, { runtime });
     },
-    async setCronDestination(id, destination) {
+    async setCronDestination(id, destination, by) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       await deps.crons.setDestination(id, destination);
-      h.recordAudit({
-        at: Date.now(),
-        principalId: before.owner,
-        action: "cron_retarget",
-        resource: id,
-        scopeLabel: before.ownerScopeId,
-      });
+      auditCron("cron_retarget", before, by);
       return deps.crons.get(id);
     },
     async createWebhook(input) {
@@ -325,6 +306,9 @@ export function createMessagingMethods(
     },
     surfaceMirrored(kind) {
       return deps.surfaces.get(kind)?.capabilities.mirrored === true;
+    },
+    chatSurfaces() {
+      return deps.surfaces.list().map(({ kind, label, mark }) => ({ kind, label, ...(mark ? { mark } : {}) }));
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
@@ -609,12 +593,13 @@ export function createMessagingMethods(
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
       }
-      if (input.edit && baseDestination.type !== "slack" && baseDestination.type !== "group") {
+      if (input.edit && !editableIn(deps.surfaces, baseDestination.type, input.turn ?? {})) {
         return {
           ok: false,
           status: 400,
           error: "bad_request",
-          message: "edit rewrites a Slack message in a channel, group DM, or this Slack conversation",
+          message:
+            "edit rewrites a message in this chat conversation, or a Slack message in a named channel or group DM",
         };
       }
       if (input.threadTs) {

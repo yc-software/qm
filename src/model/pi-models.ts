@@ -139,16 +139,6 @@ export function overlayModelCatalog(): Array<{ id: string; name: string; provide
     .map(({ id, name, provider }) => ({ id, name, provider }));
 }
 
-export function defaultWebuiModelIds(): readonly string[] {
-  return [
-    ...DEFAULT_WEBUI_MODEL_IDS,
-    ...gatewayModelCatalog(true).map((m) => m.id),
-    ...chatOverlays()
-      .filter((m) => m.webui)
-      .map((m) => m.id),
-  ];
-}
-
 export function fastModeModelIds(): readonly string[] {
   return [
     ...FAST_MODE_MODEL_IDS.filter(modelSupportsFastMode),
@@ -167,8 +157,6 @@ const OPENROUTER_CATALOG_MODELS = new Map<string, PiModel>();
 export function modelDisplayName(id: string): string {
   return overlayModel(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? OPENROUTER_CATALOG_MODELS.get(id)?.name ?? id;
 }
-
-export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
 
 export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }> = MODEL_REGISTRY.filter(
   (m) => m.base,
@@ -338,15 +326,15 @@ export function auxiliaryModelFor(baseModelId: string): string {
 }
 
 const CONTEXT_BUDGET_FRACTION = 0.5;
-const CONTEXT_BUDGET_CAP_TOKENS = 150_000;
+export const HISTORY_BUDGET_DEFAULT_TOKENS = 150_000;
 
-export function contextTokenBudgetForModel(id: string): number | undefined {
+export function contextTokenBudgetForModel(id: string, cap = HISTORY_BUDGET_DEFAULT_TOKENS): number | undefined {
   const model = resolveModel(id);
   const window = model?.contextWindow;
   const output = model?.maxTokens;
   if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0 || output >= window)
     return undefined;
-  return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
+  return Math.min(cap, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
 }
 
 export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {

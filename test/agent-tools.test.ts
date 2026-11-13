@@ -489,6 +489,13 @@ test("sandbox advertises available management actions and retires migrate", asyn
     "restart",
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
+  const botSandbox = createAgentTools(ref, { sandboxResources: true, botActor: true }).find(
+    (t) => t.name === "sandbox",
+  )!;
+  assert.match(
+    textOut(await call(botSandbox, { action: "set_default", sandbox_id: "sb-1", purpose: "p" })),
+    /unknown action `set_default` \(use one of status, restart, list, create, retire\)/,
+  );
   assert.match(
     textOut(await call(disabled, { action: "create", backend: "e2b", purpose: "p" })),
     /invalid sandbox arguments/,
@@ -3757,7 +3764,7 @@ test("resource actions preserve sharing targets and file contents", async () => 
   const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
   assert.ok(Check(files.parameters, pathShare));
   const rejected = await call(files, pathShare);
-  assert.match(textOut(rejected), /upload a sandbox path with POST \/v1\/files\/uploads first/);
+  assert.match(textOut(rejected), /upload a sandbox path with the helper from GET \/v1\/files\/upload-client first/);
   assert.deepEqual(writes, [["notes", "", undefined]]);
   const invalidAppShare = { action: "share", id: "app", toScope: "org", unknown: true };
   const apps = tools.find((tool) => tool.name === "apps")!;

@@ -7,6 +7,7 @@ import { parseIntoClientConfig } from "pg-connection-string";
 import { boundTenant, explicitTenantId, pinTenant, type Tenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { tracePoolCheckout, untraced } from "../../plugins/chassis/src/error-reporting.ts";
 
 export type { Pool, PoolClient };
 
@@ -54,6 +55,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
       pipeline: true,
     }),
   );
+  traceCheckouts(pool);
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -62,6 +64,20 @@ function guardedPool(pool: Pool): Pool {
   pool.on("error", () => {});
   pool.on("connect", (client) => client.on("error", (error) => console.error("[pg] client error:", errMessage(error))));
   return pool;
+}
+
+function traceCheckouts(pool: Pool): void {
+  const connect: () => Promise<PoolClient> = pool.connect.bind(pool);
+  const checkout = (callback?: Parameters<Pool["connect"]>[0]): Promise<PoolClient> | undefined => {
+    const checkedOut = tracePoolCheckout(connect);
+    if (!callback) return checkedOut;
+    void checkedOut.then(
+      (client) => callback(undefined, client, (discard) => client.release(discard)),
+      (error: Error) => callback(error, undefined, () => {}),
+    );
+    return undefined;
+  };
+  pool.connect = checkout as Pool["connect"];
 }
 
 async function releasePool(
@@ -157,15 +173,15 @@ async function pipelinedTransaction(
 ): Promise<QueryResult> {
   const settled = await withAbort(() => {
     const statements = [
-      client.query("BEGIN"),
-      ...(settings.length ? [client.query(settingsQuery(settings))] : []),
+      untraced(() => client.query("BEGIN")),
+      ...(settings.length ? [untraced(() => client.query(settingsQuery(settings)))] : []),
       client.query({ text, values }),
     ];
-    return Promise.allSettled(signal ? statements : [...statements, client.query("COMMIT")]);
+    return Promise.allSettled(signal ? statements : [...statements, untraced(() => client.query("COMMIT"))]);
   }, signal);
   if (signal) {
     signal.throwIfAborted();
-    settled.push(...(await Promise.allSettled([client.query("COMMIT")])));
+    settled.push(...(await Promise.allSettled([untraced(() => client.query("COMMIT"))])));
   }
   const failed = settled.find((outcome) => outcome.status === "rejected");
   if (failed) throw failed.reason;
@@ -196,7 +212,7 @@ function cancelThenClose(pg: typeof import("pg").default, client: PoolClient): v
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
   try {
-    await client.query("ROLLBACK");
+    await untraced(() => client.query("ROLLBACK"));
     return undefined;
   } catch (error) {
     swallow(context, error);
@@ -218,10 +234,10 @@ async function runPgTransaction<T>(
   let rollbackError: Error | undefined;
   try {
     const settings = tenantSettings(tenant);
-    await client.query("BEGIN");
-    if (settings.length) await client.query(settingsQuery(settings));
+    await untraced(() => client.query("BEGIN"));
+    if (settings.length) await untraced(() => client.query(settingsQuery(settings)));
     const result = await fn(client);
-    await client.query("COMMIT");
+    await untraced(() => client.query("COMMIT"));
     return result;
   } catch (error) {
     rollbackError = await rollbackOrReport(client, "pg-pool: rollback transaction");
@@ -311,7 +327,7 @@ function describePgError(error: unknown): string {
 }
 
 function unmigrated(migration: PgMigration): Error {
-  const message = `misconfiguration: migration ${migration.id} has not been applied and this database login does not own the schema; run the migrations as the database owner before starting`;
+  const message = `misconfiguration: migration ${migration.id} has not been applied and this database login lacks migration authority; run migrations as the schema owner or the migration ledger owner with CREATE on the schema before starting`;
   console.error(`[pg-pool] ${message}`);
   return new Error(message);
 }
@@ -327,7 +343,15 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       owns ??=
         (
           await client.query<{ owns: boolean }>(
-            "SELECT pg_has_role(current_user, nspowner, 'USAGE') AS owns FROM pg_namespace WHERE nspname = current_schema()",
+            `SELECT pg_has_role(current_user, n.nspowner, 'USAGE') OR (
+               has_schema_privilege(current_user, n.oid, 'CREATE') AND (
+                 ledger.oid IS NULL OR pg_has_role(current_user, ledger.relowner, 'USAGE')
+               )
+             ) AS owns
+             FROM pg_namespace n
+             LEFT JOIN pg_class ledger ON ledger.oid = to_regclass($1)
+             WHERE n.nspname = current_schema()`,
+            [PG_MIGRATIONS_TABLE],
           )
         ).rows[0]?.owns === true;
       if (!owns) throw unmigrated(migration);
@@ -373,16 +397,16 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       }
       await mayMigrate(migration);
       if (migration.prepare) {
-        await client.query("SET statement_timeout = 0");
+        await untraced(() => client.query("SET statement_timeout = 0"));
         try {
           for (const statement of migration.prepare) await client.query(statement);
         } catch (error) {
-          await client
-            .query("RESET statement_timeout")
-            .catch(swallowAs(`pg-pool: reset statement timeout after preparing ${migration.id}`, undefined));
+          await untraced(() => client.query("RESET statement_timeout")).catch(
+            swallowAs(`pg-pool: reset statement timeout after preparing ${migration.id}`, undefined),
+          );
           throw error;
         }
-        await client.query("RESET statement_timeout");
+        await untraced(() => client.query("RESET statement_timeout"));
       }
       if (migration.autocommit) {
         for (const statement of migration.statements) await client.query(statement);
@@ -428,7 +452,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         ]);
         continue;
       }
-      await client.query("BEGIN");
+      await untraced(() => client.query("BEGIN"));
       try {
         let adopted = false;
         if (migration.legacyId) {
@@ -445,7 +469,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
-        await client.query("COMMIT");
+        await untraced(() => client.query("COMMIT"));
       } catch (error) {
         console.error(`[pg-pool] migration ${migration.id} failed: ${describePgError(error)}`);
         discard = await rollbackOrReport(client, `pg-pool: rollback migration ${migration.id}`);

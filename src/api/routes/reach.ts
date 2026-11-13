@@ -6,7 +6,9 @@ import { collectNamedOutbound, parseOutboundFiles, type ArtifactRegistration } f
 import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
-  assertBotMayUseComputer,
+  BotComputerRefusedError,
+  botMayUseComputers,
+  defaultComputer,
   SandboxAccessError,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
@@ -178,15 +180,13 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
             ),
         }
       : undefined;
-    const botMayUse =
-      capability.botActor && app.swarms
-        ? (computer: SandboxResource) =>
-            app.swarms!.botMayUseComputer(computer, {
-              actorId: capability.actorId,
-              threadRef: capability.threadRef ?? "",
-              sessionId: capability.sessionId ?? "",
-            })
-        : undefined;
+    const botMayUse = capability.botActor
+      ? botMayUseComputers(app.swarms, {
+          actorId: capability.actorId,
+          threadRef: capability.threadRef ?? "",
+          sessionId: capability.sessionId ?? "",
+        })
+      : undefined;
     let resource: SandboxResource | undefined;
     if (requestedSandboxId) {
       try {
@@ -201,12 +201,15 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, {
           error: "forbidden",
-          message: "sandbox_id isn't a computer this conversation can read files from",
+          message:
+            e instanceof BotComputerRefusedError
+              ? e.message
+              : "sandbox_id isn't a computer this conversation can read files from",
         });
       }
     } else if (needsSandbox) {
       try {
-        await assertBotMayUseComputer(deps.sandboxResources, envScope, undefined, botMayUse);
+        resource = await defaultComputer(deps.sandboxResources, envScope, botMayUse);
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, { error: "forbidden", message: e.message });
@@ -259,6 +262,10 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     ...(attachments?.length ? { attachments } : {}),
     ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
     ...(capability.destination ? { currentDestination: capability.destination } : {}),
+    turn: {
+      ...(capability.surface ? { surface: capability.surface } : {}),
+      liveReplies: capability.liveReplies === true,
+    },
   });
   if (!result.ok) {
     return sendJson(res, result.status, {

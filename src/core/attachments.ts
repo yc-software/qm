@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import { basename } from "node:path";
+import { basename, parse } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
 import { isUserItem, type Item } from "../sessions/items.ts";
@@ -12,11 +12,13 @@ import {
 } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
+import { clampUtf8 } from "../util/text.ts";
 import { MIME_BY_EXT, fileContentRequest } from "./documents.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
+import { BotComputerRefusedError } from "../sandbox/sandbox-resources.ts";
 
 export const INBOX_DIR = "inbox";
 export const TURN_FILES_DIR = ".agent-turn";
@@ -95,6 +97,13 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
   return VISION_MIME_TYPES.has(baseMime(attachment.mimetype || mimeFromName(attachment.name)));
 }
 
+const FILE_NAME_MAX_BYTES = 255;
+
+function fitName(stem: string, suffix: string, maxBytes: number): string {
+  const room = maxBytes - Buffer.byteLength(suffix);
+  return room > 0 ? clampUtf8(stem, room) + suffix : clampUtf8(stem + suffix, maxBytes);
+}
+
 export function safeAttachmentName(name: string): string {
   const base = basename(String(name ?? "").replace(/\\/g, "/")).trim();
   if (!base || /^\.+$/.test(base)) return "file";
@@ -154,14 +163,17 @@ async function registerArtifact(
   }
 }
 
-function uniqueName(name: string, used: Set<string>): string {
-  if (!used.has(name)) return name;
-  const dot = name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  let n = 2;
-  while (used.has(`${stem}-${n}${ext}`)) n++;
-  return `${stem}-${n}${ext}`;
+function uniqueName(name: string, used: Set<string>, maxBytes = Number.POSITIVE_INFINITY) {
+  const original = parse(name);
+  const fitted = fitName(original.name, original.ext, maxBytes);
+  const { name: stem, ext } = parse(fitted);
+  let candidate = fitted;
+  let suffix = ext;
+  for (let n = 2; used.has(candidate); n++) {
+    suffix = `-${n}${ext}`;
+    candidate = fitName(stem, suffix, maxBytes);
+  }
+  return { name: candidate, cut: fitted !== name || Buffer.byteLength(stem + suffix) > maxBytes };
 }
 
 export function withoutAlreadyIngested(
@@ -190,13 +202,18 @@ export function inboundManifest(
   inboxDir = INBOX_DIR,
   unstaged?: Set<string>,
   sharer?: string,
+  shortened?: ReadonlyMap<string, number>,
 ): string {
   return metas
     .map((m) => {
       const where = unstaged?.has(m.name)
         ? `Files ID ${m.artifactId}, not yet on a computer: send it with {file_id: "${m.artifactId}"}, or choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)}`
         : `./${inboxDir}/${m.name}`;
-      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (${where}).`;
+      const cut = shortened?.get(m.name);
+      const note = cut
+        ? `, saved under a shortened name to fit the ${FILE_NAME_MAX_BYTES}-byte file name limit (the shared name was ${cut} bytes)`
+        : "";
+      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (${where})${note}.`;
     })
     .join("\n");
 }
@@ -204,6 +221,9 @@ export function inboundManifest(
 export function inboundIssuesNote(issues: readonly string[]): string {
   return issues.length ? `Files received this turn that did not reach ./${INBOX_DIR}/: ${issues.join("; ")}` : "";
 }
+
+export const withheldName = (name: string, verdict: SecurityScreenVerdict): string =>
+  verdict.unscreened && verdict.reason ? `${name} (${verdict.reason})` : name;
 
 export function inboundIssueList(opts: {
   tooMany?: readonly string[];
@@ -247,14 +267,16 @@ export async function materializeInbound(
   blocked: string[];
   unscreened: string[];
   unstaged?: Set<string>;
+  shortened?: Map<string, number>;
 }> {
   let target: Promise<SandboxHandle | null> | undefined;
   const computer = () =>
     (target ??= (typeof handle === "function" ? handle() : Promise.resolve(handle)).catch((e: unknown) => {
-      if (e instanceof NoDefaultSandboxError) return null;
+      if (e instanceof NoDefaultSandboxError || e instanceof BotComputerRefusedError) return null;
       throw e;
     }));
   const unstaged = new Set<string>();
+  const shortened = new Map<string, number>();
   const metas: AttachmentMeta[] = [];
   const images: InboundImage[] = [];
   const tooMany: string[] = [];
@@ -273,14 +295,16 @@ export async function materializeInbound(
       continue;
     }
     const bytes = await collectBlob(blob.stream);
-    const name = uniqueName(safeAttachmentName(a.name), usedNames);
+    const fullName = safeAttachmentName(a.name);
+    const { name, cut } = uniqueName(fullName, usedNames, FILE_NAME_MAX_BYTES);
     usedNames.add(name);
+    if (cut) shortened.set(name, Buffer.byteLength(fullName));
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
     const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
     if (screenText && textContent !== null) {
       const verdict = await screenText({ content: textContent, name, mimetype });
       if (verdict?.decision === "strict") {
-        blocked.push(name);
+        blocked.push(withheldName(name, verdict));
         continue;
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);
@@ -316,7 +340,16 @@ export async function materializeInbound(
       });
     }
   }
-  return { metas, images, tooMany, unavailable, blocked, unscreened, ...(unstaged.size ? { unstaged } : {}) };
+  return {
+    metas,
+    images,
+    tooMany,
+    unavailable,
+    blocked,
+    unscreened,
+    ...(unstaged.size ? { unstaged } : {}),
+    ...(shortened.size ? { shortened } : {}),
+  };
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";
@@ -415,7 +448,7 @@ export async function collectNamedOutbound(
         stored?.stream.destroy();
         continue;
       }
-      const name = uniqueName(safeAttachmentName(stored?.name ?? label), usedNames);
+      const { name } = uniqueName(safeAttachmentName(stored?.name ?? label), usedNames);
       usedNames.add(name);
       const mimetype = stored?.mimetype || mimeFromName(name);
       let blob;

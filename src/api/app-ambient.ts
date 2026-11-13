@@ -1,12 +1,15 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { pullSurfaceFiles } from "./surface-context-puller.ts";
 import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
+import { fittingEntryCount } from "../security/security-posture.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
+import { hasContent } from "../slack/message-gating.ts";
 import { DEFAULT_ROLLUP_HOURS, type BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import {
   ambientWindow,
@@ -18,14 +21,16 @@ import {
 } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
-import { buildWakeEnvelope } from "../wake/wake-envelope.ts";
+import { buildWakeEnvelope, type WakeMessage } from "../wake/wake-envelope.ts";
 import { liveTurnOf, routeIncoming } from "../wake/route-incoming.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import { isTerminal } from "../runs/run-store.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
+import { ambientActorId } from "../resolution/ambient-wake.ts";
+
+const canAsk = (m: CachedMessage) => Boolean(!m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim());
 
 export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
@@ -132,7 +137,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
     const unmentioned = delta.filter((m) => !m.mentionsSelf);
-    const forJudge = unmentioned.filter((m) => m.text.trim());
+    const forJudge = unmentioned.filter((m) => hasContent(m.text, m.files ?? []));
     if (unmentioned.length < delta.length)
       recordJudgment({
         surface,
@@ -238,9 +243,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     decision: AmbientDecision,
   ): Promise<{ message: CachedMessage; member: DirectoryMember } | undefined> {
     if (!decision.askedBy) return undefined;
-    const eligible = batch.messages.filter(
-      (m) => !m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim(),
-    );
+    const eligible = batch.messages.filter(canAsk);
     const asking = eligible.find((m) => m.ts === decision.askedBy);
     const newest = eligible.reduce<CachedMessage | undefined>((max, m) => (!max || m.ts > max.ts ? m : max), undefined);
     if (!asking?.authorId || asking.authorId !== newest?.authorId) return undefined;
@@ -292,6 +295,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
+    const askedByPerson = batch.messages.some((m) => m.ts === decision.askedBy && canAsk(m));
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
     if (solicited) {
@@ -310,7 +314,24 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
-    const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
+    const recent = solicited ? [] : recentWakeMessages(batch);
+    const screened = ({ authorId, authorName, ts, text }: WakeMessage) => ({ authorId, authorName, ts, text });
+    const judgeReason = decision.reason ?? null;
+    const screenDataOf = (messages: ReturnType<typeof screened>[]) => JSON.stringify({ messages, judgeReason });
+    const sizes = recent.map((m) => JSON.stringify(screened(m)).length + 1);
+    const omitted = recent.length - fittingEntryCount(sizes.toReversed(), screenDataOf([]).length);
+    const shown = recent.slice(omitted);
+    if (omitted)
+      console.error(
+        `[ambient] wake left out ${omitted} earlier messages past the content screen's input limit (container=${batch.container})`,
+      );
+    const fileFields = await pullSurfaceFiles(app, batch.surface, batch.container, [
+      ...new Set(
+        batch.messages
+          .filter((m) => !m.deleted && (!solicited || m.authorId === solicited.message.authorId))
+          .flatMap((m) => (m.files ?? []).map((f) => f.fileId)),
+      ),
+    ]);
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -323,6 +344,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           deliveryTarget: batch.container,
           text: solicited.message.text,
           origin: { kind: "human", ...(solicited.message.ts ? { messageTs: solicited.message.ts } : {}) },
+          ...fileFields,
           surfaceTools: true,
           async: true,
           spawned: true,
@@ -331,7 +353,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
-          actor: { externalId: `system:ambient:${orgIdOf()}` },
+          actor: { externalId: ambientActorId() },
           ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
@@ -342,55 +364,58 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: recentWakeMessages(batch),
-            instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+            recentMessages: shown,
+            instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.${omitted ? ` The ${omitted} oldest of the recent messages are left out because together they pass the content screen's input limit; read them with \`read_thread\` or \`search\`.` : ""}`,
           }),
           origin: {
             kind: "automation",
-            screenData: JSON.stringify({
-              messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
-              judgeReason: decision.reason ?? null,
-            }),
+            screenData: screenDataOf(shown.map(screened)),
           },
+          ...fileFields,
           surfaceTools: true,
           async: true,
           spawned: true,
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return undefined;
+    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req, askedByPerson))) return undefined;
     const result = await app.turn(req);
     return result.status === "refused" || result.status === "failed"
       ? `${result.status}: ${result.reason ?? "no reason given"}`
       : undefined;
   }
 
-  async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {
+  async function steerIntoLiveAmbientRun(
+    batch: AmbientBatch,
+    latestTs: string,
+    req: TurnRequest,
+    asked: boolean,
+  ): Promise<boolean> {
     if (!deps.signals) return false;
     const prefix = `${batch.surface}:${batch.container}:ambient:`;
     const activeIds = await deps.runs
       .activeSessionIds()
       .catch(swallowAs("ambient: active session ids", [] as string[]));
-    const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
-    if (!liveRef) return false;
-    const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status)) return false;
-    const route = routeIncoming(
-      {
-        origin: "ambient",
-        person: false,
-        text: req.text,
-        hasFiles: false,
-        actorId: req.actor.externalId,
-        modelAccount: "company",
-        ...(req.botActor ? { bot: true } : {}),
-        ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
-        routed: false,
-      },
-      liveTurnOf(live),
-      {},
+    const live = await deps.runs.activeForThreads(
+      activeIds.filter((id) => id.startsWith(prefix) && id !== req.conversation.threadRef),
     );
-    if (route.kind !== "steer") return false;
-    await h.steerRun(live, {
+    const incoming = {
+      origin: "ambient" as const,
+      person: asked,
+      text: req.text,
+      hasFiles: Boolean(req.attachments?.length),
+      actorId: req.actor.externalId,
+      modelAccount: "company",
+      ...(req.botActor ? { bot: true } : {}),
+      ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
+      routed: false,
+    };
+    const target = [...live.values()].find(
+      (run) =>
+        run.request.actor.id === ambientActorId() &&
+        routeIncoming(incoming, liveTurnOf(run), { midTurn: "steer" }).kind === "steer",
+    );
+    if (!target) return false;
+    await h.steerRun(target, {
       kind: "steer",
       text: req.text,
       ts: latestTs,
@@ -419,6 +444,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           ts: input.origin.kind === "human" ? (input.origin.messageTs ?? "") : "",
           ...(input.actor.displayName ? { authorName: input.actor.displayName } : {}),
           authorId: input.actor.id,
+          ...(input.botActor ? { bot: true } : {}),
           text: input.text,
         },
       ],

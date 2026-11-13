@@ -13,13 +13,14 @@ export interface BackendSearchHit {
   score?: number;
   metadata?: Record<string, unknown>;
 }
-export interface SearchHit extends BackendSearchHit {
+interface SearchHit extends BackendSearchHit {
   backend: string;
 }
-interface SearchRequest {
+export interface SearchRequest {
   query: string;
   principals: readonly Principal[];
   limit: number;
+  botActor?: boolean;
 }
 export interface SearchBackend {
   name: string;
@@ -30,6 +31,7 @@ export interface CoreSearch {
     query: string;
     principals: readonly Principal[];
     limit?: number;
+    botActor?: boolean;
   }): Promise<{ hits: SearchHit[]; failedBackends: string[] }>;
 }
 function canonicalPrincipals(principals: readonly Principal[]): Principal[] {
@@ -62,7 +64,9 @@ export function createCoreSearch(
       const principals = canonicalPrincipals(input.principals);
       if (!query || !principals.length) return { hits: [], failedBackends: [] };
       const limit = searchLimit(input.limit);
-      const settled = await Promise.allSettled(backends.map((backend) => backend.search({ query, principals, limit })));
+      const settled = await Promise.allSettled(
+        backends.map((backend) => backend.search({ query, principals, limit, botActor: input.botActor })),
+      );
       const hits: SearchHit[] = [];
       const failedBackends: string[] = [];
       for (const [index, result] of settled.entries()) {

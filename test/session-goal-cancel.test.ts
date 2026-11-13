@@ -13,6 +13,8 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 
+const asU1 = { actorId: "U1" };
+
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) }));
 }
@@ -56,7 +58,7 @@ for (const status of ["active", "paused"] as const) {
     );
     assert.equal(openGoal(await sessionGoal(built, session.id))?.status, status);
     assert.equal(
-      (await built.app.getSessionForViewer(session.id, "U1"))?.goal?.status,
+      (await built.app.getSessionForViewer(session.id, asU1))?.goal?.status,
       status,
       "the chat's goal bar reads the open goal from the session",
     );
@@ -82,8 +84,8 @@ for (const status of ["active", "paused"] as const) {
       /The user cancelled this goal/,
       "the model is told the goal was cancelled",
     );
-    assert.ok(!(await built.app.listSessions("U1")).find((s) => s.id === session.id)?.goal);
-    assert.equal((await built.app.getSessionForViewer(session.id, "U1"))?.goal, undefined, "the goal bar closes");
+    assert.ok(!(await built.app.listSessions(asU1)).find((s) => s.id === session.id)?.goal);
+    assert.equal((await built.app.getSessionForViewer(session.id, asU1))?.goal, undefined, "the goal bar closes");
     assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
       cancelled: false,
       reason: "no_open_goal",
@@ -173,7 +175,7 @@ test("the owner resumes a paused goal from the goal bar; a running reply or a cl
   const goal = await sessionGoal(built, session.id);
   assert.equal(goal?.status, "active");
   assert.equal(goal?.pauseReason, undefined, "the pause reason goes with the pause");
-  assert.equal((await built.app.getSessionForViewer(session.id, "U1"))?.goal?.status, "active");
+  assert.equal((await built.app.getSessionForViewer(session.id, asU1))?.goal?.status, "active");
   assert.equal(
     (await built.app.resumeSessionGoal(session.id, "U1"))?.resumed,
     true,

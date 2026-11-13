@@ -83,7 +83,6 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
         chat: {
           state: { scopeId, threadRef: `thread-${i}`, sessionId: `session-${i}`, agent, resolvingApprovals: new Set() },
           activePendingApprovals: () => [],
-          hasUnresolvedApproval: () => false,
           turnRuntime: () => null,
           isStopping: () => false,
           drawActiveChat: () => render(composer.composerForm(agent), host),

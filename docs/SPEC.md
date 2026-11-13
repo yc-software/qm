@@ -36,10 +36,6 @@
 
 Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant. Lenses marked _checked by CI_ are computed from the diff and get no reviewer.
 
-**Findings decide the verdict.** A reviewer takes one lens. Read it and its examples, then the PR's whole diff and the code it touches. A finding is a problem under that lens that the PR introduces or makes worse, confirmed in the code: where it is in the PR, the evidence (for Duplication and Hand-rolling, the existing owner), and the smallest fix. Any finding means **request changes**; none means **accept**. That a problem is small, could wait for a later PR, or matches existing code is no reason to accept it; tolerating it is a maintainer's call, not the reviewer's. Notes are only for what you could not confirm; they decide nothing. Return the verdict, the findings and notes, a score out of 100 (higher is better; informational), and 1–2 sentences of assessment.
-
-A finding ends one of three ways: it is fixed and a fresh reviewer of the new diff does not raise it, a judge drops it, or a maintainer waives the lens. A judge is a fresh agent given only the finding as the reviewer wrote it, the PR's whole diff and the repository, and the PR description as it stood when the finding was raised. It drops a finding only when the finding is wrong about the code, is not an instance of the lens, predates the PR and is not made worse by it, or cannot be fixed without losing the behavior the PR is for. How the PR builds that behavior is not its purpose. Each finding is judged once; the ruling stands if the finding is raised again. A lens is accepted once none of its findings stands.
-
 ### Overengineering (always reviewed, 6 examples)
 
 Let sLOC +/- be your guide here. Small and net-negative LOC fixes will be rewarded. This codebase at baseline is flabby -- many bugs can be fixed by _deleting_, _removing_, _simplifying_. For features: use restraint when adding new subsystems that increase surface area and widen the config matrix we will have to support.

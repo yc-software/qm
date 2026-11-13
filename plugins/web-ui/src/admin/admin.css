@@ -1906,6 +1906,9 @@
 #app-view #view-governance .runtime-row > :last-child {
   justify-self: start;
 }
+#app-view #view-governance .runtime-row > input {
+  width: 120px;
+}
 #app-view #view-governance .runtime-hint {
   grid-column: 2;
   margin: 0;

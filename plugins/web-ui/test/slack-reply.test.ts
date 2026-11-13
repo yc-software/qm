@@ -50,7 +50,7 @@ test("Slack chats offer the account link once the check finds no link, recheckin
       document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder")!,
       /Reply in Slack as Alice/,
     );
-    assert.equal(document.querySelector(".chat-subtitle")!.textContent, "slack");
+    assert.equal(document.querySelector(".chat-subtitle")!.textContent, "Slack");
   } finally {
     await h.close();
   }

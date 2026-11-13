@@ -173,7 +173,7 @@ test("a persona conversation stays private to the people in it, even from the pe
   );
   const bobChat = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:with-ada" });
   ok(await personas.assign(BOB, (await built.sessions.get(bobChat.sessionId))!, ada.id));
-  assert.equal(await built.app.getSessionForViewer(bobChat.sessionId, ALICE), null);
+  assert.equal(await built.app.getSessionForViewer(bobChat.sessionId, { actorId: ALICE }), null);
   const aliceList = await built.app.listSessionPage(ALICE, { limit: 50, status: "active" });
   assert.ok(!aliceList.sessions.some((session) => session.id === bobChat.sessionId));
   const bobList = await built.app.listSessionPage(BOB, { limit: 50, status: "active" });
@@ -507,7 +507,7 @@ test("a persona pinned in a channel is worn by every conversation there until it
   const channel = { scopeId: "channel:C_PIN", role: "read" as const };
   const thread = (n: number) => ({ kind: "channel" as const, channelRef: "C_PIN", threadRef: `channel:C_PIN:t${n}` });
 
-  assert.equal((await sysprompt(CAROL, thread(1))).reply.includes("## Persona"), false);
+  assert.equal((await sysprompt(CAROL, thread(1))).reply.includes("## Persona:"), false);
   assert.equal(
     (await personas.setAccess(ALICE, ada.id, [{ ...owner, pinned: true }])).status,
     "invalid",
@@ -527,7 +527,11 @@ test("a persona pinned in a channel is worn by every conversation there until it
   ok(await personas.setAccess(ALICE, bea.id, [owner, channel]));
 
   ok(await personas.setAccess(ALICE, ada.id, [owner, channel]));
-  assert.equal((await sysprompt(CAROL, thread(3))).reply.includes("## Persona"), false, "unpinned");
+  assert.equal((await sysprompt(CAROL, thread(3))).reply.includes("## Persona:"), false, "unpinned");
   ok(await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]));
   assert.match((await sysprompt(CAROL, thread(4))).reply, /## Persona: Bea/);
+
+  ok(await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "group:G_PIN", role: "read", pinned: true }]));
+  const group = { kind: "group" as const, channelRef: "G_PIN", threadRef: "grp:G_PIN:t1" };
+  assert.match((await sysprompt(CAROL, group)).reply, /## Persona: Ada/);
 });

@@ -16,6 +16,15 @@ export interface DirectoryChannel {
   isExternal?: boolean;
 }
 
+export interface ScopeMembershipFacts {
+  member: boolean;
+  membership: boolean | undefined;
+}
+
+export interface ChannelMembershipFacts extends ScopeMembershipFacts {
+  isPrivate: boolean | undefined;
+}
+
 export interface ChannelMembership {
   channelId: string;
   principalId: string;
@@ -67,6 +76,7 @@ export interface DirectoryStore {
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
+  channelMemberships(channelIds: readonly string[], principalId: string): Promise<Map<string, ChannelMembershipFacts>>;
   channelMemberIds(channelId: string): Promise<string[] | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
   rosterCoversAudience(channelId: string): Promise<boolean | undefined>;
@@ -76,10 +86,11 @@ export interface DirectoryStore {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
-  resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
+  upsertGroup(groupId: string, principalIds: readonly string[], surface: string): Promise<void>;
+  resolveGroupByParticipants(participants: readonly string[], surface: string): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
+  groupMemberships(groupIds: readonly string[], principalId: string): Promise<Map<string, ScopeMembershipFacts>>;
   listGroupsFor(principalId: string): Promise<string[]>;
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
   groupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>>;

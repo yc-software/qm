@@ -301,7 +301,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
 
 test("shared-home members can approve and decline, outsiders cannot", async (t) => {
   const f = await fixture(t);
-  await f.directory.upsertGroup("G1", [owner, "carol@example.com"]);
+  await f.directory.upsertGroup("G1", [owner, "carol@example.com"], "slack");
   await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
   assert.match(await f.decide("carol@example.com", false), /^Declined\./);
   assert.match(await f.decide("carol@example.com"), /^Approved\./);

@@ -18,6 +18,7 @@ import {
 } from "lucide";
 import {
   api,
+  isSharedScopeId,
   sharedContextLabel,
   type CoreContext,
   type CoreProject,
@@ -28,7 +29,7 @@ import {
 import { UI_BASE } from "./deep-link";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
-import { slackMark } from "./slack-mark";
+import { chatSurfaceMark } from "./surface-mark";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
@@ -240,7 +241,7 @@ export function personalScopeId(): string | null {
 }
 
 export function resolveProjectScope(contexts: readonly CoreContext[], slug: string): string | null {
-  if (slug.startsWith("channel:") || slug.startsWith("group:")) {
+  if (isSharedScopeId(slug)) {
     return contexts.some((context) => context.scopeId === slug) ? slug : null;
   }
   const normalized = slug.toLowerCase();
@@ -266,6 +267,10 @@ function metaForScope(scopeId: string | null, fallbackName?: string | null): { t
 
 export function scopeTitle(scopeId: string | null, fallbackName?: string | null): string {
   return metaForScope(scopeId, fallbackName).title;
+}
+
+export function scopeGlyph(scopeId: string | null, fallbackName?: string | null): IconNode {
+  return metaForScope(scopeId, fallbackName).glyph;
 }
 
 export function scopeChip(scopeId: string | null, fallbackName?: string | null): TemplateResult {
@@ -1440,13 +1445,12 @@ async function loadScopeResources(scopeId: string): Promise<void> {
 }
 
 function contextSessionRow(s: CoreSession): TemplateResult {
-  const surface = surfaceOf(s);
   const readOnly = !s.canContinue;
   return html`
     <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
       <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>
       <span class="context-session-meta">
-        ${surface === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : html`<span class="badge">${surface}</span>`}
+        ${surfaceOf(s) === "chat" ? chatSurfaceMark(s, 13, "surface surface-mark") : html`<span class="badge">${surfaceOf(s)}</span>`}
         ${readOnly ? html`<span class="ro-lock" ${tip("Read-only. Replies happen on the original surface")}>${icon(Lock, 12)}</span>` : nothing}
         <span>${relTime(activityOf(s))}</span>
       </span>

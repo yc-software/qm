@@ -66,13 +66,14 @@ test("a fully migrated database skips the base schema and drops the retired obje
       ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x'),
       ('directory/store/0005', 'x')`);
     await admin.query("CREATE TABLE directory_sync(org_id TEXT PRIMARY KEY, channel_members_synced BOOLEAN)");
+    await admin.query("CREATE TABLE directory_groups(org_id TEXT, group_id TEXT)");
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY, thread_ref TEXT, spawn_meta TEXT)");
     await admin.query(
       "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, status TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT, preemptions INT NOT NULL DEFAULT 0)",
     );
     await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
     await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, session_id TEXT, kind TEXT, variant TEXT,
-      text TEXT, search TSVECTOR, target_seq BIGINT, author TEXT, body JSONB, created_at TIMESTAMPTZ,
+      text TEXT, search TSVECTOR, target_seq BIGINT, author TEXT, body JSONB, created_at TIMESTAMPTZ, hidden BOOLEAN,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query(
       "CREATE FUNCTION forbid_direct_delete() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN OLD; END'",
@@ -113,7 +114,7 @@ test("a fully migrated database skips the base schema and drops the retired obje
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ["seq", "tenant_id", "session_id", "kind", "variant", "text", "search", "author", "body", "created_at"],
+      ["seq", "tenant_id", "session_id", "kind", "variant", "text", "search", "author", "body", "created_at", "hidden"],
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);

@@ -104,6 +104,8 @@ export function createRefreshCoalescer(run: () => Promise<void>): () => Promise<
   };
 }
 
+export { inboundFileName as slackFileName } from "../surfaces/attachments.ts";
+
 export function hasContent(text: string, files: readonly unknown[]): boolean {
   return text.trim().length > 0 || files.length > 0;
 }
