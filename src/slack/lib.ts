@@ -67,12 +67,9 @@ export {
   uploadFailureNote,
 } from "./attachments.ts";
 export {
-  type ApprovalActionId,
-  APPROVAL_ACTION_IDS,
   approvalCardDestination,
   approvalMessage,
   approvalDecisionMessage,
-  type ApprovalDecisionRecord,
   type StoredApproval,
   recoveredApprovalContext,
   createApprovalRegistry,

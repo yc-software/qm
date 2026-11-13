@@ -1,10 +1,12 @@
 import type { App } from "../../api/app-types.ts";
 import { refusedStatus, type Send } from "../../delivery/relay.ts";
 import type { Tenant } from "../../tenants/context.ts";
+import type { KeychainApprovals } from "../../credentials/keychain-approval.ts";
 import type { Delivery } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import type { AddressFetch } from "../../util/network.ts";
 import type { BlobSource } from "../attachments.ts";
+import { partnerChatCard } from "./approvals.ts";
 import { PartnerChatHttpError, type PartnerChatClient } from "./client.ts";
 import { UPLOAD_FAILED, uploadPartnerChatFiles } from "./files.ts";
 import { deletePartnerChatMessage, editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
@@ -23,15 +25,18 @@ export function partnerChatSender(deps: {
   client: PartnerChatClient;
   blobs: BlobSource;
   storageFetch?: AddressFetch;
-  app: Pick<App, "ingestSurfaceEvents" | "readSurfaceMessages" | "tenantFor">;
+  app: Pick<App, "ingestSurfaceEvents" | "readSurfaceMessages" | "tenantFor" | "getApproval">;
+  keychainApprovals?: Pick<KeychainApprovals, "card">;
   now?: () => number;
 }): Send {
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
-    let body = d.text.trim();
     if (!ref) throw new UnsupportedDelivery(`partner-chat: unroutable target ${d.destination.target}`);
     if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
       throw new UnsupportedDelivery(`partner-chat: account ${ref.account} is not bound to this workspace`);
+    const card = await partnerChatCard(deps, d);
+    if (card === null) return;
+    let body = card?.body ?? d.text.trim();
     const { react, delete: del, pin, edit, editRef } = d.destination;
     if (react) {
       const messageId = partnerChatMessageId(react.messageTs);
@@ -82,9 +87,15 @@ export function partnerChatSender(deps: {
     const posted = await postPartnerChatMessage(
       deps,
       { account: ref.account, kind: ref.kind, chat: ref.chat, ...(thread ? { thread } : {}) },
-      { text: body, idempotencyKey: d.idempotencyKey, fileIds },
+      {
+        text: body,
+        idempotencyKey: card?.key ?? d.idempotencyKey,
+        fileIds,
+        ...(card ? { actions: card.actions } : {}),
+      },
     );
     if (!posted) console.log(`[partner-chat] delivery ${d.id} posted without a message id`);
+    else if (card?.resolved) await editPartnerChatMessage(deps, ref, posted, card.body, card.actions);
   }
 
   return async (d, tenant) => {

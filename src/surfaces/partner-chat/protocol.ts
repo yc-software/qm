@@ -7,6 +7,7 @@ const MAX_CLOCK_SKEW_S = 300;
 const MESSAGE_ID_WIDTH = 20;
 
 const ID = /^[A-Za-z0-9_-]+$/;
+const ACTION_ID = /^[\w.:%~-]{1,255}$/;
 const id = z.string().regex(ID);
 const messageId = z.string().regex(/^\d{1,20}$/);
 const user = z.object({
@@ -39,6 +40,12 @@ const eventSchema = z.object({
   }),
 });
 
+const actionEventSchema = eventSchema.extend({
+  protocol: z.literal(2),
+  type: z.literal("action.invoked"),
+  action: z.object({ id: z.string().regex(ACTION_ID), user }),
+});
+
 const reactionEventSchema = eventSchema.extend({
   protocol: z.literal(2),
   type: z.enum(["reaction.added", "reaction.removed"]),
@@ -49,6 +56,7 @@ export type PartnerChatUser = z.infer<typeof user>;
 export type PartnerChatEvent = z.infer<typeof eventSchema>;
 export type PartnerChatFile = z.infer<typeof file>;
 export type PartnerChatReactionEvent = z.infer<typeof reactionEventSchema>;
+export type PartnerChatActionEvent = z.infer<typeof actionEventSchema>;
 
 export interface PartnerChatRef {
   account: string;
@@ -89,6 +97,10 @@ export function verifyPartnerChat(
 
 export function parsePartnerChatEvent(raw: unknown) {
   return eventSchema.safeParse(raw);
+}
+
+export function parsePartnerChatActionEvent(raw: unknown) {
+  return actionEventSchema.safeParse(raw);
 }
 
 export function parsePartnerChatReactionEvent(raw: unknown) {

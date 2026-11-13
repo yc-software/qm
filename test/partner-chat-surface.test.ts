@@ -19,6 +19,8 @@ import {
   type PartnerChatMessages,
 } from "../src/surfaces/partner-chat/messages.ts";
 import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
+import { createPartnerChatApprovals } from "../src/surfaces/partner-chat/approvals.ts";
+import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
 import { removePartnerChatReaction } from "../src/surfaces/partner-chat/reactions.ts";
 import { signPartnerChat, signPartnerChatRequest } from "../src/surfaces/partner-chat/protocol.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
@@ -47,7 +49,10 @@ interface Received {
 
 async function fakePartnerChat(status = 200) {
   const received: Received[] = [];
-  const messages = new Map<string, { chat_id: unknown; thread_id: unknown; body: unknown }>();
+  const messages = new Map<
+    string,
+    Record<"chat_id" | "thread_id" | "body", unknown> & { actions?: unknown; to?: unknown }
+  >();
   let next = 41;
   const keyed = new Map<string, string>();
   const server = createServer((req: IncomingMessage, res) => {
@@ -75,13 +80,16 @@ async function fakePartnerChat(status = 200) {
       const target = messages.get(String(body.message_id));
       const change = status === 200 && (req.url ?? "").startsWith("/agent_app/messages/");
       const id = change ? String(body.message_id) : (keyed.get(key) ?? String(++next));
-      if (change && target && req.url === "/agent_app/messages/update") target.body = body.body;
+      if (change && target && req.url === "/agent_app/messages/update")
+        Object.assign(target, { body: body.body }, body.actions ? { actions: body.actions } : {});
       else if (change && target) messages.delete(id);
       else if (status === 200 && req.url === "/agent_app/messages")
         messages.set(keyed.set(key, id).get(key)!, {
           chat_id: body.chat_id,
           thread_id: body.thread_id,
           body: body.body,
+          ...(body.actions ? { actions: body.actions } : {}),
+          ...(body.recipient_user_id ? { to: body.recipient_user_id } : {}),
         });
       const code = change && !target ? 404 : status;
       res.writeHead(code, { "content-type": "application/json" });
@@ -344,6 +352,7 @@ function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: 
     blobs: NO_BLOBS,
     app: {
       tenantFor,
+      getApproval: async () => null,
       readSurfaceMessages: async () => [],
       ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
     },
@@ -911,7 +920,12 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const sent: string[] = [];
   const send = partnerChatSender({
     blobs: NO_BLOBS,
-    app: { tenantFor, readSurfaceMessages: async () => [], ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    app: {
+      tenantFor,
+      getApproval: async () => null,
+      readSurfaceMessages: async () => [],
+      ingestSurfaceEvents: async () => ({ upserted: 0 }),
+    },
     client: createPartnerChatClient({
       url: "https://chat.example",
       secret: SECRET,
@@ -940,6 +954,125 @@ test("a retryable failure holds back later posts to the same chat target only", 
     (await deliveries.pending("partner-chat")).map((d) => d.text),
     ["first in 88", "second in 88"],
   );
+});
+
+interface ShownAction {
+  id: string;
+  label: string;
+  style: string;
+}
+
+test("a pending approval arrives as a card with buttons that only the person who asked can settle", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    const ask = { body: "!paused-approval git push", mentions: true, eventId: "ev-ask", messageId: "1002" };
+    await deliver(event({ ...ask, protocol: 2 }));
+    const card = () => partnerChat.shown().find((m) => String(m.body).includes("git push") && Array.isArray(m.actions));
+    await settle(async () => card() !== undefined);
+    const posted = card()!;
+    const actions = posted.actions as ShownAction[];
+    assert.match(String(posted.body), /Approval needed[\s\S]*git push[\s\S]*Flagged as/);
+    assert.equal(posted.thread_id, "1002");
+    assert.deepEqual(
+      actions.map((a) => [a.label, a.style]),
+      [
+        ["Allow once", "primary"],
+        ["Allow session", "default"],
+        ["Allow always", "default"],
+        ["Deny", "danger"],
+      ],
+    );
+    const click = (eventId: string, user: Record<string, string>) =>
+      deliver({
+        ...event({ bot: true, appPost: true, messageId: posted.id, thread: "1002", eventId }),
+        protocol: 2,
+        type: "action.invoked",
+        action: { id: actions.at(-1)!.id, user },
+      });
+    assert.equal(
+      (await click("ev-click-1", { id: "77", email: "eve@example.com" })).body.ignored,
+      "unvouched_participants",
+    );
+    await click("ev-click-2", { id: "6", email: "grace@example.com", name: "Grace Hopper" });
+    assert.ok(partnerChat.shown().some((m) => m.to === "6" && /Only the person who requested/.test(String(m.body))));
+    assert.equal((card()!.actions as ShownAction[]).length, 4);
+    await click("ev-click-3", { id: "5", email: "ada@example.com", name: "Ada Lovelace" });
+    const settled = partnerChat.shown().find((m) => m.id === posted.id)!;
+    assert.deepEqual([settled.body, settled.actions], ["Denied by Ada Lovelace · `git push`", []]);
+    await settle(async () => {
+      const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
+      const items = session ? await built.sessions.getItems(session.id) : [];
+      return items.some((i) => /denied this pending operation/.test((i as { text?: string }).text ?? ""));
+    });
+    await new Promise((r) => setTimeout(r, 1_000));
+    assert.ok(!partnerChat.shown().some((m) => /couldn't finish|waiting on a pending approval/.test(String(m.body))));
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("a credential request is a card its owner decides from the chat, and a decision made elsewhere clears the posted card", async () => {
+  const partnerChat = await fakePartnerChat();
+  const ask = { id: "ask1", status: "pending", requestedMode: "once", requesterScopeId: "group:g1" };
+  const view = () => ({ ask, service: "github", conversation: "Launch crew" }) as unknown as KeychainApprovalView;
+  const decided: unknown[] = [];
+  const keychainApprovals = {
+    card: async () => view(),
+    decide: async (...args: unknown[]) => {
+      decided.push(args);
+      ask.status = "approved";
+      return view();
+    },
+  };
+  const client = createPartnerChatClient({ url: partnerChat.url, secret: SECRET });
+  const app = {
+    tenantFor,
+    getApproval: async () => null,
+    readSurfaceMessages: async () => [],
+    ingestSurfaceEvents: async () => ({ upserted: 1 }),
+  };
+  const deliveries = createDeliveryStore();
+  const send = partnerChatSender({ client, blobs: NO_BLOBS, app, keychainApprovals });
+  const destination = { type: "partner-chat", target: `${CONTAINER}:1002`, keychainAskId: "ask1" };
+  try {
+    await deliveries.enqueue({ destination, text: "notice", idempotencyKey: "ask:ask1:notice" });
+    await relayUntil(deliveries, send, async () => partnerChat.shown().length === 1);
+    const [card] = partnerChat.shown();
+    assert.equal(
+      card!.body,
+      "🔒 **Approval needed.**\n\nUse your **github** credential in Launch crew (one-time access).",
+    );
+    const actions = card!.actions as ShownAction[];
+    assert.deepEqual(
+      actions.map((a) => a.label),
+      ["Allow once", "Allow", "Deny"],
+    );
+    const actor = { externalId: "ada@example.com" };
+    await createPartnerChatApprovals({ client, app: app as never, keychainApprovals }).invoke({
+      eventId: "ev-1",
+      account: "7001",
+      kind: "group",
+      chat: "88",
+      messageId: card!.id,
+      actionId: actions[0]!.id,
+      userId: "5",
+      actor,
+    });
+    assert.deepEqual(decided, [["ask1", actor, "once"]]);
+    const resolved = "**Approved — one-time access.**\n\nUse your **github** credential in Launch crew.";
+    assert.deepEqual([partnerChat.shown()[0]!.body, partnerChat.shown()[0]!.actions], [resolved, []]);
+    await deliveries.enqueue({ destination, text: "resolved", idempotencyKey: "ask:ask1:resolved" });
+    await relayUntil(deliveries, send, async () => partnerChat.received.length === 4);
+    assert.deepEqual(
+      partnerChat.received.slice(2).map((r) => [r.path, r.body.client_message_id, r.body.body, r.body.actions]),
+      [
+        ["/agent_app/messages", "ask:ask1:notice", resolved, undefined],
+        ["/agent_app/messages/update", undefined, resolved, []],
+      ],
+    );
+  } finally {
+    await partnerChat.close();
+  }
 });
 
 test("a status post becomes the final reply in place, and the agent can revise or delete what it posted", async () => {

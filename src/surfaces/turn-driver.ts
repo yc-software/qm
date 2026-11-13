@@ -1,6 +1,7 @@
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { OutgoingAttachment, TurnResult } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { AWAITING_APPROVAL } from "./approval-cards.ts";
 import type { ReplyReaction } from "./reactions.ts";
 import { postThenAckRunDelivery, refusalDelivery, refusalNote } from "./refusals.ts";
 import { turnFailureText, type CoreTurnBody, type TurnFlow } from "./turn-flow.ts";
@@ -240,7 +241,7 @@ export async function runSurfaceTurn(
   } else if (result.status === "pending_approval") {
     await settleAck();
     if (!result.pendingApprovals?.length) {
-      const note = result.reason ?? "This conversation is waiting on a pending approval.";
+      const note = result.reason ?? AWAITING_APPROVAL;
       if (unprompted) console.error(`[${label}] turn.pending_approval (no card) ${turn.where}: ${note}`);
       else if (ack?.postedAck()) await transport.post(note);
       else await transport.postPrivate(note);

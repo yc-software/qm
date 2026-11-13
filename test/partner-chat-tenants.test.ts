@@ -32,6 +32,7 @@ describeTwoTenants("partner chat on a shared host", (db) => {
     surfaceCache,
     isInternalEmail,
     unansweredReply,
+    onAction: async () => {},
   });
   const blobs = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
   const send = partnerChatSender({ app, client, blobs });

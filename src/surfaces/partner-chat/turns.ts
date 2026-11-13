@@ -7,7 +7,7 @@ import { reportFailureAs } from "../../util/errors.ts";
 import { reactionDetectGuidance, reactionInstruction } from "../reactions.ts";
 import { createRunWaiter } from "../run-wait.ts";
 import { HANDOFF_INSTRUCTION, runSurfaceTurn, type SurfaceTurnBody } from "../turn-driver.ts";
-import { createTurnFlow, liveRunHoldsDelivery, runDeliveryId } from "../turn-flow.ts";
+import { createTurnFlow, drivenLive, liveRunHoldsDelivery, runDeliveryId } from "../turn-flow.ts";
 import type { PartnerChatRef } from "./protocol.ts";
 import { createPartnerChatTransport, type PartnerChatTransportDeps } from "./transport.ts";
 
@@ -64,7 +64,7 @@ export function createPartnerChatTurns(
   async function held(d: Delivery): Promise<boolean> {
     const runId = runDeliveryId(d);
     if (!runId || !liveRunHoldsDelivery(flow.inFlightRuns, d)) return false;
-    return flow.inFlightRuns.has(runId) || (await deps.runs.get(runId))?.request.liveReplies === true;
+    return flow.inFlightRuns.has(runId) || drivenLive((await deps.runs.get(runId))?.request ?? {});
   }
 
   function start(turn: PartnerChatTurn): Promise<void> {

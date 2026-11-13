@@ -1,6 +1,6 @@
 import type { App } from "../../api/app-types.ts";
-import type { SurfaceAction } from "../contract.ts";
 import type { IngestEvent } from "../../surface-cache/types.ts";
+import type { SurfaceAction } from "../contract.ts";
 import type { PartnerChatClient } from "./client.ts";
 import { findMessage, partnerChatMessageId, partnerChatRef, partnerChatTs, type PartnerChatRef } from "./protocol.ts";
 
@@ -79,12 +79,14 @@ export async function editPartnerChatMessage(
   where: PartnerChatWhere,
   ref: string,
   text: string,
+  actions?: readonly SurfaceAction[],
 ): Promise<void> {
   const messageId = partnerChatMessageId(ref);
   await deps.client.call(where.account, "/agent_app/messages/update", {
     chat_id: where.chat,
     message_id: messageId,
     body: text,
+    ...(actions ? { actions } : {}),
   });
   await recordChange(deps, where, messageId, { text, editedAt: (deps.now ?? Date.now)() });
 }

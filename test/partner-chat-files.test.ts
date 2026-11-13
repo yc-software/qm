@@ -34,6 +34,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
   const inbound = createPartnerChatInbound({
     secret: SECRET,
     client,
+    onAction: async () => {},
     stageBlob: async (bytes) => ({ blobId: `blob-${Buffer.from(bytes).toString()}` }),
     storageFetch: async (url) =>
       String(url).endsWith("/31") ? new Response("deck bytes") : new Response("gone", { status: 403 }),
@@ -93,7 +94,12 @@ function sending(respond: Parameters<typeof chatHost>[0]) {
   const stored: Array<{ url: string; fields: Record<string, string> }> = [];
   const send = partnerChatSender({
     client: host.client,
-    app: { tenantFor, readSurfaceMessages: async () => [], ingestSurfaceEvents: async () => ({ upserted: 1 }) },
+    app: {
+      tenantFor,
+      getApproval: async () => null,
+      readSurfaceMessages: async () => [],
+      ingestSurfaceEvents: async () => ({ upserted: 1 }),
+    },
     blobs: {
       readBlob: async (blobId) => {
         if (blobId === "expired") throw new Error("blob expired");

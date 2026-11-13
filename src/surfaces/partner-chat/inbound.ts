@@ -8,6 +8,7 @@ import type { AddressFetch } from "../../util/network.ts";
 import { buildContextWindow, detectInputs } from "../context-window.ts";
 import { buildReactionTurnText, shouldSurfaceReaction } from "../reactions.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
+import type { PartnerChatActionClick } from "./approvals.ts";
 import type { PartnerChatClient } from "./client.ts";
 import { stagePartnerChatFiles } from "./files.ts";
 import {
@@ -15,10 +16,12 @@ import {
   partnerChatRef,
   partnerChatTs,
   parsePartnerChatEvent,
+  parsePartnerChatActionEvent,
   parsePartnerChatReactionEvent,
   parsePartnerChatRef,
   verifyPartnerChat,
   type PartnerChatEvent,
+  type PartnerChatActionEvent,
   type PartnerChatReactionEvent,
 } from "./protocol.ts";
 import type { PartnerChatTurns } from "./turns.ts";
@@ -42,6 +45,7 @@ export function createPartnerChatInbound(deps: {
   isInternalEmail: (email: string) => Promise<boolean>;
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
   turns: Pick<PartnerChatTurns, "start">;
+  onAction: (click: PartnerChatActionClick) => Promise<void>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -90,7 +94,9 @@ export function createPartnerChatInbound(deps: {
       return { status: 400, body: { error: "invalid_json", detail: errMessage(e) } };
     }
     const reaction = parsePartnerChatReactionEvent(parsed);
-    const result = reaction.success ? reaction : parsePartnerChatEvent(parsed);
+    const action = parsePartnerChatActionEvent(parsed);
+    const special = reaction.success ? reaction : action;
+    const result = special.success ? special : parsePartnerChatEvent(parsed);
     if (!result.success)
       return {
         status: 400,
@@ -102,7 +108,10 @@ export function createPartnerChatInbound(deps: {
       console.log(`[partner-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };
     }
-    return inTenant(tenant, () => ("reaction" in event ? acceptReaction(event) : accept(event)));
+    return inTenant(tenant, (): Promise<{ status: number; body: Record<string, unknown> }> => {
+      if ("reaction" in event) return acceptReaction(event);
+      return "action" in event ? acceptAction(event) : accept(event);
+    });
   }
 
   async function participants(chat: PartnerChatEvent["chat"], actorId: string) {
@@ -170,6 +179,24 @@ export function createPartnerChatInbound(deps: {
           }
         : {}),
     };
+  }
+
+  async function acceptAction(event: PartnerChatActionEvent) {
+    const { chat, action } = event;
+    const who = action.user.bot ? ({ ignored: "bot_action" } as const) : await participants(chat, action.user.id);
+    if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
+    await deps.onAction({
+      eventId: event.event_id,
+      account: event.account,
+      kind: chat.kind,
+      chat: chat.id,
+      ...(event.thread_id ? { thread: event.thread_id } : {}),
+      messageId: event.message.id,
+      actionId: action.id,
+      userId: action.user.id,
+      actor: who.humans[who.members.indexOf(who.listed)]!,
+    });
+    return { status: 200, body: { ok: true } };
   }
 
   async function acceptReaction(event: PartnerChatReactionEvent) {

@@ -11,7 +11,8 @@ import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./slack/approval-store.ts";
+import { createApprovalStore } from "./surfaces/approval-store.ts";
+import { slackApprovalCardRoute } from "./slack/approval-cards.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
@@ -423,6 +424,7 @@ import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
 import { PARTNER_CHAT_CLAIM_MS, createPartnerChatClient } from "./surfaces/partner-chat/client.ts";
 import { partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
 import { createPartnerChatTurns } from "./surfaces/partner-chat/turns.ts";
+import { createPartnerChatApprovals, partnerChatApprovalCardRoute } from "./surfaces/partner-chat/approvals.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
@@ -2077,7 +2079,10 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
+  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
+    slack: slackApprovalCardRoute,
+    "partner-chat": partnerChatApprovalCardRoute,
+  });
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2591,13 +2596,24 @@ export function buildApp(
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           unansweredReply: partnerChatNotices.unanswered,
           turns: partnerChatTurns,
+          onAction: createPartnerChatApprovals({
+            client: partnerChatClient,
+            app,
+            ...(keychainApprovals ? { keychainApprovals } : {}),
+          }).invoke,
         })
       : null;
   const partnerChatDelivery =
     partnerChatClient && partnerChatTurns
       ? createDeliveryRelay(deliveries, {
           type: "partner-chat",
-          send: partnerChatSender({ client: partnerChatClient, blobs: slackCore, app }),
+          send: partnerChatSender({
+            client: partnerChatClient,
+            blobs: slackCore,
+            app,
+            ...(keychainApprovals ? { keychainApprovals } : {}),
+          }),
+          fail: (id, reason) => app.failDelivery(id, reason),
           claimMs: PARTNER_CHAT_CLAIM_MS,
           held: partnerChatTurns.held,
         })

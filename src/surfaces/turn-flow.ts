@@ -48,6 +48,10 @@ export interface TurnFlow {
 const ACK_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
 const RUN_RECOVERY_GRACE_MS = 15_000;
 
+export function drivenLive(request: Pick<TurnRequest, "liveReplies" | "approval">): boolean {
+  return request.liveReplies === true && !request.approval;
+}
+
 export function runDeliveryId(d: Pick<Delivery, "idempotencyKey">): string | undefined {
   return d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
 }

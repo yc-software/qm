@@ -1,7 +1,7 @@
 import { escapeSlackText } from "./mrkdwn.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
-import { approvalDeliveryKey } from "./approval-store.ts";
+import { approvalDeliveryKey } from "../surfaces/approval-cards.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalDeliveryRecipient, approvalMessage, type ApprovalRequester } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
