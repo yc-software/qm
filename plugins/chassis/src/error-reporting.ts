@@ -127,21 +127,23 @@ function ownTraceHeader(sdk: typeof Sentry): (envelope: Envelope) => void {
   return (envelope) => {
     const header = envelope[0] as { trace?: Record<string, unknown> };
     if (!header.trace) return;
-    const { sampled, sample_rate: sampleRate } = header.trace;
+    const sampleRate = header.trace.sample_rate;
     delete header.trace;
     try {
       const payload = envelope[1][0]?.[1] as
         { contexts?: { trace?: { trace_id?: string } }; items?: { trace_id?: string }[] } | undefined;
+      const spans = payload?.items;
       const sentryClient = sdk.getClient();
       const options = sentryClient?.getOptions();
       header.trace = Object.fromEntries(
         Object.entries({
-          trace_id: payload?.contexts?.trace?.trace_id ?? payload?.items?.[0]?.trace_id,
+          trace_id: spans ? spans[0]?.trace_id : payload?.contexts?.trace?.trace_id,
           public_key: sentryClient?.getDsn()?.publicKey,
           release: options?.release,
           environment: options?.environment,
-          sampled: sampled === "true" || sampled === "false" ? sampled : undefined,
-          sample_rate: typeof sampleRate === "string" && parseSampleRate(sampleRate) > 0 ? sampleRate : undefined,
+          sampled: spans ? "true" : undefined,
+          sample_rate:
+            spans && typeof sampleRate === "string" && parseSampleRate(sampleRate) > 0 ? sampleRate : undefined,
         }).filter(([, value]) => typeof value === "string" && value),
       );
     } catch (error) {

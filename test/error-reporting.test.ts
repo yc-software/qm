@@ -320,6 +320,7 @@ test("sampled requests and queued runs become scrubbed, connected segments", asy
     const sent = events[0]?.contexts.trace.trace_id ?? spans[0]?.trace_id;
     assert.equal(header!.trace?.trace_id, sent, "every envelope's trace header matches what it carries");
     assert.equal(header!.trace.release, "test-release");
+    assert.equal(header!.trace.sampled, spans.length ? "true" : undefined, "only span envelopes say they were sampled");
   }
   const handlerError = on.events.find((event) => event.exception.values[0].value === "handler-error");
   assert.equal(handlerError?.transaction, "GET /v1/things/:id", "errors inside a request carry the route template");
@@ -435,6 +436,10 @@ test("human turns are always traced while other runs follow the configured rate"
   const names = sampled.segments.map((sent) => sent.name);
   assert.equal(names.filter((name) => name === "human-run").length, 20);
   assert.ok(names.includes("human-after-unsampled-request"));
+  assert.ok(
+    sampled.envelopes.every((envelope) => !envelope.spans.length || envelope.header!.trace.sampled === "true"),
+    "a traced run under an unsampled request is still sent as sampled",
+  );
   assert.deepEqual(
     names.filter((name) => !name.startsWith("human-")),
     [],
