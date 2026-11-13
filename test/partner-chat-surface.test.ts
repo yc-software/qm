@@ -92,7 +92,8 @@ async function fakePartnerChat(status = 200) {
           ...(body.recipient_user_id ? { to: body.recipient_user_id } : {}),
         });
       const privateReply = req.url === "/agent_app/messages" && body.recipient_user_id && body.thread_id;
-      const code = privateReply ? 422 : change && !target ? 404 : status;
+      let code = change && !target ? 404 : status;
+      if (privateReply) code = 422;
       res.writeHead(code, { "content-type": "application/json" });
       res.end(JSON.stringify(code === 200 ? { message_id: id } : { error: change ? "message not found" : "nope" }));
     });
