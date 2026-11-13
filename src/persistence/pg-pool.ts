@@ -382,16 +382,16 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       }
       await mayMigrate(migration);
       if (migration.prepare) {
-        await client.query("SET statement_timeout = 0");
+        await untraced(() => client.query("SET statement_timeout = 0"));
         try {
           for (const statement of migration.prepare) await client.query(statement);
         } catch (error) {
-          await client
-            .query("RESET statement_timeout")
-            .catch(swallowAs(`pg-pool: reset statement timeout after preparing ${migration.id}`, undefined));
+          await untraced(() => client.query("RESET statement_timeout")).catch(
+            swallowAs(`pg-pool: reset statement timeout after preparing ${migration.id}`, undefined),
+          );
           throw error;
         }
-        await client.query("RESET statement_timeout");
+        await untraced(() => client.query("RESET statement_timeout"));
       }
       if (migration.autocommit) {
         for (const statement of migration.statements) await client.query(statement);
@@ -437,7 +437,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         ]);
         continue;
       }
-      await client.query("BEGIN");
+      await untraced(() => client.query("BEGIN"));
       try {
         let adopted = false;
         if (migration.legacyId) {
@@ -454,7 +454,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
-        await client.query("COMMIT");
+        await untraced(() => client.query("COMMIT"));
       } catch (error) {
         console.error(`[pg-pool] migration ${migration.id} failed: ${describePgError(error)}`);
         discard = await rollbackOrReport(client, `pg-pool: rollback migration ${migration.id}`);
