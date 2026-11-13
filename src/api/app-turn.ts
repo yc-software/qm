@@ -29,7 +29,7 @@ import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { samePerson } from "../directory/person.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailureAs, swallowAs } from "../util/errors.ts";
 import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
 
@@ -511,7 +511,7 @@ export function createTurnMethods(
         });
         if (botTurn)
           await stopRun(botTurn, false, true).catch(
-            swallowAs("turn: stop the bot's turn behind a queued Steer", false),
+            reportFailureAs("turn: stop the bot's turn behind a queued Steer", false, `run=${botTurn.id}`),
           );
         return queued;
       });
@@ -706,7 +706,7 @@ export function createTurnMethods(
       return (await deps.runs.withdraw(runId)) ? { withdrawn: true } : { withdrawn: false, reason: "started" };
     },
 
-    async signalRun(runId, signal, viewer) {
+    async signalRun(runId, { remark, ...signal }, viewer) {
       if (!deps.signals) return { accepted: false, reason: "signals_unavailable" };
       const run = await deps.runs.get(runId);
       if (!run) return { accepted: false, reason: "not_found" };
@@ -793,7 +793,7 @@ export function createTurnMethods(
           ...request,
           text: signal.text ?? "",
           ...(signal.ts ? { idempotencyKey: `signal-turn:${runId}:${signal.ts}` } : {}),
-          midTurn: route.reason === "bot-turn" && !signal.remark ? "steer" : "queue",
+          midTurn: route.reason === "bot-turn" && !remark ? "steer" : "queue",
           async: true,
         });
         if (!own.runId) return { accepted: false, reason: own.reason ?? own.status };
