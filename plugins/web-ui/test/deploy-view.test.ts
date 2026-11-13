@@ -1,25 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  deploymentAfterRestore,
-  deploymentActionView,
-  deploymentArchiveUndoAvailable,
-  deploymentCanManage,
-  deploymentContextScope,
-  deploymentInScope,
-  deploymentListAfterRestoreRefresh,
-  deploymentListRefreshCanRedraw,
-  deploymentLatestAt,
-  deploymentSlug,
-  deploymentTab,
-  deploymentTabEmptyMessage,
-  deploymentTitle,
-  filterDeployments,
+  appAfterRestore,
+  appActionView,
+  appArchiveUndoAvailable,
+  appCanManage,
+  appContextScope,
+  appInScope,
+  appListAfterRestoreRefresh,
+  appListRefreshCanRedraw,
+  appLatestAt,
+  appSlug,
+  appTab,
+  appTabEmptyMessage,
+  appTitle,
+  filterApps,
   friendlyPrincipal,
-  type DeploymentView,
+  type AppView,
 } from "../src/deploy-view.ts";
 
-function deployment(patch: Partial<DeploymentView>): DeploymentView {
+function publishedApp(patch: Partial<AppView>): AppView {
   return {
     id: "deployment-id",
     status: "running",
@@ -32,125 +32,125 @@ function deployment(patch: Partial<DeploymentView>): DeploymentView {
   };
 }
 
-test("deployment labels prefer friendly metadata and retain durable fallbacks", () => {
+test("app labels prefer friendly metadata and retain durable fallbacks", () => {
   assert.equal(
-    deploymentTitle(deployment({ displayName: "Launch dashboard", name: "launch", id: "id" })),
+    appTitle(publishedApp({ displayName: "Launch dashboard", name: "launch", id: "id" })),
     "Launch dashboard",
   );
-  assert.equal(deploymentTitle(deployment({ displayName: "", name: "launch", id: "id" })), "launch");
-  assert.equal(deploymentSlug(deployment({ name: undefined, id: "stable-id" })), "stable-id");
+  assert.equal(appTitle(publishedApp({ displayName: "", name: "launch", id: "id" })), "launch");
+  assert.equal(appSlug(publishedApp({ name: undefined, id: "stable-id" })), "stable-id");
   assert.equal(friendlyPrincipal("blair.reeves@example.com"), "Blair Reeves");
   assert.equal(friendlyPrincipal("oidc:5f2a:NzkzOTE"), "Unknown person");
 });
 
-test("deployment context prefers its creation scope and filtering accepts either creation or ownership", () => {
-  const fromChannel = deployment({ createdInScope: "channel:launch", ownerScopeId: "personal:blair@example.com" });
-  assert.equal(deploymentContextScope(fromChannel), "channel:launch");
-  assert.equal(deploymentInScope(fromChannel, "channel:launch"), true);
-  assert.equal(deploymentInScope(fromChannel, "personal:blair@example.com"), true);
-  assert.equal(deploymentInScope(fromChannel, "channel:other"), false);
-  assert.equal(deploymentContextScope(deployment({ createdInScope: undefined, ownerScopeId: "org:acme" })), "org:acme");
+test("app context prefers its creation scope and filtering accepts either creation or ownership", () => {
+  const fromChannel = publishedApp({ createdInScope: "channel:launch", ownerScopeId: "personal:blair@example.com" });
+  assert.equal(appContextScope(fromChannel), "channel:launch");
+  assert.equal(appInScope(fromChannel, "channel:launch"), true);
+  assert.equal(appInScope(fromChannel, "personal:blair@example.com"), true);
+  assert.equal(appInScope(fromChannel, "channel:other"), false);
+  assert.equal(appContextScope(publishedApp({ createdInScope: undefined, ownerScopeId: "org:acme" })), "org:acme");
 });
 
 test("archive Undo remains available when the post-mutation list refresh is stale or missing", () => {
-  const archivedToast = deployment({ status: "archived" });
-  assert.equal(deploymentArchiveUndoAvailable(archivedToast), true);
-  assert.equal(deploymentArchiveUndoAvailable(deployment({ status: "running" })), false);
+  const archivedToast = publishedApp({ status: "archived" });
+  assert.equal(appArchiveUndoAvailable(archivedToast), true);
+  assert.equal(appArchiveUndoAvailable(publishedApp({ status: "running" })), false);
 });
 
 test("a restored notification cannot inherit Undo from a stale archived list row", () => {
-  const staleArchivedRow = deployment({ status: "archived" });
-  const restoredToast = deploymentAfterRestore(staleArchivedRow);
-  assert.equal(deploymentArchiveUndoAvailable(restoredToast), false);
+  const staleArchivedRow = publishedApp({ status: "archived" });
+  const restoredToast = appAfterRestore(staleArchivedRow);
+  assert.equal(appArchiveUndoAvailable(restoredToast), false);
   assert.equal(restoredToast.status, "running");
-  assert.equal(deploymentTab(restoredToast, "blair@example.com"), "yours");
+  assert.equal(appTab(restoredToast, "blair@example.com"), "yours");
 });
 
 test("restore ignores a stale archived row when refresh failed", () => {
-  const requested = deployment({
+  const requested = publishedApp({
     status: "archived",
     ownerScopeId: "personal:casey@example.com",
     createdBy: "casey@example.com",
   });
-  const restored = deploymentAfterRestore(requested, undefined, undefined);
+  const restored = appAfterRestore(requested, undefined, undefined);
   assert.equal(restored.status, "running");
-  assert.equal(deploymentTab(restored, "blair@example.com"), "shared");
+  assert.equal(appTab(restored, "blair@example.com"), "shared");
 });
 
 test("a superseded restore refresh cannot overwrite a newer authoritative row", () => {
-  const newer = deployment({ id: "deployment-id", status: "archived", displayName: "Newer metadata" });
-  const staleRestore = deploymentAfterRestore(deployment({ id: "deployment-id", status: "archived" }));
-  const list = deploymentListAfterRestoreRefresh([newer], staleRestore, "superseded");
+  const newer = publishedApp({ id: "deployment-id", status: "archived", displayName: "Newer metadata" });
+  const staleRestore = appAfterRestore(publishedApp({ id: "deployment-id", status: "archived" }));
+  const list = appListAfterRestoreRefresh([newer], staleRestore, "superseded");
   assert.deepEqual(list, [newer]);
   assert.equal(list[0]?.status, "archived");
   assert.equal(list[0]?.displayName, "Newer metadata");
 });
 
 test("an updated restore refresh trusts a newer authoritative archived row", () => {
-  const requested = deployment({ id: "deployment-id", status: "archived", displayName: "Old metadata" });
-  const authoritative = deployment({ id: "deployment-id", status: "archived", displayName: "Newer metadata" });
-  const restored = deploymentAfterRestore(requested, deploymentAfterRestore(requested), authoritative);
+  const requested = publishedApp({ id: "deployment-id", status: "archived", displayName: "Old metadata" });
+  const authoritative = publishedApp({ id: "deployment-id", status: "archived", displayName: "Newer metadata" });
+  const restored = appAfterRestore(requested, appAfterRestore(requested), authoritative);
   assert.equal(restored, authoritative);
   assert.equal(restored.status, "archived");
   assert.equal(restored.displayName, "Newer metadata");
 });
 
 test("an actual restore refresh failure inserts the optimistic running row", () => {
-  const stale = deployment({ id: "deployment-id", status: "archived" });
-  const restored = deploymentAfterRestore(stale);
-  assert.deepEqual(deploymentListAfterRestoreRefresh([stale], restored, "failed"), [restored]);
+  const stale = publishedApp({ id: "deployment-id", status: "archived" });
+  const restored = appAfterRestore(stale);
+  assert.deepEqual(appListAfterRestoreRefresh([stale], restored, "failed"), [restored]);
 });
 
-test("tabs separate manageable, shared, and archived deployments", () => {
-  assert.equal(deploymentTab(deployment({ permission: "write" }), "blair@example.com"), "yours");
+test("tabs separate manageable, shared, and archived apps", () => {
+  assert.equal(appTab(publishedApp({ permission: "write" }), "blair@example.com"), "yours");
   assert.equal(
-    deploymentTab(
-      deployment({ permission: "write", createdBy: "casey@example.com", ownerScopeId: "personal:casey@example.com" }),
+    appTab(
+      publishedApp({ permission: "write", createdBy: "casey@example.com", ownerScopeId: "personal:casey@example.com" }),
       "blair@example.com",
     ),
     "shared",
   );
   assert.equal(
-    deploymentTab(
-      deployment({ permission: "write", createdBy: "blair@example.com", ownerScopeId: "personal:casey@example.com" }),
+    appTab(
+      publishedApp({ permission: "write", createdBy: "blair@example.com", ownerScopeId: "personal:casey@example.com" }),
       "blair@example.com",
     ),
     "shared",
   );
-  assert.equal(deploymentTab(deployment({ permission: "read", status: "archived" }), "blair@example.com"), "archived");
+  assert.equal(appTab(publishedApp({ permission: "read", status: "archived" }), "blair@example.com"), "archived");
 });
 
 test("the empty Yours message stays tab-local when a manageable transfer is Shared", () => {
-  const transferred = deployment({
+  const transferred = publishedApp({
     ownerScopeId: "personal:casey@example.com",
     createdBy: "blair@example.com",
     permission: "write",
   });
-  assert.equal(deploymentTab(transferred, "blair@example.com"), "shared");
-  assert.equal(deploymentTabEmptyMessage("yours"), "No apps of your own yet.");
+  assert.equal(appTab(transferred, "blair@example.com"), "shared");
+  assert.equal(appTabEmptyMessage("yours"), "No apps of your own yet.");
 });
 
 test("management actions fail closed when permission is missing or unknown", () => {
-  assert.equal(deploymentCanManage(deployment({ permission: "write" })), true);
-  assert.equal(deploymentCanManage(deployment({ permission: "read" })), false);
-  assert.equal(deploymentCanManage(deployment({ permission: undefined })), false);
-  assert.equal(deploymentCanManage({ ...deployment({}), permission: "admin" as "write" }), false);
+  assert.equal(appCanManage(publishedApp({ permission: "write" })), true);
+  assert.equal(appCanManage(publishedApp({ permission: "read" })), false);
+  assert.equal(appCanManage(publishedApp({ permission: undefined })), false);
+  assert.equal(appCanManage({ ...publishedApp({}), permission: "admin" as "write" }), false);
 });
 
-test("a restored deployment returns to its live ownership tab", () => {
-  const restoredPersonal = deployment({ status: "running" });
-  const restoredShared = deployment({
+test("a restored app returns to its live ownership tab", () => {
+  const restoredPersonal = publishedApp({ status: "running" });
+  const restoredShared = publishedApp({
     status: "running",
     ownerScopeId: "personal:casey@example.com",
     createdBy: "casey@example.com",
     permission: "write",
   });
-  assert.equal(deploymentTab(restoredPersonal, "blair@example.com"), "yours");
-  assert.equal(deploymentTab(restoredShared, "blair@example.com"), "shared");
+  assert.equal(appTab(restoredPersonal, "blair@example.com"), "yours");
+  assert.equal(appTab(restoredShared, "blair@example.com"), "shared");
 });
 
 test("last deployed uses the applied version instead of a pending version", () => {
-  const d = deployment({
+  const d = publishedApp({
     currentVersion: 3,
     appliedVersion: 2,
     versions: [
@@ -159,30 +159,30 @@ test("last deployed uses the applied version instead of a pending version", () =
       { version: 3, createdAt: 300 },
     ],
   });
-  assert.equal(deploymentLatestAt(d), 200);
+  assert.equal(appLatestAt(d), 200);
 });
 
 test("list filtering composes tab, context, search, and newest-first sorting", () => {
-  const deployments = [
-    deployment({
+  const publishedApps = [
+    publishedApp({
       id: "old",
       displayName: "Alpha report",
       ownerScopeId: "channel:eng",
       versions: [{ version: 1, createdAt: 100 }],
     }),
-    deployment({
+    publishedApp({
       id: "new",
       displayName: "Beta report",
       ownerScopeId: "channel:eng",
       versions: [{ version: 1, createdAt: 300 }],
     }),
-    deployment({
+    publishedApp({
       id: "personal",
       displayName: "Personal report",
       ownerScopeId: "personal:blair@example.com",
       versions: [{ version: 1, createdAt: 400 }],
     }),
-    deployment({
+    publishedApp({
       id: "shared",
       displayName: "Beta shared",
       ownerScopeId: "channel:eng",
@@ -190,7 +190,7 @@ test("list filtering composes tab, context, search, and newest-first sorting", (
       permission: "read",
       versions: [{ version: 1, createdAt: 500 }],
     }),
-    deployment({
+    publishedApp({
       id: "created-in-eng",
       displayName: "Gamma report",
       ownerScopeId: "personal:blair@example.com",
@@ -200,7 +200,7 @@ test("list filtering composes tab, context, search, and newest-first sorting", (
   ];
 
   assert.deepEqual(
-    filterDeployments(deployments, {
+    filterApps(publishedApps, {
       tab: "yours",
       scope: "channel:eng",
       query: "report",
@@ -209,7 +209,7 @@ test("list filtering composes tab, context, search, and newest-first sorting", (
     ["new", "created-in-eng", "old"],
   );
   assert.deepEqual(
-    filterDeployments(deployments, { tab: "shared", scope: null, query: "beta", viewer: "blair@example.com" }).map(
+    filterApps(publishedApps, { tab: "shared", scope: null, query: "beta", viewer: "blair@example.com" }).map(
       (d) => d.id,
     ),
     ["shared"],
@@ -217,26 +217,26 @@ test("list filtering composes tab, context, search, and newest-first sorting", (
 });
 
 test("sorting supports newest, name, and status without changing the filtered set", () => {
-  const deployments = [
-    deployment({ id: "z", displayName: "Zulu", status: "stopped", versions: [{ version: 1, createdAt: 300 }] }),
-    deployment({ id: "a", displayName: "Alpha", status: "running", versions: [{ version: 1, createdAt: 200 }] }),
+  const publishedApps = [
+    publishedApp({ id: "z", displayName: "Zulu", status: "stopped", versions: [{ version: 1, createdAt: 300 }] }),
+    publishedApp({ id: "a", displayName: "Alpha", status: "running", versions: [{ version: 1, createdAt: 200 }] }),
   ];
   const options = { tab: "yours" as const, scope: null, query: "", viewer: "blair@example.com" };
   assert.deepEqual(
-    filterDeployments(deployments, { ...options, sort: "newest" }).map((d) => d.id),
+    filterApps(publishedApps, { ...options, sort: "newest" }).map((d) => d.id),
     ["z", "a"],
   );
   assert.deepEqual(
-    filterDeployments(deployments, { ...options, sort: "name" }).map((d) => d.id),
+    filterApps(publishedApps, { ...options, sort: "name" }).map((d) => d.id),
     ["a", "z"],
   );
   assert.deepEqual(
-    filterDeployments(deployments, { ...options, sort: "status" }).map((d) => d.id),
+    filterApps(publishedApps, { ...options, sort: "status" }).map((d) => d.id),
     ["a", "z"],
   );
 });
 
-test("delayed deployment actions re-check the active detail on resolve and reject", async () => {
+test("delayed app actions re-check the active detail on resolve and reject", async () => {
   for (const action of ["edit", "archive", "restore"]) {
     for (const outcome of ["resolve", "reject"] as const) {
       let activeId = "A";
@@ -245,8 +245,8 @@ test("delayed deployment actions re-check the active detail on resolve and rejec
         finish = outcome === "resolve" ? resolve : () => reject(new Error(`${action} failed`));
       });
       const settled = pending.then(
-        () => deploymentActionView("A", "deploys", activeId),
-        () => deploymentActionView("A", "deploys", activeId),
+        () => appActionView("A", "deploys", activeId),
+        () => appActionView("A", "deploys", activeId),
       );
       activeId = "B";
       finish();
@@ -262,7 +262,7 @@ test("list refresh completion leaves a pending detail's loading state untouched"
     finish = resolve;
   });
   const completion = refresh.then(() => {
-    if (deploymentListRefreshCanRedraw(state.activeId)) state.detailLoading = false;
+    if (appListRefreshCanRedraw(state.activeId)) state.detailLoading = false;
   });
   state.activeId = "A";
   state.detailLoading = true;

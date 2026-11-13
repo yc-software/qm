@@ -12012,17 +12012,17 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   margin-top: 0;
 }
 
-.deployment-permissions-dialog {
+.app-permissions-dialog {
   width: min(440px, calc(100vw - 32px));
   padding: 24px;
 }
-.deployment-permissions-dialog .project-dialog-head {
+.app-permissions-dialog .project-dialog-head {
   margin-bottom: 20px;
 }
-.deployment-permissions-dialog .project-dialog-head h2 {
+.app-permissions-dialog .project-dialog-head h2 {
   font-size: var(--font-17);
 }
-.deployment-permissions-dialog .project-dialog-head p {
+.app-permissions-dialog .project-dialog-head p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
   font-size: 12px;
@@ -12121,11 +12121,11 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--muted-foreground);
   margin: 10px 0 0;
 }
-.deployment-permissions-dialog .project-dialog-actions {
+.app-permissions-dialog .project-dialog-actions {
   margin-top: 20px;
 }
 
-.deployment-permissions-dialog .permission-control .menu-popover {
+.app-permissions-dialog .permission-control .menu-popover {
   position: absolute !important;
   inset: calc(100% + 6px) 0 auto auto !important;
   width: 170px !important;
@@ -12136,21 +12136,21 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   border-radius: var(--radius-sm);
   animation: none;
 }
-.deployment-permissions-dialog .permission-control .menu-popover::after {
+.app-permissions-dialog .permission-control .menu-popover::after {
   display: none;
 }
-.deployment-permissions-dialog .permission-control .menu-option {
+.app-permissions-dialog .permission-control .menu-option {
   min-height: 34px;
   padding: 6px 10px;
 }
-.deployment-permissions-dialog .permission-invite .menu-popover {
+.app-permissions-dialog .permission-invite .menu-popover {
   inset: calc(100% + 6px) auto auto 0 !important;
 }
-.deployment-permissions-dialog .general-access-control .menu-popover {
+.app-permissions-dialog .general-access-control .menu-popover {
   inset: calc(100% + 6px) auto auto -8px !important;
   width: 220px !important;
 }
-.deployment-permissions-dialog .permission-control .menu-popover.drop-up {
+.app-permissions-dialog .permission-control .menu-popover.drop-up {
   top: auto !important;
   bottom: calc(100% + 6px) !important;
 }

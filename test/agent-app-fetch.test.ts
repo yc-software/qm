@@ -9,9 +9,9 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
-const SECRET = "agent-deployment-fetch-secret".repeat(2);
+const SECRET = "agent-app-fetch-secret".repeat(2);
 
-describe("agent deployment fetch", () => {
+describe("agent app fetch", () => {
   let upstream: Server;
   let server: Server;
   let base: string;
@@ -59,7 +59,7 @@ describe("agent deployment fetch", () => {
 
     const app = {
       authorizesCapabilityScope: async () => true,
-      reachDeployment: async (id: string, viewer: string) => {
+      reachApp: async (id: string, viewer: string) => {
         if (id !== "mine" && id !== "down") return { status: "not_found" as const };
         if (viewer !== "U1") return { status: "denied" as const };
         return {
@@ -79,11 +79,11 @@ describe("agent deployment fetch", () => {
   });
 
   it("requires an identified viewer", async () => {
-    assert.equal((await get("/v1/deployments/mine/fetch")).status, 401);
+    assert.equal((await get("/v1/apps/mine/fetch")).status, 401);
   });
 
   it("fetches rendered text for the owner", async () => {
-    const response = await get("/v1/deployments/mine/fetch", "U1");
+    const response = await get("/v1/apps/mine/fetch", "U1");
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       status: 200,
@@ -93,12 +93,12 @@ describe("agent deployment fetch", () => {
     });
   });
 
-  it("hides an out-of-reach deployment", async () => {
-    assert.equal((await get("/v1/deployments/mine/fetch", "U2")).status, 404);
+  it("hides an out-of-reach app", async () => {
+    assert.equal((await get("/v1/apps/mine/fetch", "U2")).status, 404);
   });
 
   it("truncates at the requested byte cap", async () => {
-    const response = await get("/v1/deployments/mine/fetch?path=%2Flarge&maxBytes=4", "U1");
+    const response = await get("/v1/apps/mine/fetch?path=%2Flarge&maxBytes=4", "U1");
     assert.deepEqual(await response.json(), {
       status: 200,
       contentType: "text/plain",
@@ -108,13 +108,13 @@ describe("agent deployment fetch", () => {
   });
 
   it("maps an unavailable upstream to 502", async () => {
-    const response = await get("/v1/deployments/down/fetch", "U1");
+    const response = await get("/v1/apps/down/fetch", "U1");
     assert.equal(response.status, 502);
     assert.deepEqual(await response.json(), { error: "upstream_unreachable" });
   });
 
   it("encodes binary content as base64", async () => {
-    const response = await get("/v1/deployments/mine/fetch?path=%2Fbinary", "U1");
+    const response = await get("/v1/apps/mine/fetch?path=%2Fbinary", "U1");
     assert.deepEqual(await response.json(), {
       status: 200,
       contentType: "application/octet-stream",
@@ -125,6 +125,6 @@ describe("agent deployment fetch", () => {
   });
 
   it("rejects encoded traversal variants", async () => {
-    assert.equal((await get("/v1/deployments/mine/fetch?path=%2F%2525252e%2525252e%2525255csecret", "U1")).status, 400);
+    assert.equal((await get("/v1/apps/mine/fetch?path=%2F%2525252e%2525252e%2525255csecret", "U1")).status, 400);
   });
 });

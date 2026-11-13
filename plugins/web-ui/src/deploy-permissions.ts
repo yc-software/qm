@@ -25,7 +25,7 @@ interface Grant {
 
 const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
 
-export async function openDeploymentPermissions(
+export async function openAppPermissions(
   id: string,
   title: string,
   owner: string,
@@ -33,8 +33,8 @@ export async function openDeploymentPermissions(
 ): Promise<void> {
   const opener = document.activeElement as HTMLElement | null;
   const dialog = document.createElement("dialog");
-  dialog.className = "project-dialog deployment-permissions-dialog";
-  dialog.setAttribute("aria-labelledby", "deployment-permissions-heading");
+  dialog.className = "project-dialog app-permissions-dialog";
+  dialog.setAttribute("aria-labelledby", "app-permissions-heading");
   document.body.append(dialog);
   let grantees: Grant[] = [];
   let publicAccess = false;
@@ -51,7 +51,7 @@ export async function openDeploymentPermissions(
   let loaded = false;
   let error = "";
   let searched = false;
-  const endpoint = `/api/deployments/${encodeURIComponent(id)}/share`;
+  const endpoint = `/api/apps/${encodeURIComponent(id)}/share`;
   const close = () => {
     clearTimeout(timer);
     searchSequence++;
@@ -203,7 +203,7 @@ export async function openDeploymentPermissions(
       html`
         <div class="project-dialog-head">
           <div>
-            <h2 id="deployment-permissions-heading">App permissions</h2>
+            <h2 id="app-permissions-heading">App permissions</h2>
             <p>${title}</p>
           </div>
           <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>

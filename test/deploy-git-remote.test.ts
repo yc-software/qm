@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type PublishedApp } from "../src/deploy/deploy-store.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
@@ -23,7 +23,7 @@ const SECRET = "deploy-git-remote-secret".repeat(3);
 async function fixture(): Promise<{
   base: string;
   close: () => Promise<void>;
-  deployment: Deployment;
+  deployment: PublishedApp;
 }> {
   const backing = testDeployBackings();
   const archiveStore = testMap<DeployGitArchive>();
@@ -31,7 +31,7 @@ async function fixture(): Promise<{
     ...backing,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-writer-")), archiveStore },
   });
-  const deployment = await writerStore.create({
+  const publishedApp = await writerStore.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
@@ -42,15 +42,15 @@ async function fixture(): Promise<{
     ],
     name: "git-remote",
   });
-  await writerStore.setAppliedVersion(deployment.id, 1);
+  await writerStore.setAppliedVersion(publishedApp.id, 1);
   const readerStore = createDeployStore({
     ...backing,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-reader-")), archiveStore },
   });
   const app = {
     tenantFor: async () => TEST_TENANT,
-    listDeployments: async () => [deployment],
-    deploymentGitRepoPath: async (id: string) => (id === deployment.id ? await readerStore.repoUrl(id) : null),
+    listApps: async () => [publishedApp],
+    appGitRepoPath: async (id: string) => (id === publishedApp.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;
   const server: Server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -58,22 +58,18 @@ async function fixture(): Promise<{
   });
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { base, deployment, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return { base, deployment: publishedApp, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-async function authedGitUrl(
-  base: string,
-  deploymentId: string,
-  permission: "read" | "write" = "read",
-): Promise<string> {
-  const token = await mintDeployGitAccess(SECRET, { deploymentId, permission, exp: Date.now() + 60_000 });
-  const url = new URL(`/v1/deployments/${encodeURIComponent(deploymentId)}/git`, base);
+async function authedGitUrl(base: string, appId: string, permission: "read" | "write" = "read"): Promise<string> {
+  const token = await mintDeployGitAccess(SECRET, { deploymentId: appId, permission, exp: Date.now() + 60_000 });
+  const url = new URL(`/v1/apps/${encodeURIComponent(appId)}/git`, base);
   url.username = "deployment";
   url.password = token;
   return url.toString();
 }
 
-test("deployment git remote serves the current ref to a real git client", async () => {
+test("app git remote serves the current ref to a real git client", async () => {
   const f = await fixture();
   try {
     const v = f.deployment.versions[0]!;
@@ -88,14 +84,14 @@ test("deployment git remote serves the current ref to a real git client", async 
   }
 });
 
-test("deployment git remote rejects unauthenticated fetches when core auth is configured", async () => {
+test("app git remote rejects unauthenticated fetches when core auth is configured", async () => {
   const f = await fixture();
   try {
     const res = await fetch(
-      `${f.base}/v1/deployments/${encodeURIComponent(f.deployment.id)}/git/info/refs?service=git-upload-pack`,
+      `${f.base}/v1/apps/${encodeURIComponent(f.deployment.id)}/git/info/refs?service=git-upload-pack`,
     );
     assert.equal(res.status, 401);
-    assert.match(res.headers.get("www-authenticate") ?? "", /deployment git/);
+    assert.match(res.headers.get("www-authenticate") ?? "", /app git/);
   } finally {
     await f.close();
   }

@@ -54,7 +54,7 @@ interface ScopeFile {
   createdAt: number;
   openable: boolean;
 }
-interface ScopeDeployment {
+interface ScopeApp {
   id: string;
   name: string;
   status: string;
@@ -71,7 +71,7 @@ interface ScopeResourcesView {
   files: ScopeFile[];
   webhooks: WebhookView[];
   crons: CronView[];
-  deployments: ScopeDeployment[];
+  deployments: ScopeApp[];
   skills: ScopeSkill[];
   manageable: boolean;
 }
@@ -859,7 +859,7 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
         : nothing
     }
     ${r.webhooks.length ? resourceGroup("Webhooks", r.webhooks.map(webhookRow)) : nothing}
-    ${r.deployments.length ? resourceGroup("Apps", r.deployments.map(deploymentRow)) : nothing}
+    ${r.deployments.length ? resourceGroup("Apps", r.deployments.map(appRow)) : nothing}
   `;
 }
 
@@ -1022,7 +1022,7 @@ function skillRow(s: ScopeSkill, manage = false): TemplateResult {
   `;
 }
 
-function deploymentRow(d: ScopeDeployment): TemplateResult {
+function appRow(d: ScopeApp): TemplateResult {
   return html`
     <div class="context-session-row context-resource-row">
       <span class="context-session-title" dir="auto">${d.name}</span>

@@ -139,9 +139,9 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(ctx, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
-  const [crons, deployments, skills, environmentRows] = await Promise.all([
+  const [crons, publishedApps, skills, environmentRows] = await Promise.all([
     app.listCrons(),
-    app.listDeployments(),
+    app.listApps(),
     app.listSkills(),
     app.listEnvironments(),
   ]);
@@ -159,7 +159,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   );
   const owners = [
     ...crons.map((c) => c.ownerScopeId),
-    ...deployments.map((d) => d.ownerScopeId),
+    ...publishedApps.map((d) => d.ownerScopeId),
     ...skills.map((s) => s.scopeId),
     ...environments.map((environment) => environment.id),
     ...environments.flatMap((environment) => environment.attachedScopes),
@@ -172,7 +172,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     return m;
   };
   const cronN = countBy(crons.map((c) => c.ownerScopeId));
-  const deployN = countBy(deployments.map((d) => d.ownerScopeId));
+  const deployN = countBy(publishedApps.map((d) => d.ownerScopeId));
   const skillN = countBy(skills.map((s) => s.scopeId));
   const scopes = [...labels].map(([id, label]) => {
     const counts = activity?.byScope.get(id);

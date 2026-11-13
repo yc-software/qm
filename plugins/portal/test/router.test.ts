@@ -24,7 +24,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
       res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
     });
   }
-  if (req.url?.startsWith("/v1/deployments/app-1/git/")) {
+  if (req.url?.startsWith("/v1/apps/app-1/git/")) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     return void req.on("end", () => {
@@ -891,28 +891,28 @@ test("core's readiness, Slack HTTP events and the spend export reach core throug
   const exported = (await spend.json()) as { url: string; headers: Record<string, string> };
   assert.equal(exported.url, "/v1/spend/export?from=2026-10-01&to=2026-11-01");
   assert.equal(exported.headers.authorization, "Bearer spend-token");
-  const apps = await fetch(`${base}/v1/deployments/export?principalId=alice%40example.com`, {
+  const apps = await fetch(`${base}/v1/apps/export?principalId=alice%40example.com`, {
     headers: { authorization: "Bearer spend-token", cookie: "portal_session=x" },
   });
   assert.equal(apps.status, 200);
   const listed = (await apps.json()) as { url: string; headers: Record<string, string> };
-  assert.equal(listed.url, "/v1/deployments/export?principalId=alice%40example.com");
+  assert.equal(listed.url, "/v1/apps/export?principalId=alice%40example.com");
   assert.equal(listed.headers.authorization, "Bearer spend-token");
   assert.equal(listed.headers.cookie, undefined);
   assert.equal((await fetch(`${base}/slack/events`)).status === 200, false);
 });
 
-test("deployment git requests reach core with their token and without browser credentials", async () => {
-  const refs = await fetch(`${base}/v1/deployments/app-1/git/info/refs?service=git-upload-pack`, {
+test("app git requests reach core with their token and without browser credentials", async () => {
+  const refs = await fetch(`${base}/v1/apps/app-1/git/info/refs?service=git-upload-pack`, {
     headers: { authorization: "Bearer deploy-git-token", cookie: "portal_session=x", "git-protocol": "version=2" },
   });
   assert.equal(refs.status, 200);
   const refsBody = (await refs.json()) as { url: string; headers: Record<string, string> };
-  assert.equal(refsBody.url, "/v1/deployments/app-1/git/info/refs?service=git-upload-pack");
+  assert.equal(refsBody.url, "/v1/apps/app-1/git/info/refs?service=git-upload-pack");
   assert.equal(refsBody.headers.authorization, "Bearer deploy-git-token");
   assert.equal(refsBody.headers["git-protocol"], "version=2");
   assert.equal(refsBody.headers.cookie, undefined);
-  const pack = await fetch(`${base}/v1/deployments/app-1/git/git-upload-pack`, {
+  const pack = await fetch(`${base}/v1/apps/app-1/git/git-upload-pack`, {
     method: "POST",
     headers: { authorization: "Bearer deploy-git-token", "content-type": "application/x-git-upload-pack-request" },
     body: "0032want",
@@ -920,10 +920,10 @@ test("deployment git requests reach core with their token and without browser cr
   assert.equal(pack.status, 200);
   assert.equal(((await pack.json()) as { body: string }).body, "0032want");
   for (const [method, path] of [
-    ["POST", "/v1/deployments/app-1/git/info/refs"],
-    ["GET", "/v1/deployments/app-1/git/git-upload-pack"],
-    ["GET", "/v1/deployments/app-1/git/HEAD"],
-    ["GET", "/v1/deployments/app-1/versions"],
+    ["POST", "/v1/apps/app-1/git/info/refs"],
+    ["GET", "/v1/apps/app-1/git/git-upload-pack"],
+    ["GET", "/v1/apps/app-1/git/HEAD"],
+    ["GET", "/v1/apps/app-1/versions"],
   ] as const)
     assert.equal((await fetch(`${base}${path}`, { method })).status, 404, `${method} ${path}`);
 });

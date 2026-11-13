@@ -36,32 +36,32 @@ function svc() {
 const make = (deploy: ReturnType<typeof svc>["deploy"], name: string) =>
   deploy.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [], name });
 
-test("renameDeployment moves the URL slug by id, keeping the immutable id", async () => {
+test("renameApp moves the URL slug by id, keeping the immutable id", async () => {
   const s = svc();
   const d = await make(s.deploy, "old-slug");
-  const r = await s.deploy.renameDeployment(d.id, "new-slug");
-  assert.equal(r.id, d.id, "same deployment");
+  const r = await s.deploy.renameApp(d.id, "new-slug");
+  assert.equal(r.id, d.id, "same app");
   assert.equal(r.name, "new-slug");
   assert.equal(await s.deployStore.getByName("old-slug"), null, "old slug no longer resolves");
   assert.equal((await s.deployStore.getByName("new-slug"))!.id, d.id);
 });
 
-test("renameDeployment rejects a taken slug, an invalid slug, and an unknown id", async () => {
+test("renameApp rejects a taken slug, an invalid slug, and an unknown id", async () => {
   const s = svc();
   const a = await make(s.deploy, "alpha");
   await make(s.deploy, "beta");
-  await assert.rejects(() => s.deploy.renameDeployment(a.id, "beta"), /name taken/);
-  await assert.rejects(() => s.deploy.renameDeployment(a.id, "Bad_Slug"), /invalid deployment name/);
-  await assert.rejects(() => s.deploy.renameDeployment("nope", "ok-slug"), /unknown deployment/);
+  await assert.rejects(() => s.deploy.renameApp(a.id, "beta"), /name taken/);
+  await assert.rejects(() => s.deploy.renameApp(a.id, "Bad_Slug"), /invalid app name/);
+  await assert.rejects(() => s.deploy.renameApp("nope", "ok-slug"), /unknown app/);
 });
 
-test("setDeploymentDisplayName sets the label, then clears it (independent of the slug)", async () => {
+test("setAppDisplayName sets the label, then clears it (independent of the slug)", async () => {
   const s = svc();
   const d = await make(s.deploy, "my-app");
-  const set = await s.deploy.setDeploymentDisplayName(d.id, "My Cool App");
+  const set = await s.deploy.setAppDisplayName(d.id, "My Cool App");
   assert.equal(set.displayName, "My Cool App");
   assert.equal(set.name, "my-app", "the URL slug is untouched");
-  const cleared = await s.deploy.setDeploymentDisplayName(d.id, "");
+  const cleared = await s.deploy.setAppDisplayName(d.id, "");
   assert.equal(cleared.displayName, undefined, "empty clears the label (falls back to name/id)");
   assert.equal(cleared.name, "my-app");
 });
@@ -87,12 +87,12 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
     });
   try {
     const d = await make(s.deploy, "my-app");
-    const dn = await post(`/v1/deployments/${d.id}/display-name`, { displayName: "Pretty" });
+    const dn = await post(`/v1/apps/${d.id}/display-name`, { displayName: "Pretty" });
     assert.equal(dn.status, 200);
     const dnBody = (await dn.json()) as { deployment: { name?: string; displayName?: string } };
     assert.equal(dnBody.deployment.displayName, "Pretty");
     assert.equal(dnBody.deployment.name, "my-app", "the URL slug is untouched");
-    const rn = await post(`/v1/deployments/${d.id}/name`, { name: "new-slug" });
+    const rn = await post(`/v1/apps/${d.id}/name`, { name: "new-slug" });
     assert.equal(rn.status, 200);
     const rnBody = (await rn.json()) as { deployment: { name?: string; displayName?: string } };
     assert.equal(rnBody.deployment.name, "new-slug");
@@ -102,10 +102,10 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   }
 });
 
-test("setDeploymentDisplayName rejects an over-long or control-char label, and an unknown id", async () => {
+test("setAppDisplayName rejects an over-long or control-char label, and an unknown id", async () => {
   const s = svc();
   const d = await make(s.deploy, "app");
-  await assert.rejects(() => s.deploy.setDeploymentDisplayName(d.id, "x".repeat(61)), /too long/);
-  await assert.rejects(() => s.deploy.setDeploymentDisplayName(d.id, "badname"), /control characters/);
-  await assert.rejects(() => s.deploy.setDeploymentDisplayName("nope", "label"), /unknown deployment/);
+  await assert.rejects(() => s.deploy.setAppDisplayName(d.id, "x".repeat(61)), /too long/);
+  await assert.rejects(() => s.deploy.setAppDisplayName(d.id, "badname"), /control characters/);
+  await assert.rejects(() => s.deploy.setAppDisplayName("nope", "label"), /unknown app/);
 });

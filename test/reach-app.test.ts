@@ -55,7 +55,7 @@ function appWithFakeRuntime() {
   return { app, acl, directory, sessions, teams };
 }
 
-test("reachDeployment: org → any non-empty principal; personal → owner only; empty/unknown → denied", async () => {
+test("reachApp: org → any non-empty principal; personal → owner only; empty/unknown → denied", async () => {
   const { app } = appWithFakeRuntime();
 
   const org = await app.deploy({
@@ -64,8 +64,8 @@ test("reachDeployment: org → any non-empty principal; personal → owner only;
     entrypoint: "x",
     files: [],
   });
-  assert.equal((await app.reachDeployment(org.id, "U-anyone")).status, "ok");
-  assert.equal((await app.reachDeployment(org.id, "")).status, "denied");
+  assert.equal((await app.reachApp(org.id, "U-anyone")).status, "ok");
+  assert.equal((await app.reachApp(org.id, "")).status, "denied");
 
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -73,19 +73,19 @@ test("reachDeployment: org → any non-empty principal; personal → owner only;
     entrypoint: "x",
     files: [],
   });
-  assert.equal((await app.reachDeployment(personal.id, "U1")).status, "ok");
-  assert.equal((await app.reachDeployment(personal.id, "U2")).status, "denied");
+  assert.equal((await app.reachApp(personal.id, "U1")).status, "ok");
+  assert.equal((await app.reachApp(personal.id, "U2")).status, "denied");
 
-  assert.equal((await app.reachDeployment("no-such-id", "U1")).status, "not_found");
+  assert.equal((await app.reachApp("no-such-id", "U1")).status, "not_found");
 });
 
-test("reachDeployment: a team-owned deployment is denied (membership ingress is a follow-up)", async () => {
+test("reachApp: a team-owned app is denied (membership ingress is a follow-up)", async () => {
   const { app } = appWithFakeRuntime();
   const team = await app.deploy({ ownerScopeId: scopeId("team", "eng"), createdBy: "U1", entrypoint: "x", files: [] });
-  assert.equal((await app.reachDeployment(team.id, "U1")).status, "denied");
+  assert.equal((await app.reachApp(team.id, "U1")).status, "denied");
 });
 
-test("reachDeployment: a read grant lets a non-owner reach a personal deployment; revoke re-denies", async () => {
+test("reachApp: a read grant lets a non-owner reach a personal app; revoke re-denies", async () => {
   const { app, acl } = appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -93,7 +93,7 @@ test("reachDeployment: a read grant lets a non-owner reach a personal deployment
     entrypoint: "x",
     files: [],
   });
-  assert.equal((await app.reachDeployment(personal.id, "U2")).status, "denied");
+  assert.equal((await app.reachApp(personal.id, "U2")).status, "denied");
 
   await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
@@ -102,14 +102,14 @@ test("reachDeployment: a read grant lets a non-owner reach a personal deployment
     permission: "read",
     grantedBy: "U1",
   });
-  assert.equal((await app.reachDeployment(personal.id, "U2")).status, "ok");
-  assert.equal((await app.reachDeployment(personal.id, "U3")).status, "denied");
+  assert.equal((await app.reachApp(personal.id, "U2")).status, "ok");
+  assert.equal((await app.reachApp(personal.id, "U3")).status, "denied");
 
   await acl.revoke(tenant, scopeId("personal", "U1"), `deployment:${personal.id}`, scopeId("personal", "U2"), "U1");
-  assert.equal((await app.reachDeployment(personal.id, "U2")).status, "denied");
+  assert.equal((await app.reachApp(personal.id, "U2")).status, "denied");
 });
 
-test("reachDeployment: shared-scope read grants require current channel or group membership", async () => {
+test("reachApp: shared-scope read grants require current channel or group membership", async () => {
   const { app, acl, directory, sessions } = appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -129,10 +129,10 @@ test("reachDeployment: shared-scope read grants require current channel or group
     [{ channelId: "C1", principalId: "U2" }],
   );
 
-  assert.equal((await app.reachDeployment(personal.id, "U2")).status, "ok");
-  assert.equal((await app.reachDeployment(personal.id, "U3")).status, "denied");
+  assert.equal((await app.reachApp(personal.id, "U2")).status, "ok");
+  assert.equal((await app.reachApp(personal.id, "U3")).status, "denied");
 
-  const groupDeployment = await app.deploy({
+  const groupApp = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "x",
@@ -140,17 +140,17 @@ test("reachDeployment: shared-scope read grants require current channel or group
   });
   await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
-    ref: `deployment:${groupDeployment.id}`,
+    ref: `deployment:${groupApp.id}`,
     granteeScopeId: scopeId("group", "G1"),
     permission: "read",
     grantedBy: "U1",
   });
   await directory.replaceGroups([{ groupId: "G1", principalId: "U4" }]);
-  assert.equal((await app.reachDeployment(groupDeployment.id, "U4")).status, "ok");
+  assert.equal((await app.reachApp(groupApp.id, "U4")).status, "ok");
 
   const session = await sessions.getOrCreateByThread("thread-g2", "group", scopeId("group", "G2"));
   await sessions.addParticipant(session.id, "U5");
-  const priorGroupDeployment = await app.deploy({
+  const priorGroupApp = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "x",
@@ -158,15 +158,15 @@ test("reachDeployment: shared-scope read grants require current channel or group
   });
   await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
-    ref: `deployment:${priorGroupDeployment.id}`,
+    ref: `deployment:${priorGroupApp.id}`,
     granteeScopeId: scopeId("group", "G2"),
     permission: "read",
     grantedBy: "U1",
   });
-  assert.equal((await app.reachDeployment(priorGroupDeployment.id, "U5")).status, "denied");
+  assert.equal((await app.reachApp(priorGroupApp.id, "U5")).status, "denied");
 });
 
-test("listDeploymentsForViewer includes owned and ACL-visible deployments only", async () => {
+test("listAppsForViewer includes owned and ACL-visible apps only", async () => {
   const { app, acl, directory } = appWithFakeRuntime();
   const own = await app.deploy({
     ownerScopeId: scopeId("personal", "U2"),
@@ -198,14 +198,14 @@ test("listDeploymentsForViewer includes owned and ACL-visible deployments only",
     [{ channelId: "C1", principalId: "U2" }],
   );
 
-  const rows = await app.listDeploymentsForViewer(tenant, { actorId: "U2" });
+  const rows = await app.listAppsForViewer(tenant, { actorId: "U2" });
   assert.deepEqual(rows.map((d) => d.id).sort(), [own.id, shared.id].sort());
   assert.ok(!rows.some((d) => d.id === hidden.id));
   assert.equal(rows.find((d) => d.id === own.id)?.permission, "write");
   assert.equal(rows.find((d) => d.id === shared.id)?.permission, "read");
 });
 
-test("listDeploymentsForViewer: a write grant yields permission write for a non-owner", async () => {
+test("listAppsForViewer: a write grant yields permission write for a non-owner", async () => {
   const { app, acl } = appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -220,11 +220,11 @@ test("listDeploymentsForViewer: a write grant yields permission write for a non-
     permission: "write",
     grantedBy: "U1",
   });
-  const rows = await app.listDeploymentsForViewer(tenant, { actorId: "U2" });
+  const rows = await app.listAppsForViewer(tenant, { actorId: "U2" });
   assert.equal(rows.find((d) => d.id === shared.id)?.permission, "write");
 });
 
-test("listDeploymentsForViewer matches per-app permissions with store reads independent of app count", async () => {
+test("listAppsForViewer matches per-app permissions with store reads independent of app count", async () => {
   const { app, acl, directory, teams } = appWithFakeRuntime();
   await teams.apply(tenant, { id: "eng", addMembers: ["U2"] }, "admin");
   await teams.apply(tenant, { id: "ops", addMembers: ["U3"] }, "admin");
@@ -277,12 +277,12 @@ test("listDeploymentsForViewer matches per-app permissions with store reads inde
         store[key] = (...args: unknown[]) => (reads++, (fn as (...a: unknown[]) => unknown).apply(store, args));
   const listedReads = async () => {
     reads = 0;
-    const rows = await app.listDeploymentsForViewer(tenant, { actorId: "U2" });
+    const rows = await app.listAppsForViewer(tenant, { actorId: "U2" });
     const count = reads;
-    for (const d of await app.listDeployments())
+    for (const d of await app.listApps())
       assert.equal(
         rows.find((r) => r.id === d.id)?.permission ?? null,
-        await app.deploymentGitPermissionFor(d.id, { actorId: "U2" }),
+        await app.appGitPermissionFor(d.id, { actorId: "U2" }),
       );
     return { count, rows: rows.length };
   };
@@ -294,7 +294,7 @@ test("listDeploymentsForViewer matches per-app permissions with store reads inde
   assert.equal(many.count, few.count);
 });
 
-test("HTTP: /v1/deployments?principalId= filters through viewer authz", async () => {
+test("HTTP: /v1/apps?principalId= filters through viewer authz", async () => {
   const { app, acl, directory } = appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -318,7 +318,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const r = await fetch(`${base}/v1/deployments?principalId=U2`);
+    const r = await fetch(`${base}/v1/apps?principalId=U2`);
     assert.equal(r.status, 200);
     const body = (await r.json()) as { deployments: Array<{ id: string; permission: string }> };
     assert.deepEqual(
@@ -331,7 +331,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
   }
 });
 
-test("HTTP: /v1/deployments/:id shows a deployment only to principals who can see it", async () => {
+test("HTTP: /v1/apps/:id shows an app only to principals who can see it", async () => {
   const { app, acl, directory } = appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -363,7 +363,7 @@ test("HTTP: /v1/deployments/:id shows a deployment only to principals who can se
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const view = async (ref: string, principal?: string) => {
-      const r = await fetch(`${base}/v1/deployments/${ref}${principal ? `?principalId=${principal}` : ""}`);
+      const r = await fetch(`${base}/v1/apps/${ref}${principal ? `?principalId=${principal}` : ""}`);
       const body = (await r.json()) as { deployment?: { id: string; permission?: string } };
       return [r.status, body.deployment?.id, body.deployment?.permission];
     };
@@ -379,7 +379,7 @@ test("HTTP: /v1/deployments/:id shows a deployment only to principals who can se
   }
 });
 
-test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ingress is configured", async () => {
+test("HTTP: each /v1/apps row carries an authed, clonable gitUrl when ingress is configured", async () => {
   const { app, acl, directory } = appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -408,7 +408,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const path = "/v1/deployments?principalId=U2";
+    const path = "/v1/apps?principalId=U2";
     const headers = signedRequestHeaders(secret, "GET", path, "", {}) as Record<string, string>;
     const r = await fetch(`${base}${path}`, { headers });
     assert.equal(r.status, 200);
@@ -419,7 +419,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     assert.ok(row.gitUrl);
     const gitUrl = new URL(row.gitUrl!);
     assert.equal(gitUrl.host, "core.test");
-    assert.equal(gitUrl.pathname, `/v1/deployments/${shared.id}/git`);
+    assert.equal(gitUrl.pathname, `/v1/apps/${shared.id}/git`);
     assert.ok(gitUrl.password.length > 0);
     const access = await verifyDeployGitAccess(secret, gitUrl.password);
     assert.equal(access?.deploymentId, shared.id);
@@ -428,7 +428,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
   }
 });
 
-test("reachDeployment: an org grant on a personal deployment opens it to any verified principal", async () => {
+test("reachApp: an org grant on a personal app opens it to any verified principal", async () => {
   const { app, acl } = appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -443,11 +443,11 @@ test("reachDeployment: an org grant on a personal deployment opens it to any ver
     permission: "read",
     grantedBy: "U1",
   });
-  assert.equal((await app.reachDeployment(personal.id, "U-anyone")).status, "ok");
-  assert.equal((await app.reachDeployment(personal.id, "")).status, "denied");
+  assert.equal((await app.reachApp(personal.id, "U-anyone")).status, "ok");
+  assert.equal((await app.reachApp(personal.id, "")).status, "denied");
 });
 
-test("reachDeployment: admin bypass reaches running deployments without owner scope membership", async () => {
+test("reachApp: admin bypass reaches running apps without owner scope membership", async () => {
   const { app } = appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -455,6 +455,6 @@ test("reachDeployment: admin bypass reaches running deployments without owner sc
     entrypoint: "x",
     files: [],
   });
-  assert.equal((await app.reachDeployment(personal.id, "U2")).status, "denied");
-  assert.equal((await app.reachDeployment(personal.id, "", { bypassAcl: true })).status, "ok");
+  assert.equal((await app.reachApp(personal.id, "U2")).status, "denied");
+  assert.equal((await app.reachApp(personal.id, "", { bypassAcl: true })).status, "ok");
 });

@@ -14,11 +14,11 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 function appWith(endpoint: Record<string, unknown>): App {
   return {
     tenantFor: async () => TEST_TENANT,
-    reachDeployment: async () => ({ status: "ok", endpoint }),
+    reachApp: async () => ({ status: "ok", endpoint }),
   } as unknown as App;
 }
 
-test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authenticates to a token-gated deployment", async () => {
+test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authenticates to a token-gated app", async () => {
   let seenCookie: string | undefined;
   const upstream = createHttpServer((req, res) => {
     seenCookie = req.headers.cookie;
@@ -247,7 +247,7 @@ test("/d/ proxy keeps the shared HTTP/2 session when one request has invalid hea
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const app = {
     tenantFor: async () => TEST_TENANT,
-    reachDeployment: async () => ({
+    reachApp: async () => ({
       status: "ok",
       endpoint: {
         host: "127.0.0.1",
@@ -351,7 +351,7 @@ test("/d/ proxy resets the downstream response when an HTTP/2 body is truncated"
   }
 });
 
-test("/d/ proxy returns 504 instead of hanging when the deployment accepts but never responds", async () => {
+test("/d/ proxy returns 504 instead of hanging when the app accepts but never responds", async () => {
   const held: import("node:net").Socket[] = [];
   const upstream = createHttpServer((req) => {
     held.push(req.socket);
@@ -397,7 +397,7 @@ test("/d/ proxy sends no extra headers when the endpoint declares none", async (
   }
 });
 
-test("admin deployment proxy bypasses deployment ACL after admin auth and audits the visit", async () => {
+test("admin app proxy bypasses app ACL after admin auth and audits the visit", async () => {
   let upstreamUrl = "";
   const upstream = createHttpServer((req, res) => {
     upstreamUrl = req.url ?? "";
@@ -410,8 +410,8 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   let bypassAcl: boolean | undefined;
   const app = {
     tenantFor: async () => TEST_TENANT,
-    getDeployment: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: "personal:U1" } : null),
-    reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
+    getApp: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: "personal:U1" } : null),
+    reachApp: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;
       return opts?.bypassAcl
         ? { status: "ok", endpoint: { host: "127.0.0.1", port: upstreamPort } }
@@ -432,7 +432,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const path = "/v1/admin/deployments/d1/proxy/hello?x=1";
+    const path = "/v1/admin/apps/d1/proxy/hello?x=1";
     const actor = "admin-alice@default-org";
     const ts = Math.floor(Date.now() / 1000);
     const res = await fetch(`${base}${path}`, {

@@ -84,8 +84,8 @@ test("restore reapplies the archived current version before marking it running",
     entrypoint: "server.js",
     files: [],
   });
-  await deploy.archiveDeployment(d.id);
-  const restored = await deploy.restoreDeployment(d.id);
+  await deploy.archiveApp(d.id);
+  const restored = await deploy.restoreApp(d.id);
 
   assert.deepEqual(counts(), { applies: 2, destroys: 1 });
   assert.equal(restored.status, "running");
@@ -94,7 +94,7 @@ test("restore reapplies the archived current version before marking it running",
   assert.equal(restored.endpoint?.port, 20202);
 });
 
-test("a failed restore leaves the deployment archived and unreachable", async () => {
+test("a failed restore leaves the app archived and unreachable", async () => {
   const { deploy } = agent(true);
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -102,13 +102,13 @@ test("a failed restore leaves the deployment archived and unreachable", async ()
     entrypoint: "server.js",
     files: [],
   });
-  await deploy.archiveDeployment(d.id);
+  await deploy.archiveApp(d.id);
 
-  await assert.rejects(() => deploy.restoreDeployment(d.id), /runtime unavailable/);
-  const after = (await deploy.listDeployments()).find((row) => row.id === d.id)!;
+  await assert.rejects(() => deploy.restoreApp(d.id), /runtime unavailable/);
+  const after = (await deploy.listApps()).find((row) => row.id === d.id)!;
   assert.equal(after.status, "archived");
   assert.equal(after.endpoint, null);
-  assert.equal((await deploy.reachDeployment(d.id, "U1")).status, "not_found");
+  assert.equal((await deploy.reachApp(d.id, "U1")).status, "not_found");
 });
 
 test("restore is idempotent for retries and concurrent callers", async () => {
@@ -119,11 +119,11 @@ test("restore is idempotent for retries and concurrent callers", async () => {
     entrypoint: "server.js",
     files: [],
   });
-  await deploy.archiveDeployment(d.id);
-  const [first, second] = await Promise.all([deploy.restoreDeployment(d.id), deploy.restoreDeployment(d.id)]);
+  await deploy.archiveApp(d.id);
+  const [first, second] = await Promise.all([deploy.restoreApp(d.id), deploy.restoreApp(d.id)]);
   assert.equal(first.status, "running");
   assert.equal(second.status, "running");
-  assert.equal((await deploy.restoreDeployment(d.id)).status, "running");
+  assert.equal((await deploy.restoreApp(d.id)).status, "running");
 });
 
 for (const failMethod of ["setVersionImage", "setEndpoint", "setStatus", "setAppliedVersion"] as const) {
@@ -135,11 +135,11 @@ for (const failMethod of ["setVersionImage", "setEndpoint", "setStatus", "setApp
       entrypoint: "server.js",
       files: [],
     });
-    await deploy.archiveDeployment(d.id);
+    await deploy.archiveApp(d.id);
     arm();
 
-    await assert.rejects(() => deploy.restoreDeployment(d.id), new RegExp(`failed ${failMethod}`));
-    const after = (await deploy.listDeployments()).find((row) => row.id === d.id)!;
+    await assert.rejects(() => deploy.restoreApp(d.id), new RegExp(`failed ${failMethod}`));
+    const after = (await deploy.listApps()).find((row) => row.id === d.id)!;
     assert.equal(destroys(), 2);
     assert.equal(after.status, "archived");
     assert.equal(after.endpoint, null);

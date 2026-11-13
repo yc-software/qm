@@ -6,7 +6,7 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
@@ -64,8 +64,8 @@ function makeDeps() {
     participantScopes: async (_p: string) => [],
   };
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const deployRows: Deployment[] = [];
-  const deploy = { listDeployments: async () => deployRows };
+  const deployRows: PublishedApp[] = [];
+  const deploy = { listApps: async () => deployRows };
   return { files, crons, webhooks, acl, identity, directory, sessions, skills, deploy, deployRows };
 }
 
@@ -178,7 +178,7 @@ async function setup(): Promise<{ app: App; deps: ReturnType<typeof makeDeps> }>
   return { app: createApp(deps as unknown as AppDeps), deps };
 }
 
-test("a member sees a channel's files (incl. personally-owned deliverables), webhooks, crons, deployments and skills", async () => {
+test("a member sees a channel's files (incl. personally-owned deliverables), webhooks, crons, apps and skills", async () => {
   const { app } = await setup();
   const out = await app.listScopeResources(tenant, U1, channelScope);
   assert.ok(out, "U1 is a member of C1");
@@ -276,7 +276,7 @@ test("a context view never leaks another scope's files or crons", async () => {
   );
   assert.ok(
     out!.deployments.every((d) => d.id === "d-c1"),
-    "no deployment created in C2 appears",
+    "no app created in C2 appears",
   );
   assert.ok(
     out!.skills.every((s) => s.name === "triage"),

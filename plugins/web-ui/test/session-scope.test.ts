@@ -25,7 +25,7 @@ test("only Crons and Apps request counts; both count past 100", async () => {
     ownerScopeId: "personal:test",
     enabled: true,
   }));
-  const deployments = Array.from({ length: 151 }, (_, i) => ({
+  const publishedApps = Array.from({ length: 151 }, (_, i) => ({
     id: String(i),
     ownerScopeId: "personal:test",
     status: "ready",
@@ -43,7 +43,7 @@ test("only Crons and Apps request counts; both count past 100", async () => {
         }
       : {
           deployments: [
-            ...deployments,
+            ...publishedApps,
             { id: "archived", ownerScopeId: "personal:test", status: "archived" },
             { id: "other", ownerScopeId: "other", status: "ready" },
           ],
@@ -67,7 +67,7 @@ test("only Crons and Apps request counts; both count past 100", async () => {
       count,
     );
   }
-  assert.deepEqual(requests, ["/api/crons", "/api/deployments"]);
+  assert.deepEqual(requests, ["/api/crons", "/api/apps"]);
 });
 
 test("desktop and mobile put Crons and Apps first and badge only those tools", () => {

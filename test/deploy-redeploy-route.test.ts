@@ -34,7 +34,7 @@ describe("deployment redeploy route", () => {
   };
 
   before(async () => {
-    const deployment = {
+    const publishedApp = {
       id: "dep-1",
       name: "envy",
       ownerScopeId: scopeId("personal", "U1"),
@@ -45,11 +45,11 @@ describe("deployment redeploy route", () => {
       versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
     };
     const app = {
-      getDeployment: async (id: string) => (id === deployment.id || id === deployment.name ? deployment : null),
-      canManageDeployment: async () => true,
+      getApp: async (id: string) => (id === publishedApp.id || id === publishedApp.name ? publishedApp : null),
+      canManageApp: async () => true,
       redeploy: async (_id: string, input: RedeployInput) => {
         received = input;
-        return deployment;
+        return publishedApp;
       },
     } as unknown as App;
     server = createServer(app, {
@@ -73,15 +73,17 @@ describe("deployment redeploy route", () => {
       env: { DB_URL: "postgres://one" },
       alwaysOn: false,
     };
-    const response = await post("/v1/deployments/envy/redeploy", body);
+    const response = await post("/v1/apps/envy/redeploy", body);
     assert.equal(response.status, 200);
     assert.deepEqual(received, { ...body, actor: "U1" });
-    const { deployment } = (await response.json()) as { deployment: { versions: Record<string, unknown>[] } };
-    assert.deepEqual(Object.keys(deployment.versions[0]!), ["version", "createdAt"], "no snapshot paths or env");
+    const { deployment: publishedApp } = (await response.json()) as {
+      deployment: { versions: Record<string, unknown>[] };
+    };
+    assert.deepEqual(Object.keys(publishedApp.versions[0]!), ["version", "createdAt"], "no snapshot paths or env");
   });
 
   it("still requires an entrypoint and files", async () => {
-    assert.equal((await post("/v1/deployments/envy/redeploy", { env: { A: "1" } })).status, 400);
+    assert.equal((await post("/v1/apps/envy/redeploy", { env: { A: "1" } })).status, 400);
   });
 
   it("rejects malformed optional fields", async () => {
@@ -93,7 +95,7 @@ describe("deployment redeploy route", () => {
       { env: ["A=1"] },
       { homeFiles: null },
     ]) {
-      const response = await post("/v1/deployments/envy/redeploy", { ...valid, ...bad });
+      const response = await post("/v1/apps/envy/redeploy", { ...valid, ...bad });
       assert.equal(response.status, 400, JSON.stringify(bad));
     }
   });

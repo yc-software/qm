@@ -8,7 +8,7 @@ import {
   type SlackSessionStatusState,
 } from "../slack/session-status.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { decideDeploymentAccess } from "../slack/deploy-access.ts";
+import { decideAppAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
@@ -84,7 +84,7 @@ interface DirectoryPush {
 
 export interface SlackCoreClient {
   privateContinuationSource?(runId: string): Promise<TurnRequest | null>;
-  decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
+  decideAppAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
@@ -182,8 +182,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   const orgScope: ScopeId = scopeId("org", configOrgId());
 
   return {
-    decideDeploymentAccess: (value, actor, approve) =>
-      decideDeploymentAccess(ambientTenant(), deps.app, deps.identity, value, actor, approve),
+    decideAppAccess: (value, actor, approve) =>
+      decideAppAccess(ambientTenant(), deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
       ? {

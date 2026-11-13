@@ -11,7 +11,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import {
-  decideDeploymentAccess,
+  decideAppAccess,
   deployAccessMessage,
   parseDeployAccess,
   registerDeployAccessActions,
@@ -82,10 +82,10 @@ async function fixture(t: { after(fn: () => void): void }) {
   const d = await app.deploy(publishInput());
   const value = JSON.stringify({ deploymentId: d.id, requesterId: requester });
   const share = (permission: Permission | null, scope = person(requester)) =>
-    app.shareDeployment(d.id, scope, permission, { createdBy: owner });
+    app.shareApp(d.id, scope, permission, { createdBy: owner });
   return {
     share,
-    grants: () => app.deploymentGrantees(d.id),
+    grants: () => app.appGrantees(d.id),
     notices: () => deliveries.pending("principal"),
     app,
     deploy,
@@ -96,11 +96,11 @@ async function fixture(t: { after(fn: () => void): void }) {
     value,
     auditLog,
     decide: (id = owner, approve = true, extra: Partial<ActorAssertion> = {}) =>
-      decideDeploymentAccess(tenant, app, identity, value, { externalId: id, ...extra }, approve),
+      decideAppAccess(tenant, app, identity, value, { externalId: id, ...extra }, approve),
   };
 }
 
-test("card is plain text with only deployment and requester in bounded JSON buttons", () => {
+test("card is plain text with only app and requester in bounded JSON buttons", () => {
   const text = '<@everyone> asks to open "A & B"';
   const card = deployAccessMessage(request, text);
   assert.equal(card.text, text);
@@ -172,15 +172,12 @@ test("requester, stranger, guest and deactivated owner cannot approve or decline
   assert.deepEqual(await f.notices(), []);
 });
 
-test("tampering the deployment ID cannot authorize another owner's app", async (t) => {
+test("tampering the app ID cannot authorize another owner's app", async (t) => {
   const f = await fixture(t);
   const other = await f.app.deploy(publishInput(requester, "other"));
   const value = JSON.stringify({ ...request, deploymentId: other.id });
   for (const approve of [true, false])
-    await assert.rejects(
-      decideDeploymentAccess(tenant, f.app, f.identity, value, { externalId: owner }, approve),
-      /owner/,
-    );
+    await assert.rejects(decideAppAccess(tenant, f.app, f.identity, value, { externalId: owner }, approve), /owner/);
 });
 
 test("decline only notifies and leaves access unchanged; duplicate clicks dedupe", async (t) => {
@@ -234,7 +231,7 @@ companyTest("notify:false grants access on every direct share path without a DM 
     (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,
     true,
   );
-  await app.shareDeployment(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
+  await app.shareApp(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
   const invited = await control.shareArtifact(
     { type: "deploy", id: f.d.id, email: "carol@example.com", ...quiet },
     cap,
@@ -245,7 +242,7 @@ companyTest("notify:false grants access on every direct share path without a DM 
     emailProblem: "notify was false",
     appUrl: "https://acme1-mysite.apps.example.com/",
   });
-  assert.deepEqual(await f.deploy.deploymentGrantees(f.d.id), [
+  assert.deepEqual(await f.deploy.appGrantees(f.d.id), [
     { scope: person(requester), permission: "write" },
     { scope: person("carol@example.com"), permission: "read" },
   ]);
@@ -270,8 +267,8 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
     {
       directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id }) } as never,
       core: {
-        decideDeploymentAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
-          decideDeploymentAccess(tenant, f.app, f.identity, value, actor, approve),
+        decideAppAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
+          decideAppAccess(tenant, f.app, f.identity, value, actor, approve),
       } as never,
     },
   );

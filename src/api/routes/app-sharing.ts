@@ -1,7 +1,7 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { canEditAppPermissions } from "../../deploy/app-access.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
-import { deploymentView, type App } from "../app.ts";
+import { appView, type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, livePersonTurn } from "./shared.ts";
@@ -9,7 +9,7 @@ import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 
-async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
+async function setAppConnectors(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability, actor } = ctx;
   const principalId = capability ? capability.actorId : actor?.p;
   if (!principalId)
@@ -22,8 +22,8 @@ async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
   try {
-    const deployment = await app.setDeploymentConnectors(params.id!, connectors, { createdBy: principalId });
-    return sendJson(res, 200, { deployment: deploymentView(deployment) });
+    const publishedApp = await app.setAppConnectors(params.id!, connectors, { createdBy: principalId });
+    return sendJson(res, 200, { deployment: appView(publishedApp) });
   } catch (e) {
     return sendShareFailure(res, e);
   }
@@ -46,23 +46,23 @@ export function resolveShareTarget(
   });
 }
 
-export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
+export async function getAppShares(ctx: ApiCtx): Promise<void> {
   const { res, app, params } = ctx;
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principalId) return sendJson(res, 403, { error: "forbidden" });
-  const deployment = await app.getDeployment(params.id!);
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (!canEditAppPermissions(deployment.ownerScopeId, principalId))
+  const publishedApp = await app.getApp(params.id!);
+  if (!publishedApp) return sendJson(res, 404, { error: "not_found" });
+  if (!canEditAppPermissions(publishedApp.ownerScopeId, principalId))
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
-  const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
+  const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, publishedApp.ownerScopeId);
   return sendJson(res, 200, {
-    public: deployment.public === true && externalSharing,
+    public: publishedApp.public === true && externalSharing,
     externalSharing,
-    grantees: await app.deploymentGrantees(deployment.id),
+    grantees: await app.appGrantees(publishedApp.id),
   });
 }
 
-export async function shareDeployment(ctx: ApiCtx): Promise<void> {
+export async function shareApp(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principalId)
@@ -91,12 +91,12 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         message: "public access and person/scope access must be changed separately",
       });
     try {
-      const deployment = await app.setDeploymentPublic(params.id!, b.public, actor);
+      const publishedApp = await app.setAppPublic(params.id!, b.public, actor);
       return sendJson(res, 200, {
         ok: true,
-        public: deployment.public === true,
-        reach: deployment.public === true ? "anyone with the link" : "restricted",
-        grantees: await app.deploymentGrantees(deployment.id),
+        public: publishedApp.public === true,
+        reach: publishedApp.public === true ? "anyone with the link" : "restricted",
+        grantees: await app.appGrantees(publishedApp.id),
       });
     } catch (e) {
       return sendShareFailure(res, e);
@@ -133,15 +133,14 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   try {
     const invite =
       typeof b.email === "string" && permission === "read"
-        ? await app.inviteToDeployment(params.id!, b.email, actor, notify)
+        ? await app.inviteToApp(params.id!, b.email, actor, notify)
         : undefined;
-    const grantees =
-      invite?.grantees ?? (await app.shareDeployment(params.id!, target.scope, permission, actor, notify));
+    const grantees = invite?.grantees ?? (await app.shareApp(params.id!, target.scope, permission, actor, notify));
     const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
     let reach = "owner-only";
     if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;
     else if (grantees.length) reach = `${grantees.length} grantee${grantees.length === 1 ? "" : "s"}`;
-    const deployment = await app.getDeployment(params.id!);
+    const publishedApp = await app.getApp(params.id!);
     return sendJson(res, 200, {
       ok: true,
       target: { scope: target.scope, label: target.label },
@@ -149,8 +148,8 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       reach,
       ...(invite ? { invitation: invite.invitation } : {}),
       public:
-        deployment?.public === true &&
-        (await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId)),
+        publishedApp?.public === true &&
+        (await externalAppSharingAllowed(ctx.deps.featureFlags, publishedApp.ownerScopeId)),
       grantees,
     });
   } catch (e) {
@@ -172,22 +171,22 @@ function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
   return sendJson(res, 400, { error: "share_failed", message: errMessage(e) });
 }
 
-export const deploymentSharingRoutes: ReadonlyArray<Route<ApiCtx>> = [
+export const appSharingRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "GET",
-    path: "/v1/deployments/:id/share",
+    path: "/v1/apps/:id/share",
     browser: true,
     actor: "person",
     auth: "either",
-    handle: getDeploymentShares,
+    handle: getAppShares,
   },
   {
     method: "POST",
-    path: "/v1/deployments/:id/share",
+    path: "/v1/apps/:id/share",
     browser: true,
     actor: "person",
     auth: "either",
-    handle: shareDeployment,
+    handle: shareApp,
   },
-  { method: "POST", path: "/v1/deployments/:id/connectors", auth: "either", handle: setDeploymentConnectors },
+  { method: "POST", path: "/v1/apps/:id/connectors", auth: "either", handle: setAppConnectors },
 ];

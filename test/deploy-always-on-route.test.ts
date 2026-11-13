@@ -35,7 +35,7 @@ describe("deployment always-on route", () => {
     });
 
   before(async () => {
-    const deployment = {
+    const publishedApp = {
       id: "dep-1",
       name: "warm-app",
       ownerScopeId: scopeId("personal", "U1"),
@@ -47,11 +47,11 @@ describe("deployment always-on route", () => {
     };
     const app = {
       authorizesCapabilityScope: async () => true,
-      getDeployment: async (id: string) => (id === deployment.id || id === deployment.name ? deployment : null),
-      canManageDeployment: async (_id: string, caller: { actorId: string }) => caller.actorId === "U1",
-      setDeploymentAlwaysOn: async (_id: string, alwaysOn: boolean) => {
+      getApp: async (id: string) => (id === publishedApp.id || id === publishedApp.name ? publishedApp : null),
+      canManageApp: async (_id: string, caller: { actorId: string }) => caller.actorId === "U1",
+      setAppAlwaysOn: async (_id: string, alwaysOn: boolean) => {
         flag = alwaysOn;
-        return { ...deployment, ...(alwaysOn ? { alwaysOn: true } : {}) };
+        return { ...publishedApp, ...(alwaysOn ? { alwaysOn: true } : {}) };
       },
     } as unknown as App;
     server = createServer(app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), signingSecret: SECRET });
@@ -64,7 +64,7 @@ describe("deployment always-on route", () => {
   });
 
   it("lets a manager turn always-on on, by name", async () => {
-    const response = await post("/v1/deployments/warm-app/always-on", { alwaysOn: true }, "U1");
+    const response = await post("/v1/apps/warm-app/always-on", { alwaysOn: true }, "U1");
     assert.equal(response.status, 200);
     const body = (await response.json()) as { deployment: { alwaysOn?: boolean } };
     assert.equal(body.deployment.alwaysOn, true);
@@ -72,14 +72,14 @@ describe("deployment always-on route", () => {
   });
 
   it("rejects a caller who does not manage the app", async () => {
-    assert.equal((await post("/v1/deployments/warm-app/always-on", { alwaysOn: true }, "U2")).status, 403);
+    assert.equal((await post("/v1/apps/warm-app/always-on", { alwaysOn: true }, "U2")).status, 403);
   });
 
   it("requires a boolean alwaysOn", async () => {
-    assert.equal((await post("/v1/deployments/warm-app/always-on", { alwaysOn: "yes" }, "U1")).status, 400);
+    assert.equal((await post("/v1/apps/warm-app/always-on", { alwaysOn: "yes" }, "U1")).status, 400);
   });
 
-  it("404s an unknown deployment", async () => {
-    assert.equal((await post("/v1/deployments/nope/always-on", { alwaysOn: true }, "U1")).status, 404);
+  it("404s an unknown app", async () => {
+    assert.equal((await post("/v1/apps/nope/always-on", { alwaysOn: true }, "U1")).status, 404);
   });
 });

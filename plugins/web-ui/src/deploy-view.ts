@@ -1,11 +1,11 @@
-interface DeploymentVersionView {
+interface AppVersionView {
   version: number;
   createdAt: number;
   commit?: string;
   parentCommit?: string;
 }
 
-export interface DeploymentView {
+export interface AppView {
   id: string;
   status?: "running" | "stopped" | "archived" | string;
   ownerScopeId?: string;
@@ -25,104 +25,93 @@ export interface DeploymentView {
   createdAt?: number;
   updatedAt?: number;
   lastAccessAt?: number;
-  versions?: DeploymentVersionView[];
+  versions?: AppVersionView[];
 }
 
-export type DeploymentTab = "yours" | "shared" | "archived";
-export type DeploymentSort = "newest" | "name" | "status";
-export type DeploymentActionView = "target" | "other" | "list" | "away";
-export type DeploymentRefreshResult = "updated" | "failed" | "superseded";
+export type AppTab = "yours" | "shared" | "archived";
+export type AppSort = "newest" | "name" | "status";
+export type AppActionView = "target" | "other" | "list" | "away";
+export type AppRefreshResult = "updated" | "failed" | "superseded";
 
-export function deploymentActionView(targetId: string, currentView: string, activeId?: string): DeploymentActionView {
+export function appActionView(targetId: string, currentView: string, activeId?: string): AppActionView {
   if (currentView !== "deploys") return "away";
   if (!activeId) return "list";
   return activeId === targetId ? "target" : "other";
 }
 
-export function deploymentListRefreshCanRedraw(activeId?: string): boolean {
+export function appListRefreshCanRedraw(activeId?: string): boolean {
   return !activeId;
 }
 
-export function deploymentCanManage(d: DeploymentView): boolean {
+export function appCanManage(d: AppView): boolean {
   return d.permission === "write";
 }
 
-export function deploymentContextScope(d: DeploymentView): string | undefined {
+export function appContextScope(d: AppView): string | undefined {
   return d.createdInScope ?? d.ownerScopeId;
 }
 
-export function deploymentInScope(d: DeploymentView, scope: string | null): boolean {
+export function appInScope(d: AppView, scope: string | null): boolean {
   return !scope || d.createdInScope === scope || d.ownerScopeId === scope;
 }
 
-export function deploymentArchiveUndoAvailable(toastDeployment: DeploymentView): boolean {
-  return toastDeployment.status === "archived";
+export function appArchiveUndoAvailable(toastApp: AppView): boolean {
+  return toastApp.status === "archived";
 }
 
-export function deploymentAfterRestore(
-  requested: DeploymentView,
-  response?: DeploymentView,
-  refreshed?: DeploymentView,
-): DeploymentView {
+export function appAfterRestore(requested: AppView, response?: AppView, refreshed?: AppView): AppView {
   return refreshed ?? { ...(response ?? requested), status: "running" };
 }
 
-export function deploymentListAfterRestoreRefresh(
-  list: DeploymentView[],
-  restored: DeploymentView,
-  result: DeploymentRefreshResult,
-): DeploymentView[] {
+export function appListAfterRestoreRefresh(list: AppView[], restored: AppView, result: AppRefreshResult): AppView[] {
   return result === "failed" ? [restored, ...list.filter((item) => item.id !== restored.id)] : list;
 }
 
-export function deploymentTitle(d: DeploymentView): string {
+export function appTitle(d: AppView): string {
   return d.displayName?.trim() || d.name?.trim() || d.id;
 }
 
-export function deploymentSlug(d: DeploymentView): string {
+export function appSlug(d: AppView): string {
   return d.name?.trim() || d.id;
 }
 
-export function deploymentLatestAt(d: DeploymentView): number {
+export function appLatestAt(d: AppView): number {
   const applied = d.versions?.find((version) => version.version === (d.appliedVersion ?? d.currentVersion));
   return applied?.createdAt ?? d.versions?.at(-1)?.createdAt ?? 0;
 }
 
-export function deploymentTab(d: DeploymentView, viewer: string | undefined): DeploymentTab {
+export function appTab(d: AppView, viewer: string | undefined): AppTab {
   if (d.status === "archived") return "archived";
   if (!viewer) return "shared";
   if (d.ownerScopeId === `personal:${viewer}`) return "yours";
   return !d.ownerScopeId?.startsWith("personal:") && d.createdBy === viewer ? "yours" : "shared";
 }
 
-export function deploymentTabEmptyMessage(tab: DeploymentTab): string {
+export function appTabEmptyMessage(tab: AppTab): string {
   if (tab === "shared") return "No apps shared with you.";
   if (tab === "archived") return "Nothing archived.";
   return "No apps of your own yet.";
 }
 
-export function filterDeployments(
-  deployments: DeploymentView[],
-  options: { tab: DeploymentTab; scope: string | null; query: string; viewer?: string; sort?: DeploymentSort },
-): DeploymentView[] {
+export function filterApps(
+  publishedApps: AppView[],
+  options: { tab: AppTab; scope: string | null; query: string; viewer?: string; sort?: AppSort },
+): AppView[] {
   const query = options.query.trim().toLocaleLowerCase();
-  return deployments
-    .filter((d) => deploymentTab(d, options.viewer) === options.tab)
-    .filter((d) => deploymentInScope(d, options.scope))
+  return publishedApps
+    .filter((d) => appTab(d, options.viewer) === options.tab)
+    .filter((d) => appInScope(d, options.scope))
     .filter((d) => {
       if (!query) return true;
-      return [deploymentTitle(d), deploymentSlug(d), d.createdBy, d.createdInScope, d.ownerScopeId, d.status].some(
-        (value) => value?.toLocaleLowerCase().includes(query),
+      return [appTitle(d), appSlug(d), d.createdBy, d.createdInScope, d.ownerScopeId, d.status].some((value) =>
+        value?.toLocaleLowerCase().includes(query),
       );
     })
     .sort((a, b) => {
-      if (options.sort === "name") return deploymentTitle(a).localeCompare(deploymentTitle(b));
+      if (options.sort === "name") return appTitle(a).localeCompare(appTitle(b));
       if (options.sort === "status")
-        return (
-          (a.status ?? "unknown").localeCompare(b.status ?? "unknown") ||
-          deploymentTitle(a).localeCompare(deploymentTitle(b))
-        );
-      return deploymentLatestAt(b) - deploymentLatestAt(a) || deploymentTitle(a).localeCompare(deploymentTitle(b));
+        return (a.status ?? "unknown").localeCompare(b.status ?? "unknown") || appTitle(a).localeCompare(appTitle(b));
+      return appLatestAt(b) - appLatestAt(a) || appTitle(a).localeCompare(appTitle(b));
     });
 }
 

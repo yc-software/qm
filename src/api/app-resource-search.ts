@@ -51,7 +51,7 @@ export function createResourceSearchMethods(
           const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes);
           visibleSkills = new Set(visibleSkillRows(skills, ordered, granted).map((r) => r.skill.id));
         }
-        const deploys = kind === "deploys" ? await helpers.deploymentPermissions(tenant, rows, principalId) : [];
+        const deploys = kind === "deploys" ? await helpers.appPermissions(tenant, rows, principalId) : [];
         for (let i = 0; i < rows.length; i += 20) {
           const batch = rows.slice(i, i + 20);
           const allowed =

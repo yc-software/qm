@@ -85,6 +85,6 @@ test("an invalid embed ancestor is refused before anything is published", async 
   assert.equal(await deployStore.getByName("panel"), null);
 
   const d = await deploy.deploy({ ...owner, entrypoint: "node server.js", files });
-  await assert.rejects(deploy.setDeploymentEmbedAncestors(d.id, ["*"]), /embedAncestors must be an/);
+  await assert.rejects(deploy.setAppEmbedAncestors(d.id, ["*"]), /embedAncestors must be an/);
   assert.equal((await deployStore.get(d.id))!.embedAncestors, undefined);
 });

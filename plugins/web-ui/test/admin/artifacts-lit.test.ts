@@ -101,9 +101,9 @@ test("cron list opens a detail page whose destination edit sends the API payload
 });
 
 test("apps open their public URL in a new tab", async () => {
-  const f = await mountPage("/settings/deployments", {
+  const f = await mountPage("/settings/apps", {
     ...scopes,
-    "/deployments": {
+    "/apps": {
       deployments: [
         {
           id: "d",

@@ -67,8 +67,8 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
       }));
     return sendJson(res, 200, { scopeId: scope, crons });
   }
-  if (resource === "deployments") {
-    const deployments = (await app.listDeployments())
+  if (resource === "apps") {
+    const publishedApps = (await app.listApps())
       .filter((d) => orgWide || d.ownerScopeId === scope)
       .map((d) => ({
         id: d.id,
@@ -83,7 +83,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         lastAccessAt: d.lastAccessAt,
         publicUrl: appUrlOf(d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }),
       }));
-    return sendJson(res, 200, { scopeId: scope, deployments });
+    return sendJson(res, 200, { scopeId: scope, deployments: publishedApps });
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
   const skills = (await app.listSkills())

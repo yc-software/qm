@@ -133,7 +133,7 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
+import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -168,14 +168,9 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import {
-  createDeployStore,
-  deployTouchDebounceMs,
-  type Deployment,
-  type DeploymentDraft,
-} from "./deploy/deploy-store.ts";
+import { createDeployStore, deployTouchDebounceMs, type PublishedApp, type AppDraft } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
+import { appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
@@ -332,7 +327,7 @@ import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
   CREDENTIAL_BROKER_AUD,
-  DEPLOYMENT_CREDENTIAL_TTL_MS,
+  APP_CREDENTIAL_TTL_MS,
   EGRESS_PROXY_AUD,
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
@@ -1712,8 +1707,8 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: pgArtifactMap.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
-    drafts: artifactMap<DeploymentDraft>("deployment_drafts"),
+    deployments: pgArtifactMap.map<PublishedApp>("deployments", undefined, APP_TABLES),
+    drafts: artifactMap<AppDraft>("deployment_drafts"),
     pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
@@ -1928,25 +1923,25 @@ export function buildApp(
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
-          deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
+          appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
-            const credentials = await deploymentCredentialSlugs(
+            const credentials = await appCredentialSlugs(
               ambientTenant(),
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,
             );
             return {
-              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
+              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, publishedApp.id),
               AGENT_API_URL: deployGitBase,
               AGENT_CREDENTIAL_TOKEN: await mintCapabilityToken(
                 {
-                  actorId: deployment.createdBy,
-                  scopeId: personalScope(deployment.createdBy),
+                  actorId: publishedApp.createdBy,
+                  scopeId: personalScope(publishedApp.createdBy),
                   aud: CREDENTIAL_BROKER_AUD,
                   credentials,
-                  deployment: deployment.id,
-                  exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+                  deployment: publishedApp.id,
+                  exp: Date.now() + APP_CREDENTIAL_TTL_MS,
                 },
                 config.capabilitySecret ?? deployGitSecret,
                 config.capabilityTokenCompression,
@@ -2443,7 +2438,7 @@ export function buildApp(
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
-    ...(renderArtifacts ? { deploymentGitPrincipals: renderArtifacts } : {}),
+    ...(renderArtifacts ? { appGitPrincipals: renderArtifacts } : {}),
     deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
@@ -2980,10 +2975,10 @@ export function buildApp(
     );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
+      ? createSweeper(() => app.reapIdleApps(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
       : null;
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
+  const deployMaintenanceSweeper = createSweeper(() => app.maintainApps(), DEPLOY_MAINTENANCE_INTERVAL_MS);
   const liveEditPublishSweeper = createSweeper(() => app.publishDueLiveEdits(), 10_000);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;

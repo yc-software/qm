@@ -66,7 +66,7 @@ function serviceWithProvider(provider: DeployProvider) {
   return { deploy, deployStore };
 }
 
-test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the live endpoint", async () => {
+test("reachApp: a provider's resolveEndpoint refreshes (and persists) the live endpoint", async () => {
   let applies = 0;
   let resolved: DeployEndpoint | null = null;
   const provider: DeployProvider = {
@@ -88,7 +88,7 @@ test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the
   assert.equal(applies, 1);
 
   resolved = { host: "warm", port: 443, tls: true, proxyHeaders: { "X-aws-proxy-auth": "fresh" } };
-  const reach = await deploy.reachDeployment(d.id, "U-any");
+  const reach = await deploy.reachApp(d.id, "U-any");
   assert.equal(reach.status, "ok");
   assert.equal(reach.status === "ok" && reach.endpoint.host, "warm", "the refreshed endpoint is returned");
   assert.equal(applies, 1, "a warm refresh does not re-apply");
@@ -99,7 +99,7 @@ test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the
   );
 });
 
-test("reachDeployment: a null resolveEndpoint re-applies the current version from source", async () => {
+test("reachApp: a null resolveEndpoint re-applies the current version from source", async () => {
   let applies = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
@@ -119,13 +119,13 @@ test("reachDeployment: a null resolveEndpoint re-applies the current version fro
   });
   assert.equal(applies, 1);
 
-  const reach = await deploy.reachDeployment(d.id, "U-any");
+  const reach = await deploy.reachApp(d.id, "U-any");
   assert.equal(reach.status, "ok");
   assert.equal(applies, 2, "a gone body triggers a re-apply");
   assert.equal(reach.status === "ok" && reach.endpoint.host, "body-2", "the freshly re-applied endpoint is served");
 });
 
-test("reachDeployment: a provider without resolveEndpoint returns the frozen stored endpoint", async () => {
+test("reachApp: a provider without resolveEndpoint returns the frozen stored endpoint", async () => {
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
     apply: async () => ({ host: "frozen", port: 9000 }),
@@ -138,7 +138,7 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
     entrypoint: "x",
     files: [],
   });
-  const reach = await deploy.reachDeployment(d.id, "U-any");
+  const reach = await deploy.reachApp(d.id, "U-any");
   assert.equal(reach.status === "ok" && reach.endpoint.host, "frozen");
 });
 
@@ -238,7 +238,7 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
       Host: "nope.apps.example.com",
       Cookie: `portal_session=${mintPortalSession("U1")}`,
     });
-    assert.equal(unknownSlug.status, 404, "a session on a non-existent deployment is a 404");
+    assert.equal(unknownSlug.status, 404, "a session on a non-existent app is a 404");
 
     assert.deepEqual(
       denials.map((e) => [e.principalId, e.resource, e.status, e.scopeLabel]),
@@ -251,7 +251,7 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
   }
 });
 
-test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing the throttled deployment", async () => {
+test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing the throttled app", async () => {
   let upstreamHits = 0;
   const upstream = createHttpServer((_req, res) => {
     upstreamHits++;
@@ -285,7 +285,7 @@ test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing th
     const second = await httpGet(port, "/", { Host: host, Cookie: cookie });
     assert.equal(second.status, 429, "the shield answers throttled too");
     assert.ok(second.headers["retry-after"], "the shield tells clients when to come back");
-    assert.equal(upstreamHits, 1, "a throttled deployment is not re-dialed while the shield is up");
+    assert.equal(upstreamHits, 1, "a throttled app is not re-dialed while the shield is up");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
@@ -330,7 +330,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
       JSON.stringify({ error: "slow down" }),
       "the app's own rate-limit response reaches the visitor",
     );
-    assert.equal(upstreamHits, 2, "an app-emitted 429 must not suppress the deployment for other visitors");
+    assert.equal(upstreamHits, 2, "an app-emitted 429 must not suppress the app for other visitors");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
@@ -398,7 +398,7 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
     assert.equal(
       await verifyPortalIdentity(String(tok), viewerIdentityKey(signingSecret, "other-deployment"), Date.now()),
       null,
-      "another deployment's key rejects it — no cross-app reuse",
+      "another app's key rejects it — no cross-app reuse",
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -438,7 +438,7 @@ test("subdomain ingress: the SameSite=None twin is honoured only for framed requ
     assert.equal(notOptedIn.status, 401, "an app that has not opted in never honours the twin");
     assert.ok(!String(notOptedIn.headers["content-security-policy"] ?? "").includes("frame-ancestors"));
 
-    await app.setDeploymentEmbedAncestors(d.id, ["https://internal.example.com", "https://mail.google.com"]);
+    await app.setAppEmbedAncestors(d.id, ["https://internal.example.com", "https://mail.google.com"]);
 
     const framed = await httpGet(port, "/", { Host: host, Cookie: twin, ...frameDoc });
     assert.equal(framed.status, 200, "the frame document authenticates with the twin");

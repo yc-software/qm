@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct NativeDeployment: Decodable, Identifiable {
+struct NativeApp: Decodable, Identifiable {
   struct Version: Decodable, Identifiable {
     let version: Int
     let createdAt: Double
@@ -47,19 +47,19 @@ struct NativeDeployment: Decodable, Identifiable {
     return origins
   }
 }
-struct NativeDeployments: Decodable { let deployments: [NativeDeployment] }
-struct NativeDeploymentResult: Decodable { let deployment: NativeDeployment }
+struct NativeAppList: Decodable { let deployments: [NativeApp] }
+struct NativeAppResult: Decodable { let deployment: NativeApp }
 
 struct NativeAppsView: View {
   let client: APIClient
   let user: String
   var scope: String? = nil
-  @State private var apps: [NativeDeployment] = []
+  @State private var apps: [NativeApp] = []
   @State private var tab = "Yours"
   @State private var query = ""
   @State private var error: String?
   @State private var loading = true
-  private var filtered: [NativeDeployment] {
+  private var filtered: [NativeApp] {
     apps.filter {
       $0.tab(user: user) == tab
         && (scope == nil || $0.ownerScopeId == scope || $0.createdInScope == scope)
@@ -116,7 +116,7 @@ struct NativeAppsView: View {
     loading = true
     defer { loading = false }
     do {
-      let result: NativeDeployments = try await client.fetch("api/deployments")
+      let result: NativeAppList = try await client.fetch("api/apps")
       try Task.checkCancellation()
       apps = result.deployments
       error = nil
@@ -127,8 +127,8 @@ struct NativeAppsView: View {
 struct NativeAppDetail: View {
   let client: APIClient
   let user: String
-  let original: NativeDeployment
-  @State private var current: NativeDeployment?
+  let original: NativeApp
+  @State private var current: NativeApp?
   @State private var loader = LoadGuard()
   @State private var error: String?
   @State private var busy = false
@@ -139,7 +139,7 @@ struct NativeAppDetail: View {
   @State private var editingSlug = false
   @State private var editingEmbed = false
   @State private var archive = false
-  private var app: NativeDeployment { current ?? original }
+  private var app: NativeApp { current ?? original }
   var body: some View {
     QMList {
       Section {
@@ -194,7 +194,7 @@ struct NativeAppDetail: View {
             archive = true
           } label: {
             NativeActionLabel(
-              title: app.status == "archived" ? "Restore deployment" : "Archive deployment",
+              title: app.status == "archived" ? "Restore app" : "Archive app",
               busyTitle: mutationAction == "restore" ? "Restoring…" : "Archiving…",
               busy: busy && (mutationAction == "restore" || mutationAction == "archive"))
           }
@@ -270,8 +270,8 @@ struct NativeAppDetail: View {
   private func load(afterMutation: Bool = false) async -> Bool {
     guard !busy || afterMutation else { return false }
     return await loader.run {
-      try await client.fetch("api/deployments/\(original.id.apiComponent)")
-        as NativeDeploymentResult
+      try await client.fetch("api/apps/\(original.id.apiComponent)")
+        as NativeAppResult
     } apply: { result in
       current = result.deployment
       error = nil
@@ -288,7 +288,7 @@ struct NativeAppDetail: View {
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(
-        "api/deployments/\(app.id.apiComponent)/\(action)", body: body)
+        "api/apps/\(app.id.apiComponent)/\(action)", body: body)
       if await load(afterMutation: true) { mutationAction = nil }
       return true
     } catch {
@@ -317,7 +317,7 @@ struct NativeAppGrants: Decodable {
 @MainActor @Observable
 final class AppPermissionsModel {
   let client: APIClient
-  let app: NativeDeployment
+  let app: NativeApp
   var grants: [NativeAppGrant] = []
   var isPublic = false
   var externalSharing = true
@@ -328,8 +328,8 @@ final class AppPermissionsModel {
   var error: String?
   var busy: Bool { savingScope != nil || savingPublic }
   private var saves = 0
-  private var endpoint: String { "api/deployments/\(app.id.apiComponent)/share" }
-  init(client: APIClient, app: NativeDeployment) {
+  private var endpoint: String { "api/apps/\(app.id.apiComponent)/share" }
+  init(client: APIClient, app: NativeApp) {
     self.client = client
     self.app = app
   }
@@ -397,7 +397,7 @@ struct NativeAppPermissions: View {
         && !model.grants.contains(where: { $0.scope == "personal:\(person.id)" })
     }
   }
-  init(client: APIClient, app: NativeDeployment) {
+  init(client: APIClient, app: NativeApp) {
     _model = State(initialValue: AppPermissionsModel(client: client, app: app))
     _search = State(initialValue: NativePeopleSearchModel(client: client))
   }
@@ -536,7 +536,7 @@ struct NativeAppEmbedSites: View {
             Task {
               busy = true
               defer { busy = false }
-              error = await save(NativeDeployment.parseEmbedAncestors(text))
+              error = await save(NativeApp.parseEmbedAncestors(text))
               if error == nil { dismiss() }
             }
           } label: {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after, beforeEach } from "node:test";
 import { browserEnv } from "./browser-env.ts";
-import type { DeploymentView } from "../src/deploy-view.ts";
+import type { AppView } from "../src/deploy-view.ts";
 
 let requests: Array<{ path: string; resolve: (body: unknown) => void }> = [];
 const { vite, close } = await browserEnv({
@@ -51,7 +51,7 @@ test("the initial list refresh redraws the list when no detail was opened", asyn
   const rendering = renderDeploys();
   await settle();
   assert.match(main.textContent ?? "", /Loading apps…/);
-  request("/api/deployments").resolve({ deployments: [{ id: "app", ownerScopeId: "personal:tester" }] });
+  request("/api/apps").resolve({ deployments: [{ id: "app", ownerScopeId: "personal:tester" }] });
   await rendering;
   assert.deepEqual(listedIds(), ["app"]);
 });
@@ -59,7 +59,7 @@ test("the initial list refresh redraws the list when no detail was opened", asyn
 test("the initial list refresh leaves an opened detail and its loading state untouched", async () => {
   const first = renderDeploys();
   await settle();
-  request("/api/deployments").resolve({ deployments: [{ id: "opened-app", ownerScopeId: "personal:tester" }] });
+  request("/api/apps").resolve({ deployments: [{ id: "opened-app", ownerScopeId: "personal:tester" }] });
   await first;
   requests = [];
   const rendering = renderDeploys();
@@ -68,13 +68,13 @@ test("the initial list refresh leaves an opened detail and its loading state unt
   await settle();
   assert.deepEqual(
     requests.map((r) => r.path),
-    ["/api/deployments", "/api/deployments/opened-app"],
+    ["/api/apps", "/api/apps/opened-app"],
   );
-  request("/api/deployments").resolve({ deployments: [] });
+  request("/api/apps").resolve({ deployments: [] });
   await rendering;
   assert.equal(listedIds().length, 0);
   assert.ok(loadingDetail());
-  request("/api/deployments/opened-app").resolve({ deployment: { id: "opened-app", displayName: "Opened" } });
+  request("/api/apps/opened-app").resolve({ deployment: { id: "opened-app", displayName: "Opened" } });
   await settle();
   assert.equal(detail()?.querySelector("h2")?.textContent, "Opened");
   assert.equal(loadingDetail(), false);
@@ -85,13 +85,13 @@ for (const listed of [false, true]) {
     openDeployById("linked-app");
     const rendering = renderDeploys();
     await settle();
-    request("/api/deployments").resolve({
+    request("/api/apps").resolve({
       deployments: listed ? [{ id: "linked-app", displayName: "Linked app" }] : [],
     });
     await settle();
-    assert.ok(request("/api/deployments/linked-app"));
+    assert.ok(request("/api/apps/linked-app"));
     assert.ok(loadingDetail());
-    request("/api/deployments/linked-app").resolve({ deployment: { id: "linked-app" } });
+    request("/api/apps/linked-app").resolve({ deployment: { id: "linked-app" } });
     await rendering;
     assert.ok(detail());
     assert.equal(loadingDetail(), false);
@@ -105,36 +105,36 @@ for (const supersede of ["view", "render"] as const) {
     await settle();
     if (supersede === "view") appState.currentView = "skills";
     else appState.viewRenderSeq++;
-    request("/api/deployments").resolve({ deployments: [{ id: "linked-app" }] });
+    request("/api/apps").resolve({ deployments: [{ id: "linked-app" }] });
     await rendering;
     assert.deepEqual(
       requests.map((r) => r.path),
-      ["/api/deployments"],
+      ["/api/apps"],
     );
     assert.equal(detail(), null);
   });
 }
 
-async function openDetail(deployment: DeploymentView): Promise<HTMLElement> {
-  openDeployById(deployment.id);
+async function openDetail(publishedApp: AppView): Promise<HTMLElement> {
+  openDeployById(publishedApp.id);
   const rendering = renderDeploys();
   await settle();
-  request("/api/deployments").resolve({ deployments: [] });
+  request("/api/apps").resolve({ deployments: [] });
   await settle();
-  request(`/api/deployments/${deployment.id}`).resolve({ deployment });
+  request(`/api/apps/${publishedApp.id}`).resolve({ deployment: publishedApp });
   await rendering;
   return detail() as HTMLElement;
 }
 
 for (const count of [0, 7, 23, 150]) {
   test(`version history reveals ${count} versions in newest-first batches of ten`, async () => {
-    const deployment = {
+    const publishedApp = {
       id: "history-app",
       currentVersion: count,
       appliedVersion: 1,
       versions: Array.from({ length: count }, (_, index) => ({ version: index + 1, createdAt: 1000 })),
     };
-    const pane = await openDetail(deployment);
+    const pane = await openDetail(publishedApp);
     const history = () =>
       [...pane.querySelectorAll(".deploy-detail-section")].find(
         (s) => s.querySelector("h3")?.textContent === "Version history",
@@ -163,7 +163,7 @@ for (const count of [0, 7, 23, 150]) {
       shown += 10;
     }
     assert.deepEqual(
-      deployment.versions.map((version) => version.version),
+      publishedApp.versions.map((version) => version.version),
       Array.from({ length: count }, (_, index) => index + 1),
     );
   });
@@ -173,13 +173,13 @@ test("detail redraws reuse the scroll container and retain focus", async () => {
   openDeployById("app");
   const rendering = renderDeploys();
   await settle();
-  request("/api/deployments").resolve({ deployments: [] });
+  request("/api/apps").resolve({ deployments: [] });
   await settle();
   const host = detail() as HTMLElement;
   const button = host.querySelector<HTMLButtonElement>("button")!;
   host.scrollTop = 450;
   button.focus();
-  request("/api/deployments/app").resolve({ deployment: { id: "app", displayName: "App" } });
+  request("/api/apps/app").resolve({ deployment: { id: "app", displayName: "App" } });
   await rendering;
   assert.equal(loadingDetail(), false);
   assert.equal(main.firstElementChild, host);

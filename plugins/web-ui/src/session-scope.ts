@@ -43,7 +43,7 @@ const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<numb
   },
   apps: async (scope) => {
     const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
-      "/api/deployments",
+      "/api/apps",
     );
     return (r.deployments ?? []).filter(
       (d) => d.status !== "archived" && (d.createdInScope === scope || d.ownerScopeId === scope),

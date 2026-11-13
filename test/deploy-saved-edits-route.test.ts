@@ -11,7 +11,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "deploy-saved-edits-route-secret".repeat(2);
-const DEPLOYMENT = {
+const APP = {
   id: "d1",
   name: "app",
   ownerScopeId: scopeId("personal", "owner"),
@@ -33,18 +33,18 @@ describe("deployment view with saved edits", () => {
       { actorId, scopeId: scopeId("personal", actorId), aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
-    const r = await fetch(`${base}/v1/deployments/d1`, { headers: { "x-agent-capability": cap } });
+    const r = await fetch(`${base}/v1/apps/d1`, { headers: { "x-agent-capability": cap } });
     return z.object({ deployment: z.object({ savedEdits: z.unknown().optional() }) }).parse(await r.json()).deployment;
   };
 
   before(async () => {
     const app = {
       authorizesCapabilityScope: async () => true,
-      getDeployment: async () => DEPLOYMENT,
-      deploymentGitPermissionFor: async (_id: string, who: { actorId: string }) =>
+      getApp: async () => APP,
+      appGitPermissionFor: async (_id: string, who: { actorId: string }) =>
         who.actorId === "owner" ? "write" : "read",
-      deploymentGitUrlFor: async () => null,
-      deploymentLiveEdit: async () => ({
+      appGitUrlFor: async () => null,
+      appLiveEdit: async () => ({
         draft: {
           deploymentId: "d1",
           commit: "c",
