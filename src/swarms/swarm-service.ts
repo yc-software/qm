@@ -98,6 +98,7 @@ export interface SwarmService {
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   claimOwedStops(): Promise<ClaimedRow[]>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
+  botStartedWorker(session: { id: string; threadRef: string }): Promise<boolean>;
   queuedMessages(
     input: OrchestratorInput,
     options?: { skipRuns?: ReadonlySet<string>; mailboxOnly?: boolean },
@@ -1100,6 +1101,11 @@ export function createSwarmService(deps: {
       }
       return handed;
     },
+    async botStartedWorker(session) {
+      if (!session.threadRef.startsWith("swarm:")) return false;
+      return (await store.get(threadIdentity(session.threadRef, session.id).rootId))?.template.botActor === true;
+    },
+
     async binding(input) {
       const session = await sessions.getByThread(input.conversation.threadRef);
       if (!session) {

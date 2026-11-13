@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { credentialHandle } from "../src/credentials/keychain.ts";
+import { sessionVisibleTo } from "../src/sessions/session-syscalls.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
@@ -224,10 +225,13 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   assert.match(await childTurn(read), /no file/);
   await childTurn(cred, "failed");
   await childTurn(own, "failed");
-  const fork = (await b.app.forkSession(child.id, "U1"))!.session.threadRef;
-  assert.match(await childTurn(read, "ok", fork), /no file/);
-  await childTurn(cred, "failed", fork);
-  await childTurn(own, "failed", fork);
+  const fork = (await b.app.forkSession(child.id, "U1"))!.session;
+  for (const { id, threadRef } of [fork, (await b.app.forkSession(fork.id, "U1"))!.session]) {
+    assert.match(await childTurn(read, "ok", threadRef), /no file/);
+    await childTurn(cred, "failed", threadRef);
+    await childTurn(own, "failed", threadRef);
+    assert.equal(sessionVisibleTo({ botActor: true }, (await b.sessions.get(id))!), false);
+  }
   const refusals = (await b.errors.list(testTenant)).map((e) => e.message).join("\n");
   assert.match(
     refusals,

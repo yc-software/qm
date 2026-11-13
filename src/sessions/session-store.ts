@@ -418,6 +418,7 @@ export interface SessionStore {
   endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string, principalId?: string): Promise<Session[]>;
+  forkOrigin(sessionId: string): Promise<Session | null>;
   expandSideChat(sessionId: string): Promise<void>;
   updateForkProvenance(
     sessionId: string,

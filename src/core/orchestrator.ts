@@ -22,7 +22,7 @@ import {
   delegatedAuthorizationOrigin,
   doesBotWork,
   isOwnerFire,
-  keepsBotLimits,
+  forkOfBotWork,
   ownsSessionContext,
   isSubagentThreadRef,
   sessionContextOf,
@@ -552,7 +552,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (subagentRefusal) return subagentRefusal;
       const storedSession = delegatedSession ?? (await deps.sessions.getByThread(conversation.threadRef));
       const botRequest = input.botActor;
-      if (doesBotWork(delegatedSession, input) || (storedSession && keepsBotLimits(storedSession)))
+      if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(storedSession, deps)))
         input = { ...input, botActor: true };
       const personConversationTurn =
         isPersonAuthored(input.origin.kind) &&
@@ -996,7 +996,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
         {
           ...(input.surfaceOrigin ? { surfaceBinding: input.surfaceOrigin } : {}),
-          ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
+          ...(ownsSessionContext(conversation.threadRef, input)
+            ? { context: sessionContextOf({ ...input, botActor: botRequest }) }
+            : {}),
         },
       );
       screenSession.id = session.id;

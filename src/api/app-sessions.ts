@@ -3,7 +3,7 @@ import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyAppShared } from "../deploy/share-notice.ts";
 import { appShareScope } from "../deploy/email-access.ts";
-import { keepsBotLimits, sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
@@ -1111,11 +1111,6 @@ export function createSessionMethods(
           source.scopeId,
           source.channelName,
           "web",
-          undefined,
-          keepsBotLimits(source) ? { context: source.spawnMeta } : undefined,
-        );
-        await Promise.all(
-          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
         );
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
@@ -1129,6 +1124,9 @@ export function createSessionMethods(
             ...(opts?.sideChat ? { sideChat: { ...opts.sideChat, expanded: false } } : {}),
           });
         }
+        await Promise.all(
+          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
+        );
         const sourceTitle = source.title?.trim();
         if (sourceTitle && projectMembers === undefined)
           await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
