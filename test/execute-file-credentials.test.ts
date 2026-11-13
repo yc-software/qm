@@ -614,7 +614,7 @@ test("an unattended command saves only token cache refreshes and says why it kep
     });
   assert.match(
     result.stderr,
-    /could not save its changes to \.aws\/config \(a new file\), \.aws\/sso\/cache\/session\.json \(account field unreadable\)/,
+    /could not save its changes to \.aws\/config \(a new file\), \.aws\/sso\/cache\/session\.json \(unreadable\)/,
   );
   assert.equal(await savedValue(f), "original");
 });

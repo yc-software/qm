@@ -1153,7 +1153,7 @@ export function createKeychain(deps: {
         );
       if (withheld.length)
         console.warn(
-          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn may only refresh a token cache`,
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn saves only token refreshes`,
         );
       for (const { path, kept } of byExpiry)
         console.warn(

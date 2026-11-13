@@ -247,7 +247,7 @@ async function finishExecutionFiles(
           );
         if (withheld.length)
           notes.push(
-            `could not save its changes to ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn may only refresh a token cache; the owner can make the change in their own turn`,
+            `could not save its changes to ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn saves only token refreshes; the saved login keeps its stored version`,
           );
       }),
     );

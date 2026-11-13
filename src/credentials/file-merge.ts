@@ -1,23 +1,23 @@
 import type { CredentialFile } from "./keychain.ts";
 
-const TOKEN_CACHES: ReadonlyArray<{ directory: string; expiry: readonly string[]; account?: readonly string[] }> = [
-  { directory: ".aws/sso/cache/", expiry: ["expiresAt"], account: ["startUrl"] },
+const TOKEN_CACHES: ReadonlyArray<{ directory: string; expiry: readonly string[]; tokens?: readonly string[] }> = [
+  { directory: ".aws/sso/cache/", expiry: ["expiresAt"], tokens: ["accessToken", "expiresAt", "refreshToken"] },
   { directory: ".aws/cli/cache/", expiry: ["Credentials", "Expiration"] },
 ];
 
-function cacheField(file: CredentialFile, field: "expiry" | "account"): unknown {
-  const declared = TOKEN_CACHES.find(({ directory }) => file.path.startsWith(directory))?.[field];
-  if (!declared) return undefined;
-  return declared.reduce<unknown>(
-    (node, key) => (node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined),
-    JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")),
-  );
-}
+const tokenCache = (file: CredentialFile) => TOKEN_CACHES.find(({ directory }) => file.path.startsWith(directory));
+const parsed = (file: CredentialFile): unknown =>
+  JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8"));
 
 export function credentialFileExpiry(file: CredentialFile): number | undefined {
+  const declared = tokenCache(file)?.expiry;
+  if (!declared) return undefined;
   let value: unknown;
   try {
-    value = cacheField(file, "expiry");
+    value = declared.reduce<unknown>(
+      (node, key) => (node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined),
+      parsed(file),
+    );
   } catch {
     value = file.path.endsWith(".json") ? "unparseable" : undefined;
   }
@@ -28,21 +28,32 @@ export function credentialFileExpiry(file: CredentialFile): number | undefined {
   return undefined;
 }
 
-function refreshRefusal(ours: CredentialFile | undefined, theirs: CredentialFile | undefined): string | undefined {
+function refreshRefusal(
+  ours: CredentialFile | undefined,
+  theirs: CredentialFile | undefined,
+  inBaseline: boolean,
+): string | undefined {
   if (!ours) return "deleted";
-  if (!theirs) return "a new file";
-  const cache = TOKEN_CACHES.find(({ directory }) => ours.path.startsWith(directory));
-  if (!cache) return "not a token cache";
-  if (!cache.account) return "a token cache with no account field";
-  const accounts = [ours, theirs].map((file) => {
+  if (!theirs) return inBaseline ? "no longer in the saved login" : "a new file";
+  const tokens = tokenCache(ours)?.tokens;
+  if (!tokens) return "not a refreshable token cache";
+  const [refreshed, current] = [ours, theirs].map((file) => {
     try {
-      return cacheField(file, "account");
+      const value = parsed(file);
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
     } catch {
       return undefined;
     }
   });
-  if (accounts.some((account) => typeof account !== "string" || !account)) return "account field unreadable";
-  return accounts[0] === accounts[1] ? undefined : "account changed";
+  if (!refreshed || !current) return "unreadable";
+  const fixed = [...new Set([...Object.keys(refreshed), ...Object.keys(current)])].filter(
+    (key) => !tokens.includes(key),
+  );
+  return fixed.every((key) => JSON.stringify(refreshed[key]) === JSON.stringify(current[key]))
+    ? undefined
+    : "changed beyond its token fields";
 }
 
 export interface CredentialFileMerge {
@@ -69,7 +80,7 @@ export function mergeCredentialFiles(input: {
     const base = input.baseline.get(path);
     let pick = theirs;
     if (version(ours) !== version(theirs) && version(ours) !== base) {
-      const reason = input.refreshOnly ? refreshRefusal(ours, theirs) : undefined;
+      const reason = input.refreshOnly ? refreshRefusal(ours, theirs, base !== undefined) : undefined;
       if (reason) {
         merged.withheld.push({ path, reason });
         if (theirs) merged.files.push(theirs);
