@@ -276,6 +276,7 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
       END IF;
       WITH bot_calls AS MATERIALIZED (
         SELECT c.tenant_id, ${msOf("c.created_at")} AS started, ${msOf("res.created_at")} AS ended,
+               generate_series(${msOf("c.created_at")} / 60000, ${msOf("res.created_at")} / 60000) AS minute,
                jsonb_build_object('runId', r.id, 'threadRef', r.session_id) AS source,
                concat_ws(' ', c.body, c.text, res.body, res.text) AS evidence
           FROM items c
@@ -292,8 +293,8 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
                  AND l.json ->> 'taskAuthor' IS DISTINCT FROM 'automation'))[1] AS rewritten_by
           FROM loops l
           CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'playbookHistory') h
-          JOIN bot_calls b ON b.tenant_id = l.tenant_id AND (h ->> 'at')::bigint BETWEEN b.started AND b.ended
-                          AND strpos(b.evidence, l.id) > 0
+          JOIN bot_calls b ON b.tenant_id = l.tenant_id AND b.minute = (h ->> 'at')::bigint / 60000
+                          AND (h ->> 'at')::bigint BETWEEN b.started AND b.ended AND strpos(b.evidence, l.id) > 0
          WHERE h -> 'version' = '1' OR h -> 'version' = l.json -> 'playbookVersion'
          GROUP BY l.tenant_id, l.id
       ), written AS (
@@ -304,7 +305,8 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
         SELECT DISTINCT ON (g.tenant_id, g.id) g.tenant_id, g.id, l.json ->> 'ownerScopeId' AS scope,
                l.id AS loop_id, g.json ->> 'shipAction' AS ship_action, b.source
           FROM loop_ship_grants g
-          JOIN bot_calls b ON b.tenant_id = g.tenant_id AND (g.json ->> 'createdAt')::bigint BETWEEN b.started AND b.ended
+          JOIN bot_calls b ON b.tenant_id = g.tenant_id AND b.minute = (g.json ->> 'createdAt')::bigint / 60000
+                          AND (g.json ->> 'createdAt')::bigint BETWEEN b.started AND b.ended
                           AND strpos(b.evidence, g.json ->> 'loopId') > 0
           JOIN loops l ON l.tenant_id = g.tenant_id AND l.id = g.json ->> 'loopId'
          WHERE NOT g.json ? 'revokedAt'
