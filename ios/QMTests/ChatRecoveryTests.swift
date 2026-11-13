@@ -23,7 +23,7 @@ private final class ChatRecoveryProtocol: URLProtocol, @unchecked Sendable {
   private static let answer =
     #"{"status":"done","result":{"status":"ok","reply":"Recovered answer"}}"#
   private static let history =
-    #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Earlier question","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Earlier answer","body":{}},{"seq":3,"createdAt":3,"kind":"UserMessage","turnId":"run","text":"Question","body":{}}]}"#
+    #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Earlier question","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Earlier answer","body":{}},{"seq":3,"createdAt":3,"kind":"UserMessage","turnId":"run","text":"Question","body":{"speakerId":"alice"}}]}"#
 
   static func configure(_ host: String, scenario: Scenario) {
     registry.withLock { $0[host] = State(scenario: scenario) }

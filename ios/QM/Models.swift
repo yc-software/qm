@@ -154,6 +154,7 @@ struct ConversationList: Decodable {
 }
 
 struct Transcript: Decodable {
+  let latestPromptAt: Double?
   let items: [Item]
   let earlierItems: Int?
   let pins: [NativeConversationPin]?
@@ -274,7 +275,7 @@ func presentedChatMessages(
     let last = run.activity.last
     let finalNarration =
       last?.presentationRole == "text" && last?.details?["phase"] == .string("final_answer")
-      && last?.details?["demoted"] != .bool(true) && last?.text == run.reply
+      && last?.details?["demoted"] != .bool(true)
     let replyRecorded =
       (run.runID.map { hasRecordedRunReply(items, runID: $0) } ?? false)
       || delivered || finalNarration

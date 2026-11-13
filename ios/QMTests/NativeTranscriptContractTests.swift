@@ -47,7 +47,8 @@ final class NativeTranscriptContractTests: XCTestCase {
     XCTAssertEqual(messages.map(\.runID), ["turn", "turn"])
     XCTAssertEqual(messages.first?.speaker, "Alice")
     XCTAssertEqual(messages.first?.slackTimestamp, "100.1")
-    XCTAssertEqual(messages.last?.activity.map(\.presentationRole), ["thinking", "tool_call", "tool_result"])
+    XCTAssertEqual(
+      messages.last?.activity.map(\.presentationRole), ["thinking", "tool_call", "tool_result"])
     XCTAssertEqual(history.items[1].text, "Checking the contents")
     XCTAssertEqual(history.items[2].body?.command, "cat report.txt")
     XCTAssertEqual(history.items[2].callId, "read")
@@ -149,8 +150,11 @@ final class NativeTranscriptContractTests: XCTestCase {
   func testExpandedActivityUsesCurrentEnvelope() throws {
     let current = try decode(
       TranscriptItemResponse.self,
-      ["item": item("ToolResult", text: "Full output", body: ["ok": true],
-        columns: ["callId": "read", "tool": "execute"])])
+      [
+        "item": item(
+          "ToolResult", text: "Full output", body: ["ok": true],
+          columns: ["callId": "read", "tool": "execute"])
+      ])
     XCTAssertEqual(current.item.text, "Full output")
     XCTAssertEqual(current.item.kind, "ToolResult")
     XCTAssertThrowsError(try decode(TranscriptItemResponse.self, [:]))

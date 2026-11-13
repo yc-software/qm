@@ -217,7 +217,8 @@ final class ChatReconciliationTests: XCTestCase {
     let entry = try JSONDecoder().decode(
       Item.self,
       from: Data(
-        #"{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Question","body":{}}"#.utf8))
+        #"{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Question","body":{"speakerId":"alice"}}"#
+          .utf8))
     chat.items = [entry]
     XCTAssertEqual(chat.messages.map(\.text), ["Question"])
     chat.partial = "Streaming"
@@ -295,7 +296,7 @@ final class ChatReconciliationTests: XCTestCase {
     chat.items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Existing message","body":{}}]"#
+        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Existing message","body":{"speakerId":"alice"}}]"#
           .utf8))
     XCTAssertFalse(view.showsInitialHistoryPlaceholder)
     XCTAssertEqual(chat.messages.first?.text, "Existing message")
@@ -387,7 +388,7 @@ final class ChatReconciliationTests: XCTestCase {
     chat.items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":10000,"createdAt":10000,"kind":"UserMessage","text":"Latest question","body":{}}]"#
+        #"[{"seq":10000,"createdAt":10000,"kind":"UserMessage","text":"Latest question","body":{"speakerId":"alice"}}]"#
           .utf8))
     await chat.loadInheritedHistory()
     XCTAssertNil(chat.error)
@@ -426,7 +427,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.items = try JSONDecoder().decode(
         [Item].self,
         from: Data(
-          #"[{"seq":6,"createdAt":6,"kind":"UserMessage","text":"Latest question","body":{}}]"#
+          #"[{"seq":6,"createdAt":6,"kind":"UserMessage","text":"Latest question","body":{"speakerId":"alice"}}]"#
             .utf8))
       let loading = Task {
         if inherited { await chat.loadInheritedHistory() } else { await chat.loadEarlier() }
@@ -670,7 +671,7 @@ final class ChatReconciliationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"old","text":"Repeat","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Same answer","body":{}},{"seq":3,"createdAt":3,"kind":"UserMessage","turnId":"new","text":"Repeat","body":{}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"old","text":"Repeat","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Same answer","body":{}},{"seq":3,"createdAt":3,"kind":"UserMessage","turnId":"new","text":"Repeat","body":{"speakerId":"alice"}}]
         """#.utf8))
     XCTAssertTrue(hasRecordedRunReply(items, runID: "old"))
     XCTAssertFalse(hasRecordedRunReply(items, runID: "new"))
@@ -682,7 +683,7 @@ final class ChatReconciliationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Start","body":{}},{"seq":2,"createdAt":2,"kind":"SteeringMessage","text":"Steer","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"Done","body":{}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Start","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"SteeringMessage","text":"Steer","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"Done","body":{}}]
         """#.utf8))
     XCTAssertTrue(hasRecordedRunReply(items, runID: "run"))
   }

@@ -50,8 +50,12 @@ private struct NativeRemoteLogo: View {
     .task(id: url) {
       do {
         let (data, response) = try await URLSession.shared.data(from: url)
-        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
-          throw QMError.message("The app logo could not be downloaded.")
+        guard let response = response as? HTTPURLResponse else {
+          throw URLError(.badServerResponse)
+        }
+        guard response.statusCode == 200 else {
+          throw QMError.message(
+            "App logo HTTP \(response.statusCode) from \(url.host() ?? "unknown host")")
         }
         try Task.checkCancellation()
         if let loaded = UIImage(data: data) {

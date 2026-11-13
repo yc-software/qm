@@ -1,36 +1,44 @@
 import SwiftUI
 
-struct NativeLoadingPulse: ViewModifier {
+struct NativeAnimationTimeline<Content: View>: View {
   var active = true
-  var phaseOffset: Double = 0
-  var minimumOpacity: Double = 0.4
+  var minimumInterval: TimeInterval = 1.0 / 24
+  @ViewBuilder var content: (Date, Bool) -> Content
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
   @State private var visible = false
 
-  func body(content: Content) -> some View {
+  var body: some View {
     let moving = active && visible && !reduceMotion && scenePhase == .active
-    TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !moving)) { context in
-      let phase = (context.date.timeIntervalSinceReferenceDate + phaseOffset) / 1.8
-      let opacity = minimumOpacity + (1 - minimumOpacity) * (1 + sin(phase * 2 * .pi)) / 2
-      content.opacity(moving ? opacity : 1)
+    TimelineView(.animation(minimumInterval: minimumInterval, paused: !moving)) { context in
+      content(context.date, moving)
     }
     .onAppear { visible = true }
     .onDisappear { visible = false }
   }
 }
 
+struct NativeLoadingPulse: ViewModifier {
+  var active = true
+  var phaseOffset: Double = 0
+  var minimumOpacity: Double = 0.4
+
+  func body(content: Content) -> some View {
+    NativeAnimationTimeline(active: active) { date, moving in
+      let phase = (date.timeIntervalSinceReferenceDate + phaseOffset) / 1.8
+      let opacity = minimumOpacity + (1 - minimumOpacity) * (1 + sin(phase * 2 * .pi)) / 2
+      content.opacity(moving ? opacity : 1)
+    }
+  }
+}
+
 struct NativeLoadingRail: View {
   var tint: Color?
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.scenePhase) private var scenePhase
-  @State private var visible = false
 
   var body: some View {
-    let moving = visible && !reduceMotion && scenePhase == .active
-    TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !moving)) { context in
+    NativeAnimationTimeline { date, moving in
       GeometryReader { geometry in
-        let phase = moving ? (1 + sin(context.date.timeIntervalSinceReferenceDate * 2.2)) / 2 : 0.5
+        let phase = moving ? (1 + sin(date.timeIntervalSinceReferenceDate * 2.2)) / 2 : 0.5
         let color = tint ?? QMTheme.ink
         ZStack(alignment: .leading) {
           Capsule().fill(color.opacity(0.08))
@@ -43,8 +51,6 @@ struct NativeLoadingRail: View {
     .frame(height: 3)
     .clipped()
     .accessibilityHidden(true)
-    .onAppear { visible = true }
-    .onDisappear { visible = false }
   }
 }
 

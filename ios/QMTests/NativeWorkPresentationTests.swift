@@ -22,7 +22,7 @@ final class NativeWorkPresentationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"first","tool":"files","body":{}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"first","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"AgentMessage","variant":"narration","text":"Progress","body":{}},{"seq":5,"createdAt":5,"kind":"ToolCall","callId":"second","tool":"search","body":{}},{"seq":6,"createdAt":6,"kind":"ToolResult","callId":"second","body":{"ok":true}},{"seq":7,"createdAt":7,"kind":"AgentMessage","text":"Done","body":{}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"first","tool":"files","body":{}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"first","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"AgentMessage","variant":"narration","text":"Progress","body":{}},{"seq":5,"createdAt":5,"kind":"ToolCall","callId":"second","tool":"search","body":{}},{"seq":6,"createdAt":6,"kind":"ToolResult","callId":"second","body":{"ok":true}},{"seq":7,"createdAt":7,"kind":"AgentMessage","text":"Done","body":{}}]
         """#.utf8))
     let client = APIClient(baseURL: URL(string: "https://example.com")!)
     let disclosure = NativeWorkDisclosureState()
@@ -57,7 +57,7 @@ final class NativeWorkPresentationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":1,"createdAt":1,"kind":"Reasoning","text":"Checking","step":0,"body":{"wire":{"message":{"id":"step"}}}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"spawn","tool":"subagents","body":{"action":"open","name":"Scout"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"spawn","body":{"ok":true}}]
+        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"Reasoning","text":"Checking","step":0,"body":{"wire":{"message":{"id":"step"}}}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"spawn","tool":"subagents","body":{"action":"open","name":"Scout"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"spawn","body":{"ok":true}}]
         """#.utf8))
     func group(
       _ history: [Item], status: NativeReadOnlyWorkStatus?, reasoning: [RunReasoning] = []
@@ -97,7 +97,7 @@ final class NativeWorkPresentationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Hello","body":{}}]
+        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Hello","body":{"speakerId":"alice"}}]
         """#.utf8))
     func sections(_ text: String, reasoning: [RunReasoning] = [], after: Set<String> = [])
       -> [NativeChatTranscriptSection]
@@ -150,7 +150,7 @@ final class NativeWorkPresentationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Review the launch plan","body":{}},{"seq":1,"createdAt":1,"kind":"AgentMessage","variant":"narration","text":"I’ll check the available tools and data first.","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{"purpose":"Check tools and data"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"list","tool":"tool_search","body":{"purpose":"List available tools"}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"list","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"AgentMessage","variant":"narration","text":"Next I’ll check the project directory.","body":{}},{"seq":7,"createdAt":7,"kind":"ToolCall","callId":"lookup","tool":"execute","body":{"purpose":"Check project access"}},{"seq":8,"createdAt":8,"kind":"ToolResult","callId":"lookup","body":{"ok":false,"error":"Access unavailable"}}]
+        [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Review the launch plan","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"AgentMessage","variant":"narration","text":"I’ll check the available tools and data first.","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{"purpose":"Check tools and data"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"list","tool":"tool_search","body":{"purpose":"List available tools"}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"list","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"AgentMessage","variant":"narration","text":"Next I’ll check the project directory.","body":{}},{"seq":7,"createdAt":7,"kind":"ToolCall","callId":"lookup","tool":"execute","body":{"purpose":"Check project access"}},{"seq":8,"createdAt":8,"kind":"ToolResult","callId":"lookup","body":{"ok":false,"error":"Access unavailable"}}]
         """#.utf8))
     let timeline = NativeChatTimeline(messages: chatMessages(items), items: items)
     let sections = NativeChatTranscriptSection.grouped(

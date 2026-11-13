@@ -27,7 +27,7 @@ final class NativeRunTimelineTests: XCTestCase {
   func testLaterStreamedTextSurvivesRecordedInterimPost() throws {
     let history = try items(
       #"""
-      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Find issues","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"First update"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"post","body":{"ok":true}}]
+      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Find issues","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"First update"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"post","body":{"ok":true}}]
       """#)
     let activity = try items(
       #"""
@@ -66,7 +66,7 @@ final class NativeRunTimelineTests: XCTestCase {
   func testReloadKeepsCommentaryAndLaterThinkingInTheirOrder() throws {
     let history = try items(
       #"""
-      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Find issues","body":{}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"First","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","variant":"narration","text":"Continuing","body":{"phase":"commentary"}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"Second","body":{}},{"seq":5,"createdAt":5,"kind":"AgentMessage","variant":"narration","text":"Done","step":0,"body":{"wire":{"message":{"id":"final"}}}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Done","step":0,"body":{"wire":{"message":{"id":"final"}}}}]
+      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Find issues","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"First","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","variant":"narration","text":"Continuing","body":{"phase":"commentary"}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"Second","body":{}},{"seq":5,"createdAt":5,"kind":"AgentMessage","variant":"narration","text":"Done","step":0,"body":{"wire":{"message":{"id":"final"}}}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Done","step":0,"body":{"wire":{"message":{"id":"final"}}}}]
       """#)
     let messages = chatMessages(history)
     XCTAssertEqual(messages.map(\.text), ["Find issues", "Continuing", "Done"])
@@ -109,7 +109,8 @@ final class NativeRunTimelineTests: XCTestCase {
 
   func testCompletionKeepsLiveCommentaryWhenHistoryHasNotCaughtUp() throws {
     let history = try items(
-      #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{}}]"#)
+      #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}}]"#
+    )
     let activity = try items(
       #"""
       [{"seq":2,"createdAt":2,"kind":"Reasoning","text":"First","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","variant":"narration","text":"First update","body":{}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"Second","body":{}}]
@@ -185,7 +186,7 @@ final class NativeRunTimelineTests: XCTestCase {
       NativeWorkItem.items(timeline.messages[0].activity).first?.state(active: false), .complete)
     let recorded = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"check","tool":"execute","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Done","body":{}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"check","tool":"execute","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Done","body":{}}]
       """#)
     let completed = presentedChatMessages(
       recorded,
@@ -244,7 +245,7 @@ final class NativeChatTimelineTests: XCTestCase {
   func testActivityGroupsKeepCommentaryAndOldRunsSeparateWithoutDuplicatingCalls() throws {
     let history = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"old","text":"Old question","body":{}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"check","tool":"files","body":{}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"Old answer","body":{}},{"seq":4,"createdAt":4,"kind":"UserMessage","turnId":"new","text":"New question","body":{}},{"seq":5,"createdAt":5,"kind":"Reasoning","text":"Checking the request","body":{}},{"seq":6,"createdAt":6,"kind":"ToolCall","callId":"check","tool":"search","body":{}},{"seq":7,"createdAt":7,"kind":"AgentMessage","variant":"narration","text":"I found a lead","body":{"phase":"commentary"}},{"seq":8,"createdAt":8,"kind":"ToolCall","callId":"verify","tool":"execute","body":{}},{"seq":9,"createdAt":9,"kind":"ToolResult","callId":"verify","body":{"ok":true}},{"seq":10,"createdAt":10,"kind":"ToolResult","callId":"check","body":{"ok":true}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"old","text":"Old question","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"check","tool":"files","body":{}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"Old answer","body":{}},{"seq":4,"createdAt":4,"kind":"UserMessage","turnId":"new","text":"New question","body":{"speakerId":"alice"}},{"seq":5,"createdAt":5,"kind":"Reasoning","text":"Checking the request","body":{}},{"seq":6,"createdAt":6,"kind":"ToolCall","callId":"check","tool":"search","body":{}},{"seq":7,"createdAt":7,"kind":"AgentMessage","variant":"narration","text":"I found a lead","body":{"phase":"commentary"}},{"seq":8,"createdAt":8,"kind":"ToolCall","callId":"verify","tool":"execute","body":{}},{"seq":9,"createdAt":9,"kind":"ToolResult","callId":"verify","body":{"ok":true}},{"seq":10,"createdAt":10,"kind":"ToolResult","callId":"check","body":{"ok":true}}]
       """#)
     let timeline = NativeChatTimeline(
       messages: chatMessages(history), items: history, activeRunID: "new")
@@ -268,7 +269,7 @@ final class NativeChatTimelineTests: XCTestCase {
   func testActivityGroupDoesNotPresentFailedInterruptedOrApprovalWorkAsComplete() throws {
     let history = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"check","tool":"execute","body":{}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"check","tool":"execute","body":{}}]
       """#)
     func group(
       _ history: [Item], runID: String? = nil, error: ChatMessage? = nil
@@ -294,7 +295,7 @@ final class NativeChatTimelineTests: XCTestCase {
   func testEveryInvocationKeepsItsPlaceAcrossLiveCompletionAndReload() throws {
     let history = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"first","tool":"files","body":{"action":"read"}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"first","body":{"ok":true}},{"seq":3,"createdAt":3,"kind":"AgentMessage","variant":"narration","text":"First update","body":{}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"second","tool":"search","body":{}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"second","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"Reasoning","text":"Need another opinion","body":{}},{"seq":7,"createdAt":7,"kind":"ToolCall","callId":"spawn","tool":"subagents","body":{"action":"open"}},{"seq":8,"createdAt":8,"kind":"ToolResult","callId":"spawn","body":{"ok":true}},{"seq":9,"createdAt":9,"kind":"AgentMessage","variant":"narration","text":"An agent is checking","body":{}},{"seq":10,"createdAt":10,"kind":"ToolCall","callId":"last","tool":"execute","body":{}},{"seq":11,"createdAt":11,"kind":"ToolResult","callId":"last","body":{"ok":true}},{"seq":12,"createdAt":12,"kind":"AgentMessage","text":"Done","body":{}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"first","tool":"files","body":{"action":"read"}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"first","body":{"ok":true}},{"seq":3,"createdAt":3,"kind":"AgentMessage","variant":"narration","text":"First update","body":{}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"second","tool":"search","body":{}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"second","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"Reasoning","text":"Need another opinion","body":{}},{"seq":7,"createdAt":7,"kind":"ToolCall","callId":"spawn","tool":"subagents","body":{"action":"open"}},{"seq":8,"createdAt":8,"kind":"ToolResult","callId":"spawn","body":{"ok":true}},{"seq":9,"createdAt":9,"kind":"AgentMessage","variant":"narration","text":"An agent is checking","body":{}},{"seq":10,"createdAt":10,"kind":"ToolCall","callId":"last","tool":"execute","body":{}},{"seq":11,"createdAt":11,"kind":"ToolResult","callId":"last","body":{"ok":true}},{"seq":12,"createdAt":12,"kind":"AgentMessage","text":"Done","body":{}}]
       """#)
     let activity = Array(history.dropFirst().dropLast())
     let live = NativeRunTimeline(
@@ -333,7 +334,7 @@ final class NativeChatTimelineTests: XCTestCase {
   func testLatePostResultUpdatesInvocationWithoutMovingCommentaryOrCollidingWithDelivery() throws {
     let history = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"post","tool":"slack","body":{"action":"post","text":"Delivered"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","variant":"narration","text":"Progress","body":{"phase":"commentary"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"post","body":{"ok":true}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"post","tool":"slack","body":{"action":"post","text":"Delivered"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","variant":"narration","text":"Progress","body":{"phase":"commentary"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"post","body":{"ok":true}}]
       """#)
     let timeline = NativeChatTimeline(messages: chatMessages(history), items: history)
     XCTAssertEqual(labels(timeline), ["Check", "slack · post", "Progress", "Delivered"])
@@ -346,7 +347,7 @@ final class NativeChatTimelineTests: XCTestCase {
   func testSourceBlockIndexOrdersTextBeforeLaterThinkingWithinItsStep() throws {
     let history = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"before","tool":"files","body":{}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"Plan parallel work","step":1,"body":{"wire":{"message":{"id":"step"}}}},{"seq":3,"createdAt":3,"kind":"AgentMessage","variant":"narration","text":"Starting agents","step":0,"body":{"wire":{"message":{"id":"step"}}}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"spawn","tool":"subagents","step":2,"body":{"action":"open","wire":{"message":{"id":"step"}}}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"spawn","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Done","step":0,"body":{"wire":{"message":{"id":"next"}}}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"before","tool":"files","body":{}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"Plan parallel work","step":1,"body":{"wire":{"message":{"id":"step"}}}},{"seq":3,"createdAt":3,"kind":"AgentMessage","variant":"narration","text":"Starting agents","step":0,"body":{"wire":{"message":{"id":"step"}}}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"spawn","tool":"subagents","step":2,"body":{"action":"open","wire":{"message":{"id":"step"}}}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"spawn","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Done","step":0,"body":{"wire":{"message":{"id":"next"}}}}]
       """#)
     let timeline = NativeChatTimeline(messages: chatMessages(history), items: history)
     XCTAssertEqual(
@@ -360,7 +361,7 @@ final class NativeChatTimelineTests: XCTestCase {
   func testEqualSequenceEventsKeepSourceOrderAndTrailingSavedWorkStaysVisible() throws {
     let history = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":0,"createdAt":1,"marker":"text_start","streamOffset":0},{"seq":1,"createdAt":2,"kind":"AgentMessage","variant":"narration","text":"Progress","body":{}},{"seq":1,"createdAt":3,"kind":"ToolCall","callId":"first","tool":"files","body":{}},{"seq":1,"createdAt":4,"kind":"ToolCall","callId":"second","tool":"search","body":{}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":0,"createdAt":1,"marker":"text_start","streamOffset":0},{"seq":1,"createdAt":2,"kind":"AgentMessage","variant":"narration","text":"Progress","body":{}},{"seq":1,"createdAt":3,"kind":"ToolCall","callId":"first","tool":"files","body":{}},{"seq":1,"createdAt":4,"kind":"ToolCall","callId":"second","tool":"search","body":{}}]
       """#)
     XCTAssertEqual(
       labels(NativeChatTimeline(messages: chatMessages(history), items: history)),
@@ -370,7 +371,7 @@ final class NativeChatTimelineTests: XCTestCase {
   func testAcceptedInputWithoutSequenceStaysAfterThePreviousAnswer() throws {
     let history = try items(
       #"""
-      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"old","text":"Old question","body":{}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Old answer","body":{}}]
+      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"old","text":"Old question","body":{"speakerId":"alice"}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Old answer","body":{}}]
       """#)
     let messages =
       chatMessages(history) + [
@@ -387,7 +388,7 @@ final class NativeChatTimelineTests: XCTestCase {
       forkedFrom: .init(sessionId: "source", title: nil), forkBoundarySeq: 5)
     let history = try items(
       #"""
-      [{"seq":4,"createdAt":4,"kind":"UserMessage","turnId":"old","text":"Old question","body":{}},{"seq":5,"createdAt":5,"kind":"ToolCall","callId":"read","tool":"files","body":{}},{"seq":6,"createdAt":6,"kind":"UserMessage","turnId":"new","text":"New question","body":{}}]
+      [{"seq":4,"createdAt":4,"kind":"UserMessage","turnId":"old","text":"Old question","body":{"speakerId":"alice"}},{"seq":5,"createdAt":5,"kind":"ToolCall","callId":"read","tool":"files","body":{}},{"seq":6,"createdAt":6,"kind":"UserMessage","turnId":"new","text":"New question","body":{"speakerId":"alice"}}]
       """#)
     let pending = ChatMessage(id: "pending", role: "assistant", text: "Still working", runID: "new")
     let timeline = NativeChatTimeline(
@@ -434,7 +435,7 @@ final class NativeChatTimelineTests: XCTestCase {
     }
     let history = try items(
       #"""
-      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Question","body":{}},{"seq":1,"createdAt":1,"kind":"Reasoning","text":"Second","step":1,"body":{"wire":{"message":{"id":"step"}}}}]
+      [{"seq":0,"createdAt":0,"kind":"UserMessage","turnId":"run","text":"Question","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"Reasoning","text":"Second","step":1,"body":{"wire":{"message":{"id":"step"}}}}]
       """#)
     let live = NativeRunTimeline(
       activity: [history[1]], partial: stream.text, startOffset: 0,

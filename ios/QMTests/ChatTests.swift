@@ -42,10 +42,10 @@ final class ChatScenarioProtocol: URLProtocol, @unchecked Sendable {
       } else if path == "/api/sessions/chat" {
         if request.url?.query?.contains("beforeSeq") == true {
           body =
-            #"{"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","text":"Earlier","body":{}},{"seq":1,"createdAt":2,"kind":"AgentMessage","text":"Answer","body":{}}],"earlierItems":0}"#
+            #"{"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","text":"Earlier","body":{"speakerId":"alice"}},{"seq":1,"createdAt":2,"kind":"AgentMessage","text":"Answer","body":{}}],"earlierItems":0}"#
         } else if request.url!.host!.hasPrefix("history-") {
           body =
-            #"{"items":[{"seq":2,"createdAt":3,"kind":"UserMessage","text":"Current","body":{}}],"earlierItems":2}"#
+            #"{"items":[{"seq":2,"createdAt":3,"kind":"UserMessage","text":"Current","body":{"speakerId":"alice"}}],"earlierItems":2}"#
         } else {
           status = 503
         }
@@ -68,7 +68,7 @@ final class ChatTests: XCTestCase {
     chat.items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Review this","body":{}},{"seq":2,"createdAt":2000,"kind":"UserMessage","hidden":true,"text":"Continue","body":{}},{"seq":3,"createdAt":3000,"kind":"UserMessage","text":"<wake reason=\"subagent\" name=\"Scout\" sessionId=\"child\" kind=\"final_answer\">Done</wake>","body":{}},{"seq":4,"createdAt":4000,"kind":"AgentMessage","text":"Here is the result","body":{}}]"#
+        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Review this","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2000,"kind":"UserMessage","hidden":true,"text":"Continue","body":{}},{"seq":3,"createdAt":3000,"kind":"UserMessage","text":"<wake reason=\"subagent\" name=\"Scout\" sessionId=\"child\" kind=\"final_answer\">Done</wake>","body":{}},{"seq":4,"createdAt":4000,"kind":"AgentMessage","text":"Here is the result","body":{}}]"#
           .utf8))
     XCTAssertEqual(chat.latestPromptAt, 1000)
     chat.draft = "A new draft"
@@ -78,7 +78,7 @@ final class ChatTests: XCTestCase {
       try JSONDecoder().decode(
         Item.self,
         from: Data(
-          #"{"seq":5,"createdAt":5000,"kind":"UserMessage","text":"The next question","body":{}}"#
+          #"{"seq":5,"createdAt":5000,"kind":"UserMessage","text":"The next question","body":{"speakerId":"alice"}}"#
             .utf8)))
     XCTAssertEqual(chat.latestPromptAt, 5000)
   }
@@ -91,7 +91,7 @@ final class ChatTests: XCTestCase {
     chat.items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"Consider the question","body":{}}]"#
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"Consider the question","body":{}}]"#
           .utf8))
     XCTAssertEqual(chat.workStatus, .working)
     chat.items.append(
@@ -129,7 +129,7 @@ final class ChatTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","externalId":"1.1","text":"<@U1|ada> and <!here>: see <https://docs.example/plan|the plan> in <#C1|launch> &lt;today&gt; &amp; reply","body":{}},{"seq":2,"createdAt":2,"kind":"SteeringMessage","externalId":"queued-steer:web:test:chat:run","text":"Return Result<T, E> &amp; ping <@U1|ada>","body":{}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","externalId":"1.1","text":"<@U1|ada> and <!here>: see <https://docs.example/plan|the plan> in <#C1|launch> &lt;today&gt; &amp; reply","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"SteeringMessage","externalId":"queued-steer:web:test:chat:run","text":"Return Result<T, E> &amp; ping <@U1|ada>","body":{}}]
         """#.utf8))
     XCTAssertEqual(
       chat.messages.map(\.text),
@@ -155,7 +155,7 @@ final class ChatTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":0,"createdAt":1000,"kind":"UserMessage","turnId":"old","text":"Earlier question","body":{}},{"seq":1,"createdAt":1100,"kind":"ToolCall","callId":"old-spawn","tool":"subagents","body":{"action":"open"}},{"seq":2,"createdAt":1200,"kind":"ToolResult","callId":"old-spawn","body":{"ok":true,"sessionId":"old-agent"}},{"seq":3,"createdAt":2000,"kind":"UserMessage","turnId":"current","text":"Current question","body":{}},{"seq":4,"createdAt":2100,"kind":"ToolCall","callId":"pending-spawn","tool":"subagents","body":{"action":"open"}},{"seq":5,"createdAt":2200,"kind":"ToolCall","callId":"started-spawn","tool":"subagents","body":{"action":"open"}},{"seq":6,"createdAt":2300,"kind":"ToolResult","callId":"started-spawn","body":{"ok":true,"sessionId":"current-agent"}}]
+        [{"seq":0,"createdAt":1000,"kind":"UserMessage","turnId":"old","text":"Earlier question","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1100,"kind":"ToolCall","callId":"old-spawn","tool":"subagents","body":{"action":"open"}},{"seq":2,"createdAt":1200,"kind":"ToolResult","callId":"old-spawn","body":{"ok":true,"sessionId":"old-agent"}},{"seq":3,"createdAt":2000,"kind":"UserMessage","turnId":"current","text":"Current question","body":{"speakerId":"alice"}},{"seq":4,"createdAt":2100,"kind":"ToolCall","callId":"pending-spawn","tool":"subagents","body":{"action":"open"}},{"seq":5,"createdAt":2200,"kind":"ToolCall","callId":"started-spawn","tool":"subagents","body":{"action":"open"}},{"seq":6,"createdAt":2300,"kind":"ToolResult","callId":"started-spawn","body":{"ok":true,"sessionId":"current-agent"}}]
         """#.utf8))
     chat.activeRunID = "current"
     XCTAssertEqual(
@@ -169,7 +169,7 @@ final class ChatTests: XCTestCase {
       try JSONDecoder().decode(
         Item.self,
         from: Data(
-          #"{"seq":7,"createdAt":3000,"kind":"UserMessage","turnId":"next","text":"Next question","body":{}}"#
+          #"{"seq":7,"createdAt":3000,"kind":"UserMessage","turnId":"next","text":"Next question","body":{"speakerId":"alice"}}"#
             .utf8)))
     XCTAssertTrue(chat.agentActivity.isEmpty)
   }
@@ -194,8 +194,7 @@ final class ChatTests: XCTestCase {
           .utf8))
   }
 
-  func testServerDeniedMutationsAreBlockedAndPermittedMutationsReachTheServer() async throws
-  {
+  func testServerDeniedMutationsAreBlockedAndPermittedMutationsReachTheServer() async throws {
     let file = FileManager.default.temporaryDirectory
       .appendingPathComponent("\(UUID().uuidString).txt")
     try Data("abc".utf8).write(to: file)
@@ -265,7 +264,7 @@ final class ChatTests: XCTestCase {
     restored.items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Check","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Done","body":{}}]"#
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Check","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Done","body":{}}]"#
           .utf8))
     XCTAssertEqual(restored.messages.map(\.text), ["Check", "Done"])
     XCTAssertTrue(restored.draft.isEmpty)
@@ -367,7 +366,7 @@ final class ChatTests: XCTestCase {
     chat.items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Previous question","body":{}}]"#
+        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Previous question","body":{"speakerId":"alice"}}]"#
           .utf8))
     chat.draft = "An oversized request"
     await chat.send()
@@ -381,7 +380,9 @@ final class ChatTests: XCTestCase {
     let chat = model()
     chat.items = try JSONDecoder().decode(
       [Item].self,
-      from: Data(#"[{"seq":2,"createdAt":3,"kind":"UserMessage","text":"Current","body":{}}]"#.utf8))
+      from: Data(
+        #"[{"seq":2,"createdAt":3,"kind":"UserMessage","text":"Current","body":{"speakerId":"alice"}}]"#
+          .utf8))
     async let first: Void = chat.loadEarlier()
     async let second: Void = chat.loadEarlier()
     _ = await (first, second)

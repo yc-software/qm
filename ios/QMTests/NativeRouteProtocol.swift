@@ -34,6 +34,7 @@ final class NativeRouteProtocol: URLProtocol, @unchecked Sendable {
     var calls: [Call] = []
     var holding: Set<String> = []
     var held: [String: [NativeRouteProtocol]] = [:]
+    var responder: (@Sendable (Call) -> Reply)?
     var onCall: (@Sendable (String) -> Void)?
   }
   final class Server: Sendable {
@@ -94,6 +95,7 @@ final class NativeRouteProtocol: URLProtocol, @unchecked Sendable {
   private var server: Server? { Self.servers.withLock { $0[request.url!.host ?? ""] } }
 
   private var keys: [String] = []
+  private var dynamicReply: Reply?
 
   override func startLoading() {
     let call = Call(
@@ -102,6 +104,7 @@ final class NativeRouteProtocol: URLProtocol, @unchecked Sendable {
     let keys = [call.exact, call.route]
     self.keys = keys
     let server = server
+    dynamicReply = server?.state.withLock { $0.responder }?(call)
     let held = server?.state.withLock { state -> Bool in
       state.calls.append(call)
       guard let key = keys.first(where: state.holding.contains) else { return false }
@@ -116,7 +119,7 @@ final class NativeRouteProtocol: URLProtocol, @unchecked Sendable {
     guard !stopped.withLock({ $0 }) else { return }
     let keys = keys
     let reply =
-      server?.state.withLock { state -> Reply in
+      dynamicReply ?? server?.state.withLock { state -> Reply in
         guard let key = keys.first(where: { state.replies[$0]?.isEmpty == false }) else {
           return state.fallback
         }

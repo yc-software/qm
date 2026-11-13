@@ -14,11 +14,12 @@ private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
       [
         "kind": "AgentMessage", "seq": sequence, "createdAt": sequence,
         "text": "Images from message \(sequence).\n\n"
-            + "![Workspace image](/api/files/markdown-\(sequence)/content)\n\n"
-            + "![Attached image](attachment://figure-\(sequence).png)",
-        "body": ["attachments": [
+          + "![Workspace image](/api/files/markdown-\(sequence)/content)\n\n"
+          + "![Attached image](attachment://figure-\(sequence).png)",
+        "body": [
+          "attachments": [
             ["name": "figure-\(sequence).png", "artifactId": "attachment-\(sequence)"]
-          ],
+          ]
         ],
       ]
     }
@@ -47,7 +48,8 @@ private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
       }
       return [
         "kind": sequence % 3 == 0 ? "AgentMessage" : "UserMessage", "seq": sequence,
-        "createdAt": sequence, "text": text, "body": [:],
+        "createdAt": sequence, "text": text,
+        "body": sequence % 3 == 0 ? [:] : ["speakerId": "alice"],
       ]
     }
     return try JSONSerialization.data(withJSONObject: ["items": items, "earlierItems": 0])
@@ -58,7 +60,8 @@ private final class ChatScrollProtocol: URLProtocol, @unchecked Sendable {
       "items": (first..<(first + count)).map { sequence in
         [
           "kind": "UserMessage", "seq": sequence, "createdAt": sequence,
-          "text": "Message \(sequence). " + String(repeating: "Conversation text. ", count: 8), "body": [:],
+          "text": "Message \(sequence). " + String(repeating: "Conversation text. ", count: 8),
+          "body": ["speakerId": "alice"],
         ] as [String: Any]
       },
       "earlierItems": first - 1,
@@ -233,8 +236,9 @@ final class ChatScrollTests: XCTestCase {
           Item.self,
           from: JSONSerialization.data(withJSONObject: [
             "kind": "ToolCall", "seq": 61, "createdAt": 61,
-            "turnId": "current", "callId": "tool", "tool": "execute", "body": [
-              "description": String(repeating: "Inspecting the requested file. ", count: 12),
+            "turnId": "current", "callId": "tool", "tool": "execute",
+            "body": [
+              "description": String(repeating: "Inspecting the requested file. ", count: 12)
             ],
           ])))
       try await self.waitUntil(diagnostics: { self.geometry(scroll) }) {
@@ -427,7 +431,7 @@ final class ChatScrollTests: XCTestCase {
       let newMessage = try JSONDecoder().decode(
         Item.self,
         from: Data(
-          #"{"seq":61,"createdAt":2000,"kind":"UserMessage","turnId":"next","text":"A later question","body":{}}"#
+          #"{"seq":61,"createdAt":2000,"kind":"UserMessage","turnId":"next","text":"A later question","body":{"speakerId":"alice"}}"#
             .utf8))
       model.items.append(newMessage)
       try await self.waitUntil(diagnostics: { self.geometry(scroll) }) {

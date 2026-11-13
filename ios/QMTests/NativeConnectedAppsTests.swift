@@ -3,11 +3,11 @@ import os
 
 @testable import QM
 
-final class ConnectedAppsProtocol: URLProtocol, @unchecked Sendable {
+enum ConnectedAppsFixture {
   struct State {
     var cursors: [String] = []
     var heldCursor: String?
-    var pending: ConnectedAppsProtocol?
+    let server = NativeRouteProtocol.Server()
     var onHold: (@Sendable () -> Void)?
     var repeatsCursor = false
     var failsPage = false
@@ -26,71 +26,58 @@ final class ConnectedAppsProtocol: URLProtocol, @unchecked Sendable {
   static let freshLinearAccount =
     #"{"id":"ca_3","toolkit":"linear","userId":"alice","missingScopes":[]}"#
   static let state = OSAllocatedUnfairLock(initialState: State())
-  private let stopped = OSAllocatedUnfairLock(initialState: false)
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-  private var cursor: String {
-    URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first {
-      $0.name == "cursor"
-    }?.value ?? ""
+  static var server: NativeRouteProtocol.Server { state.withLock { $0.server } }
+  static func install() {
+    server.state.withLock { state in
+      state.responder = { call in answer(call) }
+      state.onCall = { route in
+        if route == "GET /api/composio/toolkits", let callback = Self.state.withLock({ $0.onHold }),
+          !server.state.withLock({ $0.held.isEmpty })
+        {
+          callback()
+        }
+      }
+    }
   }
-  private var requestBody: [String: Any] {
-    (try? JSONSerialization.jsonObject(with: request.bodyData) as? [String: Any]) ?? [:]
-  }
-  override func startLoading() {
+  private static func answer(_ call: NativeRouteProtocol.Call) -> NativeRouteProtocol.Reply {
+    let cursor = call.parameters["cursor"] ?? ""
     let held = Self.state.withLock { state in
-      if request.url!.path == "/api/composio/authorize" {
+      let requestBody = call.json
+      if call.url.path == "/api/composio/authorize" {
         state.authorizationRequests += 1
         state.authorizationState = requestBody["state"] as? String ?? ""
         if let account = state.authorizedAccount { state.accounts.append(account) }
       }
-      if request.url!.path == "/api/composio/disconnect",
+      if call.url.path == "/api/composio/disconnect",
         let accountId = requestBody["accountId"] as? String
       {
         state.disconnected.append(accountId)
         if state.disconnectStatus == 200 { state.accounts.removeAll { $0.contains(accountId) } }
       }
-      guard request.url!.path == "/api/composio/toolkits" else { return false }
+      guard call.url.path == "/api/composio/toolkits" else { return false }
       state.cursors.append(cursor)
       guard state.heldCursor == cursor else { return false }
-      state.pending = self
       return true
     }
-    if held {
-      Self.state.withLock { $0.onHold }?()
-    } else {
-      respond()
-    }
-  }
-  static func release() {
-    let pending = state.withLock { state in
-      let pending = state.pending
-      state.pending = nil
-      state.heldCursor = nil
-      return pending
-    }
-    pending?.respond()
-  }
-  private func respond() {
-    guard !stopped.withLock({ $0 }) else { return }
+    if held { server.hold(call.exact) }
     let snapshot = Self.state.withLock { $0 }
     let github = #"{"id":"github","name":"GitHub","description":"Repositories"}"#
     let linear = #"{"id":"linear","name":"Linear","description":"Project planning"}"#
     let calendar = #"{"id":"calendar","name":"Calendar","description":"Meetings"}"#
     let body: String
     var status = 200
-    if request.url!.path == "/api/composio/authorize", snapshot.authorizedAccount != nil {
+    if call.url.path == "/api/composio/authorize", snapshot.authorizedAccount != nil {
       body = #"{"url":"https://connect.composio.dev/link/lk_test","accountId":"ca_3"}"#
-    } else if request.url!.path == "/api/composio/authorize" {
+    } else if call.url.path == "/api/composio/authorize" {
       status = 503
       body = #"{"message":"Connection unavailable"}"#
-    } else if request.url!.path == "/api/composio/disconnect" {
+    } else if call.url.path == "/api/composio/disconnect" {
       status = snapshot.disconnectStatus
       body =
         status == 200
         ? #"{"disconnected":"ca_1","toolkit":"github"}"#
         : #"{"error":"composio_unavailable","message":"Could not disconnect."}"#
-    } else if request.url!.path == "/api/composio/connections" {
+    } else if call.url.path == "/api/composio/connections" {
       body = "{\"items\":[\(snapshot.accounts.joined(separator: ","))]}"
     } else if cursor.isEmpty {
       body = "{\"items\":[\(github)],\"nextCursor\":\"page2\"}"
@@ -103,30 +90,28 @@ final class ConnectedAppsProtocol: URLProtocol, @unchecked Sendable {
     } else {
       body = "{\"items\":[\(calendar)]}"
     }
-    client?.urlProtocol(
-      self,
-      didReceive: HTTPURLResponse(
-        url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!,
-      cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data(body.utf8))
-    client?.urlProtocolDidFinishLoading(self)
+    return .init(status: status, body: body)
   }
-  override func stopLoading() {
-    stopped.withLock { $0 = true }
+  static func release() {
+    state.withLock {
+      $0.heldCursor = nil
+      $0.onHold = nil
+    }
+    let routes = server.state.withLock { $0.holding }
+    routes.forEach(server.release)
   }
 }
 
 @MainActor
 final class NativeConnectedAppsTests: XCTestCase {
   private func model() -> ConnectedAppsModel {
-    ConnectedAppsProtocol.state.withLock { $0 = .init() }
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [ConnectedAppsProtocol.self]
+    ConnectedAppsFixture.state.withLock { $0 = .init() }
+    ConnectedAppsFixture.install()
     let provider = WebAuthentication { _, reply in
       .init(
         start: {
           var callback = URLComponents(string: "qm://connection/callback")!
-          let (state, refusal) = ConnectedAppsProtocol.state.withLock {
+          let (state, refusal) = ConnectedAppsFixture.state.withLock {
             ($0.authorizationState, $0.authorizationError)
           }
           callback.queryItems = [
@@ -140,8 +125,7 @@ final class NativeConnectedAppsTests: XCTestCase {
         }, cancel: {})
     }
     return ConnectedAppsModel(
-      client: APIClient(
-        baseURL: URL(string: "https://connected-apps.example")!, configuration: configuration),
+      client: ConnectedAppsFixture.server.client(),
       authorization: ConnectionAuthorization(authentication: provider))
   }
 
@@ -172,7 +156,7 @@ final class NativeConnectedAppsTests: XCTestCase {
     await model.search()
     XCTAssertEqual(model.matchingToolkits.map(\.id), ["github"])
     XCTAssertEqual(model.nextCursor, "page2")
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.cursors }, [""])
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.cursors }, [""])
     XCTAssertFalse(model.busy)
   }
 
@@ -188,13 +172,13 @@ final class NativeConnectedAppsTests: XCTestCase {
     model.query = "planning"
     await model.search()
     XCTAssertEqual(model.matchingToolkits.map(\.id), ["linear"])
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.cursors }, ["", "page2", "page3"])
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.cursors }, ["", "page2", "page3"])
   }
 
   func testSearchWaitsForTheInitialLoad() async {
     let model = model()
     let held = expectation(description: "Initial catalog request")
-    ConnectedAppsProtocol.state.withLock {
+    ConnectedAppsFixture.state.withLock {
       $0.heldCursor = ""
       $0.onHold = { held.fulfill() }
     }
@@ -204,20 +188,20 @@ final class NativeConnectedAppsTests: XCTestCase {
     XCTAssertFalse(model.loadingMore)
     model.query = "Linear"
     let search = Task { await model.search() }
-    ConnectedAppsProtocol.release()
+    ConnectedAppsFixture.release()
     let loaded = await initial.value
     await search.value
     XCTAssertTrue(loaded)
     XCTAssertEqual(model.matchingToolkits.map(\.id), ["linear"])
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.cursors }, ["", "page2", "page3"])
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.cursors }, ["", "page2", "page3"])
     XCTAssertFalse(model.busy)
   }
 
   func testConnectedAccountsLoadWhileTheCatalogIsStillLoading() async throws {
     let model = model()
     let held = expectation(description: "Initial catalog request")
-    ConnectedAppsProtocol.state.withLock {
-      $0.accounts = [ConnectedAppsProtocol.githubAccount]
+    ConnectedAppsFixture.state.withLock {
+      $0.accounts = [ConnectedAppsFixture.githubAccount]
       $0.heldCursor = ""
       $0.onHold = { held.fulfill() }
     }
@@ -229,7 +213,7 @@ final class NativeConnectedAppsTests: XCTestCase {
     }
     XCTAssertEqual(model.accounts.map(\.id), ["ca_1"])
     XCTAssertTrue(model.toolkits.isEmpty)
-    ConnectedAppsProtocol.release()
+    ConnectedAppsFixture.release()
     let loaded = await initial.value
     XCTAssertTrue(loaded)
     XCTAssertEqual(model.toolkits.map(\.id), ["github"])
@@ -239,7 +223,7 @@ final class NativeConnectedAppsTests: XCTestCase {
     let model = model()
     await model.search()
     let held = expectation(description: "Second catalog page")
-    ConnectedAppsProtocol.state.withLock {
+    ConnectedAppsFixture.state.withLock {
       $0.heldCursor = "page2"
       $0.onHold = { held.fulfill() }
     }
@@ -256,32 +240,32 @@ final class NativeConnectedAppsTests: XCTestCase {
     XCTAssertNil(model.error)
     XCTAssertEqual(model.toolkits.map(\.id), ["github"])
     XCTAssertEqual(model.nextCursor, "page2")
-    ConnectedAppsProtocol.release()
+    ConnectedAppsFixture.release()
     model.query = "Linear"
     await model.search()
     XCTAssertEqual(model.matchingToolkits.map(\.id), ["linear"])
     XCTAssertNil(model.nextCursor)
     XCTAssertEqual(
-      ConnectedAppsProtocol.state.withLock { $0.cursors }, ["", "page2", "page2", "page3"])
+      ConnectedAppsFixture.state.withLock { $0.cursors }, ["", "page2", "page2", "page3"])
   }
 
   func testRepeatedCursorStopsSearchAndReportsFailure() async {
     let model = model()
-    ConnectedAppsProtocol.state.withLock { $0.repeatsCursor = true }
+    ConnectedAppsFixture.state.withLock { $0.repeatsCursor = true }
     model.query = "Calendar"
     await model.search()
     XCTAssertNotNil(model.error)
     XCTAssertNil(model.nextCursor)
     XCTAssertFalse(model.busy)
     XCTAssertTrue(model.matchingToolkits.isEmpty)
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.cursors }, ["", "page2"])
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.cursors }, ["", "page2"])
   }
 
   func testLoadedResultCanConnectWhileSearchPageIsPending() async throws {
     let model = model()
     await model.search()
     let held = expectation(description: "Second catalog page")
-    ConnectedAppsProtocol.state.withLock {
+    ConnectedAppsFixture.state.withLock {
       $0.heldCursor = "page2"
       $0.onHold = { held.fulfill() }
     }
@@ -294,33 +278,33 @@ final class NativeConnectedAppsTests: XCTestCase {
 
     await model.connect(toolkit)
 
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.authorizationRequests }, 1)
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.authorizationRequests }, 1)
     XCTAssertEqual(model.error, "Connection unavailable")
     XCTAssertFalse(model.busy)
     XCTAssertFalse(model.loadingMore)
     XCTAssertEqual(model.toolkits.map(\.id), ["github"])
     XCTAssertEqual(model.nextCursor, "page2")
 
-    ConnectedAppsProtocol.release()
+    ConnectedAppsFixture.release()
     await search.value
 
     XCTAssertEqual(model.toolkits.map(\.id), ["github"])
     XCTAssertEqual(model.nextCursor, "page2")
     XCTAssertEqual(model.error, "Connection unavailable")
     XCTAssertFalse(model.busy)
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.cursors }, ["", "page2"])
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.cursors }, ["", "page2"])
   }
 
   func testFailedPageRetainsResultsAndRetryCompletesSearch() async {
     let model = model()
-    ConnectedAppsProtocol.state.withLock { $0.failsPage = true }
+    ConnectedAppsFixture.state.withLock { $0.failsPage = true }
     model.query = "Linear"
     await model.search()
     XCTAssertNotNil(model.error)
     XCTAssertEqual(model.toolkits.map(\.id), ["github"])
     XCTAssertFalse(model.busy)
     XCTAssertFalse(model.loadingMore)
-    ConnectedAppsProtocol.state.withLock { $0.failsPage = false }
+    ConnectedAppsFixture.state.withLock { $0.failsPage = false }
     await model.load()
     await model.search()
     XCTAssertNil(model.error)
@@ -331,8 +315,8 @@ final class NativeConnectedAppsTests: XCTestCase {
 
   func testDisconnectingTheLastAccountClearsTheToolkitConnection() async throws {
     let model = model()
-    ConnectedAppsProtocol.state.withLock {
-      $0.accounts = [ConnectedAppsProtocol.githubAccount, ConnectedAppsProtocol.staleLinearAccount]
+    ConnectedAppsFixture.state.withLock {
+      $0.accounts = [ConnectedAppsFixture.githubAccount, ConnectedAppsFixture.staleLinearAccount]
     }
     await model.search()
     XCTAssertTrue(model.isConnected("github"))
@@ -345,7 +329,7 @@ final class NativeConnectedAppsTests: XCTestCase {
 
     await model.disconnect(github)
 
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.disconnected }, ["ca_1"])
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.disconnected }, ["ca_1"])
     XCTAssertFalse(model.isConnected("github"))
     XCTAssertEqual(model.accounts.map(\.id), ["ca_2"])
     XCTAssertNil(model.error)
@@ -358,9 +342,9 @@ final class NativeConnectedAppsTests: XCTestCase {
     let model = model()
     try model.client.saveSession("token")
     defer { model.client.signOut() }
-    ConnectedAppsProtocol.state.withLock {
-      $0.accounts = [ConnectedAppsProtocol.staleLinearAccount]
-      $0.authorizedAccount = ConnectedAppsProtocol.freshLinearAccount
+    ConnectedAppsFixture.state.withLock {
+      $0.accounts = [ConnectedAppsFixture.staleLinearAccount]
+      $0.authorizedAccount = ConnectedAppsFixture.freshLinearAccount
     }
     await model.search()
     let stale = try XCTUnwrap(model.accounts.first)
@@ -368,8 +352,8 @@ final class NativeConnectedAppsTests: XCTestCase {
 
     await model.reconnect(stale)
 
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.authorizationRequests }, 1)
-    XCTAssertEqual(ConnectedAppsProtocol.state.withLock { $0.disconnected }, ["ca_2"])
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.authorizationRequests }, 1)
+    XCTAssertEqual(ConnectedAppsFixture.state.withLock { $0.disconnected }, ["ca_2"])
     XCTAssertEqual(model.accounts.map(\.id), ["ca_3"])
     XCTAssertFalse(model.accounts.contains(where: \.needsReconnect))
     XCTAssertNil(model.error)
@@ -382,8 +366,8 @@ final class NativeConnectedAppsTests: XCTestCase {
     let model = model()
     try model.client.saveSession("token")
     defer { model.client.signOut() }
-    ConnectedAppsProtocol.state.withLock {
-      $0.authorizedAccount = ConnectedAppsProtocol.freshLinearAccount
+    ConnectedAppsFixture.state.withLock {
+      $0.authorizedAccount = ConnectedAppsFixture.freshLinearAccount
       $0.authorizationError = "access_denied"
     }
     await model.search()
@@ -398,23 +382,23 @@ final class NativeConnectedAppsTests: XCTestCase {
 
   func testFailedReconnectKeepsTheStaleAccount() async throws {
     let model = model()
-    ConnectedAppsProtocol.state.withLock {
-      $0.accounts = [ConnectedAppsProtocol.staleLinearAccount]
+    ConnectedAppsFixture.state.withLock {
+      $0.accounts = [ConnectedAppsFixture.staleLinearAccount]
     }
     await model.search()
 
     await model.reconnect(try XCTUnwrap(model.accounts.first))
 
     XCTAssertEqual(model.error, "Connection unavailable")
-    XCTAssertTrue(ConnectedAppsProtocol.state.withLock { $0.disconnected }.isEmpty)
+    XCTAssertTrue(ConnectedAppsFixture.state.withLock { $0.disconnected }.isEmpty)
     XCTAssertEqual(model.accounts.map(\.id), ["ca_2"])
     XCTAssertFalse(model.busy)
   }
 
   func testFailedDisconnectKeepsTheAccountAndReportsTheError() async throws {
     let model = model()
-    ConnectedAppsProtocol.state.withLock {
-      $0.accounts = [ConnectedAppsProtocol.githubAccount]
+    ConnectedAppsFixture.state.withLock {
+      $0.accounts = [ConnectedAppsFixture.githubAccount]
       $0.disconnectStatus = 503
     }
     await model.search()
@@ -429,8 +413,8 @@ final class NativeConnectedAppsTests: XCTestCase {
 
   func testDisconnectingAnAlreadyRemovedAccountSucceeds() async throws {
     let model = model()
-    ConnectedAppsProtocol.state.withLock {
-      $0.accounts = [ConnectedAppsProtocol.githubAccount]
+    ConnectedAppsFixture.state.withLock {
+      $0.accounts = [ConnectedAppsFixture.githubAccount]
       $0.disconnectStatus = 404
     }
     await model.search()

@@ -84,6 +84,15 @@ struct Item: Decodable, Identifiable {
     default: "system"
     }
   }
+  var isHumanPrompt: Bool {
+    guard ["UserMessage", "SteeringMessage"].contains(kind), !isHidden,
+      details?["overheard"] != .bool(true)
+    else { return false }
+    return (details?["speakerId"] != nil && details?["speakerId"] != .null)
+      || details?["slackReplyReceipt"] == .bool(true)
+      || kind == "SteeringMessage" && details?["author"] != nil
+  }
+
   var steered: Bool { kind == "SteeringMessage" }
   var isHidden: Bool { hidden == true || body?.hidden == true }
   var messageTs: String? { externalId ?? body?.ts }

@@ -83,7 +83,8 @@ struct NativeActivityRow: View {
           if entry.presentationRole == "tool_call" || entry.presentationRole == "tool_result" {
             NativeActivityIcon(item: NativeWorkItem(entry: entry))
           }
-          Text(entry.presentationRole.replacingOccurrences(of: "_", with: " ").capitalized).font(.headline)
+          Text(entry.presentationRole.replacingOccurrences(of: "_", with: " ").capitalized).font(
+            .headline)
         }
         if let tool = entry.tool {
           Text([tool, entry.body?.action].compactMap { $0 }.joined(separator: " · "))
@@ -108,14 +109,9 @@ struct NativeActivityDetails: View {
   @State private var error: String?
   private var displayed: Item { fullEntry ?? entry }
 
-  static let contentKeys = [
-    "purpose", "command", "path", "query", "url", "text", "message", "reason", "args",
-    "arguments", "input", "stdout", "stderr", "result", "output", "content", "error",
-  ]
   private static let hiddenKeys: Set<String> = [
     "tool", "action", "callId", "step", "wire", "workStartedAt", "workFinishedAt",
-    "retrySafe", "rerun", "runId", "requestId", "scope", "scopeLabel", "code", "timedOut",
-    "quarantined", "pressure", "chars", "sessionId",
+    "retrySafe", "rerun", "runId", "requestId", "scope", "scopeLabel", "chars", "sessionId",
   ]
   private static let labels = [
     "args": "Arguments", "arguments": "Arguments", "stdout": "Output", "stderr": "Errors",
@@ -132,15 +128,15 @@ struct NativeActivityDetails: View {
     guard case .object = details else { return [("Payload", details)] }
     let shown = details.fields.filter { field in
       switch field.value {
-      case .null, .bool: return false
+      case .null: return false
+      case .bool: return true
       case .string(let text): return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       case .object(let values): return !values.isEmpty
       case .array(let items): return !items.isEmpty
       case .number: return true
       }
     }
-    let content = shown.filter { contentKeys.contains($0.key) }
-    return content.isEmpty ? shown.filter { !hiddenKeys.contains($0.key) } : content
+    return shown.filter { !hiddenKeys.contains($0.key) }
   }
 
   private static func label(_ key: String) -> String {
@@ -367,7 +363,8 @@ struct NativeWorkItem: Identifiable {
         if entry.presentationRole == "tool_call", let callID = entry.callId {
           calls[callID] = items.count
         }
-        items.append(Self(entry: entry, result: entry.presentationRole == "tool_result" ? entry : nil))
+        items.append(
+          Self(entry: entry, result: entry.presentationRole == "tool_result" ? entry : nil))
       }
     }
     return items

@@ -12,13 +12,11 @@ final class ChatModel {
   var loadingInherited = false
   private(set) var hasLoadedTranscript: Bool
 
-  private var earlierPromptAt: Double? {
-    didSet { if earlierPromptAt != oldValue { presentationRevision += 1 } }
+  private var recordedPromptAt: Double? {
+    didSet { if recordedPromptAt != oldValue { presentationRevision += 1 } }
   }
-  private var earlierPromptBoundary: Int?
-  private static func latestPrompt(in messages: [ChatMessage]) -> Double? {
-    messages.lazy.filter { $0.role == "user" && SubagentMail(text: $0.text) == nil }
-      .compactMap(\.createdAt).max()
+  private static func latestPrompt(in items: [Item]) -> Double? {
+    items.lazy.filter(\.isHumanPrompt).map(\.createdAt).max()
   }
 
   private struct StreamShape: Equatable {
@@ -67,8 +65,11 @@ final class ChatModel {
       activeRunID: activeRunID, reasoning: live == nil ? [] : liveReasoning,
       reasoningAfterText: reasoningAfterText,
       streamingMessageID: live?.messages.last?.id)
-    let visiblePromptAt = Self.latestPrompt(in: messages)
-    let latestPromptAt = [visiblePromptAt, earlierPromptAt].compactMap { $0 }.max()
+    let visiblePromptAt = Self.latestPrompt(in: transcriptEntries)
+    let startedPromptAt = runPresentations.filter { !queuedRunIDs.contains($0.id) }
+      .compactMap { $0.input?.createdAt }.max()
+    let latestPromptAt = [visiblePromptAt, recordedPromptAt, startedPromptAt].compactMap { $0 }
+      .max()
     let built = Presentation(
       revision: revision, transcriptEntries: transcriptEntries, messages: messages,
       forkableMessageIDs: conversation.isSubagent
@@ -237,6 +238,7 @@ final class ChatModel {
     hasLoadedTranscript = transcript != nil || !knownSession
     goal = conversation.goal
     if let transcript {
+      recordedPromptAt = transcript.latestPromptAt
       goal = transcript.goal
       items = transcript.items
       pins = transcript.pins ?? []
@@ -329,6 +331,7 @@ final class ChatModel {
             items.filter { ($0.seq ?? Int.max) < first }
           } ?? []
         pins = transcript.pins ?? []
+        recordedPromptAt = transcript.latestPromptAt
         goal = transcript.goal
         conversation = session
         items = retained + transcript.items
@@ -365,7 +368,6 @@ final class ChatModel {
                 })
         }
         earlierItems = max(0, (transcript.earlierItems ?? 0) - retained.count)
-        await recoverEarlierPrompt()
         guard current == generation, revision == transcriptRevision else { return false }
         if conversation.canReply {
           let response: ApprovalList = try await client.fetch(
@@ -412,7 +414,6 @@ final class ChatModel {
       restored = await refresh()
     }
     guard !Task.isCancelled, current == generation else { return }
-    await recoverEarlierPrompt()
     guard !Task.isCancelled, current == generation else { return }
     if !conversation.canReply && !conversation.isSubagent {
       monitor = Task {
@@ -824,41 +825,6 @@ final class ChatModel {
       var presentation = ChatRunPresentation(id: id, runID: id)
       update(&presentation)
       runPresentations.append(presentation)
-    }
-  }
-
-  private func recoverEarlierPrompt() async {
-    guard presentation.visiblePromptAt == nil, earlierItems > 0, let first = items.first?.seq,
-      earlierPromptBoundary != first
-    else { return }
-    let current = generation
-    let revision = transcriptRevision
-    var before = first
-    do {
-      while !Task.isCancelled {
-        let page: Transcript = try await client.fetch(
-          "api/sessions/\(conversation.id.apiComponent)",
-          query: [
-            .init(name: "beforeSeq", value: String(before)), .init(name: "tailTurns", value: "25"),
-          ])
-        guard current == generation, revision == transcriptRevision, !Task.isCancelled else {
-          return
-        }
-        if let prompt = Self.latestPrompt(in: chatMessages(page.items)) {
-          earlierPromptAt = prompt
-          earlierPromptBoundary = first
-          return
-        }
-        guard (page.earlierItems ?? 0) > 0, let next = page.items.first?.seq,
-          next > 0, next < before
-        else {
-          earlierPromptBoundary = first
-          return
-        }
-        before = next
-      }
-    } catch {
-      if !Task.isCancelled { Log.background.failure("Earlier prompt lookup", error) }
     }
   }
 

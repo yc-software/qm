@@ -127,7 +127,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
   private static let stoppedEvent =
     "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"done\",\"result\":{\"status\":\"ok\",\"reply\":\"(stopped)\",\"stopped\":true}}}\n\n"
   private static let questionEntry =
-    #"{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Question","body":{}}"#
+    #"{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Question","body":{"speakerId":"alice"}}"#
 
   private static let swarmRoot = #"{"id":"root","depth":0,"state":"ready"}"#
   private static let swarmWorkers =
@@ -414,7 +414,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     }
     return Reply(
       body:
-        #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Inherited question","body":{}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Inherited answer","body":{}}],"earlierItems":0}"#,
+        #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Inherited question","body":{"speakerId":"alice"}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Inherited answer","body":{}}],"earlierItems":0}"#,
       held: host.hasPrefix("fork-history-held")
     )
   }

@@ -3,7 +3,7 @@ import os
 
 @testable import QM
 
-final class LoopsFixtureProtocol: URLProtocol, @unchecked Sendable {
+enum LoopsFixture {
   struct Seen {
     let method: String
     let path: String
@@ -16,18 +16,26 @@ final class LoopsFixtureProtocol: URLProtocol, @unchecked Sendable {
     var patchStatus = 200
     var previewStatus = 200
     var preview = "[]"
-    var held: String?
-    var pending: LoopsFixtureProtocol?
-    var onHold: (@Sendable () -> Void)?
-    var seen: [Seen] = []
+    let server = NativeRouteProtocol.Server()
   }
   static let state = OSAllocatedUnfairLock(initialState: State())
-  private let stopped = OSAllocatedUnfairLock(initialState: false)
-  private let reply = OSAllocatedUnfairLock(initialState: (status: 200, body: "{}"))
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  static var server: NativeRouteProtocol.Server { state.withLock { $0.server } }
+  static func install() {
+    server.state.withLock {
+      $0.responder = { call in
+        state.withLock { state in
+          let reply = answer(
+            &state, method: call.method, path: call.url.path,
+            body: String(decoding: call.body, as: UTF8.self))
+          return .init(status: reply.status, body: reply.body)
+        }
+      }
+    }
+  }
   static func seen(_ method: String, _ path: String) -> [Seen] {
-    state.withLock { $0.seen.filter { $0.method == method && $0.path == path } }
+    server.calls.filter { $0.method == method && $0.url.path == path }.map {
+      Seen(method: $0.method, path: $0.url.path, body: String(decoding: $0.body, as: UTF8.self))
+    }
   }
   static func object(_ text: String) -> [String: Any] {
     (try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]) ?? [:]
@@ -39,25 +47,6 @@ final class LoopsFixtureProtocol: URLProtocol, @unchecked Sendable {
       #"{"id":"l1","name":"Mail triage","playbook":"Sort mail","playbookVersion":1,"#
       + #""successCondition":"Sorted","shipActions":[{"action":"send","gate":"hold"}],"#
       + #""state":"\#(state.loopState)","health":"\#(health)","owner":"alice"\#(triage)}"#
-  }
-  override func startLoading() {
-    let method = request.httpMethod ?? "GET"
-    let path = request.url!.path
-    let body = String(decoding: request.bodyData, as: UTF8.self)
-    let held = Self.state.withLock { state in
-      state.seen.append(.init(method: method, path: path, body: body))
-      let answer = Self.answer(&state, method: method, path: path, body: body)
-      reply.withLock { $0 = answer }
-      guard state.held == "\(method) \(path)" else { return false }
-      state.held = nil
-      state.pending = self
-      return true
-    }
-    if held {
-      Self.state.withLock { $0.onHold }?()
-    } else {
-      respond()
-    }
   }
   private static func answer(
     _ state: inout State, method: String, path: String, body: String
@@ -115,43 +104,25 @@ final class LoopsFixtureProtocol: URLProtocol, @unchecked Sendable {
     }
   }
   static func release() {
-    let pending = state.withLock { state in
-      let pending = state.pending
-      state.pending = nil
-      return pending
+    let routes = server.state.withLock { state in
+      state.onCall = nil
+      return state.holding
     }
-    pending?.respond()
-  }
-  private func respond() {
-    guard !stopped.withLock({ $0 }) else { return }
-    let answer = reply.withLock { $0 }
-    client?.urlProtocol(
-      self,
-      didReceive: HTTPURLResponse(
-        url: request.url!, statusCode: answer.status, httpVersion: nil, headerFields: nil)!,
-      cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data(answer.body.utf8))
-    client?.urlProtocolDidFinishLoading(self)
-  }
-  override func stopLoading() {
-    stopped.withLock { $0 = true }
+    routes.forEach(server.release)
   }
 }
 
 @MainActor
 final class NativeLoopsTests: XCTestCase {
-  private func list(_ prepare: (inout LoopsFixtureProtocol.State) -> Void = { _ in }) -> LoopsModel
-  {
-    var initial = LoopsFixtureProtocol.State()
+  private func list(_ prepare: (inout LoopsFixture.State) -> Void = { _ in }) -> LoopsModel {
+    var initial = LoopsFixture.State()
     prepare(&initial)
     let prepared = initial
-    LoopsFixtureProtocol.state.withLock { $0 = prepared }
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [LoopsFixtureProtocol.self]
-    return LoopsModel(
-      client: APIClient(
-        baseURL: URL(string: "https://loops.example.test")!, configuration: configuration))
+    LoopsFixture.state.withLock { $0 = prepared }
+    LoopsFixture.install()
+    return LoopsModel(client: LoopsFixture.server.client())
   }
+
   private func detail(_ list: LoopsModel) async -> LoopDetailModel {
     await list.load()
     let model = LoopDetailModel(client: list.client, id: "l1", list: list)
@@ -160,9 +131,11 @@ final class NativeLoopsTests: XCTestCase {
   }
   private func hold(_ request: String) -> XCTestExpectation {
     let held = expectation(description: request)
-    LoopsFixtureProtocol.state.withLock {
-      $0.held = request
-      $0.onHold = { held.fulfill() }
+    LoopsFixture.server.hold(request)
+    LoopsFixture.server.state.withLock {
+      $0.onCall = { route in
+        if route == request { held.fulfill() }
+      }
     }
     return held
   }
@@ -172,8 +145,8 @@ final class NativeLoopsTests: XCTestCase {
     XCTAssertEqual(model.detail?.loop.health, "quarantined")
     let cleared = await model.setState("enabled")
     XCTAssertTrue(cleared)
-    let sent = LoopsFixtureProtocol.seen("PATCH", "/api/loops/l1").map {
-      LoopsFixtureProtocol.object($0.body)["state"] as? String
+    let sent = LoopsFixture.seen("PATCH", "/api/loops/l1").map {
+      LoopsFixture.object($0.body)["state"] as? String
     }
     XCTAssertEqual(sent, ["enabled"])
     XCTAssertEqual(model.detail?.loop.state, "enabled")
@@ -198,7 +171,7 @@ final class NativeLoopsTests: XCTestCase {
     let changed = await model.setState("enabled")
     XCTAssertTrue(changed)
     XCTAssertEqual(loops.loops.map(\.state), ["enabled"])
-    LoopsFixtureProtocol.release()
+    LoopsFixture.release()
     await stale
     XCTAssertEqual(loops.loops.map(\.state), ["enabled"])
     XCTAssertFalse(loops.loading)
@@ -226,8 +199,8 @@ final class NativeLoopsTests: XCTestCase {
     XCTAssertNil(model.detail?.loop.triage(.prioritize))
     let saved = await model.saveTriage(.prioritize, enabled: true, instructions: "Outages first")
     XCTAssertTrue(saved)
-    let sent = LoopsFixtureProtocol.seen("PATCH", "/api/loops/l1").map {
-      LoopsFixtureProtocol.object($0.body)["triage"] as? [String: [String: AnyHashable]]
+    let sent = LoopsFixture.seen("PATCH", "/api/loops/l1").map {
+      LoopsFixture.object($0.body)["triage"] as? [String: [String: AnyHashable]]
     }
     XCTAssertEqual(sent, [["prioritize": ["enabled": true, "instructions": "Outages first"]]])
     XCTAssertEqual(model.detail?.loop.triage(.prioritize)?.enabled, true)
@@ -253,7 +226,7 @@ final class NativeLoopsTests: XCTestCase {
     let previewed = await model.previewTriage(.prioritize, instructions: "  \n ")
     XCTAssertFalse(previewed)
     XCTAssertNil(model.preview)
-    XCTAssertTrue(LoopsFixtureProtocol.seen("POST", "/api/loops/l1/triage/preview").isEmpty)
+    XCTAssertTrue(LoopsFixture.seen("POST", "/api/loops/l1/triage/preview").isEmpty)
   }
 
   func testPreviewListsTheReturnedItems() async {
@@ -264,8 +237,8 @@ final class NativeLoopsTests: XCTestCase {
       })
     let previewed = await model.previewTriage(.prioritize, instructions: " Money first ")
     XCTAssertTrue(previewed)
-    let sent = LoopsFixtureProtocol.seen("POST", "/api/loops/l1/triage/preview").map {
-      LoopsFixtureProtocol.object($0.body)["triage"] as? [String: [String: AnyHashable]]
+    let sent = LoopsFixture.seen("POST", "/api/loops/l1/triage/preview").map {
+      LoopsFixture.object($0.body)["triage"] as? [String: [String: AnyHashable]]
     }
     XCTAssertEqual(sent, [["prioritize": ["enabled": true, "instructions": "Money first"]]])
     XCTAssertEqual(model.preview?.map(\.id), ["i1", "i7"])
@@ -292,7 +265,7 @@ final class NativeLoopsTests: XCTestCase {
     let model = await detail(list { $0.previewStatus = 502 })
     _ = await model.previewTriage(.prioritize, instructions: "Money first")
     XCTAssertNotNil(model.previewError)
-    LoopsFixtureProtocol.state.withLock {
+    LoopsFixture.state.withLock {
       $0.previewStatus = 200
       $0.preview = #"[{"id":"i1","priority":"low"}]"#
     }
@@ -309,7 +282,7 @@ final class NativeLoopsTests: XCTestCase {
     await fulfillment(of: [held], timeout: 2)
     XCTAssertTrue(model.previewing)
     model.clearPreview()
-    LoopsFixtureProtocol.release()
+    LoopsFixture.release()
     let applied = await late
     XCTAssertFalse(applied)
     XCTAssertNil(model.preview)
@@ -337,8 +310,8 @@ final class NativeLoopsTests: XCTestCase {
     XCTAssertEqual(model.detail?.triageKinds, [.consolidate])
     let saved = await model.saveTriage(.consolidate, enabled: false, instructions: "Same sender")
     XCTAssertTrue(saved)
-    let sent = LoopsFixtureProtocol.seen("PATCH", "/api/loops/l1").map {
-      LoopsFixtureProtocol.object($0.body)["triage"] as? [String: [String: AnyHashable]]
+    let sent = LoopsFixture.seen("PATCH", "/api/loops/l1").map {
+      LoopsFixture.object($0.body)["triage"] as? [String: [String: AnyHashable]]
     }
     XCTAssertEqual(sent, [["consolidate": ["enabled": false, "instructions": "Same sender"]]])
     XCTAssertEqual(model.detail?.triageKinds, [])
@@ -354,7 +327,7 @@ final class NativeLoopsTests: XCTestCase {
     XCTAssertEqual(items.map(\.parkedReason), [nil, "Waiting on billing"])
     XCTAssertEqual(items.map(\.source), ["gmail", nil])
     XCTAssertEqual(
-      LoopsFixtureProtocol.state.withLock { $0.seen.map(\.path) }.sorted(),
+      LoopsFixture.server.calls.map { $0.url.path }.sorted(),
       ["/api/loops", "/api/loops/l1", "/api/loops/l1/ingestion"])
   }
 
@@ -365,14 +338,14 @@ final class NativeLoopsTests: XCTestCase {
     async let loading: Void = model.load()
     await fulfillment(of: [held], timeout: 2)
     let deadline = ContinuousClock.now + .seconds(2)
-    while LoopsFixtureProtocol.seen("GET", "/api/loops/l1/ingestion").isEmpty,
+    while LoopsFixture.seen("GET", "/api/loops/l1/ingestion").isEmpty,
       ContinuousClock.now < deadline
     {
       try await Task.sleep(for: .milliseconds(10))
     }
-    XCTAssertEqual(LoopsFixtureProtocol.seen("GET", "/api/loops/l1/ingestion").count, 1)
+    XCTAssertEqual(LoopsFixture.seen("GET", "/api/loops/l1/ingestion").count, 1)
     XCTAssertNil(model.detail)
-    LoopsFixtureProtocol.release()
+    LoopsFixture.release()
     await loading
     XCTAssertNotNil(model.detail)
     XCTAssertNotNil(model.ingestion)
@@ -384,7 +357,7 @@ final class NativeLoopsTests: XCTestCase {
     XCTAssertEqual(model.opened?.id, "i1")
     XCTAssertEqual(model.opened?.loopId, "l1")
     XCTAssertEqual(model.opened?.title, "Invoice overdue")
-    XCTAssertEqual(LoopsFixtureProtocol.seen("GET", "/api/loops/l1/items/i1").count, 1)
+    XCTAssertEqual(LoopsFixture.seen("GET", "/api/loops/l1/items/i1").count, 1)
     XCTAssertNil(model.error)
     XCTAssertFalse(model.busy)
   }

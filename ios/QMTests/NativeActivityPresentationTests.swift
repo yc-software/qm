@@ -41,7 +41,7 @@ final class NativeActivityPresentationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{"purpose":"Check build"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"**Reviewing the result**\nThe build passed.","body":{}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"check","tool":"execute","body":{"purpose":"Check build"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"**Reviewing the result**\nThe build passed.","body":{}}]
         """#.utf8))
     let timeline = NativeChatTimeline(
       messages: chatMessages(items), items: items, activeRunID: "run")
@@ -60,7 +60,7 @@ final class NativeActivityPresentationTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1000,"kind":"UserMessage","turnId":"run","text":"Check","body":{}},{"seq":2,"createdAt":2000,"kind":"ToolCall","callId":"check","tool":"execute","body":{}},{"seq":3,"createdAt":4000,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4500,"kind":"AgentMessage","variant":"narration","text":"Done","body":{"phase":"final_answer"}},{"seq":5,"createdAt":5000,"kind":"AgentMessage","turnId":"run","text":"Done","body":{"workStartedAt":1000,"workFinishedAt":5000}}]
+        [{"seq":1,"createdAt":1000,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2000,"kind":"ToolCall","callId":"check","tool":"execute","body":{}},{"seq":3,"createdAt":4000,"kind":"ToolResult","callId":"check","body":{"ok":true}},{"seq":4,"createdAt":4500,"kind":"AgentMessage","variant":"narration","text":"Done","body":{"phase":"final_answer"}},{"seq":5,"createdAt":5000,"kind":"AgentMessage","turnId":"run","text":"Done","body":{"workStartedAt":1000,"workFinishedAt":5000}}]
         """#.utf8))
     let timeline = NativeChatTimeline(messages: chatMessages(items), items: items)
     let section = try XCTUnwrap(

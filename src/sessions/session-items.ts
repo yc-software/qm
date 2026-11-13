@@ -53,12 +53,13 @@ function transcriptItemPredicate(alias: string): string {
   const receipt = (item: string): string => `COALESCE(${item}.body @> '{"slackReplyReceipt":true}'::jsonb, false)`;
   return `NOT (
     ${alias}.kind = 'UserMessage' AND ${receipt(alias)}
-    AND EXISTS (
+    AND (
       SELECT 1 FROM items received
       WHERE received.tenant_id = ${alias}.tenant_id AND received.session_id = ${alias}.session_id
         AND received.kind = 'UserMessage' AND received.external_id = ${alias}.external_id
         AND NOT ${receipt("received")}
-    )
+      LIMIT 1
+    ) IS NOT NULL
   )`;
 }
 
@@ -80,9 +81,42 @@ export function createSessionItems(deps: {
   | "getContextWindow"
   | "getItem"
   | "visibleItems"
+  | "latestVisiblePromptAt"
 > {
   const { db, now } = deps;
   const { pool, q } = db;
+
+  const readItems = async (sessionId: string, opts?: GetItemsOptions, principalId?: string): Promise<Item[]> => {
+    const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
+    let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}`;
+    if (principalId !== undefined) {
+      params.push(principalId);
+      sql += ` JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $${params.length}`;
+    }
+    sql += ` WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
+    if (opts?.seqs) {
+      if (!opts.seqs.length) return [];
+      params.push(opts.seqs);
+      sql += ` AND i.seq = ANY($${params.length}::bigint[])`;
+    }
+    if (opts?.messagesOnly)
+      sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
+    if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;
+    if (opts?.beforeSeq !== undefined) {
+      params.push(opts.beforeSeq);
+      sql += ` AND i.seq < $${params.length}`;
+    }
+    if (opts?.turnId !== undefined) {
+      params.push(opts.turnId);
+      sql += ` AND i.turn_id = $${params.length}::uuid`;
+    }
+    sql += " ORDER BY i.seq DESC";
+    if (opts?.limit !== undefined) {
+      params.push(opts.limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+    return (await q(sql, params)).map(rowToItem).reverse();
+  };
 
   const withSessionLock = async <T>(writer: SessionWriter, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pool(), async (client) => {
@@ -283,32 +317,7 @@ export function createSessionItems(deps: {
       ).map((row) => ({ sessionId: row.session_id as string, seq: Number(row.seq) }));
     },
 
-    async getItems(sessionId, opts?: GetItemsOptions): Promise<Item[]> {
-      const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
-      let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
-      if (opts?.seqs) {
-        if (!opts.seqs.length) return [];
-        params.push(opts.seqs);
-        sql += ` AND i.seq = ANY($${params.length}::bigint[])`;
-      }
-      if (opts?.messagesOnly)
-        sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
-      if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;
-      if (opts?.beforeSeq !== undefined) {
-        params.push(opts.beforeSeq);
-        sql += ` AND i.seq < $${params.length}`;
-      }
-      if (opts?.turnId !== undefined) {
-        params.push(opts.turnId);
-        sql += ` AND i.turn_id = $${params.length}::uuid`;
-      }
-      sql += " ORDER BY i.seq DESC";
-      if (opts?.limit !== undefined) {
-        params.push(opts.limit);
-        sql += ` LIMIT $${params.length}`;
-      }
-      return (await q(sql, params)).map(rowToItem).reverse();
-    },
+    getItems: (sessionId, opts) => readItems(sessionId, opts),
 
     async getContextWindow(sessionId) {
       const [meta, summary] = await Promise.all([
@@ -338,29 +347,22 @@ export function createSessionItems(deps: {
       return rows[0] ? rowToItem(rows[0]) : undefined;
     },
 
-    async visibleItems(sessionId, principalId, opts?: GetItemsOptions): Promise<Item[]> {
-      const params: unknown[] = [sessionId, principalId, opts?.sinceSeq ?? 0];
-      let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
-           JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
-          WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3`;
-      if (opts?.seqs) {
-        if (!opts.seqs.length) return [];
-        params.push(opts.seqs);
-        sql += ` AND i.seq = ANY($${params.length}::bigint[])`;
-      }
-      if (opts?.messagesOnly)
-        sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
-      if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;
-      if (opts?.beforeSeq !== undefined) {
-        params.push(opts.beforeSeq);
-        sql += ` AND i.seq < $${params.length}`;
-      }
-      sql += " ORDER BY i.seq DESC";
-      if (opts?.limit !== undefined) {
-        params.push(opts.limit);
-        sql += ` LIMIT $${params.length}`;
-      }
-      return (await q(sql, params)).map(rowToItem).reverse();
+    async latestVisiblePromptAt(sessionId, principalId) {
+      const rows = await q(
+        `SELECT ${msOf("i.created_at")} AS at FROM items i
+         JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
+         WHERE i.tenant_id = ${TENANT} AND i.session_id = $1
+           AND i.kind IN ('UserMessage', 'SteeringMessage') AND i.hidden IS DISTINCT FROM true
+           AND NOT (i.body @> '{"overheard":true}')
+           AND (i.body->>'speakerId' IS NOT NULL OR i.body @> '{"slackReplyReceipt":true}'
+             OR (i.kind = 'SteeringMessage' AND i.author IS NOT NULL))
+           AND ${transcriptItemPredicate("i")}
+         ORDER BY i.seq DESC LIMIT 1`,
+        [sessionId, principalId],
+      );
+      return rows[0] ? Number(rows[0].at) : undefined;
     },
+
+    visibleItems: (sessionId, principalId, opts) => readItems(sessionId, opts, principalId),
   };
 }

@@ -8,7 +8,7 @@ final class TranscriptTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Question","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"p","tool":"surface","body":{"action":"post","text":"Answer"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"p","tool":"surface","body":{"ok":true}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Question","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"p","tool":"surface","body":{"action":"post","text":"Answer"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"p","tool":"surface","body":{"ok":true}}]
         """#.utf8))
     let messages = presentedChatMessages(
       items,
@@ -22,12 +22,27 @@ final class TranscriptTests: XCTestCase {
     XCTAssertFalse(hasRecordedRunReply(Array(items.prefix(2)), runID: "A"))
   }
 
+  func testFinalNarrationReconcilesRunReplyByPhase() throws {
+    let activity = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(
+        #"[{"seq":1,"createdAt":1,"kind":"AgentMessage","variant":"narration","turnId":"A","text":"Recorded answer","body":{"phase":"final_answer"}}]"#
+          .utf8))
+    let messages = presentedChatMessages(
+      [],
+      runs: [
+        ChatRunPresentation(
+          id: "A", runID: "A", reply: "Different terminal text", finished: true, activity: activity)
+      ], activeRunID: nil)
+    XCTAssertEqual(messages.map(\.text), ["Recorded answer"])
+  }
+
   func testAttachmentOnlyHistoryKeepsFallbackWithoutDuplicatingActivity() throws {
     let items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Question","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"attachment","tool":"attach","body":{}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"attachment","tool":"attach","body":{"ok":true,"files":[{"name":"report.txt","artifactId":"report"}]}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"Summarizing the report","body":{}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Question","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"attachment","tool":"attach","body":{}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"attachment","tool":"attach","body":{"ok":true,"files":[{"name":"report.txt","artifactId":"report"}]}},{"seq":4,"createdAt":4,"kind":"Reasoning","text":"Summarizing the report","body":{}}]
         """#.utf8))
     let messages = presentedChatMessages(
       Array(items.prefix(3)),
@@ -46,7 +61,7 @@ final class TranscriptTests: XCTestCase {
     let items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Check status","body":{}}]"#
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Check status","body":{"speakerId":"alice"}}]"#
           .utf8))
     let activity = try JSONDecoder().decode(
       [Item].self,
@@ -67,7 +82,7 @@ final class TranscriptTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Question","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"failed","body":{"action":"post","text":"Answer"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"failed","body":{"ok":false}},{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"unmatched","body":{"ok":true}},{"seq":5,"createdAt":5,"kind":"UserMessage","turnId":"B","text":"Next","body":{}},{"seq":6,"createdAt":6,"kind":"ToolCall","callId":"next","body":{"action":"post","text":"Answer"}},{"seq":7,"createdAt":7,"kind":"ToolResult","callId":"next","body":{"ok":true}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"A","text":"Question","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"failed","body":{"action":"post","text":"Answer"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"failed","body":{"ok":false}},{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"unmatched","body":{"ok":true}},{"seq":5,"createdAt":5,"kind":"UserMessage","turnId":"B","text":"Next","body":{"speakerId":"alice"}},{"seq":6,"createdAt":6,"kind":"ToolCall","callId":"next","body":{"action":"post","text":"Answer"}},{"seq":7,"createdAt":7,"kind":"ToolResult","callId":"next","body":{"ok":true}}]
         """#.utf8))
     XCTAssertFalse(hasRecordedRunReply(items, runID: "A"))
     XCTAssertTrue(hasRecordedRunReply(items, runID: "B"))
@@ -78,7 +93,7 @@ final class TranscriptTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Run tests","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"execute","tool":"execute","body":{}},{"seq":3,"createdAt":3,"kind":"ElicitationResponse","elicitId":"approval","approved":true,"body":{"command":"npm test","scope":"session"}},{"seq":4,"createdAt":4,"kind":"AgentMessage","text":"Passed","body":{}},{"seq":5,"createdAt":5,"kind":"ElicitationResponse","approved":false,"elicitId":"approval-5","body":{"command":"Another action"}},{"seq":6,"createdAt":6,"kind":"AgentMessage","variant":"files_delivered","body":{"files":[{"name":"result.txt","artifactId":"result"}]}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Run tests","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"execute","tool":"execute","body":{}},{"seq":3,"createdAt":3,"kind":"ElicitationResponse","elicitId":"approval","approved":true,"body":{"command":"npm test","scope":"session"}},{"seq":4,"createdAt":4,"kind":"AgentMessage","text":"Passed","body":{}},{"seq":5,"createdAt":5,"kind":"ElicitationResponse","approved":false,"elicitId":"approval-5","body":{"command":"Another action"}},{"seq":6,"createdAt":6,"kind":"AgentMessage","variant":"files_delivered","body":{"files":[{"name":"result.txt","artifactId":"result"}]}}]
         """#.utf8))
     let messages = chatMessages(items)
     XCTAssertEqual(messages.map(\.role), ["user", "notice", "assistant", "notice"])
@@ -103,7 +118,7 @@ final class TranscriptTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","externalId":"100.1","text":"Ship Friday","body":{"name":"Alice"}},{"seq":2,"createdAt":2,"kind":"UserMessage","externalId":"100.2","text":"Another message","body":{}},{"seq":3,"createdAt":3,"kind":"Retraction","externalId":"100.1","body":{"action":"edited","text":"Ship Monday","name":"Alice"}},{"seq":4,"createdAt":4,"kind":"Retraction","externalId":"100.1","body":{"action":"deleted","name":"Alice"}},{"seq":5,"createdAt":5,"kind":"Retraction","externalId":"outside-window","body":{"action":"deleted"}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","externalId":"100.1","text":"Ship Friday","body":{"name":"Alice","speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"UserMessage","externalId":"100.2","text":"Another message","body":{"speakerId":"alice"}},{"seq":3,"createdAt":3,"kind":"Retraction","externalId":"100.1","body":{"action":"edited","text":"Ship Monday","name":"Alice"}},{"seq":4,"createdAt":4,"kind":"Retraction","externalId":"100.1","body":{"action":"deleted","name":"Alice"}},{"seq":5,"createdAt":5,"kind":"Retraction","externalId":"outside-window","body":{"action":"deleted"}}]
         """#.utf8))
     let messages = chatMessages(items)
     XCTAssertEqual(messages.count, 5)
@@ -145,7 +160,7 @@ final class TranscriptTests: XCTestCase {
       [Item].self,
       from: Data(
         #"""
-        [{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Start","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Report","body":{"attachments":[{"name":"report.png","artifactId":"old"}]}},{"seq":3,"createdAt":3,"kind":"ElicitationResponse","approved":true,"elicitId":"approval-3","body":{"command":"Continue"}},{"seq":4,"createdAt":4,"kind":"AgentMessage","text":"Same turn [report](attachment://report.png)","body":{}},{"seq":5,"createdAt":5,"kind":"UserMessage","text":"<wake reason=\"subagent\" name=\"Research\" sessionId=\"child\" kind=\"final_answer\" at=\"2026-09-30T22:00:00Z\">Finished.</wake>","body":{}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"New turn [report](attachment://report.png)","body":{}}]
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Start","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Report","body":{"attachments":[{"name":"report.png","artifactId":"old"}]}},{"seq":3,"createdAt":3,"kind":"ElicitationResponse","approved":true,"elicitId":"approval-3","body":{"command":"Continue"}},{"seq":4,"createdAt":4,"kind":"AgentMessage","text":"Same turn [report](attachment://report.png)","body":{}},{"seq":5,"createdAt":5,"kind":"UserMessage","text":"<wake reason=\"subagent\" name=\"Research\" sessionId=\"child\" kind=\"final_answer\" at=\"2026-09-30T22:00:00Z\">Finished.</wake>","body":{}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"New turn [report](attachment://report.png)","body":{}}]
         """#.utf8))
     let messages = chatMessages(items)
     XCTAssertEqual(messages[3].referencedFiles.first?.artifactId, "old")
@@ -154,7 +169,7 @@ final class TranscriptTests: XCTestCase {
 
   func testSteeringAfterAPostDoesNotDuplicateTheDeliveredReply() throws {
     let source = #"""
-      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Start","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"Delivered answer"}},{"seq":3,"createdAt":3,"kind":"SteeringMessage","text":"Steer before delivery","body":{}},{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"post","body":{"ok":true}},{"seq":5,"createdAt":5,"kind":"SteeringMessage","text":"Steer after delivery","body":{}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Delivered answer","body":{}}]
+      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Start","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"Delivered answer"}},{"seq":3,"createdAt":3,"kind":"SteeringMessage","text":"Steer before delivery","body":{}},{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"post","body":{"ok":true}},{"seq":5,"createdAt":5,"kind":"SteeringMessage","text":"Steer after delivery","body":{}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Delivered answer","body":{}}]
       """#
     let items = try JSONDecoder().decode([Item].self, from: Data(source.utf8))
     let messages = chatMessages(items)
@@ -169,7 +184,8 @@ final class TranscriptTests: XCTestCase {
     let items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"first","text":"Again","body":{}}]"#.utf8)
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"first","text":"Again","body":{"speakerId":"alice"}}]"#
+          .utf8)
     )
     let first = RunInput(runId: "first", seq: 1, text: "Again", createdAt: 1, attachments: nil)
     let second = RunInput(runId: "second", seq: nil, text: "Again", createdAt: 2, attachments: nil)
@@ -196,7 +212,7 @@ final class TranscriptTests: XCTestCase {
     let items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"first","text":"First","body":{}},{"seq":3,"createdAt":3,"kind":"UserMessage","turnId":"next","text":"Next","body":{}}]"#
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"first","text":"First","body":{"speakerId":"alice"}},{"seq":3,"createdAt":3,"kind":"UserMessage","turnId":"next","text":"Next","body":{"speakerId":"alice"}}]"#
           .utf8))
     let runs = [ChatRunPresentation(id: "first", runID: "first", reply: "Answer", finished: true)]
     XCTAssertEqual(
@@ -208,7 +224,7 @@ final class TranscriptTests: XCTestCase {
     let items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"first","text":"First","body":{}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Answer","body":{}}]"#
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"first","text":"First","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Answer","body":{}}]"#
           .utf8))
     let input = RunInput(runId: "first", seq: 1, text: "First", createdAt: 1, attachments: nil)
     let runs = [
@@ -221,7 +237,7 @@ final class TranscriptTests: XCTestCase {
 
   func testAttachmentReferencesStayWithTheirTurnAndUseLatestDeliveredVersion() throws {
     let source = #"""
-      {"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","text":"Create a report","body":{}},{"seq":1,"createdAt":1,"kind":"ToolResult","tool":"attach","callId":"call-1","body":{"ok":true,"files":[{"name":"report.png","artifactId":"old"}]}},{"seq":2,"createdAt":1,"kind":"ToolResult","tool":"attach","callId":"call-2","body":{"ok":true,"files":[{"name":"report.png","artifactId":"new"}]}},{"seq":3,"createdAt":1,"kind":"AgentMessage","text":"[Report](attachment://report.png)","body":{}},{"seq":4,"createdAt":1,"kind":"UserMessage","text":"Another request","body":{}},{"seq":5,"createdAt":1,"kind":"AgentMessage","text":"No attachment","body":{}}]}
+      {"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","text":"Create a report","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolResult","tool":"attach","callId":"call-1","body":{"ok":true,"files":[{"name":"report.png","artifactId":"old"}]}},{"seq":2,"createdAt":1,"kind":"ToolResult","tool":"attach","callId":"call-2","body":{"ok":true,"files":[{"name":"report.png","artifactId":"new"}]}},{"seq":3,"createdAt":1,"kind":"AgentMessage","text":"[Report](attachment://report.png)","body":{}},{"seq":4,"createdAt":1,"kind":"UserMessage","text":"Another request","body":{"speakerId":"alice"}},{"seq":5,"createdAt":1,"kind":"AgentMessage","text":"No attachment","body":{}}]}
       """#
     let transcript = try JSONDecoder().decode(Transcript.self, from: Data(source.utf8))
     let messages = chatMessages(transcript.items)
@@ -232,7 +248,7 @@ final class TranscriptTests: XCTestCase {
 
   func testDeliveredPostTakesPrecedenceOverInternalAssistantSummary() throws {
     let source = #"""
-      {"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","text":"internal","body":{"display":"Visible request"}},{"seq":1,"createdAt":2,"kind":"ToolCall","callId":"c1","body":{"action":"post","text":"Here is your report"}},{"seq":2,"createdAt":3,"kind":"ToolResult","callId":"c1","body":{"ok":true}},{"seq":3,"createdAt":4,"kind":"AgentMessage","text":"I posted the report","body":{}},{"seq":4,"createdAt":5,"kind":"AgentMessage","variant":"files_delivered","body":{"files":[{"name":"report.pdf","artifactId":"file-1"}]}},{"seq":5,"createdAt":6,"kind":"Error","text":"The follow-up failed","body":{}}]}
+      {"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","text":"internal","body":{"display":"Visible request","speakerId":"alice"}},{"seq":1,"createdAt":2,"kind":"ToolCall","callId":"c1","body":{"action":"post","text":"Here is your report"}},{"seq":2,"createdAt":3,"kind":"ToolResult","callId":"c1","body":{"ok":true}},{"seq":3,"createdAt":4,"kind":"AgentMessage","text":"I posted the report","body":{}},{"seq":4,"createdAt":5,"kind":"AgentMessage","variant":"files_delivered","body":{"files":[{"name":"report.pdf","artifactId":"file-1"}]}},{"seq":5,"createdAt":6,"kind":"Error","text":"The follow-up failed","body":{}}]}
       """#
     let transcript = try JSONDecoder().decode(Transcript.self, from: Data(source.utf8))
     let messages = chatMessages(transcript.items)
@@ -243,7 +259,7 @@ final class TranscriptTests: XCTestCase {
 
   func testRejectedPostAndHiddenInputsAreNotPresentedAsDelivered() throws {
     let source = #"""
-      {"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","hidden":true,"text":"hidden","body":{}},{"seq":1,"createdAt":2,"kind":"UserMessage","body":{"attachments":[{"name":"photo.jpg"}]}},{"seq":2,"createdAt":3,"kind":"ToolCall","callId":"c1","body":{"action":"post","text":"Never delivered"}},{"seq":3,"createdAt":4,"kind":"ToolResult","callId":"c1","body":{"ok":false}},{"seq":4,"createdAt":5,"kind":"AgentMessage","text":"Unable to post","body":{}}]}
+      {"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","hidden":true,"text":"hidden","body":{}},{"seq":1,"createdAt":2,"kind":"UserMessage","body":{"attachments":[{"name":"photo.jpg"}],"speakerId":"alice"}},{"seq":2,"createdAt":3,"kind":"ToolCall","callId":"c1","body":{"action":"post","text":"Never delivered"}},{"seq":3,"createdAt":4,"kind":"ToolResult","callId":"c1","body":{"ok":false}},{"seq":4,"createdAt":5,"kind":"AgentMessage","text":"Unable to post","body":{}}]}
       """#
     let transcript = try JSONDecoder().decode(Transcript.self, from: Data(source.utf8))
     let messages = chatMessages(transcript.items)
@@ -301,7 +317,7 @@ final class TranscriptTests: XCTestCase {
     let items = try JSONDecoder().decode(
       [Item].self,
       from: Data(
-        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Original question","body":{}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Original answer","body":{}},{"seq":10000,"createdAt":10000,"kind":"UserMessage","text":"Latest","body":{}}]"#
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Original question","body":{"speakerId":"alice"}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Original answer","body":{}},{"seq":10000,"createdAt":10000,"kind":"UserMessage","text":"Latest","body":{"speakerId":"alice"}}]"#
           .utf8))
     let points = NativeForkPoint.points(items, inheritedBoundary: 8)
     XCTAssertEqual(points[1].cut, "8")
@@ -310,7 +326,7 @@ final class TranscriptTests: XCTestCase {
 
   func testForkPointsIncludeDeliveredPostAndEndOfAssistantTurn() throws {
     let source =
-      #"{"items":[{"seq":0,"createdAt":0,"kind":"UserMessage","text":"First","body":{}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"Delivered"}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"post","body":{"ok":true}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"Internal summary","body":{}},{"seq":4,"createdAt":4,"kind":"UserMessage","hidden":true,"text":"Hidden event","body":{}},{"seq":5,"createdAt":5,"kind":"UserMessage","text":"Second","body":{}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Latest","body":{}}]}"#
+      #"{"items":[{"seq":0,"createdAt":0,"kind":"UserMessage","text":"First","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"Delivered"}},{"seq":2,"createdAt":2,"kind":"ToolResult","callId":"post","body":{"ok":true}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"Internal summary","body":{}},{"seq":4,"createdAt":4,"kind":"UserMessage","hidden":true,"text":"Hidden event","body":{}},{"seq":5,"createdAt":5,"kind":"UserMessage","text":"Second","body":{"speakerId":"alice"}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Latest","body":{}}]}"#
     let items = try JSONDecoder().decode(Transcript.self, from: Data(source.utf8)).items
     let points = NativeForkPoint.points(items)
     XCTAssertEqual(

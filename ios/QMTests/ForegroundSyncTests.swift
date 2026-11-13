@@ -322,7 +322,7 @@ final class ForegroundSyncTests: XCTestCase {
     let transcript = try JSONDecoder().decode(
       Transcript.self,
       from: Data(
-        #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Loaded directly","body":{}}],"earlierItems":12}"#
+        #"{"items":[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Loaded directly","body":{"speakerId":"alice"}}],"earlierItems":12}"#
           .utf8))
     let chat = ChatModel(
       conversation: Conversation(

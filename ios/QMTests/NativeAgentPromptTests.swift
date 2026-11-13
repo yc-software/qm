@@ -16,7 +16,7 @@ private final class NativeAgentPromptProtocol: URLProtocol, @unchecked Sendable 
 
   private static let states = OSAllocatedUnfairLock(initialState: [String: State]())
   private static let prompt =
-    #"{"seq":1,"createdAt":1000,"kind":"UserMessage","turnId":"current","text":"Earlier human prompt","body":{}}"#
+    #"{"seq":1,"createdAt":1000,"kind":"UserMessage","turnId":"current","text":"Earlier human prompt","body":{"speakerId":"alice"}}"#
 
   static func configure(_ host: String, scenario: Scenario) {
     states.withLock { $0[host] = State(scenario: scenario) }
@@ -72,7 +72,8 @@ private final class NativeAgentPromptProtocol: URLProtocol, @unchecked Sendable 
           return
             "{\"kind\":\"UserMessage\",\"seq\":\(sequence),\"createdAt\":\(3000 + sequence),\(content),\"body\":{}}"
         }
-        body = "{\"items\":[\(items.joined(separator: ","))],\"earlierItems\":1}"
+        body =
+          "{\"items\":[\(items.joined(separator: ","))],\"earlierItems\":1,\"latestPromptAt\":1000}"
       } else {
         body = "{\"items\":[\(Self.prompt)],\"earlierItems\":0}"
       }
@@ -135,7 +136,22 @@ final class NativeAgentPromptTests: XCTestCase {
       ], rootID: "chat")
   }
 
-  func testReopenedChatRecoversEarlierPromptWithoutExpandingDisplayedHistory() async throws {
+  func testOverheardMessageDoesNotAdvanceHumanPromptBoundary() throws {
+    let history = try JSONDecoder().decode(
+      Transcript.self,
+      from: Data(
+        #"{"latestPromptAt":1000,"items":[{"kind":"UserMessage","seq":1,"createdAt":1000,"text":"Start","body":{"speakerId":"alice"}},{"kind":"UserMessage","seq":2,"createdAt":2000,"text":"Overheard","body":{"overheard":true,"speakerId":"bob"}}]}"#
+          .utf8))
+    let model = ChatModel(
+      conversation: Conversation(id: "chat", scopeId: "personal:test", threadRef: "web:test:chat"),
+      client: APIClient(baseURL: URL(string: "https://example.test")!), user: "test",
+      knownSession: true, transcript: history)
+    XCTAssertEqual(model.latestPromptAt, 1000)
+    model.items.removeFirst()
+    XCTAssertEqual(model.latestPromptAt, 1000)
+  }
+
+  func testReopenedChatUsesPromptMetadataWithoutFetchingEarlierHistory() async throws {
     let chat = try chat(.earlierPrompt)
     defer {
       chat.pause()
@@ -154,7 +170,7 @@ final class NativeAgentPromptTests: XCTestCase {
     XCTAssertTrue(refreshedAgain)
     XCTAssertEqual(chat.latestPromptAt, 1000)
     XCTAssertEqual(chat.items.compactMap(\.seq), Array(2...26))
-    XCTAssertEqual(NativeAgentPromptProtocol.state(chat.client.baseURL.host!)?.earlierReads, 1)
+    XCTAssertEqual(NativeAgentPromptProtocol.state(chat.client.baseURL.host!)?.earlierReads, 0)
   }
 
   func testQueuedPromptKeepsFinishedAgentsUntilItsRunStarts() async throws {

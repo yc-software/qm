@@ -38,6 +38,16 @@ final class NativeActivityTests: XCTestCase {
     XCTAssertTrue(try XCTUnwrap(entry.details).formatted.contains("denied"))
     XCTAssertEqual(NativeActivityDetails.fields(entry.details).map(\.key), ["args", "error"])
   }
+  func testFailedToolDetailsPreserveExitAndTimeoutEvidence() throws {
+    let source =
+      #"{"createdAt":1,"kind":"ToolResult","callId":"failed","body":{"code":137,"timedOut":true,"quarantined":false,"output":""}}"#
+    let entry = try JSONDecoder().decode(Item.self, from: Data(source.utf8))
+    let fields = Dictionary(uniqueKeysWithValues: NativeActivityDetails.fields(entry.details))
+    XCTAssertEqual(fields["code"], .number(137))
+    XCTAssertEqual(fields["timedOut"], .bool(true))
+    XCTAssertEqual(fields["quarantined"], .bool(false))
+  }
+
   func testInlineWorkPairsInterleavedToolsByCallIdentity() throws {
     let source = #"""
       [{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"one","tool":"files","body":{"action":"read"}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"Checking the result.","body":{}},{"seq":3,"createdAt":3,"kind":"ToolCall","callId":"two","tool":"web","body":{"action":"search"}},{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"one","body":{"ok":true}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"two","body":{"ok":false}},{"seq":6,"createdAt":6,"kind":"Reasoning","hidden":true,"text":"Hidden","body":{}},{"seq":7,"createdAt":7,"kind":"Reasoning","text":"Redacted","body":{"redacted":true}},{"seq":8,"createdAt":8,"kind":"Reasoning","text":"   ","body":{}}]
@@ -54,7 +64,7 @@ final class NativeActivityTests: XCTestCase {
 
   func testInlineWorkBelongsToItsReplyAndNeverLeaksIntoNextTurn() throws {
     let source = #"""
-      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"one","text":"First","body":{}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"First thought","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"First answer","body":{}},{"seq":4,"createdAt":4,"kind":"UserMessage","turnId":"two","text":"Second","body":{}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Second answer","body":{}}]
+      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"one","text":"First","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"First thought","body":{}},{"seq":3,"createdAt":3,"kind":"AgentMessage","text":"First answer","body":{}},{"seq":4,"createdAt":4,"kind":"UserMessage","turnId":"two","text":"Second","body":{"speakerId":"alice"}},{"seq":5,"createdAt":5,"kind":"AgentMessage","text":"Second answer","body":{}}]
       """#
     let items = try JSONDecoder().decode([Item].self, from: Data(source.utf8))
     let messages = chatMessages(items)
@@ -65,7 +75,7 @@ final class NativeActivityTests: XCTestCase {
 
   func testActivityAfterDeliveredPostStaysWithTheSameTurn() throws {
     let source = #"""
-      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"one","text":"First","body":{}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"Delivered"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"post","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"read","tool":"files","body":{"action":"read"}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"read","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Delivered","body":{}},{"seq":7,"createdAt":7,"kind":"UserMessage","turnId":"two","text":"Second","body":{}},{"seq":8,"createdAt":8,"kind":"AgentMessage","text":"","body":{}},{"seq":9,"createdAt":9,"kind":"UserMessage","turnId":"three","text":"Third","body":{}},{"seq":10,"createdAt":10,"kind":"AgentMessage","text":"Third answer","body":{}}]
+      [{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"one","text":"First","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"ToolCall","callId":"post","body":{"action":"post","text":"Delivered"}},{"seq":3,"createdAt":3,"kind":"ToolResult","callId":"post","body":{"ok":true}},{"seq":4,"createdAt":4,"kind":"ToolCall","callId":"read","tool":"files","body":{"action":"read"}},{"seq":5,"createdAt":5,"kind":"ToolResult","callId":"read","body":{"ok":true}},{"seq":6,"createdAt":6,"kind":"AgentMessage","text":"Delivered","body":{}},{"seq":7,"createdAt":7,"kind":"UserMessage","turnId":"two","text":"Second","body":{"speakerId":"alice"}},{"seq":8,"createdAt":8,"kind":"AgentMessage","text":"","body":{}},{"seq":9,"createdAt":9,"kind":"UserMessage","turnId":"three","text":"Third","body":{"speakerId":"alice"}},{"seq":10,"createdAt":10,"kind":"AgentMessage","text":"Third answer","body":{}}]
       """#
     let items = try JSONDecoder().decode([Item].self, from: Data(source.utf8))
     let messages = chatMessages(items)
@@ -96,7 +106,8 @@ final class NativeActivityTests: XCTestCase {
       let output = try JSONDecoder().decode(
         Item.self,
         from: Data(
-          "{\"kind\":\"ToolResult\",\"createdAt\":2,\"callId\":\"call-1\",\"body\":\(payload)}".utf8))
+          "{\"kind\":\"ToolResult\",\"createdAt\":2,\"callId\":\"call-1\",\"body\":\(payload)}".utf8
+        ))
       return NativeWorkItem(entry: call, result: result ? output : nil)
     }
     XCTAssertEqual(try item(#"{"timedOut":true}"#).state(active: false), .failed)

@@ -2,16 +2,12 @@ import SwiftUI
 
 struct NativeTwinSailsLoading: View {
   let label: LocalizedStringKey
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.scenePhase) private var scenePhase
-  @State private var visible = false
 
   var body: some View {
-    let moving = visible && !reduceMotion && scenePhase == .active
     let ink = QMTheme.ink
     VStack(spacing: 24) {
-      TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !moving)) { timeline in
-        let time = moving ? timeline.date.timeIntervalSinceReferenceDate : 0
+      NativeAnimationTimeline(minimumInterval: 1.0 / 60) { date, moving in
+        let time = moving ? date.timeIntervalSinceReferenceDate : 0
         let cycle = time.truncatingRemainder(dividingBy: 3.2) / 3.2
         Canvas { context, size in
           context.scaleBy(x: size.width / 302, y: size.height / 56)
@@ -64,8 +60,6 @@ struct NativeTwinSailsLoading: View {
     .allowsHitTesting(false)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(label)
-    .onAppear { visible = true }
-    .onDisappear { visible = false }
   }
 
   private static func smooth(_ value: Double) -> Double {
