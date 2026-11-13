@@ -19,6 +19,7 @@ import {
   type PartnerChatMessages,
 } from "../src/surfaces/partner-chat/messages.ts";
 import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
+import { removePartnerChatReaction } from "../src/surfaces/partner-chat/reactions.ts";
 import { signPartnerChat, signPartnerChatRequest } from "../src/surfaces/partner-chat/protocol.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -72,7 +73,7 @@ async function fakePartnerChat(status = 200) {
       });
       const key = String(body.client_message_id);
       const target = messages.get(String(body.message_id));
-      const change = status === 200 && req.url !== "/agent_app/messages" && req.url !== "/agent_app/typing";
+      const change = status === 200 && (req.url ?? "").startsWith("/agent_app/messages/");
       const id = change ? String(body.message_id) : (keyed.get(key) ?? String(++next));
       if (change && target && req.url === "/agent_app/messages/update") target.body = body.body;
       else if (change && target) messages.delete(id);
@@ -971,6 +972,88 @@ test("a status post becomes the final reply in place, and the agent can revise o
         ["/agent_app/typing", { chat_id: "88", typing: false }, true],
       ],
     );
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("a react delivery adds the agent's reaction under the chat's own emoji name, and an unknown emoji is refused", async () => {
+  const partnerChat = await fakePartnerChat();
+  const { deliveries, mirrored, settled } = outboundFor(partnerChat.url);
+  try {
+    const react = (emoji: string) =>
+      deliveries.enqueue({
+        destination: {
+          type: "partner-chat",
+          target: `${CONTAINER}:1009`,
+          react: { messageTs: "1793649600.00000000000000001021", emoji },
+        },
+        text: "",
+        idempotencyKey: `react-${emoji}`,
+      });
+    await react("thumbsup");
+    await react("👍🏽");
+    const unknown = await react("not_a_real_emoji");
+    await settled(async () => (await deliveries.pending("partner-chat")).length === 0);
+    await removePartnerChatReaction(
+      createPartnerChatClient({ url: partnerChat.url, secret: SECRET }),
+      { account: "7001", chat: "88", messageId: "1021" },
+      ":white_check_mark:",
+    );
+    assert.deepEqual(
+      partnerChat.received.map((r) => [r.path, r.body, r.signed]),
+      [
+        ["/agent_app/reactions/add", { chat_id: "88", message_id: "1021", name: "+1" }, true],
+        ["/agent_app/reactions/add", { chat_id: "88", message_id: "1021", name: "+1", skin_tone: 4 }, true],
+        ["/agent_app/reactions/remove", { chat_id: "88", message_id: "1021", name: "white_check_mark" }, true],
+      ],
+    );
+    assert.equal(
+      (await deliveries.get(unknown.id))?.failedReason,
+      'partner-chat: no emoji is named "not_a_real_emoji"',
+    );
+    assert.deepEqual(mirrored, []);
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("a person's reaction to the agent's message starts one turn, while the agent's own and reactions it has no stake in start none", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    await deliver(event({ body: "!post should the bot deploy", mentions: true, eventId: "ev-ask", messageId: "1002" }));
+    await settle(async () => partnerChat.shown().length === 1);
+    const asked = partnerChat.shown()[0]!.id;
+    const reaction = (eventId: string, reactor: "5" | "6" | "9", on: "agent" | "other") => {
+      const base = event({ eventId, body: on === "agent" ? "should the bot deploy" : "is the bot around" });
+      return {
+        ...base,
+        protocol: 2,
+        type: "reaction.added",
+        ...(on === "agent" ? { thread_id: "1002" } : {}),
+        reaction: { name: "white_check_mark", user: base.chat.members.find((m) => m.id === reactor) },
+        message:
+          on === "agent"
+            ? { ...base.message, id: asked, user: { id: "9", name: "QM", bot: true }, app_post: true }
+            : { ...base.message, id: "1050" },
+      };
+    };
+    const { protocol: _unversioned, ...unversioned } = reaction("ev-r0", "5", "agent");
+    assert.equal((await deliver(unversioned)).status, 400);
+    assert.deepEqual((await deliver(reaction("ev-r1", "9", "agent"))).body, { ok: true, ignored: "bot_reaction" });
+    assert.deepEqual((await deliver(reaction("ev-r2", "6", "other"))).body, { ok: true, ignored: "no_stake" });
+    const approve = reaction("ev-r3", "5", "agent");
+    assert.deepEqual((await deliver(approve)).body, { ok: true });
+    assert.deepEqual((await deliver(approve)).body, { ok: true });
+    const reactionTurns = async () =>
+      (await built.runs.list({ threadRef: `${CONTAINER}:1002` }))
+        .map((run) => run.request.text)
+        .filter((text) => text.startsWith("[Chat reaction]"));
+    await settle(async () => (await reactionTurns()).length > 0);
+    await new Promise((r) => setTimeout(r, 1_000));
+    assert.deepEqual(await reactionTurns(), [
+      '[Chat reaction] Ada Lovelace reacted with :white_check_mark: on your message: "should the bot deploy".',
+    ]);
   } finally {
     await partnerChat.close();
   }

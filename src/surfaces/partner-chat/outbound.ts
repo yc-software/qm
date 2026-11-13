@@ -9,6 +9,7 @@ import { PartnerChatHttpError, type PartnerChatClient } from "./client.ts";
 import { uploadPartnerChatFiles } from "./files.ts";
 import { deletePartnerChatMessage, editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
 import { partnerChatMessageId, parsePartnerChatRef } from "./protocol.ts";
+import { UnknownPartnerChatReaction, addPartnerChatReaction } from "./reactions.ts";
 
 const MESSAGE_ID = /^\d+$/;
 const UPLOAD_FAILED = "I couldn't attach the file(s). Try again in a moment.";
@@ -33,7 +34,13 @@ export function partnerChatSender(deps: {
     if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
       throw new UnsupportedDelivery(`partner-chat: account ${ref.account} is not bound to this workspace`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
-    if (react || pin) throw new UnsupportedDelivery("partner-chat: reactions and pins are not supported");
+    if (react) {
+      const messageId = partnerChatMessageId(react.messageTs);
+      if (!MESSAGE_ID.test(messageId)) throw new UnsupportedDelivery(`partner-chat: bad message id ${messageId}`);
+      await addPartnerChatReaction(deps.client, { account: ref.account, chat: ref.chat, messageId }, react.emoji);
+      return;
+    }
+    if (pin) throw new UnsupportedDelivery("partner-chat: pins are not supported");
     if (del) return deletePartnerChatMessage(deps, ref, del.messageTs);
     if (edit) {
       if (body) return editPartnerChatMessage(deps, ref, edit.messageTs, body);
@@ -85,7 +92,7 @@ export function partnerChatSender(deps: {
     try {
       await deliver(d, tenant);
     } catch (e) {
-      if (e instanceof UnsupportedDelivery) return { refused: e.message };
+      if (e instanceof UnsupportedDelivery || e instanceof UnknownPartnerChatReaction) return { refused: e.message };
       if (refusal(e)) return { refused: e.message };
       throw e;
     }

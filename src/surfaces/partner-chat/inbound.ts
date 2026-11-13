@@ -1,11 +1,12 @@
 import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
-import type { Destination, TurnResult } from "../../types.ts";
+import type { ActorAssertion, Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { inTenant } from "../../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import type { AddressFetch } from "../../util/network.ts";
 import { buildContextWindow, detectInputs } from "../context-window.ts";
+import { buildReactionTurnText, shouldSurfaceReaction } from "../reactions.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
 import type { PartnerChatClient } from "./client.ts";
 import { stagePartnerChatFiles } from "./files.ts";
@@ -14,9 +15,11 @@ import {
   partnerChatRef,
   partnerChatTs,
   parsePartnerChatEvent,
+  parsePartnerChatReactionEvent,
   parsePartnerChatRef,
   verifyPartnerChat,
   type PartnerChatEvent,
+  type PartnerChatReactionEvent,
 } from "./protocol.ts";
 
 const SURFACE = "partner-chat";
@@ -84,7 +87,8 @@ export function createPartnerChatInbound(deps: {
     } catch (e) {
       return { status: 400, body: { error: "invalid_json", detail: errMessage(e) } };
     }
-    const result = parsePartnerChatEvent(parsed);
+    const reaction = parsePartnerChatReactionEvent(parsed);
+    const result = reaction.success ? reaction : parsePartnerChatEvent(parsed);
     if (!result.success)
       return {
         status: 400,
@@ -96,31 +100,132 @@ export function createPartnerChatInbound(deps: {
       console.log(`[partner-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };
     }
-    return inTenant(tenant, () => accept(event));
+    return inTenant(tenant, () => ("reaction" in event ? acceptReaction(event) : accept(event)));
   }
 
-  async function accept(event: PartnerChatEvent) {
-    const { message, chat } = event;
+  async function participants(chat: PartnerChatEvent["chat"], actorId: string) {
     const members = chat.members.filter((m) => !m.bot);
-    if (chat.kind === "dm" && (members.length !== 1 || members[0]!.id !== message.user.id)) {
+    if (chat.kind === "dm" && (members.length !== 1 || members[0]!.id !== actorId)) {
       console.log(
         `[partner-chat] ignoring dm ${chat.id}: it lists ${members.length} non-bot member(s), and a dm must list only its author`,
       );
-      return { status: 200, body: { ok: true, ignored: "not_one_to_one" } };
+      return { ignored: "not_one_to_one" } as const;
     }
     const humans = await Promise.all(
       members.map(async (m) =>
         partnerChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? "")),
       ),
     );
-    const listed = chat.members.find((m) => m.id === message.user.id);
+    const listed = chat.members.find((m) => m.id === actorId);
     const guests = humans.filter((p) => p.isExternalGuest).length;
     if (guests || !listed) {
       console.log(
         `[partner-chat] ignoring chat ${chat.id}: ${guests} member(s) not vouched for as internal, author listed: ${Boolean(listed)}`,
       );
-      return { status: 200, body: { ok: true, ignored: "unvouched_participants" } };
+      return { ignored: "unvouched_participants" } as const;
     }
+    return { members, humans, listed };
+  }
+
+  function turnFrame(
+    event: Pick<PartnerChatEvent, "account" | "chat">,
+    actor: ActorAssertion,
+    actorId: string,
+    humans: ActorAssertion[],
+    replyThread: string | undefined,
+  ) {
+    const { chat } = event;
+    const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
+    const replyTarget = partnerChatRef({
+      account: event.account,
+      kind: chat.kind,
+      chat: chat.id,
+      ...(replyThread ? { thread: replyThread } : {}),
+    });
+    return {
+      surface: SURFACE,
+      actor,
+      surfaceOrigin: {
+        author: { surface: SURFACE, account: event.account, id: actorId },
+        workspace: event.account,
+        ...(replyThread ? { replyThread } : {}),
+        audience: "internal" as const,
+      },
+      conversation: {
+        kind: chat.kind,
+        threadRef: replyTarget,
+        ...(chat.kind === "group" ? { channelRef: container, isPrivate: true } : {}),
+        ...(chat.name ? { channelName: chat.name } : {}),
+        audience: humans,
+      },
+      deliveryTarget: replyTarget,
+      ...(chat.kind === "group" && replyTarget !== container
+        ? {
+            deliveryCandidates: [
+              { target: replyTarget, label: "this thread" },
+              { target: container, label: chat.name ? `${chat.name} (the whole chat)` : "the whole chat" },
+            ],
+          }
+        : {}),
+    };
+  }
+
+  async function acceptReaction(event: PartnerChatReactionEvent) {
+    const { message, chat, reaction } = event;
+    const added = event.type === "reaction.added";
+    if (reaction.user.bot) return { status: 200, body: { ok: true, ignored: "bot_reaction" } };
+    const who = await participants(chat, reaction.user.id);
+    if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
+    const reactor = who.humans[who.members.indexOf(who.listed)]!;
+    const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
+    const isDM = chat.kind === "dm";
+    const onBotMessage =
+      (message.app_post && message.user.bot === true) ||
+      (await findMessage(cache, container, message.id, { self: true })) !== undefined;
+    const onFollowedRoot =
+      !isDM && !onBotMessage && !event.thread_id && (await followedThread(container, message.id)) !== undefined;
+    const surfaces = shouldSurfaceReaction({
+      itemType: "message",
+      reactorId: reaction.user.id,
+      botUserId: "",
+      isDM,
+      onBotMessage,
+      onFollowedRoot,
+    });
+    console.log(
+      `[partner-chat] heard reaction ${added ? "+" : "-"}:${reaction.name}: in chat ${chat.id} on message ${message.id} → ${surfaces ? "turn" : "no stake"}`,
+    );
+    if (!surfaces) return { status: 200, body: { ok: true, ignored: "no_stake" } };
+    const authorName = message.user.name?.trim();
+    await deps.app.turn({
+      ...turnFrame(
+        event,
+        reactor,
+        reaction.user.id,
+        who.humans,
+        event.thread_id ?? (chat.kind === "group" ? message.id : undefined),
+      ),
+      text: buildReactionTurnText({
+        surfaceLabel: "Chat",
+        reactorName: reactor.displayName || "Someone",
+        emoji: reaction.name,
+        added,
+        onBotMessage,
+        ...(!onBotMessage && authorName && message.user.id !== reaction.user.id ? { authorName } : {}),
+        ...(message.body ? { messageText: message.body } : {}),
+      }),
+      origin: { kind: "ambient" },
+      async: true,
+      redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:reaction:${event.event_id}`,
+    });
+    return { status: 200, body: { ok: true } };
+  }
+
+  async function accept(event: PartnerChatEvent) {
+    const { message, chat } = event;
+    const who = await participants(chat, message.user.id);
+    if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
+    const { members, humans, listed } = who;
     const bot = listed.bot === true;
     const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
     const thread = event.thread_id ?? undefined;
@@ -167,12 +272,8 @@ export function createPartnerChatInbound(deps: {
     );
     if (!addressed) return { status: 200, body: { ok: true } };
     const replyThread = thread ?? (chat.kind === "group" ? message.id : undefined);
-    const replyTarget = partnerChatRef({
-      account: event.account,
-      kind: chat.kind,
-      chat: chat.id,
-      ...(replyThread ? { thread: replyThread } : {}),
-    });
+    const frame = turnFrame(event, author, message.user.id, humans, replyThread);
+    const replyTarget = frame.deliveryTarget;
     const staged = message.files.length
       ? await stagePartnerChatFiles(
           deps.client,
@@ -184,30 +285,7 @@ export function createPartnerChatInbound(deps: {
         )
       : undefined;
     const queued = await deps.app.turn({
-      surface: SURFACE,
-      actor: author,
-      surfaceOrigin: {
-        author: { surface: SURFACE, account: event.account, id: message.user.id },
-        workspace: event.account,
-        ...(replyThread ? { replyThread } : {}),
-        audience: "internal",
-      },
-      conversation: {
-        kind: chat.kind,
-        threadRef: replyTarget,
-        ...(chat.kind === "group" ? { channelRef: container, isPrivate: true } : {}),
-        ...(chat.name ? { channelName: chat.name } : {}),
-        audience: humans,
-      },
-      deliveryTarget: replyTarget,
-      ...(chat.kind === "group" && replyTarget !== container
-        ? {
-            deliveryCandidates: [
-              { target: replyTarget, label: "this thread" },
-              { target: container, label: chat.name ? `${chat.name} (the whole chat)` : "the whole chat" },
-            ],
-          }
-        : {}),
+      ...frame,
       text: message.body,
       ...(staged?.attachments.length ? { attachments: staged.attachments } : {}),
       ...(staged?.issues.length ? { inboundNotes: staged.issues } : {}),
