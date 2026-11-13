@@ -14,13 +14,14 @@ import {
   MAX_CREDENTIAL_FILES,
   restoredFileMode,
   type CredentialFile,
+  type CredentialFileSave,
   type FileCredentialSource,
   type Keychain,
 } from "./keychain.ts";
 
 export interface ExecutionFileCredential {
   files: CredentialFile[];
-  save(files: CredentialFile[]): Promise<string[]>;
+  save(files: CredentialFile[]): Promise<CredentialFileSave>;
   source?: FileCredentialSource;
 }
 
@@ -179,7 +180,7 @@ async function finishExecutionFiles(
   sandbox: Sandbox,
   handle: SandboxHandle,
   plan: ExecutionFilePlan,
-  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<string[]>>,
+  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<CredentialFileSave>>,
   settle?: (retry: number[]) => Promise<void>,
 ): Promise<string | undefined> {
   const { directory } = plan;
@@ -232,8 +233,8 @@ async function finishExecutionFiles(
           notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
           return;
         }
-        const overruled = await saves[index]!(remaining);
-        const removed = deleted.filter((path) => !overruled.includes(path));
+        const { overruled, withheld } = await saves[index]!(remaining);
+        const removed = deleted.filter((path) => !overruled.includes(path) && !withheld.includes(path));
         if (removed.length)
           notes.push(
             `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
@@ -241,6 +242,10 @@ async function finishExecutionFiles(
         if (overruled.length)
           notes.push(
             `could not save its changes to ${overruled.join(", ")} because another command saved changes to ${overruled.length === 1 ? "it" : "them"} first; rerun it if they are needed`,
+          );
+        if (withheld.length)
+          notes.push(
+            `could not save its changes to ${withheld.join(", ")} because a run that isn't its owner's live turn may only refresh a token cache; the owner can make the change in their own turn`,
           );
       }),
     );

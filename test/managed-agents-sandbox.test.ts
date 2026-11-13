@@ -430,7 +430,7 @@ test("session status wire values map onto backend states", () => {
 
 const awsCredential = (value: string) => ({
   files: [{ path: ".aws/credentials", contentBase64: Buffer.from(value).toString("base64") }],
-  save: async (): Promise<string[]> => [],
+  save: async () => ({ overruled: [], withheld: [] }),
 });
 
 test("the guest refuses a transfer outside the workspace, the way the platform does", async () => {

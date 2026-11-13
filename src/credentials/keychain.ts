@@ -8,7 +8,7 @@ import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
-import { mergeCredentialFiles } from "./file-merge.ts";
+import { mergeCredentialFiles, type CredentialFileMerge } from "./file-merge.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
@@ -363,6 +363,7 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
+  live?: boolean;
   baseline?: Record<string, string>;
 }
 
@@ -384,7 +385,10 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
-  updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<string[]>;
+  updateFiles(
+    materialized: Extract<MaterializedCred, { kind: "file" }>,
+    files: CredentialFile[],
+  ): Promise<CredentialFileSave>;
   writebackBaseline(
     source: FileCredentialSource,
     fileHashes: Record<string, string>,
@@ -452,7 +456,10 @@ export interface FileCredentialSource {
   service: string;
   grantId?: string;
   writeback?: boolean;
+  live?: boolean;
 }
+
+export type CredentialFileSave = Pick<CredentialFileMerge, "overruled" | "withheld">;
 
 function credentialFilesFingerprint(files: CredentialFile[]): string {
   return fileCredentialFingerprint(
@@ -1096,14 +1103,16 @@ export function createKeychain(deps: {
     save: saveCredential,
 
     async updateFiles(materialized, files) {
-      if (!materialized.writeback) return [];
+      const unchanged = { overruled: [], withheld: [] };
+      if (!materialized.writeback) return unchanged;
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
       const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
       const ours = Object.entries(credentialFileHashes(normalized));
-      if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return [];
+      if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return unchanged;
       let overruled: string[] = [];
+      let withheld: string[] = [];
       let byExpiry: Array<{ path: string; kept: string }> = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
@@ -1115,8 +1124,10 @@ export function createKeychain(deps: {
           stored: currentFiles,
           refreshed: normalized,
           hash: (file) => fingerprint([file]),
+          refreshOnly: !materialized.live,
         });
         overruled = merged.overruled;
+        withheld = merged.withheld;
         byExpiry = merged.byExpiry;
         const next = checkedFiles(merged.files);
         if (!next.length) {
@@ -1140,11 +1151,15 @@ export function createKeychain(deps: {
         console.warn(
           `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
         );
+      if (withheld.length)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.join(", ")} because a run that isn't its owner's live turn may only refresh a token cache`,
+        );
       for (const { path, kept } of byExpiry)
         console.warn(
           `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
         );
-      return overruled;
+      return { overruled, withheld };
     },
 
     async writebackBaseline(source, fileHashes) {
@@ -1161,6 +1176,7 @@ export function createKeychain(deps: {
         baseline: fileHashes,
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
+        ...(source.live ? { live: true } : {}),
       };
     },
 

@@ -26,8 +26,12 @@ conversation shares that computer through an environment.
 `src/credentials/execute-files.ts` stages requested bundles in a private
 `/tmp/qm-credentials.<random>/home`, points the CLI at it, captures changed files after the
 command and writes them back with `keychain.updateFiles`, which rejects stale writes. Only
-the owner's executions write back; a grant uses the saved files as they are. Each execution
-removes its own directory in `finally`.
+the owner's executions write back; a grant uses the saved files as they are. A run that isn't
+the owner's live turn (a cron, loop, watch, credential-request resume or bot-marked turn, or
+a background job one of them started) writes back only a refreshed token cache: a file the
+saved login already holds, in `.aws/sso/cache/`, with the same `startUrl`. Anything else it
+changed keeps the stored version, with a warning in the core log and on the command's stderr.
+Each execution removes its own directory in `finally`.
 
 Background jobs accept the same `credentials` handles. The staging plan, credential ids,
 grant ids and baseline fingerprints (no secrets) are stored on the job's `process_sessions`
@@ -49,3 +53,5 @@ remove each other's files.
   Another process running as the same user during the command can read it.
 - No proactive refresh for idle AWS sessions; the CLI refreshes only when a command runs.
 - Refreshes made through a grant are not saved.
+- An unattended refresh of a CLI that rotates its refresh token outside the declared token
+  caches is not saved, so the next use asks the owner to sign in again.
