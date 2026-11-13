@@ -320,12 +320,12 @@ test("HTTP: /v1/apps?principalId= filters through viewer authz", async () => {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const r = await fetch(`${base}/v1/apps?principalId=U2`);
     assert.equal(r.status, 200);
-    const body = (await r.json()) as { deployments: Array<{ id: string; permission: string }> };
+    const body = (await r.json()) as { apps: Array<{ id: string; permission: string }> };
     assert.deepEqual(
-      body.deployments.map((d) => d.id),
+      body.apps.map((d) => d.id),
       [shared.id],
     );
-    assert.equal(body.deployments[0]!.permission, "read");
+    assert.equal(body.apps[0]!.permission, "read");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -364,8 +364,8 @@ test("HTTP: /v1/apps/:id shows an app only to principals who can see it", async 
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const view = async (ref: string, principal?: string) => {
       const r = await fetch(`${base}/v1/apps/${ref}${principal ? `?principalId=${principal}` : ""}`);
-      const body = (await r.json()) as { deployment?: { id: string; permission?: string } };
-      return [r.status, body.deployment?.id, body.deployment?.permission];
+      const body = (await r.json()) as { app?: { id: string; permission?: string } };
+      return [r.status, body.app?.id, body.app?.permission];
     };
     assert.deepEqual(await view(shared.id, "U2"), [200, shared.id, "read"]);
     assert.deepEqual(await view("shared-app", "U2"), [200, shared.id, "read"]);
@@ -412,9 +412,9 @@ test("HTTP: each /v1/apps row carries an authed, clonable gitUrl when ingress is
     const headers = signedRequestHeaders(secret, "GET", path, "", {}) as Record<string, string>;
     const r = await fetch(`${base}${path}`, { headers });
     assert.equal(r.status, 200);
-    const body = (await r.json()) as { deployments: Array<{ id: string; permission: string; gitUrl?: string }> };
-    assert.equal(body.deployments.length, 1);
-    const row = body.deployments[0]!;
+    const body = (await r.json()) as { apps: Array<{ id: string; permission: string; gitUrl?: string }> };
+    assert.equal(body.apps.length, 1);
+    const row = body.apps[0]!;
     assert.equal(row.permission, "read");
     assert.ok(row.gitUrl);
     const gitUrl = new URL(row.gitUrl!);

@@ -225,7 +225,7 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     assert.equal(d.principalId, "U1");
     assert.equal(d.scopeId, "personal:U1");
     assert.equal(d.stats.sessions, 1);
-    for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
+    for (const key of ["conversations", "files", "crons", "apps"]) assert.equal(key in d, false);
 
     const denied = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "user-uma@default-org" } });
     assert.equal(denied.status, 403);

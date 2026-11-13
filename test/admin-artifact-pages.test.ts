@@ -73,7 +73,7 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
     );
     assert.deepEqual(
       publishedApps,
-      { scopeId: "personal:U1", deployments: [] },
+      { scopeId: "personal:U1", apps: [] },
       "a scope with no apps answers an honest empty list",
     );
 

@@ -172,7 +172,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     return m;
   };
   const cronN = countBy(crons.map((c) => c.ownerScopeId));
-  const deployN = countBy(publishedApps.map((d) => d.ownerScopeId));
+  const appN = countBy(publishedApps.map((d) => d.ownerScopeId));
   const skillN = countBy(skills.map((s) => s.scopeId));
   const scopes = [...labels].map(([id, label]) => {
     const counts = activity?.byScope.get(id);
@@ -196,7 +196,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
           }
         : {}),
       crons: cronN.get(id) ?? 0,
-      deployments: deployN.get(id) ?? 0,
+      apps: appN.get(id) ?? 0,
       skills: skillN.get(id) ?? 0,
     };
   });

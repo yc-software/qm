@@ -301,10 +301,10 @@ enum NativeResourceTarget {
       try loaded(model.error)
       return (model.owned + model.shared).first { $0.id == hit.id }.map { .cron(model, $0) }
     case .apps:
-      struct Found: Decodable { let deployment: NativeApp? }
+      struct Found: Decodable { let app: NativeApp? }
       let found: Found = try await client.fetch(
         "api/apps/\(hit.id.apiComponent)", accepting: [404])
-      return found.deployment.map { .app($0) }
+      return found.app.map { .app($0) }
     case .webhooks:
       let model = WebhooksModel(client: client)
       await model.load()

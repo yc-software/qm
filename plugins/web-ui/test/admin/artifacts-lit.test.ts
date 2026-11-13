@@ -104,7 +104,7 @@ test("apps open their public URL in a new tab", async () => {
   const f = await mountPage("/settings/apps", {
     ...scopes,
     "/apps": {
-      deployments: [
+      apps: [
         {
           id: "d",
           name: "demo",

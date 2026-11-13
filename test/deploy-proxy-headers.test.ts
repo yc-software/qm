@@ -450,7 +450,7 @@ test("admin app proxy bypasses app ACL after admin auth and audits the visit", a
       auditEvents.some(
         (e) =>
           e.principalId === "admin-alice" &&
-          e.action === "deployment.visit" &&
+          e.action === "app.visit" &&
           e.resource === "d1" &&
           e.scopeLabel === "personal:U1",
       ),

@@ -842,7 +842,7 @@ interface ScopeResources {
   files: FileListItem[];
   webhooks: Webhook[];
   crons: Cron[];
-  deployments: ScopeApp[];
+  apps: ScopeApp[];
   skills: ScopeSkill[];
   manageable: boolean;
 }

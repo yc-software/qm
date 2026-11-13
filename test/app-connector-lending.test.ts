@@ -135,10 +135,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal((await h.lend(PUBLISHER, ["evil.example.com"])).json.error, "unknown_connector");
 
   const lent = await h.lend(PUBLISHER, ["Slack.com", "gmail.googleapis.com"]);
-  assert.deepEqual((lent.json.deployment as { connectors: string[] }).connectors, [
-    "gmail.googleapis.com",
-    "slack.com",
-  ]);
+  assert.deepEqual((lent.json.app as { connectors: string[] }).connectors, ["gmail.googleapis.com", "slack.com"]);
   assert.equal((await h.broker(get("api.dropboxapi.com"))).json.error, "connector_not_lent", "only the hosts lent");
 
   for (const host of ["gmail.googleapis.com", "slack.com"]) {

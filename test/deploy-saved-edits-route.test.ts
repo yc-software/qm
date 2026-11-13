@@ -34,7 +34,7 @@ describe("deployment view with saved edits", () => {
       SECRET,
     );
     const r = await fetch(`${base}/v1/apps/d1`, { headers: { "x-agent-capability": cap } });
-    return z.object({ deployment: z.object({ savedEdits: z.unknown().optional() }) }).parse(await r.json()).deployment;
+    return z.object({ app: z.object({ savedEdits: z.unknown().optional() }) }).parse(await r.json()).app;
   };
 
   before(async () => {

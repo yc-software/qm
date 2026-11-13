@@ -143,7 +143,7 @@ async function download(page: AdminPage, f: Row) {
 
 function apps(page: AdminPage, data: Row, header: Header) {
   const latest = (r: Row) => r.lastAccessAt || r.createdAt || 0;
-  const all = [...(data.deployments || [])].sort(newest(latest));
+  const all = [...(data.apps || [])].sort(newest(latest));
   const row = (r: Row) => ({
     name: r.name || r.id,
     preview: dot(

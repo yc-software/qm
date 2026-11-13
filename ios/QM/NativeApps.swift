@@ -47,8 +47,8 @@ struct NativeApp: Decodable, Identifiable {
     return origins
   }
 }
-struct NativeAppList: Decodable { let deployments: [NativeApp] }
-struct NativeAppResult: Decodable { let deployment: NativeApp }
+struct NativeAppList: Decodable { let apps: [NativeApp] }
+struct NativeAppResult: Decodable { let app: NativeApp }
 
 struct NativeAppsView: View {
   let client: APIClient
@@ -118,7 +118,7 @@ struct NativeAppsView: View {
     do {
       let result: NativeAppList = try await client.fetch("api/apps")
       try Task.checkCancellation()
-      apps = result.deployments
+      apps = result.apps
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
   }
@@ -273,7 +273,7 @@ struct NativeAppDetail: View {
       try await client.fetch("api/apps/\(original.id.apiComponent)")
         as NativeAppResult
     } apply: { result in
-      current = result.deployment
+      current = result.app
       error = nil
     } failed: {
       error = $0.localizedDescription

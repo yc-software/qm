@@ -76,8 +76,8 @@ describe("deployment redeploy route", () => {
     const response = await post("/v1/apps/envy/redeploy", body);
     assert.equal(response.status, 200);
     assert.deepEqual(received, { ...body, actor: "U1" });
-    const { deployment: publishedApp } = (await response.json()) as {
-      deployment: { versions: Record<string, unknown>[] };
+    const { app: publishedApp } = (await response.json()) as {
+      app: { versions: Record<string, unknown>[] };
     };
     assert.deepEqual(Object.keys(publishedApp.versions[0]!), ["version", "createdAt"], "no snapshot paths or env");
   });

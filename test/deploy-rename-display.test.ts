@@ -89,14 +89,14 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
     const d = await make(s.deploy, "my-app");
     const dn = await post(`/v1/apps/${d.id}/display-name`, { displayName: "Pretty" });
     assert.equal(dn.status, 200);
-    const dnBody = (await dn.json()) as { deployment: { name?: string; displayName?: string } };
-    assert.equal(dnBody.deployment.displayName, "Pretty");
-    assert.equal(dnBody.deployment.name, "my-app", "the URL slug is untouched");
+    const dnBody = (await dn.json()) as { app: { name?: string; displayName?: string } };
+    assert.equal(dnBody.app.displayName, "Pretty");
+    assert.equal(dnBody.app.name, "my-app", "the URL slug is untouched");
     const rn = await post(`/v1/apps/${d.id}/name`, { name: "new-slug" });
     assert.equal(rn.status, 200);
-    const rnBody = (await rn.json()) as { deployment: { name?: string; displayName?: string } };
-    assert.equal(rnBody.deployment.name, "new-slug");
-    assert.equal(rnBody.deployment.displayName, "Pretty");
+    const rnBody = (await rn.json()) as { app: { name?: string; displayName?: string } };
+    assert.equal(rnBody.app.name, "new-slug");
+    assert.equal(rnBody.app.displayName, "Pretty");
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

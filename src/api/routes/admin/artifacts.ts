@@ -82,7 +82,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         lastAccessAt: d.lastAccessAt,
         publicUrl: app.appUrl(d),
       }));
-    return sendJson(res, 200, { scopeId: scope, deployments: publishedApps });
+    return sendJson(res, 200, { scopeId: scope, apps: publishedApps });
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
   const skills = (await app.listSkills())

@@ -163,7 +163,7 @@ async function proxyAdminApp(ctx: BaseCtx): Promise<void> {
   if (!publishedApp) return sendJson(res, 404, { error: "not_found" });
   audit(ctx, {
     principalId: actor.id,
-    action: "deployment.visit",
+    action: "app.visit",
     resource: publishedApp.id,
     scopeLabel: publishedApp.ownerScopeId,
   });
@@ -1004,7 +1004,7 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
     const ev = {
       at: Date.now(),
       principalId: viewer,
-      action: "deployment.reach_denied",
+      action: "app.reach_denied",
       resource: slug,
       scopeLabel: owner ?? scopeId("personal", viewer),
       status: "denied",
@@ -1315,7 +1315,7 @@ async function createPublishedApp(ctx: ApiCtx): Promise<void> {
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
   if (principalId && body.createdBy !== principalId) return sendJson(res, 403, { error: "forbidden" });
   try {
-    return sendJson(res, 200, { deployment: appView(await app.deploy(body)) });
+    return sendJson(res, 200, { app: appView(await app.deploy(body)) });
   } catch (e) {
     return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
   }
@@ -1346,7 +1346,7 @@ async function listApps(ctx: ApiCtx): Promise<void> {
       return git ? { ...named, gitUrl: git.url } : named;
     }),
   );
-  return sendJson(res, 200, { deployments: publishedApps });
+  return sendJson(res, 200, { apps: publishedApps });
 }
 
 function textContentType(contentType: string): boolean {
@@ -1442,9 +1442,9 @@ export async function getApp(ctx: ApiCtx): Promise<void> {
         }
       : {}),
   };
-  if (!secret) return sendJson(res, 200, { deployment: publishedApp });
+  if (!secret) return sendJson(res, 200, { app: publishedApp });
   const git = await app.appGitUrlFor(publishedApp.id, viewer, { secret, baseUrl: gitUrlBase(ctx) });
-  return sendJson(res, 200, { deployment: git ? { ...publishedApp, gitUrl: git.url } : publishedApp });
+  return sendJson(res, 200, { app: git ? { ...publishedApp, gitUrl: git.url } : publishedApp });
 }
 
 async function rollbackApp(ctx: ApiCtx): Promise<void> {
@@ -1478,7 +1478,7 @@ async function redeployApp(ctx: ApiCtx): Promise<void> {
   try {
     const actor = ctx.capability?.actorId ?? ctx.actor?.p;
     const input = actor ? { ...body, actor } : body;
-    return sendJson(res, 200, { deployment: appView(await app.redeploy(id, input)) });
+    return sendJson(res, 200, { app: appView(await app.redeploy(id, input)) });
   } catch (e) {
     return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
   }
@@ -1513,7 +1513,7 @@ export async function restoreApp(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can restore it" });
   try {
     return sendJson(res, 200, {
-      deployment: {
+      app: {
         ...appView(await app.restoreApp(id, capability?.actorId ?? ctx.actor?.p)),
         permission: "write",
       },
@@ -1533,7 +1533,7 @@ export async function renameApp(ctx: ApiCtx): Promise<void> {
   if (typeof b.name !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
   try {
-    return sendJson(res, 200, { deployment: await app.renameApp(id, b.name) });
+    return sendJson(res, 200, { app: await app.renameApp(id, b.name) });
   } catch (e) {
     return sendJson(res, 400, { error: "rename_failed", message: errMessage(e) });
   }
@@ -1549,7 +1549,7 @@ export async function setAppDisplayName(ctx: ApiCtx): Promise<void> {
   if (typeof b.displayName !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "displayName (string) required" });
   try {
-    return sendJson(res, 200, { deployment: await app.setAppDisplayName(id, b.displayName) });
+    return sendJson(res, 200, { app: await app.setAppDisplayName(id, b.displayName) });
   } catch (e) {
     return sendJson(res, 400, { error: "display_name_failed", message: errMessage(e) });
   }
@@ -1565,7 +1565,7 @@ async function setAppEmbedAncestors(ctx: ApiCtx): Promise<void> {
   if (!ancestors)
     return sendJson(res, 400, { error: "bad_request", message: `embedAncestors (${EMBED_ANCESTORS_HINT}) required` });
   try {
-    return sendJson(res, 200, { deployment: appView(await app.setAppEmbedAncestors(id, ancestors)) });
+    return sendJson(res, 200, { app: appView(await app.setAppEmbedAncestors(id, ancestors)) });
   } catch (e) {
     return sendJson(res, 400, { error: "embed_ancestors_failed", message: errMessage(e) });
   }
@@ -1581,13 +1581,13 @@ async function setAppAlwaysOn(ctx: ApiCtx): Promise<void> {
   if (typeof b.alwaysOn !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "alwaysOn (boolean) required" });
   try {
-    return sendJson(res, 200, { deployment: appView(await app.setAppAlwaysOn(id, b.alwaysOn)) });
+    return sendJson(res, 200, { app: appView(await app.setAppAlwaysOn(id, b.alwaysOn)) });
   } catch (e) {
     return sendJson(res, 400, { error: "always_on_failed", message: errMessage(e) });
   }
 }
 
-const VISIBLE_APPS_PRINCIPAL = "deployment-export";
+const VISIBLE_APPS_PRINCIPAL = "app-export";
 
 async function visibleAppsExport(ctx: BaseCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
@@ -1621,12 +1621,12 @@ async function visibleAppsExport(ctx: BaseCtx): Promise<void> {
   }));
   audit(ctx, {
     principalId: VISIBLE_APPS_PRINCIPAL,
-    action: "deployment.export",
+    action: "app.export",
     resource: principalId,
     scopeLabel: orgScope(deps),
-    detail: `deployments=${publishedApps.length}`,
+    detail: `apps=${publishedApps.length}`,
   });
-  sendJson(res, 200, { principalId, deployments: publishedApps });
+  sendJson(res, 200, { principalId, apps: publishedApps });
 }
 
 export const appRawRoutes: ReadonlyArray<Route<BaseCtx>> = [

@@ -169,15 +169,15 @@ test("app detail is viewer-gated and fixes the permission/gitUrl wire contract",
 
   const visible = await callDetail(app, cap("U1"), d.id);
   assert.equal(visible.status, 200);
-  assert.equal(visible.body.deployment.permission, "write");
-  assert.equal(typeof visible.body.deployment.gitUrl, "string");
-  assert.equal(new URL(visible.body.deployment.gitUrl).origin, "https://api.example");
-  assert.equal(visible.body.deployment.currentVersion, 1);
-  assert.equal(typeof visible.body.deployment.versions[0].createdAt, "number");
-  assert.equal(visible.body.deployment.versions[0].snapshotDir, undefined);
-  assert.equal(visible.body.deployment.versions[0].entrypoint, undefined);
-  assert.equal(visible.body.deployment.publicUrl, undefined);
-  assert.equal(visible.body.deployment.webUrl, "https://web.example/d/details/");
+  assert.equal(visible.body.app.permission, "write");
+  assert.equal(typeof visible.body.app.gitUrl, "string");
+  assert.equal(new URL(visible.body.app.gitUrl).origin, "https://api.example");
+  assert.equal(visible.body.app.currentVersion, 1);
+  assert.equal(typeof visible.body.app.versions[0].createdAt, "number");
+  assert.equal(visible.body.app.versions[0].snapshotDir, undefined);
+  assert.equal(visible.body.app.versions[0].entrypoint, undefined);
+  assert.equal(visible.body.app.publicUrl, undefined);
+  assert.equal(visible.body.app.webUrl, "https://web.example/d/details/");
   assert.equal((await callDetail(app, cap("U3"), d.id)).status, 404);
 });
 
@@ -222,17 +222,17 @@ test("restore endpoint is manage-gated and reactivates the archived current vers
   assert.equal((await callManage(restoreApp, app, cap("U2"), d.id, {})).status, 403);
   const restored = await callManage(restoreApp, app, cap("U1"), d.id, {});
   assert.equal(restored.status, 200);
-  assert.equal(restored.body.deployment.status, "running");
-  assert.equal(restored.body.deployment.currentVersion, 1);
-  assert.equal(restored.body.deployment.permission, "write");
-  assert.equal(restored.body.deployment.endpoint, undefined);
-  assert.equal(restored.body.deployment.publicUrl, undefined);
-  assert.equal(restored.body.deployment.versions[0].snapshotDir, undefined);
+  assert.equal(restored.body.app.status, "running");
+  assert.equal(restored.body.app.currentVersion, 1);
+  assert.equal(restored.body.app.permission, "write");
+  assert.equal(restored.body.app.endpoint, undefined);
+  assert.equal(restored.body.app.publicUrl, undefined);
+  assert.equal(restored.body.app.versions[0].snapshotDir, undefined);
 
   await app.archiveApp(d.id);
   const restoredBySlug = await callManage(restoreApp, app, cap("U1"), "restore-me", {});
   assert.equal(restoredBySlug.status, 200);
-  assert.equal(restoredBySlug.body.deployment.id, d.id);
+  assert.equal(restoredBySlug.body.app.id, d.id);
 });
 
 test('share endpoint: "everyone" grants org reach — a non-owner can reach it; access:none re-denies', async () => {

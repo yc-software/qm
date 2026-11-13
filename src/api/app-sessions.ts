@@ -980,7 +980,7 @@ export function createSessionMethods(
         files,
         webhooks: allWebhooks.filter((w) => w.ownerScopeId === scope),
         crons: allCrons.filter((c) => c.ownerScopeId === scope),
-        deployments: publishedApps,
+        apps: publishedApps,
         skills,
         manageable: await principalCanManageScope(principalId, scope),
       };

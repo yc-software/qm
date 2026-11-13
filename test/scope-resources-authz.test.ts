@@ -191,10 +191,10 @@ test("a member sees a channel's files (incl. personally-owned deliverables), web
   assert.equal(out!.webhooks.length, 1);
   assert.equal(out!.webhooks[0]!.action, "triage");
   assert.deepEqual(
-    out!.deployments.map((d) => d.name),
+    out!.apps.map((d) => d.name),
     ["C1 dashboard"],
   );
-  assert.equal(out!.deployments[0]!.permission, "write");
+  assert.equal(out!.apps[0]!.permission, "write");
   assert.deepEqual(
     out!.skills.map((s) => s.name),
     ["triage"],
@@ -275,7 +275,7 @@ test("a context view never leaks another scope's files or crons", async () => {
     "no cron from C2 appears",
   );
   assert.ok(
-    out!.deployments.every((d) => d.id === "d-c1"),
+    out!.apps.every((d) => d.id === "d-c1"),
     "no app created in C2 appears",
   );
   assert.ok(

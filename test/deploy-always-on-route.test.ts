@@ -66,8 +66,8 @@ describe("deployment always-on route", () => {
   it("lets a manager turn always-on on, by name", async () => {
     const response = await post("/v1/apps/warm-app/always-on", { alwaysOn: true }, "U1");
     assert.equal(response.status, 200);
-    const body = (await response.json()) as { deployment: { alwaysOn?: boolean } };
-    assert.equal(body.deployment.alwaysOn, true);
+    const body = (await response.json()) as { app: { alwaysOn?: boolean } };
+    assert.equal(body.app.alwaysOn, true);
     assert.equal(flag, true);
   });
 

@@ -23,7 +23,7 @@ async function setAppConnectors(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
   try {
     const publishedApp = await app.setAppConnectors(params.id!, connectors, { createdBy: principalId });
-    return sendJson(res, 200, { deployment: appView(publishedApp) });
+    return sendJson(res, 200, { app: appView(publishedApp) });
   } catch (e) {
     return sendShareFailure(res, e);
   }

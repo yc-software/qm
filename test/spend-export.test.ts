@@ -125,7 +125,7 @@ test("app export: lists the person's live Apps page apps with their addresses", 
     s.built.app.appGitPermissionsFor = async (_tenant, publishedApps, { actorId }) =>
       publishedApps.map(() => (actorId === "alice@example.com" ? "read" : null));
     assert.equal((await s.get("/v1/apps/export")).status, 400);
-    const { principalId, deployments: publishedApps }: any = await (await s.get(apps)).json();
+    const { principalId, apps: publishedApps }: any = await (await s.get(apps)).json();
     assert.equal(principalId, "alice@example.com");
     const shown = { createdBy: "bob@example.com", permission: "read", updatedAt: 1 };
     assert.deepEqual(publishedApps, [
@@ -141,7 +141,7 @@ test("app export: lists the person's live Apps page apps with their addresses", 
       },
     ]);
     const events = (await s.built.auditLog.events(testTenant)).map((e) => [e.resource, e.detail]);
-    assert.deepEqual(events, [["alice@example.com", "deployments=3"]]);
+    assert.deepEqual(events, [["alice@example.com", "apps=3"]]);
   } finally {
     await s.close();
   }

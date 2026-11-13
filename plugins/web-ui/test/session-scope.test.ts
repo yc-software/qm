@@ -42,7 +42,7 @@ test("only Crons and Apps request counts; both count past 100", async () => {
           visible: crons,
         }
       : {
-          deployments: [
+          apps: [
             ...publishedApps,
             { id: "archived", ownerScopeId: "personal:test", status: "archived" },
             { id: "other", ownerScopeId: "other", status: "ready" },

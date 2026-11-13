@@ -186,7 +186,7 @@ function httpGet(
 test("subdomain ingress: a capability link grants nothing — reach is the ACL alone", async () => {
   const denials: AuditEvent[] = [];
   audits.push((e) => {
-    if (e.action === "deployment.reach_denied") denials.push(e);
+    if (e.action === "app.reach_denied") denials.push(e);
   });
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/plain" });

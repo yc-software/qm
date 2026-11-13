@@ -71,7 +71,7 @@ interface ScopeResourcesView {
   files: ScopeFile[];
   webhooks: WebhookView[];
   crons: CronView[];
-  deployments: ScopeApp[];
+  apps: ScopeApp[];
   skills: ScopeSkill[];
   manageable: boolean;
 }
@@ -517,7 +517,7 @@ function scopeResourcesEmpty(scopeId: string): boolean {
     r.files.length === 0 &&
     r.webhooks.length === 0 &&
     r.crons.length === 0 &&
-    r.deployments.length === 0 &&
+    r.apps.length === 0 &&
     r.skills.length === 0,
   );
 }
@@ -834,7 +834,7 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
     r.files.length === 0 &&
     r.webhooks.length === 0 &&
     r.crons.length === 0 &&
-    r.deployments.length === 0 &&
+    r.apps.length === 0 &&
     r.skills.length === 0
   ) {
     return nothing;
@@ -859,7 +859,7 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
         : nothing
     }
     ${r.webhooks.length ? resourceGroup("Webhooks", r.webhooks.map(webhookRow)) : nothing}
-    ${r.deployments.length ? resourceGroup("Apps", r.deployments.map(appRow)) : nothing}
+    ${r.apps.length ? resourceGroup("Apps", r.apps.map(appRow)) : nothing}
   `;
 }
 
@@ -1429,7 +1429,7 @@ async function loadScopeResources(scopeId: string): Promise<void> {
       files: r.files ?? [],
       webhooks: r.webhooks ?? [],
       crons: r.crons ?? [],
-      deployments: r.deployments ?? [],
+      apps: r.apps ?? [],
       skills: r.skills ?? [],
       manageable: r.manageable === true,
     };

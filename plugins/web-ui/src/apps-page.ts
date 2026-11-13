@@ -245,9 +245,9 @@ async function openApp(d: AppView): Promise<void> {
   history.replaceState(null, "", deepLinkPath(UI_BASE, "apps", null, null, d.id));
   drawAppDetail(d, true);
   try {
-    const response = await api<{ deployment?: AppView }>(`/api/apps/${encodeURIComponent(d.id)}`);
+    const response = await api<{ app?: AppView }>(`/api/apps/${encodeURIComponent(d.id)}`);
     if (appState.currentView !== "apps" || activeApp?.id !== d.id) return;
-    activeApp = response.deployment ?? d;
+    activeApp = response.app ?? d;
     drawAppDetail(activeApp);
   } catch (error) {
     if (activeApp?.id !== d.id) return;
@@ -276,7 +276,7 @@ function drawAppDetail(d: AppView, loading = false): void {
               <h2 dir="auto">${appTitle(d)}</h2>
               <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
             </div>
-            <div class="app-detail-url">/d/${appSlug(d)}/</div>
+            <div class="app-detail-url">${d.webUrl ?? appSlug(d)}</div>
           </div>
           <div class="actions">
             ${running && d.webUrl ? html`<a class="btn primary" href=${d.webUrl} target="_blank" rel="noreferrer">Open app ${icon(ExternalLink, 14)}</a>` : nothing}
@@ -310,7 +310,7 @@ function drawAppDetail(d: AppView, loading = false): void {
                 </div>
                 <div class="app-setting-row">
                   <div><strong>App URL</strong><span>Changes the app URL. Existing links do not redirect.</span></div>
-                  ${editingSlug ? appEditForm(d, "name") : html`<div class="app-setting-value"><code>/d/${appSlug(d)}/</code><button class="btn" type="button" @click=${() => startEditApp(d, "name")}>Change</button></div>`}
+                  ${editingSlug ? appEditForm(d, "name") : html`<div class="app-setting-value"><code>${d.webUrl ?? appSlug(d)}</code><button class="btn" type="button" @click=${() => startEditApp(d, "name")}>Change</button></div>`}
                 </div>
                 <div class="app-setting-row">
                   <div>
@@ -432,7 +432,7 @@ function appEditForm(d: AppView, field: AppEditField): TemplateResult {
     >
       <label>
         <span class="app-slug-input ${slug ? "" : "name"}"
-          >${slug ? html`<span>/d/</span>` : nothing}<input
+          ><input
             class="app-edit-input"
             aria-label=${slug ? "URL slug" : "Display name"}
             ?disabled=${appSaving}
@@ -441,8 +441,7 @@ function appEditForm(d: AppView, field: AppEditField): TemplateResult {
               appDraft = (event.currentTarget as HTMLInputElement).value;
             }}
             @keydown=${(event: KeyboardEvent) => event.key === "Escape" && cancelEditApp()}
-          />${slug ? html`<span>/</span>` : nothing}</span
-        >
+        /></span>
       </label>
       <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${appSaving}>
         ${icon(Check, 14)}
@@ -751,15 +750,15 @@ async function restoreApp(d: AppView): Promise<void> {
   else if (!activeApp) appNotices = withAppListNotice(appNotices, "Restoring app…");
   if (restoringActive || !activeApp) drawCurrentAppView();
   try {
-    const response = await api<{ deployment?: AppView }>(`/api/apps/${encodeURIComponent(d.id)}/restore`, {
+    const response = await api<{ app?: AppView }>(`/api/apps/${encodeURIComponent(d.id)}/restore`, {
       method: "POST",
     });
     appSaving = false;
-    const restoredResponse = appAfterRestore(d, response.deployment);
+    const restoredResponse = appAfterRestore(d, response.app);
     appToast = { app: restoredResponse, text: `${appTitle(d)} is restored and running.` };
     const refreshResult = await refreshApps();
     const authoritative = refreshResult === "failed" ? undefined : appList.find((item) => item.id === d.id);
-    const restored = appAfterRestore(d, response.deployment, authoritative);
+    const restored = appAfterRestore(d, response.app, authoritative);
     appList = appListAfterRestoreRefresh(appList, restored, refreshResult);
     const destination = currentAppActionView(d.id);
     if (destination === "target") {
@@ -809,9 +808,9 @@ function undoToast(toast: { app: AppView; text: string; undo?: boolean }): Templ
 async function refreshApps(): Promise<"updated" | "failed" | "superseded"> {
   const seq = ++appRefreshSeq;
   try {
-    const response = await api<{ deployments?: AppView[] }>("/api/apps");
+    const response = await api<{ apps?: AppView[] }>("/api/apps");
     if (seq !== appRefreshSeq) return "superseded";
-    appList = response.deployments ?? [];
+    appList = response.apps ?? [];
     appNotices = withAppListNotice(appNotices, "");
     return "updated";
   } catch (error) {
