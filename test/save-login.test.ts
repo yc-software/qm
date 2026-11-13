@@ -72,8 +72,9 @@ test("save-login uploads a private login home and re-saving keeps the entry and 
   assert.equal(token.mode, 0o600);
 });
 
-test("save-login removes the sign-in directory when the keychain keeps the existing login", async (t) => {
-  const server = createServer((_req, res) => res.writeHead(403).end('{"error":"human_consent_required"}'));
+test("save-login removes the sign-in directory only when the keychain keeps the existing login", async (t) => {
+  let error = "forbidden";
+  const server = createServer((_req, res) => res.writeHead(403).end(JSON.stringify({ error })));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const home = await mkdtemp(join(tmpdir(), "login-home-"));
@@ -82,6 +83,9 @@ test("save-login removes the sign-in directory when the keychain keeps the exist
   await writeFile(`${home}.ticket`, "synthetic-ticket");
   const { port } = server.address() as { port: number };
   const env = { ...process.env, AGENT_API_URL: `http://127.0.0.1:${port}`, AGENT_API_TOKEN: "synthetic-token" };
+  await assert.rejects(run("node", [script, "aws", home], { env }), /run this again to retry/);
+  await access(home);
+  error = "human_consent_required";
   await assert.rejects(run("node", [script, "aws", home], { env }), /start again from step 1/);
   await assert.rejects(access(home));
   await assert.rejects(access(`${home}.ticket`));

@@ -75,9 +75,16 @@ const response = await fetch(`${AGENT_API_URL}/v1/keychain/credentials`, {
   process.exit(1);
 });
 const text = await response.text();
+const keptExisting = () => {
+  try {
+    return ["human_consent_required", "inactive_run"].includes(JSON.parse(text).error);
+  } catch {
+    return false;
+  }
+};
 if (response.status === 400 || response.status === 413)
   discard(`keychain rejected the login (${response.status}): ${text}`);
-if (response.status === 403)
+if (response.status === 403 && keptExisting())
   discard(
     `keychain kept the existing ${service} login (403): ${text}; replacing it needs a sign-in started in the person's own running turn, so start again from step 1 there`,
   );
