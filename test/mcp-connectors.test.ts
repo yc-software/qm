@@ -36,7 +36,7 @@ test("mcp client keeps an oversized page and calls its last tool over JSON and S
     inputSchema: { type: "object" as const },
   }));
   for (const json of [true, false]) {
-    const mcp = await startMcpTestServer(t, { tools, pageSize: 129, json });
+    const mcp = await startMcpTestServer(t, { tools, pageSize: json ? 129 : 40, json });
     const client = createMcpClient({ fetch: loopbackFetch, url: `${mcp.url}/mcp`, auth: { mode: "none" } });
     assert.deepEqual(await client.listTools(), {
       tools,
@@ -56,14 +56,21 @@ test("mcp client keeps the server's own description, else its instructions", asy
   assert.equal(about, "Call search first.\nThen update.");
 });
 
-test("mcp client discovers tools beyond the former ordinary and catalog limits", async (t) => {
+test("mcp client fails explicitly rather than returning a truncated oversized inventory", async (t) => {
   const tools = Array.from({ length: 5001 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
-  const mcp = await startMcpTestServer(t, { tools, pageSize: 2000 });
-  const listed = (await createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } }).listTools())
-    .tools;
-  assert.equal(listed.length, tools.length);
-  assert.equal(listed.at(-1)?.name, "t5000");
+  const mcp = await startMcpTestServer(t, { tools, pageSize: 2500 });
+  const client = createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } });
+  await assert.rejects(client.listTools(), (e: Error) => String(e.cause).includes("inventory was not loaded"));
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 3);
+  const store = createMcpServerStore(testMap<McpServer>());
+  await store.put(server({ url: mcp.url, catalog: true }));
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
+  t.after(() => service.close());
+  for (const operation of ["search", "describe"])
+    await assert.rejects(service.call("crm", { operation, tool: "t0" }), (e: Error) =>
+      String(e.cause).includes("inventory was not loaded"),
+    );
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 6);
 });
 
 test("mcp client rejects pagination cycles instead of returning a partial list", async (t) => {

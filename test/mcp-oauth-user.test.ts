@@ -123,7 +123,7 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   tokens.set("internal:alice", "alice-token");
   assert.match(
     await service.call("orders_sign_in", {}, "internal:alice"),
-    /Tools now available on server "orders": search$/,
+    /Available tools on server "orders": 1. Use tool_search to find them.$/,
   );
   assert.deepEqual(
     (await service.toolDefsFor("internal:alice")).map((d) => d.name),

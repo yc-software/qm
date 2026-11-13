@@ -4884,7 +4884,7 @@ test("connector tools reach the model as exactly tool_search and mcp_call, leavi
     assert.deepEqual(z.object(claudeShape).parse(input), input);
 });
 
-test("tool_search ranks name matches first, lists every tool for an empty query or *, and caps full results", async () => {
+test("tool_search ranks name matches first, reports the tool count for an empty query or *, and caps full results", async () => {
   const search = createAgentTools({ current: fakeToolContext() }, { mcpTools: shopTools }).find(
     (t) => t.name === "tool_search",
   );
@@ -4903,11 +4903,7 @@ test("tool_search ranks name matches first, lists every tool for an empty query 
   for (const query of ["", " * "])
     assert.equal(
       textOut(await call(search, { query })),
-      [
-        "- shop find_stores: Find nearby stores.",
-        "- shop add_to_cart: Add items to the cart.",
-        "- shop get_cart: Show the cart contents.",
-      ].join("\n"),
+      "Available connector tools: 3. Search by connector, tool name, or description to see matching tools and their schemas.",
     );
   assert.match(textOut(await call(search, { query: "refund" })), /No connector tools match "refund"/);
   const many = Array.from({ length: 7 }, (_, i) => connectorTool(`list_${i}`, "List things."));
@@ -4920,7 +4916,10 @@ test("tool_search ranks name matches first, lists every tool for an empty query 
   const readOnlySearch = createAgentTools({ current: fakeToolContext() }, { readOnly: true, mcpTools: shopTools }).find(
     (t) => t.name === "tool_search",
   );
-  assert.equal(textOut(await call(readOnlySearch, { query: "*" })), "- shop get_cart: Show the cart contents.");
+  assert.equal(
+    textOut(await call(readOnlySearch, { query: "*" })),
+    "Available connector tools: 1. Search by connector, tool name, or description to see matching tools and their schemas.",
+  );
 });
 
 test("mcp_call runs a connector tool named by server and tool, still takes the old single name, and records both alike", async () => {

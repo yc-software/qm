@@ -9,6 +9,7 @@ import { swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
+const MAX_DISCOVERY_TOOLS = 5_000;
 const CALL_TIMEOUT_MS = 300_000;
 const OAUTH_DENIALS: ReadonlySet<string> = new Set([
   "invalid_client",
@@ -188,6 +189,10 @@ export function createMcpClient(opts: {
           let cursor: string | undefined;
           do {
             const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+            if (tools.length + page.tools.length > MAX_DISCOVERY_TOOLS || cursors.size >= MAX_DISCOVERY_TOOLS)
+              throw new Error(
+                `MCP tool discovery exceeds ${MAX_DISCOVERY_TOOLS} tools or pages; inventory was not loaded`,
+              );
             for (const t of page.tools)
               tools.push({
                 name: t.name,
@@ -206,6 +211,7 @@ export function createMcpClient(opts: {
           };
         },
         opts?.headers,
+        AbortSignal.timeout(CALL_TIMEOUT_MS),
       ),
     async callTool(name, args, headers, signal) {
       const result = (await session(

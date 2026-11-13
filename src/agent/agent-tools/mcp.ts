@@ -53,7 +53,7 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
     name: "tool_search",
     label: "tool_search",
     description:
-      "Find connector tools by keyword. Returns each match's name, description and input schema; an empty query or * lists every tool.",
+      "Find connector tools by keyword. Returns each match's name, description and input schema; an empty query or * returns the available tool count. Use keywords to find tools and their schemas.",
     parameters: Type.Object({
       query: Type.String({ description: "Words to match against tool names and descriptions." }),
     }),

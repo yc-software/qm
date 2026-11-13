@@ -23,20 +23,10 @@ export function deferredMcpTools(
   return visibleMcpTools(tools, readOnly).filter((tool) => !tool.catalog);
 }
 
-const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
-
-function firstSentence(line: string): string {
-  return [...sentences.segment(line)][0]?.segment.trim() ?? "";
-}
-
-function summary(description: string): string {
-  return firstSentence(description.trim().split("\n")[0]!.trim());
-}
-
 export function searchMcpTools(tools: readonly McpToolDescriptor[], query: string): string {
   const wanted = query.trim().toLowerCase();
   if (!wanted || wanted === "*")
-    return tools.map((tool) => `- ${tool.serverId} ${tool.remoteName}: ${summary(tool.description)}`).join("\n");
+    return `Available connector tools: ${tools.length}. Search by connector, tool name, or description to see matching tools and their schemas.`;
   const words = wanted.split(/\s+/);
   const ranked = tools
     .map((tool, index) => {
@@ -50,7 +40,7 @@ export function searchMcpTools(tools: readonly McpToolDescriptor[], query: strin
     })
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score || a.index - b.index);
-  if (!ranked.length) return `No connector tools match "${query}". Search with an empty query to list them all.`;
+  if (!ranked.length) return `No connector tools match "${query}". Try another connector, tool name, or description.`;
   const shown = ranked.slice(0, SEARCH_LIMIT).map(({ tool }) =>
     JSON.stringify({
       server: tool.serverId,
