@@ -92,6 +92,7 @@ import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
+import { storedDraft } from "./drafts";
 import { listPageTpl } from "./list-page";
 import {
   contextsState,
@@ -993,7 +994,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
           >${statusMarks(ind)}<span dir="auto">${groupDmTitle(s)}</span>${backgroundChip(s, ind)}</span
         >
         <span class="list-row-meta">
-          ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
+          ${draftMark(s)}${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
           ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
           ${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}
           <span class="list-row-date">${listWhen(activityOf(s))}</span>
@@ -1242,7 +1243,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
       >
         <div class="title" aria-live="polite">
           ${statusMarks(ind)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
-          >${backgroundChip(s, ind)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
+          >${backgroundChip(s, ind)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${draftMark(s)}${unreadDot(s)}
         </div>
       </a>
       ${
@@ -1773,6 +1774,19 @@ function setUnread(s: CoreSession, unread: boolean): void {
 
 function showsUnread(s: CoreSession): boolean {
   return Boolean(s.id && s.unread && (keptUnreadId === s.id || !openConversationIds().includes(s.id)));
+}
+
+function hasUnsentDraft(s: CoreSession): boolean {
+  if (!s.threadRef || (s.id && openConversationIds().includes(s.id))) return false;
+  return storedDraft(s.threadRef).trim() !== "";
+}
+
+function draftMark(s: CoreSession): TemplateResult | typeof nothing {
+  return hasUnsentDraft(s)
+    ? html`<span class="draft-mark" role="img" aria-label="Unsent draft" ${tip("Unsent draft")}
+        >${icon(Pencil, 12)}</span
+      >`
+    : nothing;
 }
 
 function unreadDot(s: CoreSession): TemplateResult | typeof nothing {

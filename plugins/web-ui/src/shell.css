@@ -722,6 +722,19 @@ a.chat-row-open {
   border-radius: 50%;
   background: #2f81f7;
 }
+.draft-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 8px;
+  color: var(--muted-foreground);
+}
+.draft-mark + .unread-dot {
+  margin-left: 6px;
+}
+.session-row:hover .draft-mark,
+.session-row:focus-within .draft-mark,
+.session-row.menu-open .draft-mark,
 .session-row:hover .unread-dot,
 .session-row:focus-within .unread-dot,
 .session-row.menu-open .unread-dot {
