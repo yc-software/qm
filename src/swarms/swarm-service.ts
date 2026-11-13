@@ -1102,8 +1102,8 @@ export function createSwarmService(deps: {
       return handed;
     },
     async botStartedWorker(session) {
-      if (!session.threadRef.startsWith("swarm:")) return false;
-      return (await store.get(threadIdentity(session.threadRef, session.id).rootId))?.template.botActor === true;
+      const { rootId } = threadIdentity(session.threadRef, session.id);
+      return rootId !== session.id && (await store.get(rootId))?.template.botActor === true;
     },
 
     async binding(input) {

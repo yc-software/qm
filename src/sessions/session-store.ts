@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TenantLookup } from "../tenants/lookup.ts";
+import type { Tenant } from "../tenants/context.ts";
 import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import { isUserItem, type Item, type NewItem } from "./items.ts";
@@ -418,7 +419,7 @@ export interface SessionStore {
   endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string, principalId?: string): Promise<Session[]>;
-  forkOrigin(sessionId: string): Promise<Session | null>;
+  forkOrigin(tenant: Tenant, sessionId: string): Promise<Session | null>;
   expandSideChat(sessionId: string): Promise<void>;
   updateForkProvenance(
     sessionId: string,

@@ -552,7 +552,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (subagentRefusal) return subagentRefusal;
       const storedSession = delegatedSession ?? (await deps.sessions.getByThread(conversation.threadRef));
       const botRequest = input.botActor;
-      if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(storedSession, deps)))
+      if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(tenant, storedSession, deps)))
         input = { ...input, botActor: true };
       const personConversationTurn =
         isPersonAuthored(input.origin.kind) &&

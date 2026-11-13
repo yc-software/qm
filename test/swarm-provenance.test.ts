@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { forkOfBotWork } from "../src/sessions/session-syscalls.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { SwarmCaller } from "../src/swarms/swarm-service.ts";
@@ -55,7 +56,10 @@ test("a fork of a worker in a swarm a Slack bot started does the bot's work", as
     const fork = await f.sessions.getOrCreateByThread(`web:alice:${randomUUID()}`, worker.type, worker.scopeId);
     await f.sessions.updateForkProvenance(fork.id, { forkedFrom: { sessionId: worker.id }, forkBoundarySeq: 1 });
     const session = await f.sessions.get(fork.id);
-    assert.equal(await forkOfBotWork(session, { sessions: f.sessions, swarms: f.service }), botActor);
+    assert.equal(await forkOfBotWork(testTenant, session, { sessions: f.sessions, swarms: f.service }), botActor);
+    assert.equal(await forkOfBotWork(testTenant, session, { sessions: f.sessions }), true);
+    await f.sessions.updateForkProvenance(fork.id, { forkedFrom: { sessionId: randomUUID() }, forkBoundarySeq: 1 });
+    assert.equal(await forkOfBotWork(testTenant, await f.sessions.get(fork.id), { sessions: f.sessions }), true);
   }
 });
 
