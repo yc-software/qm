@@ -4,7 +4,7 @@ import type { PublicServiceCredential } from "../credentials/keychain.ts";
 import type { ScopeId } from "../types.ts";
 import type { Tenant } from "../tenants/context.ts";
 
-export async function deploymentCredentialSlugs(
+export async function appCredentialSlugs(
   tenant: Tenant,
   credentials: readonly PublicServiceCredential[],
   orgScope: ScopeId,

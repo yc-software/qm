@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createE2bDeployProvider, type StoredE2bDeployBody } from "../src/deploy/e2b-deploy-provider.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp, AppVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
@@ -40,7 +40,7 @@ const freePort = (): Promise<number> =>
     });
   });
 
-const deployment = (id: string, extra: Partial<Deployment> = {}): Deployment => ({
+const publishedApp = (id: string, extra: Partial<PublishedApp> = {}): PublishedApp => ({
   id,
   ownerScopeId: scopeId("personal", "tester"),
   createdBy: "tester",
@@ -51,7 +51,7 @@ const deployment = (id: string, extra: Partial<Deployment> = {}): Deployment => 
   ...extra,
 });
 
-function version(appVersion: string, entrypoint = "node server.js"): DeploymentVersion {
+function version(appVersion: string, entrypoint = "node server.js"): AppVersion {
   const snapshotDir = mkdtempSync(join(tmpdir(), "e2b-deploy-snap-"));
   writeFileSync(join(snapshotDir, "server.js"), SERVER);
   return { version: 1, createdAt: Date.now(), entrypoint, snapshotDir, env: { APP_VERSION: appVersion } };
@@ -78,7 +78,7 @@ const get = async (path: string): Promise<string> => (await fetch(`http://127.0.
 
 test("e2b deploy runs each app in its own auto-pausing, auto-resuming private sandbox", async () => {
   const { provider, fake } = await make();
-  const d = deployment("dep-aaaaaaaaaaaa");
+  const d = publishedApp("dep-aaaaaaaaaaaa");
   const endpoint = await provider.apply(d, version("1"));
   const name = "qmt-app-dep-aaaaaaaa";
   const sandboxId = fake.current(name)!.sandboxId;
@@ -100,7 +100,7 @@ test("e2b deploy runs each app in its own auto-pausing, auto-resuming private sa
 
 test("e2b deploy updates in place, keeping the sandbox and its data directory", async () => {
   const { provider, fake } = await make();
-  const d = deployment("dep-bbbbbbbbbbbb");
+  const d = publishedApp("dep-bbbbbbbbbbbb");
   const first = await provider.apply(d, version("1"));
   assert.equal(await get("/write"), "ok");
   const second = await provider.apply(d, version("2"));
@@ -112,7 +112,7 @@ test("e2b deploy updates in place, keeping the sandbox and its data directory", 
 
 test("e2b deploy resolves a paused app without waking it and forgets a killed one", async () => {
   const { provider, store, fake } = await make();
-  const d = deployment("dep-cccccccccccc");
+  const d = publishedApp("dep-cccccccccccc");
   const endpoint = await provider.apply(d, version("1"));
   const name = "qmt-app-dep-cccccccc";
   fake.pause(name);
@@ -125,14 +125,14 @@ test("e2b deploy resolves a paused app without waking it and forgets a killed on
 
 test("e2b deploy kills the sandbox when the app never listens", async () => {
   const { provider, fake } = await make();
-  const d = deployment("dep-dddddddddddd");
+  const d = publishedApp("dep-dddddddddddd");
   await assert.rejects(provider.apply(d, version("1", "echo boom; exit 3")), /exited without binding port[\s\S]*boom/);
   assert.equal(fake.current("qmt-app-dep-dddddddd"), null);
 });
 
 test("e2b deploy keeps always-on apps up for the longest timeout and destroys cleanly", async () => {
   const { provider, store, fake } = await make();
-  const d = deployment("dep-eeeeeeeeeeee", { alwaysOn: true });
+  const d = publishedApp("dep-eeeeeeeeeeee", { alwaysOn: true });
   await provider.apply(d, version("1"));
   const name = "qmt-app-dep-eeeeeeee";
   assert.equal(fake.createOptions(name).timeoutMs, 24 * 3600_000);

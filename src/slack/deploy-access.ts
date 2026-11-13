@@ -52,7 +52,7 @@ export function deployAccessMessage(
   };
 }
 
-export async function decideDeploymentAccess(
+export async function decideAppAccess(
   tenant: Tenant,
   app: App,
   identity: IdentityService,
@@ -60,11 +60,11 @@ export async function decideDeploymentAccess(
   assertion: ActorAssertion,
   approve: boolean,
 ): Promise<string> {
-  const { deploymentId, requesterId } = parseDeployAccess(value);
+  const { deploymentId: publishedAppId, requesterId } = parseDeployAccess(value);
   await identity.refresh(true);
   const actor = identity.resolve(assertion);
   if (!identity.isInternal(actor)) throw new Error("Only the app's owner can decide this request.");
-  const home = await app.getArtifactHome("deploy", deploymentId);
+  const home = await app.getArtifactHome("deploy", publishedAppId);
   if (
     !home ||
     !(await (parseScopeId(home.ownerScopeId).kind === "personal"
@@ -72,12 +72,12 @@ export async function decideDeploymentAccess(
       : app.canManageArtifactHome(home.ownerScopeId, home.createdBy, actor.id)))
   )
     throw new Error("Only the app's owner can decide this request.");
-  const d = await app.getDeployment(deploymentId);
+  const d = await app.getApp(publishedAppId);
   if (!d) throw new Error("That app no longer exists.");
   const label = d.displayName ?? d.name ?? d.id;
   if (approve) {
     const grantee = scopeId("personal", requesterId);
-    const existing = (await app.deploymentGrantees(deploymentId)).find(
+    const existing = (await app.appGrantees(publishedAppId)).find(
       (g) => g.scope === grantee && g.permission === "write",
     );
     await app.grant(tenant, {
@@ -92,7 +92,7 @@ export async function decideDeploymentAccess(
   await app.enqueueDelivery({
     destination: principalDestination(requesterId, actor.id),
     text: `${actor.id} declined your request for access to "${label}".`,
-    idempotencyKey: `deploy-declined:${deploymentId}:${requesterId.toLowerCase()}:${Math.floor(Date.now() / 86_400_000)}`,
+    idempotencyKey: `deploy-declined:${publishedAppId}:${requesterId.toLowerCase()}:${Math.floor(Date.now() / 86_400_000)}`,
   });
   return `Declined. ${requesterId} was told.`;
 }
@@ -108,7 +108,7 @@ export function registerDeployAccessActions(
     if (!parsed || !clickerId || !channel || !messageTs) return;
     try {
       const actor = await deps.directory.classifyActor(client, clickerId);
-      const text = await deps.core.decideDeploymentAccess(parsed.value, actor, parsed.actionId === ACTIONS[0]);
+      const text = await deps.core.decideAppAccess(parsed.value, actor, parsed.actionId === ACTIONS[0]);
       await updateSlackMessage(client, channel, messageTs, text, [
         { type: "section", text: { type: "plain_text", text } },
       ]);

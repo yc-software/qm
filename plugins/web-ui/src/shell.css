@@ -5320,7 +5320,7 @@ a.connector-widget:focus-visible {
   color: var(--warning);
   background: color-mix(in srgb, var(--warning) 14%, var(--background));
 }
-.deploy-edit-input {
+.app-edit-input {
   flex: 1;
   min-width: 120px;
   padding: 5px 7px;
@@ -5987,7 +5987,7 @@ a.connector-widget:focus-visible {
   font-weight: 600;
 }
 .file-row,
-.deploy-row {
+.app-row {
   position: relative;
   align-items: center;
   gap: 12px;
@@ -6089,12 +6089,12 @@ a.file-card:hover {
   margin: 14px auto;
   text-align: center;
 }
-.deploy-row-actions,
+.app-row-actions,
 .chat-row-actions {
   display: inline-flex;
   gap: 3px;
 }
-.deploy-detail {
+.app-detail {
   width: min(540px, calc(100vw - 32px));
 }
 .chat-filters {
@@ -6166,12 +6166,12 @@ a.file-card:hover {
 
 @media (max-width: 700px) {
   .file-row .list-row-meta,
-  .deploy-row .list-row-meta {
+  .app-row .list-row-meta {
     grid-column: 2;
     justify-content: flex-start;
     flex-wrap: wrap;
   }
-  .deploy-row-actions {
+  .app-row-actions {
     grid-column: 2;
   }
   .chat-filters {
@@ -6888,7 +6888,7 @@ a.file-card:hover {
   font-variant-numeric: tabular-nums;
   opacity: 0.72;
 }
-.deploy-row {
+.app-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -6896,7 +6896,7 @@ a.file-card:hover {
   min-height: 44px;
   padding: 6px 12px;
 }
-.deploy-row-main {
+.app-row-main {
   min-width: 0;
   display: flex;
   flex-direction: row;
@@ -6912,34 +6912,34 @@ a.file-card:hover {
   text-decoration: none;
   cursor: pointer;
 }
-.deploy-row-main[href]::after {
+.app-row-main[href]::after {
   position: absolute;
   inset: 0;
   content: "";
   cursor: pointer;
 }
-.deploy-row-main:not([href]) {
+.app-row-main:not([href]) {
   cursor: default;
 }
-.deploy-row:has(.deploy-row-main:focus-visible) {
+.app-row:has(.app-row-main:focus-visible) {
   outline: 2px solid color-mix(in srgb, var(--foreground) 34%, transparent);
   outline-offset: 2px;
 }
-.deploy-row-main:focus-visible {
+.app-row-main:focus-visible {
   outline: none;
 }
-.deploy-row-title {
+.app-row-title {
   grid-area: title;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 9px;
 }
-.deploy-row-title .list-row-title {
+.app-row-title .list-row-title {
   font-size: var(--font-13);
   font-weight: 500;
 }
-.deploy-status {
+.app-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -6947,22 +6947,22 @@ a.file-card:hover {
   font-size: 11.5px;
   color: var(--muted-foreground);
 }
-.deploy-status > span {
+.app-status > span {
   width: 7px;
   height: 7px;
   border-radius: 999px;
   background: var(--muted-foreground);
 }
-.deploy-status.running > span {
+.app-status.running > span {
   background: var(--success);
 }
-.deploy-status.deploying > span {
+.app-status.deploying > span {
   background: var(--warning);
 }
-.deploy-status.archived > span {
+.app-status.archived > span {
   background: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
 }
-.deploy-permission {
+.app-permission {
   display: inline-flex;
   align-items: center;
   min-height: 20px;
@@ -6976,10 +6976,10 @@ a.file-card:hover {
   font-weight: 600;
   line-height: 1;
 }
-.deploy-permission.manage {
+.app-permission.manage {
   color: var(--foreground);
 }
-.deploy-row-actions {
+.app-row-actions {
   position: relative;
   z-index: 1;
   display: inline-flex;
@@ -6987,54 +6987,54 @@ a.file-card:hover {
   gap: 10px;
   padding-left: 8px;
 }
-.deploy-row-actions .deploy-manage {
+.app-row-actions .app-manage {
   min-height: 30px;
   padding: 5px 9px;
 }
 .session-menu-option.danger {
   color: var(--destructive);
 }
-.deploy-row-archived {
+.app-row-archived {
   opacity: 0.76;
 }
-.deploy-row-archived:hover {
+.app-row-archived:hover {
   opacity: 1;
 }
-.deploy-detail-pane {
+.app-detail-pane {
   max-width: 800px;
   margin: 0 auto;
 }
-.deploy-detail-heading {
+.app-detail-heading {
   align-items: flex-start;
 }
-.deploy-detail-heading > div:first-child {
+.app-detail-heading > div:first-child {
   min-width: 0;
 }
-.deploy-heading-title {
+.app-heading-title {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.deploy-heading-title h2 {
+.app-heading-title h2 {
   margin: 0;
 }
-.deploy-detail-url {
+.app-detail-url {
   margin-top: 5px;
   color: var(--muted-foreground);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--font-12-5);
 }
-.deploy-detail-section {
+.app-detail-section {
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
-.deploy-detail-section h3 {
+.app-detail-section h3 {
   margin: 0 0 6px;
   font-size: var(--font-14);
   font-weight: 650;
 }
-.deploy-summary {
+.app-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 16px;
@@ -7042,7 +7042,7 @@ a.file-card:hover {
   color: var(--muted-foreground);
   font-size: 12px;
 }
-.deploy-access-line {
+.app-access-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7052,16 +7052,16 @@ a.file-card:hover {
   border-block: 1px solid var(--border);
   font-size: var(--font-13);
 }
-.deploy-access-line > div {
+.app-access-line > div {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
-.deploy-secondary-context {
+.app-secondary-context {
   font-size: 12px;
   color: var(--muted-foreground);
 }
-.deploy-setting-row {
+.app-setting-row {
   display: grid;
   grid-template-columns: minmax(12rem, 1fr) minmax(16rem, auto);
   align-items: center;
@@ -7069,19 +7069,19 @@ a.file-card:hover {
   padding: 13px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
-.deploy-setting-row > div:first-child {
+.app-setting-row > div:first-child {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.deploy-setting-row > div:first-child strong {
+.app-setting-row > div:first-child strong {
   font-size: var(--font-13);
 }
-.deploy-setting-row > div:first-child span {
+.app-setting-row > div:first-child span {
   color: var(--muted-foreground);
   font-size: 12px;
 }
-.deploy-setting-value {
+.app-setting-value {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -7089,43 +7089,43 @@ a.file-card:hover {
   min-width: 0;
   font-size: var(--font-13);
 }
-.deploy-setting-value > span,
-.deploy-setting-value > code {
+.app-setting-value > span,
+.app-setting-value > code {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.deploy-edit-form {
+.app-edit-form {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 5px;
 }
-.deploy-embed-origins {
+.app-embed-origins {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 4px 6px;
   min-width: 0;
 }
-.deploy-embed-origins code {
+.app-embed-origins code {
   padding: 1px 6px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 999px;
   font-size: 12px;
   white-space: nowrap;
 }
-.deploy-embed-empty {
+.app-embed-empty {
   color: var(--muted-foreground);
 }
-.deploy-embed-editor {
+.app-embed-editor {
   grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.deploy-embed-list {
+.app-embed-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -7133,36 +7133,36 @@ a.file-card:hover {
   padding: 0;
   list-style: none;
 }
-.deploy-embed-list li {
+.app-embed-list li {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.deploy-embed-input {
+.app-embed-input {
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
   font-size: 12px;
 }
-.deploy-embed-actions {
+.app-embed-actions {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.deploy-embed-actions .spacer {
+.app-embed-actions .spacer {
   flex: 1;
 }
-.deploy-embed-hint {
+.app-embed-hint {
   font-size: 12px;
 }
-.deploy-embed-hint code {
+.app-embed-hint code {
   font-size: 11px;
 }
 
-.deploy-edit-form label {
+.app-edit-form label {
   min-width: 0;
 }
-.deploy-slug-input {
+.app-slug-input {
   display: flex;
   align-items: center;
   height: 34px;
@@ -7175,10 +7175,10 @@ a.file-card:hover {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
-.deploy-slug-input:focus-within {
+.app-slug-input:focus-within {
   border-color: color-mix(in srgb, var(--foreground) 32%, var(--border));
 }
-.deploy-slug-input input {
+.app-slug-input input {
   width: 150px;
   min-width: 0;
   border: 0;
@@ -7187,18 +7187,18 @@ a.file-card:hover {
   color: var(--foreground);
   font: inherit;
 }
-.deploy-slug-input.name input {
+.app-slug-input.name input {
   width: 210px;
 }
-.deploy-danger-actions {
+.app-danger-actions {
   margin-top: 16px;
   justify-content: flex-end;
 }
-.deploy-version-list {
+.app-version-list {
   display: flex;
   flex-direction: column;
 }
-.deploy-version-row {
+.app-version-row {
   display: grid;
   grid-template-columns: minmax(8rem, 0.3fr) minmax(0, 1fr);
   align-items: center;
@@ -7206,27 +7206,27 @@ a.file-card:hover {
   padding: 11px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
-.deploy-version-row > div {
+.app-version-row > div {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
-.deploy-version-row > div:last-child {
+.app-version-row > div:last-child {
   justify-content: flex-end;
   color: var(--muted-foreground);
   font-size: 12px;
 }
-.deploy-version-row code {
+.app-version-row code {
   color: var(--foreground);
 }
-.deploy-archive-dialog p {
+.app-archive-dialog p {
   margin: 18px 0 0;
   color: var(--muted-foreground);
   font-size: var(--font-13-5);
   line-height: 1.5;
 }
-.deploy-toast,
+.app-toast,
 .action-toast {
   position: fixed;
   right: 20px;
@@ -7243,12 +7243,12 @@ a.file-card:hover {
   color: var(--background);
   font-size: var(--font-13);
 }
-.deploy-toast > span,
+.app-toast > span,
 .action-toast > span {
   min-width: 0;
   flex: 1;
 }
-.deploy-toast > button:not(.icon-btn),
+.app-toast > button:not(.icon-btn),
 .action-toast > button:not(.icon-btn) {
   border: 0;
   background: transparent;
@@ -7257,32 +7257,32 @@ a.file-card:hover {
   font-weight: 700;
   cursor: pointer;
 }
-.deploy-toast .icon-btn,
+.app-toast .icon-btn,
 .action-toast .icon-btn {
   color: inherit;
 }
 @media (max-width: 760px) {
-  .deploy-setting-row {
+  .app-setting-row {
     grid-template-columns: minmax(0, 1fr);
   }
-  .deploy-setting-value,
-  .deploy-edit-form {
+  .app-setting-value,
+  .app-edit-form {
     justify-content: flex-start;
   }
 }
 @media (max-width: 520px) {
-  .deploy-row {
+  .app-row {
     grid-template-columns: minmax(0, 1fr);
   }
-  .deploy-row-actions {
+  .app-row-actions {
     padding: 8px 0 0;
   }
 
-  .deploy-version-row {
+  .app-version-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 5px;
   }
-  .deploy-version-row > div:last-child {
+  .app-version-row > div:last-child {
     justify-content: flex-start;
     flex-wrap: wrap;
   }
@@ -12013,17 +12013,17 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   margin-top: 0;
 }
 
-.deployment-permissions-dialog {
+.app-permissions-dialog {
   width: min(440px, calc(100vw - 32px));
   padding: 24px;
 }
-.deployment-permissions-dialog .project-dialog-head {
+.app-permissions-dialog .project-dialog-head {
   margin-bottom: 20px;
 }
-.deployment-permissions-dialog .project-dialog-head h2 {
+.app-permissions-dialog .project-dialog-head h2 {
   font-size: var(--font-17);
 }
-.deployment-permissions-dialog .project-dialog-head p {
+.app-permissions-dialog .project-dialog-head p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
   font-size: 12px;
@@ -12122,11 +12122,11 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--muted-foreground);
   margin: 10px 0 0;
 }
-.deployment-permissions-dialog .project-dialog-actions {
+.app-permissions-dialog .project-dialog-actions {
   margin-top: 20px;
 }
 
-.deployment-permissions-dialog .permission-control .menu-popover {
+.app-permissions-dialog .permission-control .menu-popover {
   position: absolute !important;
   inset: calc(100% + 6px) 0 auto auto !important;
   width: 170px !important;
@@ -12137,46 +12137,46 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   border-radius: var(--radius-sm);
   animation: none;
 }
-.deployment-permissions-dialog .permission-control .menu-popover::after {
+.app-permissions-dialog .permission-control .menu-popover::after {
   display: none;
 }
-.deployment-permissions-dialog .permission-control .menu-option {
+.app-permissions-dialog .permission-control .menu-option {
   min-height: 34px;
   padding: 6px 10px;
 }
-.deployment-permissions-dialog .permission-invite .menu-popover {
+.app-permissions-dialog .permission-invite .menu-popover {
   inset: calc(100% + 6px) auto auto 0 !important;
 }
-.deployment-permissions-dialog .general-access-control .menu-popover {
+.app-permissions-dialog .general-access-control .menu-popover {
   inset: calc(100% + 6px) auto auto -8px !important;
   width: 220px !important;
 }
-.deployment-permissions-dialog .permission-control .menu-popover.drop-up {
+.app-permissions-dialog .permission-control .menu-popover.drop-up {
   top: auto !important;
   bottom: calc(100% + 6px) !important;
 }
 
-.deploy-access-line + .deploy-detail-section {
+.app-access-line + .app-detail-section {
   border-top: 0;
   padding-top: 0;
 }
-.deploy-detail .deploy-setting-row {
+.app-detail .app-setting-row {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   padding: 12px 0;
 }
-.deploy-detail .deploy-setting-value {
+.app-detail .app-setting-value {
   justify-content: flex-end;
 }
-.deploy-detail .deploy-setting-row > div:first-child span {
+.app-detail .app-setting-row > div:first-child span {
   max-width: 250px;
 }
 @media (max-width: 520px) {
-  .deploy-detail .deploy-setting-row {
+  .app-detail .app-setting-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
-  .deploy-detail .deploy-setting-value {
+  .app-detail .app-setting-value {
     justify-content: flex-start;
   }
 }

@@ -189,7 +189,7 @@ test("a replaced microVM comes back running the saved edits, not the last publis
 
   h.state.body = false;
   h.state.resolved = null;
-  const reach = await h.deploy.reachDeployment(d.id, OWNER);
+  const reach = await h.deploy.reachApp(d.id, OWNER);
   assert.equal(reach.status, "ok");
   assert.deepEqual(h.state.reconciles.at(-1), { commit: draft.commit, entrypoint: DEV });
   assert.equal(
@@ -209,7 +209,7 @@ test("a replaced microVM comes back running the saved edits, not the last publis
 
   h.state.rotate = true;
   const placed = h.state.reconciles.length;
-  await h.deploy.maintainDeployments();
+  await h.deploy.maintainApps();
   assert.equal(h.state.reconciles.length, placed + 1);
   assert.deepEqual(
     h.state.reconciles.at(-1),
@@ -306,7 +306,7 @@ test("a provider without live edits publishes a version for every change", async
 test("someone who cannot publish the app cannot save edits to it", async () => {
   const h = harness();
   const d = await publishApp(h, "live-h");
-  await assert.rejects(() => h.save("live-h", tree(true, "pwned"), "U2"), /deployment name taken/);
+  await assert.rejects(() => h.save("live-h", tree(true, "pwned"), "U2"), /app name taken/);
   assert.equal(h.state.edits.length, 0);
   assert.equal(await h.deployStore.draftOf(d.id), null);
 });

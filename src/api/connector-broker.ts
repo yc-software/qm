@@ -1,5 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import type { Deployment } from "../deploy/deploy-store.ts";
+import type { PublishedApp } from "../deploy/deploy-store.ts";
 import { tokenFor, type ConnectorTokenSource } from "../loops/sources/adapter.ts";
 import { errMessage } from "../util/errors.ts";
 import {
@@ -21,7 +21,7 @@ interface ConnectorBrokerRequest extends Omit<BrokerRequest, "credential"> {
 export async function brokerConnectorCall(opts: {
   claims: CapabilityClaims;
   body: ConnectorBrokerRequest;
-  loadDeployment: (id: string) => Promise<Pick<Deployment, "id" | "createdBy" | "connectors" | "public"> | null>;
+  loadApp: (id: string) => Promise<Pick<PublishedApp, "id" | "createdBy" | "connectors" | "public"> | null>;
   tokens: ConnectorTokenSource;
   fetchImpl: BrokerFetch;
   audit?: BrokerAudit;
@@ -52,10 +52,10 @@ export async function brokerConnectorCall(opts: {
 
   if (!host || !rawUrl)
     return { status: 400, json: { error: "bad_request", message: "connector (host) and url are required" } };
-  const deployment = claims.deployment ? await opts.loadDeployment(claims.deployment) : null;
-  if (!deployment || deployment.id !== claims.deployment)
+  const publishedApp = claims.deployment ? await opts.loadApp(claims.deployment) : null;
+  if (!publishedApp || publishedApp.id !== claims.deployment)
     return deny(403, "not_entitled", "only a published app can borrow its publisher's connectors");
-  if (!deployment.connectors?.includes(host) || deployment.public)
+  if (!publishedApp.connectors?.includes(host) || publishedApp.public)
     return deny(403, "connector_not_lent", "the publisher has not lent this connector to the app");
   if (!parsed) return deny(400, "bad_url", "url is not a valid absolute URL");
   if (parsed.protocol !== "https:" || parsed.port || parsed.username || parsed.password)
@@ -63,7 +63,7 @@ export async function brokerConnectorCall(opts: {
   if (parsed.hostname.toLowerCase() !== host)
     return deny(403, "host_not_allowed", "url host is not the connector's host");
   if (!brokerPathAllowed(parsed.pathname)) return deny(403, "path_not_allowed", "url path is not allowed");
-  const token = await tokenFor(opts.tokens, host, deployment.createdBy);
+  const token = await tokenFor(opts.tokens, host, publishedApp.createdBy);
   if (!token) return deny(409, "connector_unavailable", "the publisher's connection is missing or needs reconnecting");
 
   let resp: BrokerFetchResponse;

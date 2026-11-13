@@ -10,25 +10,25 @@ import type { ServerDeps } from "../src/api/deps.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
-  DEPLOYMENT_CREDENTIAL_TTL_MS,
+  APP_CREDENTIAL_TTL_MS,
   mintCapabilityToken,
 } from "../src/auth/capability-token.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { personalScope } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
-const SECRET = "deployment-token-gate-secret".repeat(2);
+const SECRET = "app-token-gate-secret".repeat(2);
 
 describe("a published app's broker token follows the app it was minted for, on every broker route", () => {
   let server: Server;
   let base: string;
-  let deploymentsAllowed = true;
+  let appsAllowed = true;
   let scopeAuthorized = true;
   let offboarded = false;
   const authorized: unknown[] = [];
-  const deployments = new Map<string, Deployment>();
-  const running = (id: string, createdBy = "publisher"): Deployment => ({
+  const publishedApps = new Map<string, PublishedApp>();
+  const running = (id: string, createdBy = "publisher"): PublishedApp => ({
     id,
     createdBy,
     ownerScopeId: personalScope(createdBy),
@@ -38,15 +38,15 @@ describe("a published app's broker token follows the app it was minted for, on e
     versions: [],
   });
 
-  const tokenFor = (deployment: string, actorId = "publisher", aud = CREDENTIAL_BROKER_AUD) =>
+  const tokenFor = (publishedApp: string, actorId = "publisher", aud = CREDENTIAL_BROKER_AUD) =>
     mintCapabilityToken(
       {
         actorId,
         scopeId: personalScope(actorId),
         aud,
         credentials: ["sample-api"],
-        deployment,
-        exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+        deployment: publishedApp,
+        exp: Date.now() + APP_CREDENTIAL_TTL_MS,
       },
       SECRET,
     );
@@ -75,7 +75,7 @@ describe("a published app's broker token follows the app it was minted for, on e
         authorized.push(claims);
         return scopeAuthorized;
       },
-      getDeployment: async (id: string) => deployments.get(id) ?? null,
+      getApp: async (id: string) => publishedApps.get(id) ?? null,
     } as unknown as App;
     const deps = {
       identity: {
@@ -91,7 +91,7 @@ describe("a published app's broker token follows the app it was minted for, on e
           allowedMethods: ["GET", "POST"],
           allowedPathPrefixes: ["/sample-api"],
           enabled: true,
-          deployments: deploymentsAllowed,
+          deployments: appsAllowed,
         }),
       },
       brokerFetch: async () => ({ status: 200, text: async () => "{}" }),
@@ -111,34 +111,34 @@ describe("a published app's broker token follows the app it was minted for, on e
   });
 
   it("reaches upstream while the app is running and the credential is on for apps", async () => {
-    deployments.set("d1", running("d1"));
+    publishedApps.set("d1", running("d1"));
     assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 200, git: 200 });
   });
 
   it("is refused once the app is stopped, archived or gone, and for a token whose actor is not the publisher", async () => {
     const refused = { broker: 401, git: 401 };
-    deployments.set("d1", { ...running("d1"), status: "stopped" });
+    publishedApps.set("d1", { ...running("d1"), status: "stopped" });
     assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
-    deployments.set("d1", { ...running("d1"), status: "archived" });
+    publishedApps.set("d1", { ...running("d1"), status: "archived" });
     assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
-    deployments.delete("d1");
+    publishedApps.delete("d1");
     assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
-    deployments.set("d2", running("d2", "someone-else"));
+    publishedApps.set("d2", running("d2", "someone-else"));
     assert.deepEqual(await statuses(() => tokenFor("d2", "publisher")), refused);
   });
 
   it("is refused when an admin switches the credential off for published apps", async () => {
-    deployments.set("d1", running("d1"));
-    deploymentsAllowed = false;
+    publishedApps.set("d1", running("d1"));
+    appsAllowed = false;
     try {
       assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 403, git: 403 });
     } finally {
-      deploymentsAllowed = true;
+      appsAllowed = true;
     }
   });
 
   it("is refused without a token, with the wrong audience, and after scope membership is revoked", async () => {
-    deployments.set("d1", running("d1"));
+    publishedApps.set("d1", running("d1"));
     assert.equal((await fetch(`${base}/v1/credentials/git/sample-api/sample-api/repo.git/info/refs`)).status, 401);
     assert.deepEqual(await statuses(() => tokenFor("d1", "publisher", CONTROL_PLANE_AUD)), { broker: 403, git: 403 });
     scopeAuthorized = false;
@@ -150,7 +150,7 @@ describe("a published app's broker token follows the app it was minted for, on e
   });
 
   it("is refused once the publisher is offboarded", async () => {
-    deployments.set("d1", running("d1"));
+    publishedApps.set("d1", running("d1"));
     offboarded = true;
     try {
       assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 401, git: 401 });
@@ -170,7 +170,7 @@ describe("a published app's broker token follows the app it was minted for, on e
           botActor: true,
           liveActor: true,
           members: [{ id: "B1", type: "internal" }],
-          exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+          exp: Date.now() + APP_CREDENTIAL_TTL_MS,
         },
         SECRET,
       );

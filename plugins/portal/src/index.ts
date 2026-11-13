@@ -77,12 +77,12 @@ import {
   hostedDomainHint,
 } from "./oidc.ts";
 import {
-  proxyToDeployment,
+  proxyToApp,
   proxyToUpstream,
   proxyToAppHost,
   relayUpgradeToAppHost,
   FORWARD_AGENT_API_HEADERS,
-  FORWARD_DEPLOYMENT_GIT_HEADERS,
+  FORWARD_APP_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
@@ -115,7 +115,7 @@ import {
   PORTAL_IDENTITY_SECRET,
   isMissingOrPlaceholder,
 } from "../../chassis/src/env.ts";
-import { isDeploymentGitRoute } from "../../chassis/src/deployment-git.ts";
+import { isAppGitRoute } from "../../chassis/src/app-git.ts";
 
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
@@ -983,7 +983,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
-  if (method === "GET" && (pathname === "/v1/spend/export" || pathname === "/v1/deployments/export")) {
+  if (method === "GET" && (pathname === "/v1/spend/export" || pathname === "/v1/apps/export")) {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
       "authorization",
       "accept",
@@ -1055,13 +1055,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
-  if (isDeploymentGitRoute(method, pathname)) {
-    return proxyToUpstream(
-      req,
-      res,
-      { baseUrl: CORE, path: pathname, search: url.search },
-      FORWARD_DEPLOYMENT_GIT_HEADERS,
-    );
+  if (isAppGitRoute(method, pathname)) {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_APP_GIT_HEADERS);
   }
 
   if (isSourceSignedPassthrough(method, pathname)) {
@@ -1085,7 +1080,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     res.writeHead(308, { location: `${stripped}${url.search}`, "cache-control": "no-store" });
     return void res.end();
   }
-  const isDeployment = seg === "d" || seg === "deployments";
+  const isAppPath = seg === "d";
 
   if (core && method === "GET") {
     if (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) && core.serves(method, pathname))
@@ -1093,7 +1088,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname)) return core.shell(withoutInternalHeaders(req), res);
   }
 
-  if (!isDeployment) session ??= staleSession;
+  if (!isAppPath) session ??= staleSession;
   if (!session) {
     if (staleSession) return identityUnavailable(req, res);
     if (method === "GET" && wantsHtml(req)) {
@@ -1109,13 +1104,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
   }
 
-  if (isDeployment) {
-    const rest = pathname.slice(`/${seg}/`.length);
+  if (isAppPath) {
+    const rest = pathname.slice("/d/".length);
     const slash = rest.indexOf("/");
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
     const subPath = slash === -1 ? "/" : rest.slice(slash);
     if (!id) return json(res, 404, { error: "not_found" });
-    return proxyToDeployment(req, res, {
+    return proxyToApp(req, res, {
       coreBase: CORE,
       id,
       subPath,
