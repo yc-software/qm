@@ -23,7 +23,7 @@ const VIEW_TITLES: Record<View, string> = {
   webhooks: "Webhooks",
   files: "Files",
   keychain: "Keychain",
-  deploys: "Apps",
+  apps: "Apps",
   memory: "Memory",
   skills: "Skills",
   personas: "Personas",

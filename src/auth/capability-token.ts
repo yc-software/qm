@@ -5,10 +5,11 @@ import { boundTenant, isTenantId } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
-export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
+export const APP_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
 const DEFAULT_SANDBOX_CAPABILITY_TTL_HOURS = 48;
 
 export function parseSandboxCapabilityTtlMs(value: string | undefined): number {
@@ -39,6 +40,16 @@ export const MEMORY_BRAIN_DROP_AUD = "memory-brain-drop";
 interface BlobGrant {
   dir: "read" | "write";
   id?: string;
+}
+
+export async function botWorkInPersonsName(
+  users: Pick<UserStore, "resolve"> | undefined,
+  capability: Pick<CapabilityClaims, "actorId" | "botActor">,
+): Promise<boolean> {
+  return (
+    capability.botActor === true &&
+    (await users?.resolve([capability.actorId]))?.get(capability.actorId)?.kind === "person"
+  );
 }
 
 export async function personOrOwningBot(
@@ -89,6 +100,7 @@ export interface CapabilityClaims {
   triggered?: boolean;
   threadRef?: string;
   surface?: string;
+  liveReplies?: boolean;
   exp: number;
 }
 
@@ -168,6 +180,7 @@ export async function verifyCapabilityToken(
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
+  if (claims.liveReplies !== undefined && typeof claims.liveReplies !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;

@@ -401,7 +401,7 @@ export function controlPlaneTools(kit: ToolKit) {
               text("[error] set public, email, or toScope, not more than one"),
               true,
             );
-          const d = await tc.setDeploymentPublic(id, params.public);
+          const d = await tc.setAppPublic(id, params.public);
           return recordResult(
             callId,
             { tool, action: "share", type, id: d.id, public: d.public },

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createRenderAppNetwork } from "../src/deploy/render-app-network.ts";
 import { RenderApiError } from "../src/deploy/render-api.ts";
 import type { StoredRenderDeploy } from "../src/deploy/render-deploy-provider.ts";
-import { createFakeRenderApi, fakeDeployment, type FakeRenderApiCall } from "./support/fake-render.ts";
+import { createFakeRenderApi, fakeApp, type FakeRenderApiCall } from "./support/fake-render.ts";
 import { testMap } from "./support/test-database.ts";
 
 interface Environment {
@@ -14,17 +14,17 @@ interface Environment {
 }
 
 function fixture(handle: (call: FakeRenderApiCall, environment: Environment) => unknown) {
-  const deployment = fakeDeployment();
+  const publishedApp = fakeApp();
   const store = testMap<StoredRenderDeploy>();
   const initial: StoredRenderDeploy = {
-    deploymentId: deployment.id,
+    deploymentId: publishedApp.id,
     appRegion: "oregon",
     token: "token",
     suspended: false,
   };
   const environment: Environment = {
     id: "env-app",
-    name: `qm-app-${deployment.id}`,
+    name: `qm-app-${publishedApp.id}`,
     projectId: "prj-test",
     networkIsolationEnabled: true,
   };
@@ -44,10 +44,10 @@ function fixture(handle: (call: FakeRenderApiCall, environment: Environment) => 
     environment,
     api,
     async ensure() {
-      await store.put(deployment.id, initial);
-      return network.ensure(deployment, initial);
+      await store.put(publishedApp.id, initial);
+      return network.ensure(publishedApp, initial);
     },
-    saved: () => store.get(deployment.id),
+    saved: () => store.get(publishedApp.id),
   };
 }
 

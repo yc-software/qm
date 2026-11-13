@@ -16,6 +16,7 @@ export interface Me {
   user: string;
   org: string;
   slackWorkspaceUrl?: string | null;
+  chatSurfaces?: { kind: string; label: string; mark?: string }[];
   impersonatedBy?: string | null;
   displayName?: string | null;
   permissions?: string[];
@@ -31,7 +32,7 @@ const VIEWS = [
   "loops",
   "files",
   "keychain",
-  "deploys",
+  "apps",
   "memory",
   "skills",
   "personas",

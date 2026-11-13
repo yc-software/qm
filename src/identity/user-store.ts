@@ -437,10 +437,10 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       if (!wanted.length) return new Map();
       const rows = await q(
         `SELECT s.alias AS requested, ${COLUMNS}
-           FROM unnest($1::text[]) AS s(alias)
-           JOIN user_links l ON l.alias_id = ${fold("s.alias")}
+           FROM unnest($1::text[], $2::text[]) AS s(alias, folded)
+           JOIN user_links l ON l.alias_id = s.folded
            JOIN users u ON u.id = l.user_id`,
-        [wanted],
+        [wanted, wanted.map(foldPrincipalId)],
       );
       return new Map(rows.map((r) => [r.requested as string, toRecord(r)]));
     },
