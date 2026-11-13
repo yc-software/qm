@@ -608,9 +608,18 @@ test("a project session names its linked Slack home channel; unlinked projects g
     version: async () => "1",
     withVersion: async <T>(_ref: string, _version: string | undefined, fn: () => Promise<T>) => fn(),
     slackChannel: async (ref: string) =>
-      ref === "web-project-linked" ? { channelId: "C-ENG", channelName: "eng" } : undefined,
+      ref === "web-project-linked" ? { channelId: "C-ENG", channelName } : undefined,
   };
-  const { orchestrator: orch } = buildOrchestrator({ managedGroups });
+  let channelName = "eng";
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    classify: async ({ payload }) => ({
+      verdict: { decision: payload.includes("hold-me") ? "strict" : "auto" },
+      score: 0,
+      threshold: 1,
+    }),
+  };
+  const { orchestrator: orch } = buildOrchestrator({ managedGroups, securityScreener });
 
   const group = (ref: string, thread: string): OrchestratorInput => ({
     surface: "test",
@@ -634,6 +643,13 @@ test("a project session names its linked Slack home channel; unlinked projects g
   assert.match(prompt, /## Project home channel/);
   assert.match(prompt, /#eng/);
   assert.match(prompt, /channel: "eng"/);
+  channelName = "hold-me";
+  const holdTurn = group("web-project-linked", "grp:linked:2");
+  const requestId = (await orch.handleTurn(holdTurn)).pendingApprovals![0]!.requestId;
+  channelName = "hold-me again";
+  assert.ok((await orch.handleTurn({ ...holdTurn, approval: { requestId, approved: true } })).pendingApprovals);
+  channelName = "hold-me once more";
+  assert.equal((await orch.handleTurn({ ...holdTurn, approval: { requestId, approved: false } })).status, "refused");
 
   const unlinked = await orch.handleTurn(group("web-project-bare", "grp:bare:1"));
   assert.equal(unlinked.status, "ok");
