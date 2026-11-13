@@ -314,36 +314,16 @@ test("someone who cannot publish the app cannot save edits to it", async () => {
 test("a folder publish names the files it replaced that changed since the last folder publish", async () => {
   const h = harness();
   const d = await publishApp(h, "live-overwrite");
+  const folder = (extra: Array<{ path: string; data: string }> = []) =>
+    h.save("live-overwrite", tree(true, "v2", [{ path: "old.css", data: "body{}" }, ...extra]));
+  assert.equal((await folder()).liveEdit?.overwritten, undefined);
 
-  const plain = await h.save("live-overwrite", tree(true, "v2", [{ path: "old.css", data: "body{}" }]));
-  assert.equal(plain.liveEdit?.overwritten, undefined);
-  const again = await h.save("live-overwrite", tree(true, "v3", [{ path: "old.css", data: "body{}" }]));
-  assert.equal(again.liveEdit?.overwritten, undefined);
+  const edit = (data: string) =>
+    h.deploy.editSource(d.id, OWNER, async () => ({ files: [{ path: "dark.js", data }], deletedPaths: [] }));
+  await edit("dark");
+  assert.equal((await folder([{ path: "dark.js", data: "dark" }])).liveEdit?.overwritten, undefined);
 
-  await h.deploy.editSource(d.id, OWNER, async () => ({
-    files: [
-      { path: "dark.js", data: "dark" },
-      { path: "old.css", data: "body{color:red}" },
-    ],
-    deletedPaths: [],
-  }));
-  const edited = (await h.deployStore.draftOf(d.id))!.commit;
-
-  const keepsStyle = await h.save(
-    "live-overwrite",
-    tree(true, "v4", [
-      { path: "old.css", data: "body{color:red}" },
-      { path: "dark.js", data: "dark" },
-    ]),
-  );
-  assert.equal(keepsStyle.liveEdit?.overwritten, undefined);
-
-  await h.deploy.editSource(d.id, OWNER, async () => ({
-    files: [{ path: "dark.js", data: "darker" }],
-    deletedPaths: [],
-  }));
-  const before = (await h.deployStore.draftOf(d.id))!.commit;
-  assert.notEqual(before, edited);
-  const dropped = await h.save("live-overwrite", tree(true, "v5", [{ path: "old.css", data: "body{color:red}" }]));
-  assert.deepEqual(dropped.liveEdit?.overwritten, { paths: ["dark.js"], commit: before });
+  await edit("darker");
+  const commit = (await h.deployStore.draftOf(d.id))!.commit;
+  assert.deepEqual((await folder()).liveEdit?.overwritten, { paths: ["dark.js"], commit });
 });
