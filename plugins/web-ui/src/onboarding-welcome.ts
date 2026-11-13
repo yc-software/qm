@@ -441,7 +441,6 @@ export class OnboardingWelcome extends LitElement {
     }
   }
   private seededIntro(seeds: ActivitySeeds, name: string | undefined, toolkits: string[]) {
-    const cohort = this.me?.welcomeCohort;
     const names = new Map(this.services.map((service) => [service.id, service.name]));
     const { activities, fresh } = welcomeActivities(
       seeds,
@@ -453,7 +452,7 @@ export class OnboardingWelcome extends LitElement {
     );
     return html`<div class="welcome-hero welcome-beat" style="--welcome-delay:0ms">
         <p>${name ? `Hi ${name}!` : "Hi there!"}</p>
-        <h1>${cohort ? `Welcome to ${cohort}!` : "Welcome to QM"}</h1>
+        <h1>Welcome to QM!</h1>
       </div>
       <div class="welcome-section welcome-beat" style="--welcome-delay:300ms">
         <h2>Where to start</h2>
