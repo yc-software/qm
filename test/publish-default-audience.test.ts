@@ -126,7 +126,7 @@ test("D1: owner always reaches their own app; canManage recognizes the owner act
     name: "site",
   });
   const d = (await deployStore.getByName("site"))!;
-  assert.equal((await deploy.reachDeployment("site", "U1")).status, "ok");
+  assert.equal((await deploy.reachApp("site", "U1")).status, "ok");
   const again = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
     entrypoint: "node server.js",
     name: "site",
@@ -194,11 +194,11 @@ test("first publish grants channel read access but keeps group DMs private", asy
     const r = await ctx.publish({ entrypoint: "node server.js", name: `app-${i}` });
     assert.equal(r.audience?.kind, i < 2 ? "members" : "owner");
     assert.deepEqual(
-      await deploy.deploymentGrantees(`app-${i}`),
+      await deploy.appGrantees(`app-${i}`),
       i < 2 ? [{ scope: scopeId("channel", `C${i + 1}`), permission: "read" }] : [],
     );
-    assert.equal((await deploy.getDeployment(`app-${i}`))?.public, undefined);
-    assert.notEqual((await deploy.reachDeployment(`app-${i}`, "U2")).status, "ok");
+    assert.equal((await deploy.getApp(`app-${i}`))?.public, undefined);
+    assert.notEqual((await deploy.reachApp(`app-${i}`, "U2")).status, "ok");
   }
 });
 
@@ -217,7 +217,7 @@ test("publish refuses visibility inputs and points to the share action", async (
       /apps action share/,
     );
   }
-  assert.equal(await deploy.getDeployment("site"), null);
+  assert.equal(await deploy.getApp("site"), null);
 });
 
 test("sharing after publish grants access separately", async () => {
@@ -227,14 +227,14 @@ test("sharing after publish grants access separately", async () => {
     entrypoint: "node server.js",
     name: "site",
   });
-  await deploy.shareDeployment("site", scopeId("personal", "U2"), "read", { createdBy: "U1" });
-  assert.equal((await deploy.reachDeployment("site", "U2")).status, "ok");
+  await deploy.shareApp("site", scopeId("personal", "U2"), "read", { createdBy: "U1" });
+  assert.equal((await deploy.reachApp("site", "U2")).status, "ok");
   const again = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
     entrypoint: "node server.js",
     name: "site",
   });
   assert.equal(again.version, 2);
-  assert.deepEqual(await deploy.deploymentGrantees("site"), [
+  assert.deepEqual(await deploy.appGrantees("site"), [
     { scope: scopeId("channel", "C1"), permission: "read" },
     { scope: scopeId("personal", "U2"), permission: "read" },
   ]);

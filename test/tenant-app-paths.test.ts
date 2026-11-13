@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { after, before, describe, it } from "./support/unbound-test.ts";
 import { EMPTY_TENANT, inboundKey, withInboundTenant } from "../src/api/inbound-tenant.ts";
 import { identityTenant } from "../src/api/request-tenant.ts";
-import { deploymentRawRoutes } from "../src/api/routes/deployments.ts";
+import { appRawRoutes } from "../src/api/routes/apps.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { boundTenant } from "../src/tenants/context.ts";
 import { tenantLookup, type TenantLookup } from "../src/tenants/lookup.ts";
@@ -45,7 +45,7 @@ describe("app paths on a host shared by several tenants", () => {
 
   const visit = async (req: IncomingMessage): Promise<{ tenant?: string; ids: string[] }> => {
     const url = new URL(`http://shared.test${req.url}`);
-    const route = deploymentRawRoutes.find((r) => "match" in r && r.match("GET", url.pathname));
+    const route = appRawRoutes.find((r) => "match" in r && r.match("GET", url.pathname));
     assert.ok(route);
     const inbound = inboundKey(req, {}, { route, params: {} }, url);
     assert.ok(inbound);

@@ -219,7 +219,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
-import { surfaceToolPrompt } from "../surfaces/registry.ts";
+import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, botApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -555,6 +555,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const { delegatedSession, refusal: subagentRefusal } = await admitSubagentSession(deps, conversation, actor);
       if (subagentRefusal) return subagentRefusal;
+      const botRequest = input.botActor;
+      if (delegatedSession?.spawnMeta?.botActor) input = { ...input, botActor: true };
       const { managedRosterIsCurrent, withManagedRosterVersion } = createManagedRoster(
         deps,
         input,
@@ -580,6 +582,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       if (!(await managedRosterIsCurrent())) return rosterChanged();
       const surface = input.surface ? deps.surfaces.get(input.surface) : undefined;
+      const capabilities = turnCapabilities(surface, input);
+      const liveReplies = capabilities?.liveReplies === true;
       const admissionRefusal = await admitAudienceAndBudget(tenant, deps, conversation, actor, surface, external);
       if (admissionRefusal) return admissionRefusal;
 
@@ -1012,7 +1016,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
-      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
+      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, botRequest);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const wakingChild =
@@ -1492,7 +1496,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
-          if ((surface?.capabilities.liveReplies || input.surface === "monitor") && input.runLeaseToken) {
+          if ((liveReplies || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
@@ -1537,12 +1541,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resolution,
         });
         const earlyTaskAck =
-          surface?.capabilities.liveReplies === true &&
-          humanInput &&
-          conversation.kind === "dm" &&
-          !input.approval &&
-          !input.botActor &&
-          !input.swarm;
+          liveReplies && humanInput && conversation.kind === "dm" && !input.approval && !input.botActor && !input.swarm;
         const publishFirstAck = (deliberatePost: boolean) => {
           if (
             !input.runId ||
@@ -1603,7 +1602,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           openStored: openStoredOutbound,
           blobTransfer,
           fileRegistration,
-          ...(surface?.capabilities.textOnly ? { textOnly: true } : {}),
+          ...(capabilities?.textOnly ? { textOnly: true } : {}),
         });
         if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
           console.error(
@@ -2345,7 +2344,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.botActor ? { botActor: true } : {}),
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
-            ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),
+            ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface, input) } : {}),
             delegateWork,
             ...((session.clientTools ?? input.clientTools)?.length
               ? { clientTools: session.clientTools ?? input.clientTools }
@@ -2523,7 +2522,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
-          if (!surface?.capabilities.liveReplies || input.surfaceTools || !input.runId) return undefined;
+          if (!liveReplies || sessionTurn || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;

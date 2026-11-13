@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
-import { createDeployStore, type DeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type DeployStore, type PublishedApp } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService, type DeployOrUpdateInput } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { CapabilityUnsupportedError } from "../src/sandbox/sandbox.ts";
@@ -108,7 +108,7 @@ test("publish collects only the published dir (prefix-stripped) and returns a /d
   assert.equal(r.version, 1);
 
   const d = (await s.deployStore.getByName("my-app"))!;
-  assert.ok(d, "deployment is reachable by name");
+  assert.ok(d, "app is reachable by name");
   const snap = (await s.deployStore.versionOf(d.id, 1))!.snapshotDir;
   const top = readdirSync(snap).sort();
   assert.deepEqual(top, ["public", "server.js"], "dir prefix stripped; outside-dir file excluded");
@@ -181,7 +181,7 @@ test("publish by name updates in place: bumps the version, keeps the id and the 
     name: "dash",
   });
 
-  assert.equal(second.id, first.id, "same deployment");
+  assert.equal(second.id, first.id, "same app");
   assert.equal(second.version, 2, "new immutable version");
   assert.equal(second.url, "/d/dash/", "stable link");
 });
@@ -309,7 +309,7 @@ test("publish: renameFrom moves the link but keeps the id (and shares ride the i
     entrypoint: "x",
     name: "old-name",
   });
-  await s.deploy.shareDeployment(created.id, scopeId("personal", "U2"), "read", { createdBy: "U1" });
+  await s.deploy.shareApp(created.id, scopeId("personal", "U2"), "read", { createdBy: "U1" });
   const renamed = await ctx(s.deploy).publish({ renameFrom: "old-name", name: "new-name" });
 
   assert.equal(renamed.id, created.id);
@@ -498,7 +498,7 @@ test("publish rejects parent traversal before listing outside the workspace", as
   assert.equal((await s.deployStore.list()).length, 0);
 });
 
-test("publish: rollbackTo flips the named deployment's pointer", async () => {
+test("publish: rollbackTo flips the named app's pointer", async () => {
   const s = svc();
   await ctx(s.deploy, { files: [{ path: "a/s.js", data: bytes("v1") }] }).publish({
     dir: "a",
@@ -516,7 +516,7 @@ test("publish: rollbackTo flips the named deployment's pointer", async () => {
   assert.equal((await s.deployStore.getByName("roll"))!.currentVersion, 1);
 });
 
-test("publish never copies resident credentials into the deployment", async () => {
+test("publish never copies resident credentials into the app", async () => {
   const home: AgentComputerExportEntry[] = [
     { area: "home", path: ".aws/credentials", data: bytes("[default]") },
     { area: "home", path: ".config/gh/hosts.yml", data: bytes("gh") },
@@ -543,9 +543,9 @@ test("publish never copies resident credentials into the deployment", async () =
         status: "running",
         endpoint: null,
         versions: [],
-      } satisfies Deployment;
+      } satisfies PublishedApp;
     },
-    deploymentGrantees: async () => [],
+    appGrantees: async () => [],
   } as unknown as DeployService;
 
   const tc = createToolContext({
@@ -606,9 +606,9 @@ function spyDeploy(): { deploy: DeployService; captured: () => DeployOrUpdateInp
         status: "running",
         endpoint: null,
         versions: [],
-      } satisfies Deployment;
+      } satisfies PublishedApp;
     },
-    deploymentGrantees: async () => [],
+    appGrantees: async () => [],
   } as unknown as DeployService;
   return { deploy, captured: () => captured };
 }
@@ -648,7 +648,7 @@ test("publish rejects an invalid or id-shaped name", async () => {
   const s = svc();
   await assert.rejects(
     () => ctx(s.deploy, { files: appFile() }).publish({ entrypoint: "x", name: "Bad_Name" }),
-    /invalid deployment name/,
+    /invalid app name/,
   );
   await assert.rejects(
     () =>
@@ -672,7 +672,7 @@ test("publish drops a workspace's git metadata instead of deploying it", async (
   assert.deepEqual(
     (await s.deployStore.treeOf(d.id, 1))?.map((f) => f.path),
     ["server.js"],
-    "git metadata never reaches the deployment's archive",
+    "git metadata never reaches the app's archive",
   );
   const snap = (await s.deployStore.versionOf(d.id, 1))!.snapshotDir;
   assert.deepEqual(readdirSync(snap).sort(), ["server.js"], "and never reaches the running app");

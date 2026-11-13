@@ -21,7 +21,7 @@ const ADMIN_PAGES = [
   "GET /v1/admin/custom-providers",
   "PUT /v1/admin/custom-providers/:provider",
   "DELETE /v1/admin/custom-providers/:provider",
-  "GET /v1/admin/deployments",
+  "GET /v1/admin/apps",
   "GET /v1/admin/directory",
   "GET /v1/admin/egress",
   "GET /v1/admin/errors",

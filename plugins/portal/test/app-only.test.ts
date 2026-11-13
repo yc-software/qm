@@ -149,7 +149,7 @@ test("app-only sessions cannot reach or renew on any ordinary portal surface", a
     "/api/deliveries/events",
     "/ws",
     "/v1/status",
-    "/v1/deployments",
+    "/v1/apps",
     "/d/demo/",
     "/app-edit/demo",
     "/auth/desktop",

@@ -28,6 +28,7 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { editableIn } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
@@ -90,6 +91,7 @@ export function createMessagingMethods(
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
   | "surfaceMirrored"
+  | "chatSurfaces"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -304,6 +306,9 @@ export function createMessagingMethods(
     },
     surfaceMirrored(kind) {
       return deps.surfaces.get(kind)?.capabilities.mirrored === true;
+    },
+    chatSurfaces() {
+      return deps.surfaces.list().map(({ kind, label, mark }) => ({ kind, label, ...(mark ? { mark } : {}) }));
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
@@ -588,12 +593,13 @@ export function createMessagingMethods(
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
       }
-      if (input.edit && baseDestination.type !== "slack" && baseDestination.type !== "group") {
+      if (input.edit && !editableIn(deps.surfaces, baseDestination.type, input.turn ?? {})) {
         return {
           ok: false,
           status: 400,
           error: "bad_request",
-          message: "edit rewrites a Slack message in a channel, group DM, or this Slack conversation",
+          message:
+            "edit rewrites a message in this chat conversation, or a Slack message in a named channel or group DM",
         };
       }
       if (input.threadTs) {

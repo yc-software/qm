@@ -548,7 +548,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     deployDir: mkdtempSync(join(tmpdir(), "project-deploy-")),
     canReadScope: (principalId, scopeId) => built.app.belongsToScope(principalId, scopeId),
   });
-  const deployment = await deploy.deploy({
+  const publishedApp = await deploy.deploy({
     ownerScopeId: "personal:owner",
     createdBy: "owner",
     entrypoint: "node server.js",
@@ -556,12 +556,12 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   });
   await deployAcl.grant(tenant, {
     ownerScopeId: "personal:owner",
-    ref: `deployment:${deployment.id}`,
+    ref: `deployment:${publishedApp.id}`,
     granteeScopeId: scope,
     permission: "read",
     grantedBy: "owner",
   });
-  assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "ok");
+  assert.equal((await deploy.reachApp(publishedApp.id, "member")).status, "ok");
   assert.equal((await turn("owner", "web:owner:first", "Simulate four-way title outage after joining")).status, "ok");
   assert.ok((await built.app.listSessions(asMember)).some((session) => session.id === first.id));
   const latestRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
@@ -735,7 +735,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(removed.status, 200);
   assert.equal(await built.app.belongsToScope("member", scope), false);
   assert.equal(await built.app.managesScope("member", scope), false);
-  assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "denied");
+  assert.equal((await deploy.reachApp(publishedApp.id, "member")).status, "denied");
   assert.equal(await built.app.listScopeResources(tenant, "member", scope), null);
   assert.ok(!(await built.app.listSessions(asMember)).some((session) => session.scopeId === scope));
   assert.equal(await built.app.getSessionForViewer(first.id, asMember), null);
@@ -1180,7 +1180,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.ok(!(await built.app.listSessions({ actorId: "chan-pal" })).some((s) => s.scopeId === scope));
 });
 
-test("a project can add a signed-in principal on a deployment whose directory is never populated", async () => {
+test("a project can add a signed-in principal on an app whose directory is never populated", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "projects-web-only-")),

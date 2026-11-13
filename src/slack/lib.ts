@@ -1,4 +1,4 @@
-export { refusalDelivery, postThenAckRunDelivery, refusalNote } from "./refusals.ts";
+export { refusalDelivery, postThenAckRunDelivery, refusalNote } from "../surfaces/refusals.ts";
 export { inlineCode, clip, sleep } from "./util.ts";
 export { safeChunks } from "./safe-cut.ts";
 export {
@@ -52,25 +52,24 @@ export {
   dedupedRun,
 } from "./message-gating.ts";
 export {
-  type SlackFile,
   MAX_ATTACHMENT_BYTES,
   isOversize,
-  isTrustedSlackHost,
   attachmentFromBytes,
   MAX_ATTACHMENTS_PER_TURN,
-  downloadSlackFile,
   processInboundFiles,
+} from "../surfaces/attachments.ts";
+export {
+  type SlackFile,
+  isTrustedSlackHost,
+  downloadSlackFile,
   stageSlackFiles,
   uploadAttachments,
   uploadFailureNote,
 } from "./attachments.ts";
 export {
-  type ApprovalActionId,
-  APPROVAL_ACTION_IDS,
   approvalCardDestination,
   approvalMessage,
   approvalDecisionMessage,
-  type ApprovalDecisionRecord,
   type StoredApproval,
   recoveredApprovalContext,
   createApprovalRegistry,
@@ -80,20 +79,22 @@ export {
   decodeTs,
   REACTION_INSTRUCTION,
   REACTION_DETECT_GUIDANCE,
-  MAX_REACTIONS_PER_TURN,
   normalizeReaction,
   normalizeReactions,
   applyReactions,
+  type ReactionDirective,
+  resolveReactionTargets,
+} from "./reactions.ts";
+export {
+  MAX_REACTIONS_PER_TURN,
+  parseReactionGroup,
+  extractReactions,
+  stripReactionDirectives,
   type ReactionTally,
   summarizeReactions,
   shouldSurfaceReaction,
   buildReactionTurnText,
-  type ReactionDirective,
-  parseReactionGroup,
-  resolveReactionTargets,
-  extractReactions,
-  stripReactionDirectives,
-} from "./reactions.ts";
+} from "../surfaces/reactions.ts";
 export {
   buildContextWindow,
   type RecentMessage,
@@ -130,7 +131,6 @@ export {
   postWithVerify,
   findPostedByKey,
   recoveryVerifyOldest,
-  statusPlaceholderKey,
   deliveryMetadata,
   type DeliveryMetadata,
   type PostedPart,
@@ -138,12 +138,12 @@ export {
   SLACK_POST_SPLIT_LIMIT,
   SLACK_TEXT_LIMIT,
 } from "./delivery.ts";
+export { statusPlaceholderKey } from "../surfaces/turn-driver.ts";
+export { DEFAULT_ACK_REACTIONS, CURATED_ACK_EMOJI } from "./ack-emoji.ts";
 export {
-  DEFAULT_ACK_REACTIONS,
-  CURATED_ACK_EMOJI,
   createAckPresenter,
   renderGoalNotice,
   type GoalNoticeView,
   type GoalNoticePresenter,
   createGoalNoticePresenter,
-} from "./presenters.ts";
+} from "../surfaces/turn-presenters.ts";

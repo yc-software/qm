@@ -64,7 +64,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         url: `/d/${input.name ?? "dep-1"}/`,
       };
     },
-    async setDeploymentPublic(id, isPublic) {
+    async setAppPublic(id, isPublic) {
       return { id, name: id, public: isPublic };
     },
     async createPlayground(input) {
@@ -3749,7 +3749,7 @@ test("resource actions preserve sharing targets and file contents", async () => 
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
     },
-    async setDeploymentPublic(id: string, isPublic: boolean) {
+    async setAppPublic(id: string, isPublic: boolean) {
       publicChanges.push({ id, isPublic });
       return { id, name: id, public: isPublic };
     },

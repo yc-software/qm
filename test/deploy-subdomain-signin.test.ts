@@ -130,7 +130,7 @@ test("app sign-in uses the configured trusted entry and preserves the app return
   const server = createInsecureTestServer(
     {
       tenantFor: async () => TEST_TENANT,
-      getDeployment: async () => null,
+      getApp: async () => null,
     } as unknown as Parameters<typeof createInsecureTestServer>[0],
     {
       deployAppsDomain: "apps.example.com",
@@ -253,7 +253,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(xhr.status, 401, "a non-HTML request never gets a login redirect");
     assert.match(xhr.body, /loginUrl/, "…but is told where sign-in lives");
 
-    await app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    await app.setAppPublic("mysite", true, { createdBy: "alice@example.com" });
     const publicVisitor = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
     assert.equal(publicVisitor.status, 200, "a public app is reachable without a portal session");
     assert.equal(publicVisitor.body, "UPSTREAM OK");
@@ -277,7 +277,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     const lockedXhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
     assert.equal(lockedXhr.status, 401);
     externalSharing = true;
-    await app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" });
+    await app.setAppPublic("mysite", false, { createdBy: "alice@example.com" });
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
       Host: host,
@@ -370,7 +370,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       target: "alice@example.com",
       audienceScopeId: "personal:alice@example.com",
       onBehalfOf: "mallory@example.com",
-      deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
+      deploymentAccess: { deploymentId: (await app.getApp("mysite"))!.id, requesterId: "mallory@example.com" },
     });
 
     const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
@@ -453,13 +453,13 @@ test("org-wide app access admits only signed-in org members", async () => {
       TEST_TENANT,
     ]);
     assert.equal((await visit("bob@example.com")).status, 403, "restricted: a signed-in member without a grant");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" });
+    await app.shareApp(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" });
     assert.equal((await visit()).status, 401, "org access still requires sign-in");
     assert.equal((await visit("bob@example.com")).status, 200, "any signed-in org member can open it");
     assert.equal((await visit("guest@partner.test", true)).status, 403, "an app-only outside session is not the org");
     await identity.deactivate("carol@example.com", "directory-sync");
     assert.equal((await visit("carol@example.com")).status, 403, "someone who left the org is not the org");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" });
+    await app.shareApp(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" });
     assert.equal((await visit("bob@example.com")).status, 403, "back to restricted closes it");
     const hostTenant = `SELECT qm_tenant_for_app_host($1)::text AS tenant`;
     assert.deepEqual(await owner.q(hostTenant, ["orgsite-teamsite"]), [{ tenant: TEST_TENANT }]);
@@ -468,7 +468,7 @@ test("org-wide app access admits only signed-in org members", async () => {
     assert.deepEqual(
       await owner.q(hostTenant, ["teamsite"]),
       [{ tenant: TEST_TENANT }],
-      "a deployment name owned by one company keeps its legacy app host",
+      "an app name owned by one company keeps its legacy app host",
     );
     assert.deepEqual(await owner.q(hostTenant, ["nosuchsite"]), [{ tenant: null }]);
     assert.deepEqual(await owner.q(hostTenant, ["orgsite-teamsite"]), [{ tenant: null }]);

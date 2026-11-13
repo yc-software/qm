@@ -8,10 +8,10 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { testConfig } from "./support/test-config.ts";
-import { closedPort } from "./support/mcp-test-server.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 test("wiring: an unreachable fail-open MCP memory provider still serves turns via the notebook floor", async () => {
-  const url = `http://127.0.0.1:${await closedPort()}`;
+  const url = `http://127.0.0.1:${await freePort()}`;
   const memoryProviderConfig = parseMemoryProviderConfig(
     JSON.stringify({
       providers: [

@@ -198,6 +198,7 @@ export function createMcpToolService(opts: {
     attestedServers: Map<string, McpServer>;
     catalogs: LRUCache<string, Promise<RemoteTool[]>>;
     loadedAt?: number;
+    version?: string;
     pending?: Promise<void>;
   }>(() => ({
     clients: new Map(),
@@ -368,6 +369,7 @@ export function createMcpToolService(opts: {
 
   async function load(state: ReturnType<typeof tenantState>): Promise<void> {
     state.catalogs.clear();
+    const version = await opts.servers.version();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
@@ -376,6 +378,7 @@ export function createMcpToolService(opts: {
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
     state.attestedServers = new Map(servers.filter((s) => s.attestActor).map((s) => [s.id, s]));
+    state.version = version;
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -401,12 +404,21 @@ export function createMcpToolService(opts: {
     return state;
   }
 
+  async function upToDate(): Promise<ReturnType<typeof tenantState>> {
+    const state = await loaded();
+    if (closed) return state;
+    const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
+    if (version !== state.version)
+      await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+    return state;
+  }
+
   async function toolDefsFor(
     principalId?: string,
     audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<McpToolDescriptor[]> {
-    const { snapshot, perUserServers: gated, attestedServers } = await loaded();
+    const { snapshot, perUserServers: gated, attestedServers } = await upToDate();
     const current = snapshot.filter((t) => {
       const attested = attestedServers.get(t.serverId);
       return !attested || attestsInAudience(attested.attestAudience, principalId, audienceScopeId, actAsActor);

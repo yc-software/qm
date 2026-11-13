@@ -171,9 +171,10 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     return provision(owner, opts);
   };
   b.runtime.start();
-  const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok") => {
+  const childTurn = async (text: string, expectedStatus: "ok" | "refused" | "failed" = "ok") => {
     const { run } = await b.runs.enqueue({
       sessionId: child.threadRef,
+      maxAttempts: 1,
       request: {
         ...parent.request,
         conversation: { ...parent.request.conversation, threadRef: child.threadRef },
@@ -209,15 +210,23 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     secret: "fixture-secret",
     envKey: "DELEGATED_TEST_TOKEN",
   });
-  assert.equal(
-    await childTurn(
-      `!execute ${JSON.stringify({
-        command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available',
-        credentials: [credentialHandle(credential)],
-      })}`,
-    ),
-    "available",
+  const cred = `!execute ${JSON.stringify({ command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available', credentials: [credentialHandle(credential)] })}`;
+  assert.equal(await childTurn(cred), "available");
+  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
+  assert.equal(await childTurn(own), "(exit 0)");
+  const delegation = (await b.sessions.get(child.id))!.spawnMeta!;
+  const setDelegation = (meta: typeof delegation) =>
+    b.advisoryLock.withLock("session-tree-admission", () => b.sessions.setSpawnMeta(child.id, meta));
+  await setDelegation({ ...delegation, botActor: true });
+  assert.match(await childTurn(read), /no file/);
+  await childTurn(cred, "failed");
+  await childTurn(own, "failed");
+  const refusals = (await b.errors.list(testTenant)).map((e) => e.message).join("\n");
+  assert.match(
+    refusals,
+    /credential handle is not available[\s\S]*sandbox access is no longer authorized|sandbox access is no longer authorized[\s\S]*credential handle is not available/,
   );
+  await setDelegation(delegation);
   assert.deepEqual(await b.keychain!.grantsForScope("channel:C1", { includePersonGrants: true }), []);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);

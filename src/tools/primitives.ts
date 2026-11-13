@@ -54,7 +54,7 @@ import type {
   BackgroundJobSummary,
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
-import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
+import { appEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
 import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { LiveEditSaved } from "../deploy/live-edits.ts";
@@ -244,7 +244,7 @@ export interface ToolContext extends SurfaceToolDeps {
   write(path: string, data: string, sandboxId?: string): Promise<void>;
   publish(input: PublishInput): Promise<PublishResult>;
   appFiles?: AppFiles;
-  setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
+  setAppPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
   memorySearch(
     q: string,
@@ -1074,8 +1074,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const shouldInheritForRename = input.renameFrom !== undefined && input.dir !== undefined;
         const priorName =
           input.renameFrom === undefined || shouldInheritForRename ? (input.renameFrom ?? input.name) : undefined;
-        const prior = priorName ? await deps.deploy.getDeployment(priorName) : null;
-        effectiveEntrypoint = deploymentEntrypoint(prior);
+        const prior = priorName ? await deps.deploy.getApp(priorName) : null;
+        effectiveEntrypoint = appEntrypoint(prior);
         if (!effectiveEntrypoint && input.renameFrom === undefined) {
           throw new Error('publish requires an entrypoint, e.g. "node server.js"');
         }
@@ -1115,7 +1115,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
       });
       const ref = d.name ?? d.id;
-      const grantees = await deps.deploy.deploymentGrantees(d.id);
+      const grantees = await deps.deploy.appGrantees(d.id);
       const audience = audienceFromGrantees(
         grantees.map((g) => g.scope),
         d.createdInScope,
@@ -1139,8 +1139,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       };
     },
 
-    async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, {
+    async setAppPublic(id: string, isPublic: boolean) {
+      const d = await deps.deploy.setAppPublic(id, isPublic, {
         createdBy: deps.createdBy,
         botActor: deps.botActor,
       });
