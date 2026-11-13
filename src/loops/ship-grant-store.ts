@@ -39,7 +39,7 @@ export function createShipGrantStore(backing: DurableMap<ShipGrant>): ShipGrantS
       await backing.delete(id);
     },
     async deleteByLoop(loopId) {
-      for (const grant of await this.byLoop(loopId)) await backing.delete(grant.id);
+      await backing.deleteMany((await this.byLoop(loopId)).map((grant) => grant.id));
     },
   };
 }

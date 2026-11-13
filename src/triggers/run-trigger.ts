@@ -60,6 +60,7 @@ export interface TriggerSpec extends Pick<
   errorNotice?: (noteOrStatus: string) => string;
   redrivesHandOff?: boolean;
   onClaimed?: () => Promise<void>;
+  onReply?: (reply: string) => Promise<void>;
 }
 
 export interface TriggerOutcome {
@@ -335,6 +336,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     sessionId = res.sessionId;
     runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
     scriptVerdict = res.scriptVerdict;
+    if (res.status === "ok") await spec.onReply?.(res.reply ?? "");
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       if (runDelivers) return;

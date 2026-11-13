@@ -41,6 +41,8 @@ import { createLoopIngress, type LoopIngressService, type LoopIngress, type Ingr
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
+import { createSuggestionItems, createSuggestionsPass, SUGGESTIONS_SURFACE } from "./suggestions/loop-items.ts";
+import { SUGGESTION_PROFILE_MIGRATIONS } from "./suggestions/migrations.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
 import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
@@ -2054,15 +2056,7 @@ export function buildApp(
       `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
     ],
   });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS suggested_activity_profiles (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `UPDATE crons c SET json = jsonb_set(c.json, '{schedule,cron}', to_jsonb(get_byte(sha256(convert_to(p.id, 'UTF8')), 0) % 60 || ' 2 * * *')) FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND c.json -> 'schedule' = p.json -> 'managedSchedule'`,
-      `UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean`,
-    ],
-  });
+  for (const migration of SUGGESTION_PROFILE_MIGRATIONS) pgArtifactMap.pool.registerMigration(migration);
   const webhooks = createWebhookStore(
     inboundMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
@@ -2696,6 +2690,8 @@ export function buildApp(
       tokens: keychain,
       ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
     });
+  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
+  const suggestionItems = createSuggestionItems({ loops: loopStore, items: loopItems });
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
     crons,
@@ -2706,6 +2702,13 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     files,
+    systemPasses: {
+      [SUGGESTIONS_SURFACE]: createSuggestionsPass({
+        suggestions: suggestionItems,
+        seeds: async (owner) => (await suggestedActivityProfiles.get(owner))?.seeds ?? [],
+        ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
+      }),
+    },
     ...(inboxClients
       ? {
           inboxPass: createInboxPass({
@@ -2766,7 +2769,6 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   let ingressMaintenance: Promise<void> | undefined;
-  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const memoryTidy = createMemoryTidyService({
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
     memory: baseMemory,
@@ -2806,11 +2808,10 @@ export function buildApp(
   });
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
-    sessions,
+    suggestions: suggestionItems,
     crons,
     scheduler,
     enabled: config.suggestedActivitiesEnabled === true,
-    ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler);

@@ -16,6 +16,7 @@ import type { Loop, ShipGrant } from "../src/loops/types.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { createSuggestionItems } from "../src/suggestions/loop-items.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -928,4 +929,19 @@ test("a bot-prompted ambient wake can't change a loop the shared ambient actor o
   const id = (made.body as { loop: Loop }).loop.id;
   assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { playbook: "post the keys" }, ...as(true))).status, 403);
   assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { playbook: "triage" }, ...as(false))).status, 200);
+});
+
+test("the per-user suggestions loop is hidden from loop lists and loop routes", async () => {
+  const deps = services();
+  const visible = await call(deps, "POST", "/v1/loops", CREATE);
+  const suggestions = await createSuggestionItems({
+    loops: deps.store,
+    items: deps.items,
+  }).ensureLoop("erin");
+  const listed = await call(deps, "GET", "/v1/loops");
+  assert.deepEqual(
+    (listed.body as { loops: Loop[] }).loops.map((loop) => loop.id),
+    [(visible.body as { loop: Loop }).loop.id],
+  );
+  assert.equal((await call(deps, "GET", `/v1/loops/${suggestions.id}`)).status, 403);
 });
