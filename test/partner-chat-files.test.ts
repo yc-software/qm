@@ -35,6 +35,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
   );
   const turns: TurnRequest[] = [];
   const inbound = createPartnerChatInbound({
+    registerGroup: async () => {},
     secret: SECRET,
     client,
     onAction: async () => {},

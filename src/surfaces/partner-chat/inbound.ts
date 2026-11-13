@@ -46,6 +46,7 @@ export function createPartnerChatInbound(deps: {
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
   turns: Pick<PartnerChatTurns, "start">;
   onAction: (click: PartnerChatActionClick) => Promise<void>;
+  registerGroup: (groupId: string, principalIds: readonly string[]) => Promise<void>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -114,11 +115,13 @@ export function createPartnerChatInbound(deps: {
     });
   }
 
-  async function participants(chat: PartnerChatEvent["chat"], actorId: string) {
+  async function participants(event: Pick<PartnerChatEvent, "account" | "chat">, actorId: string) {
+    const { chat } = event;
     const members = chat.members.filter((m) => !m.bot);
-    if (chat.kind === "dm" && (members.length !== 1 || members[0]!.id !== actorId)) {
+    const botActor = chat.members.some((m) => m.bot && m.id === actorId);
+    if (chat.kind === "dm" && (members.length !== 1 || (!botActor && members[0]!.id !== actorId))) {
       console.log(
-        `[partner-chat] ignoring dm ${chat.id}: it lists ${members.length} non-bot member(s), and a dm must list only its author`,
+        `[partner-chat] ignoring dm ${chat.id}: it lists ${members.length} non-bot member(s), and a dm must list only its one person`,
       );
       return { ignored: "not_one_to_one" } as const;
     }
@@ -135,6 +138,11 @@ export function createPartnerChatInbound(deps: {
       );
       return { ignored: "unvouched_participants" } as const;
     }
+    if (chat.kind === "group")
+      await deps.registerGroup(
+        partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id }),
+        humans.map((p) => p.externalId),
+      );
     return { members, humans, listed };
   }
 
@@ -183,7 +191,7 @@ export function createPartnerChatInbound(deps: {
 
   async function acceptAction(event: PartnerChatActionEvent) {
     const { chat, action } = event;
-    const who = action.user.bot ? ({ ignored: "bot_action" } as const) : await participants(chat, action.user.id);
+    const who = action.user.bot ? ({ ignored: "bot_action" } as const) : await participants(event, action.user.id);
     if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
     await deps.onAction({
       eventId: event.event_id,
@@ -203,7 +211,7 @@ export function createPartnerChatInbound(deps: {
     const { message, chat, reaction } = event;
     const added = event.type === "reaction.added";
     if (reaction.user.bot) return { status: 200, body: { ok: true, ignored: "bot_reaction" } };
-    const who = await participants(chat, reaction.user.id);
+    const who = await participants(event, reaction.user.id);
     if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
     const reactor = who.humans[who.members.indexOf(who.listed)]!;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
@@ -257,7 +265,7 @@ export function createPartnerChatInbound(deps: {
 
   async function accept(event: PartnerChatEvent) {
     const { message, chat } = event;
-    const who = await participants(chat, message.user.id);
+    const who = await participants(event, message.user.id);
     if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
     const { members, humans, listed } = who;
     const bot = listed.bot === true;

@@ -231,6 +231,14 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
     await settle(async () => partnerChat.received.some((r) => r.body.body === "ambient reply"));
     const posted = partnerChat.received.find((r) => r.body.body === "ambient reply");
     assert.equal(posted?.body.chat_id, "88");
+    assert.deepEqual(
+      await Promise.all(
+        ["ada@example.com", "grace@example.com", "eve@example.com"].map((p) =>
+          built.directory.groupMember(CONTAINER, p),
+        ),
+      ),
+      [true, true, false],
+    );
     assert.ok(await built.sessions.getByThread(`partner-chat:${CONTAINER}:ambient:1793649600.00000000000000001003`));
   } finally {
     await partnerChat.close();

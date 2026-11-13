@@ -24,6 +24,7 @@ describeTwoTenants("partner chat on a shared host", (db) => {
   const client = createPartnerChatClient({ url: "https://chat.example", secret, fetch: async () => Response.json({}) });
   const stageBlob = async () => ({ blobId: "" });
   const inbound = createPartnerChatInbound({
+    registerGroup: async () => {},
     secret,
     client,
     stageBlob,
