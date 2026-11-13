@@ -115,8 +115,9 @@ export class WelcomeAbout extends LitElement {
             rel="noopener"
             >QM</a
           >
-          is an open-source version. It has most of the same features, works with any model provider, and has context on
-          your company.
+          is our open-source version. It has most of the same features, but is also wired into YC systems, with context
+          on your company. It allows us to use any model provider with minimal guardrails, and we suspect this will be
+          useful to you as well.
         </p>
       </div>
       <div class="W-figs welcome-beat" style="--welcome-delay:120ms">
