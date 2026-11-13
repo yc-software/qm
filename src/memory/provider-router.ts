@@ -218,7 +218,7 @@ export function createRoutedMemoryService(opts: {
         (!changesBrainAsPerson(by) || !ownPrivateConversation(by!.actorId, scopeId, context?.audienceScopeId))
       )
         throw new MemoryForgetRefused(
-          "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact; admin, maintenance, self-service, bot, automation and ambient changes reach the notebook only. Nothing was changed.",
+          "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact, and only while that turn is running; admin, maintenance, self-service, bot, automation and ambient changes, and a job or script that outlives its turn, reach the notebook only. Nothing was changed.",
         );
       const notebookIds = ids.filter((id) => !id.includes(":"));
       const manager = notebookIds.length ? managerFor(scopeId) : undefined;

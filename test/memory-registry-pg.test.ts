@@ -853,7 +853,9 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
     },
     TEST_CAPABILITY_SECRET,
   );
-  assert.equal((await api.call("DELETE", "/v1/memory/facts", endedTurn, BRAIN_REF, "x-agent-capability")).status, 403);
+  const ended = await api.call("DELETE", "/v1/memory/facts", endedTurn, BRAIN_REF, "x-agent-capability");
+  assert.equal(ended.status, 403);
+  assert.match(ended.text, /only while that turn is running/);
 
   assert.deepEqual(
     (await notebook(built)).map((text) => text.replace(/ on \d{4}-\d\d-\d\d\.$/, ".")),
