@@ -19,9 +19,10 @@ files, origin, label and expiry come from the new save.
 Only the owner's own running turn may replace an existing entry; saving a new service needs
 nothing. The skill's save often runs after the sign-in's turn has ended,
 so step 1 runs `save-login.mjs <service> <dir> --start` in the person's turn. That calls
-`POST /v1/keychain/login-tickets`, which keeps a one-time `kind: "login"` record for the owner
-and service in the secret-drop store and returns its id. The save sends it back as
-`loginTicket` and the route redeems it, so it allows one replace of that service.
+`POST /v1/keychain/login-tickets`, which keeps a one-time `kind: "login"` record for the owner,
+service and conversation in the secret-drop store and returns its id. The save sends it
+back as `loginTicket`, and the route redeems it once the save has landed, so it allows one
+replace of that service and survives a save that fails before then.
 
 ## Execution
 

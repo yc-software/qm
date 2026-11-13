@@ -387,7 +387,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
   claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
-  releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean>;
+  releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean | null>;
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<string[]>;
   writebackBaseline(
     source: FileCredentialSource,
@@ -534,7 +534,7 @@ function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: num
 }
 
 function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: string }): KeychainCredentialMeta {
-  const { secretEnc: _, ...meta } = rec;
+  const { secretEnc: _, writer: __, ...meta } = rec;
   return {
     ...meta,
     ...((rec.kind === "env" || rec.kind === "file") && !isBackendCredential(rec)
@@ -948,6 +948,7 @@ export function createKeychain(deps: {
         fingerprint: fingerprintOf(secret),
         ...(input.origin ? { origin: input.origin } : {}),
         ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        ...(prior?.writer ? { writer: prior.writer } : {}),
         createdAt: prior?.createdAt ?? t,
         updatedAt: t,
       };
@@ -1125,15 +1126,15 @@ export function createKeychain(deps: {
     },
 
     async releaseWriter(ownerId, id, holder) {
-      let owned = false;
+      let released: boolean | null = null;
       await deps.creds.update(id, (current) => {
         if (!samePerson(current.ownerId, ownerId)) return current;
-        owned = true;
-        if (current.writer?.holder !== holder) return current;
+        released = !current.writer || current.writer.holder === holder || current.writer.until <= now();
+        if (!released) return current;
         const { writer: _, ...rest } = current;
         return rest;
       });
-      return owned;
+      return released;
     },
 
     async updateFiles(materialized, files) {

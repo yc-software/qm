@@ -1305,7 +1305,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
   });
   it("replacing a saved login needs the owner's running turn or a one-time ticket that turn started", async () => {
     const owner = "RELOGIN_OWNER";
-    const later = await capFor(owner, undefined, { triggered: true });
+    const later = await capFor(owner, undefined, { triggered: true, threadRef: "dm:live" });
     const save = (secret: string, cap: string, loginTicket?: string) =>
       post("/v1/keychain/credentials", { service: "gh", secret, ...(loginTicket ? { loginTicket } : {}) }, cap);
     const { credential } = (await (await save("first", later)).json()) as any;
@@ -1317,6 +1317,9 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(await secret(), "first");
 
     const live = await capFor(owner, undefined, liveRunClaims(owner));
+    const { dropId } = (await (await post("/v1/keychain/drops", { service: "gh", purpose: "p" }, live)).json()) as any;
+    assert.equal((await save("swapped", later, dropId)).status, 403);
+    assert.equal((await built.secretDrops!.peek(dropId)).ok, true);
     const { loginTicket } = (await (await post("/v1/keychain/login-tickets", { service: "GH" }, live)).json()) as any;
     assert.equal((await save("relogin", later, loginTicket)).status, 200);
     assert.equal((await save("again", later, loginTicket)).status, 403);
@@ -1341,7 +1344,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(await claim("a"), 200);
     assert.equal(await claim("b"), 409);
     assert.equal(await claim("b", undefined, await capFor("U2")), 404);
-    assert.equal(await release("b"), 200);
+    assert.equal(await release("b"), 409);
     assert.equal(await claim("b"), 409);
     assert.equal(await release("a"), 200);
     assert.equal(await claim("b", Date.now() - 1), 200);

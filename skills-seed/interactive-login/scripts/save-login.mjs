@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 const [service, dir, ...rest] = process.argv.slice(2);
 const labelAt = rest.indexOf("--label");
@@ -15,14 +15,14 @@ if (!AGENT_API_URL || !AGENT_API_TOKEN) {
   process.exit(2);
 }
 const headers = { "x-agent-capability": AGENT_API_TOKEN, "content-type": "application/json" };
-const ticketFile = `${dir}.ticket`;
+const ticketFile = `${resolve(dir)}.ticket`;
 
 if (rest.includes("--start")) {
   const response = await fetch(`${AGENT_API_URL}/v1/keychain/login-tickets`, {
     method: "POST",
     headers,
     body: JSON.stringify({ service }),
-  }).catch((error) => ({ ok: false, status: 0, text: async () => error.message }));
+  }).catch((error) => ({ ok: false, status: 0, text: async () => error.cause?.message ?? error.message }));
   if (!response.ok) {
     console.error(
       `no sign-in ticket (${response.status}): ${await response.text()}; a new login still saves, but replacing an existing ${service} login needs the save to run in the person's own turn`,
@@ -70,7 +70,7 @@ const response = await fetch(`${AGENT_API_URL}/v1/keychain/credentials`, {
     ...(loginTicket ? { loginTicket } : {}),
   }),
 }).catch((error) => {
-  console.error(`keychain save failed: ${error.message}; run this again to retry`);
+  console.error(`keychain save failed: ${error.cause?.message ?? error.message}; run this again to retry`);
   process.exit(1);
 });
 const text = await response.text();
