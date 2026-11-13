@@ -3,7 +3,7 @@ import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
@@ -143,7 +143,7 @@ export function createSessionMethods(
     principalCanAccessCurrentScope,
     principalCanWriteScope,
     canContinueOnWeb,
-    principalGitPermission,
+    deploymentPermissions,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,
@@ -229,8 +229,13 @@ export function createSessionMethods(
     });
   };
 
-  const titleSearchHits = async (principalId: string, query: string, capped: number): Promise<SessionSearchHit[]> => {
-    const matches = await deps.sessions.searchSessionTitles(principalId, query, capped);
+  const titleSearchHits = async (
+    principalId: string,
+    query: string,
+    capped: number,
+    botActor: boolean | undefined,
+  ): Promise<SessionSearchHit[]> => {
+    const matches = await deps.sessions.searchSessionTitles(principalId, query, capped, botActor);
     if (!matches.length) return [];
     const allowed = await managedProjectMemberships(
       matches.map((s) => s.scopeId),
@@ -417,12 +422,13 @@ export function createSessionMethods(
       return !!(await sessionForViewer(sessionId, principalId));
     },
 
-    async getSessionForViewer(sessionId, principalId, window) {
+    async getSessionForViewer(sessionId, viewer, window) {
+      const principalId = viewer.actorId;
       const found = await sessionForViewer(sessionId, principalId);
-      if (!found) return null;
+      if (!found || !sessionVisibleTo(viewer, found)) return null;
       const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords, goals] = await Promise.all([
+      const [initialRead, pinRecords, goals, latestPromptAt] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -430,6 +436,7 @@ export function createSessionMethods(
         }),
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
+        window?.beforeSeq === undefined ? deps.sessions.latestVisiblePromptAt(sessionId, principalId) : undefined,
       ]);
       const goal = openGoal(goals.get(sessionId));
       const runtime = window?.beforeSeq === undefined ? found.runtime : undefined;
@@ -448,6 +455,7 @@ export function createSessionMethods(
       return {
         session,
         items: w.items,
+        ...(latestPromptAt !== undefined ? { latestPromptAt } : {}),
         ...(earlier > 0 ? { earlierItems: earlier } : {}),
         ...(pins.length ? { pins } : {}),
         ...(goal ? { goal: goalView(goal) } : {}),
@@ -566,8 +574,8 @@ export function createSessionMethods(
       return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
     },
 
-    async listSessions(principalId) {
-      return decorateSessions(principalId, await sessionsForViewer(principalId));
+    async listSessions(viewer) {
+      return decorateSessions(viewer.actorId, await sessionsForViewer(viewer));
     },
 
     async listSessionPage(principalId, query) {
@@ -654,11 +662,12 @@ export function createSessionMethods(
       return decorated ?? null;
     },
 
-    async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
+    async searchSessions(viewer, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
+      const principalId = viewer.actorId;
       const capped = Math.max(1, Math.min(Math.floor(limit), 100));
       const [hits, titleHits] = await Promise.all([
-        deps.sessions.searchEntries(principalId, query, capped),
-        titleSearchHits(principalId, query, capped),
+        deps.sessions.searchEntries(principalId, query, capped, viewer.botActor),
+        titleSearchHits(principalId, query, capped, viewer.botActor),
       ]);
       if (!hits.length) return titleHits;
       const allowed = await managedProjectMemberships(
@@ -948,24 +957,22 @@ export function createSessionMethods(
         cursor = next.nextCursor;
       }
       files.sort((a, b) => b.createdAt - a.createdAt);
-      const deployments = (
-        await Promise.all(
-          allDeployments
-            .filter((d) => d.createdInScope === scope || d.ownerScopeId === scope)
-            .map(async (d): Promise<ScopeDeployment | null> => {
-              const permission = await principalGitPermission(d, principalId);
-              return permission
-                ? {
-                    id: d.id,
-                    name: d.displayName ?? d.name ?? d.id,
-                    status: d.status,
-                    permission,
-                    currentVersion: d.currentVersion,
-                  }
-                : null;
-            }),
-        )
-      ).filter((d): d is ScopeDeployment => d != null);
+      const inScope = allDeployments.filter((d) => d.createdInScope === scope || d.ownerScopeId === scope);
+      const permissions = await deploymentPermissions(tenant, inScope, principalId);
+      const deployments = inScope.flatMap((d, i): ScopeDeployment[] => {
+        const permission = permissions[i];
+        return permission
+          ? [
+              {
+                id: d.id,
+                name: d.displayName ?? d.name ?? d.id,
+                status: d.status,
+                permission,
+                currentVersion: d.currentVersion,
+              },
+            ]
+          : [];
+      });
       const skills = allSkills
         .filter((s) => s.scopeId === scope)
         .map((s) => ({ id: s.id, name: s.manifest.name, description: s.manifest.description, status: s.status }));
@@ -1015,9 +1022,10 @@ export function createSessionMethods(
       return authorizesCapabilityScope(claims);
     },
 
-    async updateSession(sessionId, principalId, patch) {
+    async updateSession(sessionId, viewer, patch) {
+      const principalId = viewer.actorId;
       const session = await sessionForViewer(sessionId, principalId);
-      if (!session) return null;
+      if (!session || !sessionVisibleTo(viewer, session)) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       const updated = await sessionForViewer(sessionId, principalId);
       return updated && { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };

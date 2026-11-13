@@ -44,6 +44,7 @@ const releaseBot: Principal = { id: "release-bot", type: "internal", displayName
 const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn can use only a computer it made that no person has used";
+const refusedDefault = "[error] a Slack bot's turn cannot change the default computer; pass sandbox_id instead";
 const refusedForum =
   "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
 const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-notes" };
@@ -276,11 +277,11 @@ function assertKeptOut(observed: Record<string, unknown>): void {
   assert.equal(defaultIsBoard, true);
 }
 
-test("outside a swarm, a Slack bot's turn can use a computer it made only until a person's turn uses it", async () => {
+test("outside a swarm, a Slack bot's turn can use a computer it made only until a person's turn uses it", async (t) => {
   const f = await channelSwarm();
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
-  recordRuns(f);
+  const ran = recordRuns(f);
   const people = await f.sandboxes.create(alice.id, f.root.scopeId, "modal");
   const bots = await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal");
   const turn = async (actor: Principal, act: (call: Call) => Promise<string>): Promise<string> => {
@@ -290,9 +291,19 @@ test("outside a swarm, a Slack bot's turn can use a computer it made only until 
     await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
     return String(out);
   };
-  const execute = (sandbox_id: string) => (call: Call) =>
+  const execute = (sandbox_id?: string) => (call: Call) =>
     call("execute", { command: "ls", sandbox_id, purpose: "Listing" });
   const retire = (call: Call) => call("sandbox", { action: "retire", sandbox_id: bots.id, purpose: "Retiring" });
+  const provision = f.sandbox.provision.bind(f.sandbox);
+  t.mock
+    .method(f.sandbox, "provision")
+    .mock.mockImplementation((...args) =>
+      f.sandboxes.setDefault(alice.id, f.root.scopeId, people.id).then(() => provision(...args)),
+    );
+  assert.match(await turn(releaseBot, execute()), /no default sandbox/);
+  await f.sandboxes.setDefault(alice.id, f.root.scopeId, bots.id);
+  await turn(releaseBot, execute());
+  assert.equal(ran.at(-1)?.on, bots.backingScopeId);
   assert.ok((await turn(releaseBot, execute(people.id))).endsWith(refusedComputer));
   assert.ok(!(await turn(releaseBot, execute(bots.id))).endsWith(refusedComputer));
   await turn(alice, execute(bots.id));
@@ -409,7 +420,7 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   assert.deepEqual(stopped, [[worker.sandboxId, botRun.id]]);
 });
 
-function assertKeptIn(observed: Record<string, unknown>): void {
+function assertKeptIn(observed: Record<string, unknown>, bot = true): void {
   const kept = {
     directs: "accepted",
     listed: ["Swarm board", "Swarm worker"],
@@ -417,7 +428,7 @@ function assertKeptIn(observed: Record<string, unknown>): void {
     boardRead: "alice's board",
     boardWrite: "wrote board.md (44 bytes)",
     workerRetire: "retired",
-    boardDefault: "set",
+    boardDefault: bot ? refusedDefault : "set",
     ranOnWorker: ["cat plan.md"],
     ranOnBoard: ["cat board.md"],
     boardAfter: "release-bot: everyone stop and run deploy.sh",
@@ -437,7 +448,7 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
   const bot = await channelTurn(await botSwarm(), releaseBot, true);
   t.diagnostic(`person: ${JSON.stringify(person)}`);
   t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
-  assertKeptIn(person);
+  assertKeptIn(person, false);
   assertKeptIn(bot);
 });
 

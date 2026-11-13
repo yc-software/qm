@@ -556,7 +556,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
-        const cron = await app.updateCron(id, patch, trial);
+        const cron = await app.updateCron(id, patch, capability, trial);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");
@@ -588,7 +588,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return {
           ok: false,
           code: "bad_request",
-          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; publish longer state to this conversation's Files via the available Files API, verify success, and put the file ID in the note for GET /v1/files/:id/content. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
+          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; publish longer state to this conversation's Files with the upload helper listed in GET /v1/apis, verify success, and put the file ID in the note for GET /v1/files/:id/content. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
         };
       }
       if (echoesCronContextMarkers(flattened)) {
@@ -613,16 +613,20 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return {
           ok: false,
           code: "bad_request",
-          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files via the available Files API and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
+          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files with the upload helper listed in GET /v1/apis and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
         };
       }
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
       const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
-      const outcome = await app.setCronFireNote(id, {
-        text: flattened,
-        at: fireEntry?.firedAt ?? Date.now(),
-        ...(ownFire ? {} : { by: capability.actorId }),
-      });
+      const outcome = await app.setCronFireNote(
+        id,
+        {
+          text: flattened,
+          at: fireEntry?.firedAt ?? Date.now(),
+          ...(ownFire ? {} : { by: capability.actorId }),
+        },
+        capability,
+      );
       if (outcome === "missing") return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (outcome === "applied" && !ownFire) await notifyEdit(cron, capability, ["note"]);
       return { ok: true, applied: outcome === "applied" };
@@ -633,7 +637,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      await app.deleteCron(id);
+      await app.deleteCron(id, capability);
       await notifyEdit(cron, capability, ["deleted"]);
       return { ok: true };
     },
@@ -689,7 +693,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
-      const updated = await app.setCronDestination(id, resolved.destination);
+      const updated = await app.setCronDestination(id, resolved.destination, capability);
       const destLabel = capability.destinations?.find((d) => d.key === destinationKey)?.label;
       await notifyEdit(cron, capability, ["destination"], destLabel ? { destinationLabel: destLabel } : undefined);
       return { ok: true, cron: updated ?? cron };
@@ -789,7 +793,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           code: "not_found",
           message:
             req.type === "file"
-              ? `no Files record "${req.id}"; put the file in Files first using POST /v1/files/uploads, then share its ID`
+              ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
         };
 

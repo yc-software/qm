@@ -199,6 +199,7 @@ import {
   type CanManageScope,
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
+import { ambientWakeReaches, withAmbientWakes } from "./resolution/ambient-wake.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createRegistryMemoryService } from "./memory/registry-memory.ts";
@@ -338,6 +339,7 @@ import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
+import { expireStaleApprovals } from "./core/approval-requester.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
@@ -1235,7 +1237,7 @@ export function buildApp(
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,
     beforeRetire: async (record) => {
-      if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
+      if ((await processes?.listLive())?.some((process) => process.sandboxId === record.id))
         throw new Error("stop this sandbox's background jobs before retiring it");
     },
     provisionOptions: async (scopeId) => {
@@ -1551,6 +1553,7 @@ export function buildApp(
       requested,
       hydrateModelCatalog,
       route.runtimePurpose,
+      route.session?.runtime?.modelId,
     );
   const resolveSessionRuntime = async (route: SessionRoute): Promise<RuntimeChoice> => {
     if (!route.runtimePinned || !route.runtime?.modelId) return resolveRequestedRuntime(route, route.runtime);
@@ -2095,9 +2098,10 @@ export function buildApp(
     }
     return broker;
   };
+  const canActInScope = withAmbientWakes(canWriteScope, config.externalSlackPolicies);
   const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
     const scope = resolution.scopeFor(request.conversation, request.actor);
-    if (!(await canWriteScope(request.actor.id, scope))) throw new Error("session actor no longer has scope access");
+    if (!(await canActInScope(request, scope))) throw new Error("session actor no longer has scope access");
     const ref = request.conversation.channelRef;
     if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
     const version = await projects.version(ref);
@@ -2139,10 +2143,11 @@ export function buildApp(
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
-    authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
+    authorize: (target, request) => canActInScope(request, target.scopeId),
+    reaches: (target, request, from) => ambientWakeReaches(sessions, request, target, from),
     conversations: {
-      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
-      list: (actorId) => app.listSessions(actorId),
+      search: (input) => app.searchConversations(input),
+      list: (viewer) => app.listSessions(viewer),
       start: (actorId, input) => startSession(app, sessions, actorId, input),
     },
     async validateRuntime(input, scope) {
@@ -2216,7 +2221,6 @@ export function buildApp(
     acl,
     admin,
     mcp: mcpToolService,
-    ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
@@ -2773,7 +2777,7 @@ export function buildApp(
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
-    deleteCron: (id) => app.deleteCron(id),
+    deleteCron: (id) => app.deleteCron(id, { actorId: "system" }),
     advisoryLock,
     crons,
     deliveries,
@@ -2953,6 +2957,14 @@ export function buildApp(
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );
+  const approvalExpirySweeper = createSweeper(
+    () =>
+      claimThenBind(approvals.claimTenants, (_id, tenant) =>
+        expireStaleApprovals({ approvals, sessions, audit: auditLog }, tenant, orgScope),
+      ),
+    60_000,
+    { label: "approval expiry", immediate: true },
+  );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
@@ -3010,6 +3022,7 @@ export function buildApp(
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
       composioReturnSweeper.start();
+      approvalExpirySweeper.start();
       fileUploads?.start();
       idleSweeper?.start();
       deployMaintenanceSweeper.start();
@@ -3052,6 +3065,7 @@ export function buildApp(
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
+      approvalExpirySweeper.stop(),
       fileUploads?.stop(),
       wakeSweep.stop(),
       swarms?.stop(),

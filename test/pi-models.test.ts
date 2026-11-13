@@ -226,6 +226,8 @@ test("context token budget is half of each model's real input room", () => {
     tiers: undefined,
   });
   assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), 150_000, "a 1M window is capped, not halved");
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-1", 40_000), 40_000, "an org ceiling lowers the cap");
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-1", 1_000_000), 436_000, "and never exceeds half the room");
   const opus55 = getRequiredModel("claude-opus-5-5");
   assert.equal(opus55.contextWindow, 1_000_000);
   assert.equal(opus55.maxTokens, 128_000);

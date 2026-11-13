@@ -352,10 +352,16 @@ test("the models view saves runtime rows chosen in the composer picker", async (
       fallbackRuntime: null,
       memoryEmbeddingModel: null,
       memoryEmbeddingOptions: [{ id: "gateway/embed", name: "embed", provider: "qm:gateway" }],
+      compactionKeepPercent: null,
+      compactionKeepPercentDefault: 40,
+      historyBudgetTokens: null,
+      historyBudgetTokensDefault: 150000,
     },
     "PUT /scopes/org:acme/runtime": save,
     "PUT /scopes/org:acme/cron-runtime": save,
     "PUT /scopes/org:acme/memory-embedding-model": save,
+    "PUT /scopes/org:acme/compaction-keep-percent": save,
+    "PUT /scopes/org:acme/history-budget-tokens": save,
   });
   await admin.settle();
   const doc = admin.document;
@@ -365,6 +371,16 @@ test("the models view saves runtime rows chosen in the composer picker", async (
   const pickRecall = (modelId: string) => {
     recall.value = modelId;
     recall.dispatchEvent(new admin.window.Event("change"));
+  };
+  const keep = row("compaction-keep-percent").querySelector("input")!;
+  const typeKeep = (value: string) => {
+    keep.value = value;
+    keep.dispatchEvent(new admin.window.Event("input"));
+  };
+  const budget = row("history-budget-tokens").querySelector("input")!;
+  const typeBudget = (value: string) => {
+    budget.value = value;
+    budget.dispatchEvent(new admin.window.Event("input"));
   };
   const saveAll = async () => {
     doc.getElementById("runtimes-save")!.click();
@@ -392,12 +408,18 @@ test("the models view saves runtime rows chosen in the composer picker", async (
     ["", "gateway/embed"],
   );
   pickRecall("gateway/embed");
+  assert.equal(keep.placeholder, "40");
+  typeKeep("25");
+  assert.equal(budget.placeholder, "150000");
+  typeBudget("60000");
 
   await saveAll();
   assert.deepEqual(plain(saves), [
     ["/scopes/org:acme/runtime", { modelId: "fast", effortLevel: "high", fastMode: true }],
     ["/scopes/org:acme/cron-runtime", { modelId: "model", effortLevel: "auto", fastMode: false }],
     ["/scopes/org:acme/memory-embedding-model", { modelId: "gateway/embed" }],
+    ["/scopes/org:acme/compaction-keep-percent", { percent: "25" }],
+    ["/scopes/org:acme/history-budget-tokens", { tokens: "60000" }],
   ]);
   assert.equal(doc.querySelector(".dirty"), null);
   assert.equal(admin.window.localStorage.length, 0);
@@ -405,10 +427,14 @@ test("the models view saves runtime rows chosen in the composer picker", async (
   open("cron-runtime");
   row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-foot-btn")!.click();
   pickRecall("");
+  typeKeep("");
+  typeBudget("");
   await saveAll();
-  assert.deepEqual(plain(saves.slice(3)), [
+  assert.deepEqual(plain(saves.slice(5)), [
     ["/scopes/org:acme/cron-runtime", { inherit: true }],
     ["/scopes/org:acme/memory-embedding-model", { modelId: null }],
+    ["/scopes/org:acme/compaction-keep-percent", { percent: null }],
+    ["/scopes/org:acme/history-budget-tokens", { tokens: null }],
   ]);
   assert.equal(row("cron-runtime").querySelector(".menu-label")!.textContent, "Job's scope default");
   admin.close();

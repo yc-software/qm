@@ -5,11 +5,12 @@ import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
 import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
+import { bearerToken } from "../request-tenant.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
 const FILTERS_MESSAGE = "every filter requires a non-empty path and at least one non-empty value";
-const VERIFICATION_MESSAGE = "a supported signature scheme and non-empty signing secret are required";
+const VERIFICATION_MESSAGE = "a supported verification scheme and non-empty secret are required";
 
 function isWebhookVerification(value: Record<string, unknown>): boolean {
   return (
@@ -41,7 +42,7 @@ export function redactWebhook(w: Webhook): Webhook {
 }
 
 async function incomingWebhook(ctx: BaseCtx): Promise<void> {
-  const { req, res, deps, params } = ctx;
+  const { req, res, deps, params, url } = ctx;
   if (!deps.webhookReceiver) {
     req.resume();
     return sendJson(res, 404, { error: "not_found" });
@@ -55,7 +56,11 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
       return sendJson(res, 413, { error: "payload_too_large", message: errMessage(e) });
     throw e;
   }
-  const out = await deps.webhookReceiver.deliver(id, { headers: req.headers, rawBody });
+  const out = await deps.webhookReceiver.deliver(id, {
+    headers: req.headers,
+    rawBody,
+    presentedToken: bearerToken(req) ?? url.searchParams.get("token") ?? undefined,
+  });
   if (out.status === 200) {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end(out.body);
@@ -63,7 +68,10 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
   }
   if (out.status === 202) return sendJson(res, 202, { ok: true });
   if (out.status === 401)
-    return sendJson(res, 401, { error: "unauthorized", message: "signature verification failed" });
+    return sendJson(res, 401, {
+      error: "unauthorized",
+      message: out.reason ? `verification failed: ${out.reason}` : "verification failed",
+    });
   return sendJson(res, 404, { error: "not_found" });
 }
 

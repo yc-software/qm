@@ -7,7 +7,6 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import { deploymentView } from "../src/api/app.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import type { AppPageViewLog } from "../src/deploy/page-views.ts";
 import { scopeId } from "../src/types.ts";
@@ -71,7 +70,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
   };
   const s = fixture({ sessions: store });
   try {
-    s.built.app.listDeploymentsForViewer = async () => {
+    s.built.app.listDeployments = async () => {
       reads++;
       return [];
     };
@@ -123,8 +122,8 @@ test("deployment export: lists the person's live Apps page apps with their addre
     };
     const fleet = [app("live", "running"), app("gone", "archived"), own, given];
     s.built.app.listDeployments = async () => fleet;
-    s.built.app.listDeploymentsForViewer = async ({ actorId }) =>
-      actorId === "alice@example.com" ? fleet.map((d) => ({ ...deploymentView(d), permission: "read" as const })) : [];
+    s.built.app.deploymentGitPermissionsFor = async (_tenant, deployments, { actorId }) =>
+      deployments.map(() => (actorId === "alice@example.com" ? "read" : null));
     assert.equal((await s.get("/v1/deployments/export")).status, 400);
     const { principalId, deployments }: any = await (await s.get(apps)).json();
     assert.equal(principalId, "alice@example.com");

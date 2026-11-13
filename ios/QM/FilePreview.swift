@@ -1,6 +1,7 @@
 import Foundation
 import QuickLook
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FileAttachmentView: View {
   let file: DeliveredFile
@@ -37,12 +38,100 @@ struct FileAttachmentView: View {
 }
 
 enum FilePreviewResource {
-  static func attachment(_ url: URL, files: [DeliveredFile]) -> DeliveredFile? {
-    guard url.scheme?.lowercased() == "attachment", url.query == nil, url.fragment == nil,
-      url.absoluteString.hasPrefix("attachment://"),
-      let name = String(url.absoluteString.dropFirst("attachment://".count)).removingPercentEncoding
+  case file(DeliveredFile)
+  case draft(UploadAttachment, account: String)
+
+  var name: String? {
+    switch self {
+    case .file(let file): file.name
+    case .draft(let attachment, _): attachment.name
+    }
+  }
+
+  var canLoad: Bool {
+    switch self {
+    case .file(let file): Self.path(for: file.artifactId) != nil
+    case .draft(let attachment, _): attachment.localSHA != nil
+    }
+  }
+
+  var loadingDescription: String {
+    switch self {
+    case .file: "Downloading file…"
+    case .draft: "Opening file…"
+    }
+  }
+
+  @MainActor
+  func load(client: APIClient) async throws -> TemporaryPreviewFile {
+    let generation = client.generation
+    let loaded: TemporaryPreviewFile
+    switch self {
+    case .file(let file):
+      guard let path = Self.path(for: file.artifactId) else {
+        throw QMError.message("This attachment does not have a downloadable file reference.")
+      }
+      let downloaded = try await client.download(path)
+      defer { try? FileManager.default.removeItem(at: downloaded.url) }
+      try Task.checkCancellation()
+      loaded = try TemporaryPreviewFile(
+        moving: downloaded.url,
+        name: file.name?.isEmpty == false ? file.name : downloaded.suggestedFilename)
+    case .draft(let attachment, let account):
+      guard let sha = attachment.localSHA else {
+        throw QMError.message(
+          "This attachment is no longer available on this device. Remove it and attach the file again."
+        )
+      }
+      let prepared: PreparedAttachment
+      do {
+        let worker = Task.detached(priority: .userInitiated) {
+          try AttachmentCache.read(account: account, sha: sha)
+        }
+        prepared = try await withTaskCancellationHandler {
+          try await worker.value
+        } onCancel: {
+          worker.cancel()
+        }
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        Log.background.failure("Saved attachment preview", error)
+        throw QMError.message(
+          "Couldn’t open the saved attachment. Remove it and attach the file again.")
+      }
+      defer { withExtendedLifetime(prepared) {} }
+      try Task.checkCancellation()
+      loaded = try TemporaryPreviewFile(moving: prepared.url, name: attachment.name)
+    }
+    guard generation == client.generation else { throw CancellationError() }
+    return loaded
+  }
+
+  static func attachment(_ url: URL, baseURL: URL? = nil, files: [DeliveredFile]) -> DeliveredFile?
+  {
+    guard url.query == nil, url.fragment == nil else { return nil }
+    if url.scheme?.lowercased() == "attachment" {
+      guard url.absoluteString.hasPrefix("attachment://"),
+        let name = String(url.absoluteString.dropFirst("attachment://".count))
+          .removingPercentEncoding
+      else { return nil }
+      return files.first { $0.name == name && path(for: $0.artifactId) != nil }
+    }
+    guard let baseURL, APIClient.sameOrigin(url, baseURL), url.user == nil, url.password == nil
+    else {
+      return nil
+    }
+    let pieces = url.path(percentEncoded: true).split(
+      separator: "/", omittingEmptySubsequences: false)
+    guard [5, 6].contains(pieces.count), pieces[0].isEmpty, pieces[1] == "api",
+      pieces[2] == "files", pieces[4] == "content",
+      let artifactID = String(pieces[3]).removingPercentEncoding,
+      path(for: artifactID) != nil
     else { return nil }
-    return files.first { $0.name == name && path(for: $0.artifactId) != nil }
+    let name = pieces.count == 6 ? String(pieces[5]).removingPercentEncoding : nil
+    return DeliveredFile(
+      name: files.first { $0.artifactId == artifactID }?.name ?? name, artifactId: artifactID)
   }
 
   static func path(for artifactID: String?) -> String? {
@@ -68,6 +157,17 @@ enum FilePreviewResource {
         })
     ).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
     return safe.isEmpty ? "Attachment" : String(safe.suffix(180))
+  }
+
+  static func typeDescription(_ name: String?) -> String {
+    let fileExtension = URL(fileURLWithPath: filename(name)).pathExtension.lowercased()
+    guard !fileExtension.isEmpty else { return "File" }
+    if let type = UTType(filenameExtension: fileExtension), type.isDeclared,
+      let description = type.localizedDescription
+    {
+      return description
+    }
+    return "\(fileExtension.uppercased()) file"
   }
 }
 
@@ -110,7 +210,7 @@ final class TemporaryPreviewFile {
 }
 
 struct FilePreviewSheet: View {
-  let file: DeliveredFile
+  let resource: FilePreviewResource
   let client: APIClient
   @Environment(\.dismiss) private var dismiss
   @State private var preview: TemporaryPreviewFile?
@@ -118,6 +218,16 @@ struct FilePreviewSheet: View {
   @State private var showingSource = false
   @State private var error: String?
   @State private var attempt = 0
+
+  init(file: DeliveredFile, client: APIClient) {
+    resource = .file(file)
+    self.client = client
+  }
+
+  init(attachment: UploadAttachment, account: String, client: APIClient) {
+    resource = .draft(attachment, account: account)
+    self.client = client
+  }
 
   var body: some View {
     NavigationStack {
@@ -140,15 +250,15 @@ struct FilePreviewSheet: View {
           } description: {
             Text(error)
           } actions: {
-            if FilePreviewResource.path(for: file.artifactId) != nil {
+            if resource.canLoad {
               Button("Try again") { attempt += 1 }.buttonStyle(.borderedProminent)
             }
           }
         } else {
-          ProgressView("Downloading file…").frame(maxWidth: .infinity, maxHeight: .infinity)
+          NativeFileTransferLoading(name: resource.name, label: resource.loadingDescription)
         }
       }
-      .navigationTitle(file.name?.isEmpty == false ? file.name! : "Attachment")
+      .navigationTitle(resource.name?.isEmpty == false ? resource.name! : "Attachment")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
@@ -175,15 +285,8 @@ struct FilePreviewSheet: View {
 
   private func load() async {
     error = nil
-    guard let path = FilePreviewResource.path(for: file.artifactId) else {
-      error = "This attachment does not have a downloadable file reference."
-      return
-    }
     do {
-      let downloaded = try await client.download(path)
-      defer { try? FileManager.default.removeItem(at: downloaded) }
-      try Task.checkCancellation()
-      let loaded = try TemporaryPreviewFile(moving: downloaded, name: file.name)
+      let loaded = try await resource.load(client: client)
       if ["md", "markdown"].contains(loaded.url.pathExtension.lowercased()),
         let size = try loaded.url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
         size <= 2_000_000
@@ -195,6 +298,43 @@ struct FilePreviewSheet: View {
     } catch {
       self.error = error.localizedDescription
     }
+  }
+}
+
+private struct NativeFileTransferLoading: View {
+  let name: String?
+  let label: String
+
+  var body: some View {
+    GeometryReader { geometry in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 24) {
+          HStack(alignment: .top, spacing: 16) {
+            Image(systemName: "doc")
+              .font(.system(size: 34)).foregroundStyle(.teal)
+              .frame(width: 44, height: 48).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+              Text(name?.isEmpty == false ? name! : "Attachment")
+                .font(.headline).fixedSize(horizontal: false, vertical: true)
+              Text(FilePreviewResource.typeDescription(name))
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          Divider()
+          VStack(alignment: .leading, spacing: 14) {
+            Text(label).font(.subheadline)
+            NativeLoadingRail(tint: .teal)
+          }
+        }
+        .frame(maxWidth: 440)
+        .padding(28)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: geometry.size.height)
+        .accessibilityElement(children: .combine)
+      }
+    }
+    .background(QMTheme.surface)
   }
 }
 

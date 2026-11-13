@@ -354,30 +354,27 @@ export function createTurnMethods(
         }
       }
       const sealedByApproval = async (): Promise<TurnResult | undefined> => {
+        const approval = req.approval;
+        if (!approval) return undefined;
         const blocked = await pendingApprovalResultForThread(conversation.threadRef, actor.id, { alwaysBlock: true });
-        if (blocked) {
-          const record = req.approval ? await deps.approvals?.get(req.approval.requestId) : undefined;
-          const blockedSession = blocked.sessionId ? await deps.sessions.get(blocked.sessionId) : null;
-          let cause: Awaited<ReturnType<typeof approvalResumable>> | "no_session" | "nonblocking" = blockedSession
-            ? await approvalResumable(blockedSession, actor.id, record)
-            : "no_session";
-          if (cause === "ok" && record?.blocksInput === false) cause = "nonblocking";
-          if (cause !== "ok") {
-            if (req.approval) {
-              h.recordAudit({
-                at: Date.now(),
-                principalId: actor.id,
-                action: `command_approval.${req.approval.approved ? "approve" : "deny"}`,
-                resource: req.approval.requestId,
-                scopeLabel: blockedSession?.scopeId ?? conversation.threadRef,
-                status: "refused",
-                detail: JSON.stringify({ approvalOutcome: "sealed_thread", cause }),
-              });
-            }
-            return blocked;
-          }
-        }
-        return undefined;
+        if (!blocked) return undefined;
+        const record = await deps.approvals?.get(approval.requestId);
+        const blockedSession = blocked.sessionId ? await deps.sessions.get(blocked.sessionId) : null;
+        let cause: Awaited<ReturnType<typeof approvalResumable>> | "no_session" | "nonblocking" = blockedSession
+          ? await approvalResumable(blockedSession, actor.id, record)
+          : "no_session";
+        if (cause === "ok" && record?.blocksInput === false) cause = "nonblocking";
+        if (cause === "ok") return undefined;
+        h.recordAudit({
+          at: Date.now(),
+          principalId: actor.id,
+          action: `command_approval.${approval.approved ? "approve" : "deny"}`,
+          resource: approval.requestId,
+          scopeLabel: blockedSession?.scopeId ?? conversation.threadRef,
+          status: "refused",
+          detail: JSON.stringify({ approvalOutcome: "sealed_thread", cause }),
+        });
+        return blocked;
       };
       let request = input;
 
@@ -457,9 +454,11 @@ export function createTurnMethods(
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
+        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer" && live?.run) {
+          const botTurn = live.run;
+          await withCurrentProjectRoster(() => stopRun(botTurn, false, true));
+        }
         if (live?.run && route.kind !== "turn") {
-          const sealed = await sealedByApproval();
-          if (sealed) return sealed;
           const target = live.run;
           const steerTs =
             (origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : undefined) ??
@@ -782,6 +781,10 @@ export function createTurnMethods(
       if (route.kind === "turn") {
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
+        if (route.reason === "bot-turn" && (signal.queuedRunId || request)) {
+          await stopRun(run, false, true);
+          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
+        }
         if (signal.queuedRunId || !request) return { accepted: false, reason: "not_steerable", why: route.reason };
         const own = await methods.turn({
           ...request,

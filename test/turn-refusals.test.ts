@@ -30,7 +30,7 @@ test("a company web turn refuses when its stored runtime's provider has no key",
   assert.equal(result.reason, "that model isn't available on this deployment (its provider isn't configured)");
 });
 
-test("a web turn refuses another person's new thread, an unknown subagent thread and a channel the actor isn't in", async () => {
+test("a web turn starts new threads only under the caller's own IDs and refuses an unknown subagent thread or channel", async () => {
   const built = buildApp(testConfig({}));
   const foreign = await built.app.turn(
     webTurn("alice", { conversation: { kind: "dm", threadRef: `web:bob:${crypto.randomUUID()}` } }),
@@ -47,4 +47,6 @@ test("a web turn refuses another person's new thread, an unknown subagent thread
     webTurn("alice", { conversation: { kind: "channel", channelRef: "C-NOT-JOINED", threadRef: "web:alice:channel" } }),
   );
   assert.deepEqual([channel.status, channel.reason], ["refused", "you're not a member of that context"]);
+  await built.principalLinks.link({ principalId: "sso:a", canonicalId: "alice", evidence: "x", linkedBy: "t" });
+  assert.notEqual((await built.app.turn(webTurn("sso:a"))).status, "refused");
 });

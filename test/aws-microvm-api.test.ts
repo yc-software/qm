@@ -234,11 +234,11 @@ test("runMicrovm retries a throttled create but never an ambiguous server error"
 test("writeAbs splits writes above the chunk size into parts, joins them in the MicroVM, and removes the parts", async () => {
   const writes: Array<{ path: string; bytes: number }> = [];
   const execs: string[] = [];
-  let failWrite: RegExp | null = null;
+  let failWrite: string | null = null;
   const { fetchImpl } = fakeFetch((rec) => {
     const body = JSON.parse(rec.body ?? "{}") as { path?: string; b64?: string; cmd?: string };
     if (rec.url.endsWith("/write")) {
-      if (failWrite?.test(body.path!)) return { status: 500, body: { error: "disk full" } };
+      if (failWrite && body.path!.endsWith(failWrite)) return { status: 500, body: { error: "disk full" } };
       writes.push({ path: body.path!, bytes: Buffer.from(body.b64!, "base64").length });
     }
     if (rec.url.endsWith("/exec")) {
@@ -255,7 +255,7 @@ test("writeAbs splits writes above the chunk size into parts, joins them in the 
   writes.length = 0;
   await client.writeAbs("mvm-1", "mvm-1.example.on.aws", "/app/big", new Uint8Array(10));
   const stem = writes[0]!.path.replace(/\.part-0$/, "");
-  assert.match(stem, /^\/app\/big\.qm-[0-9a-f]{12}$/);
+  assert.ok(stem.startsWith("/app/.qm-"), stem);
   assert.deepEqual(writes, [
     { path: `${stem}.part-0`, bytes: 4 },
     { path: `${stem}.part-1`, bytes: 4 },
@@ -267,7 +267,7 @@ test("writeAbs splits writes above the chunk size into parts, joins them in the 
   ]);
   execs.length = 0;
   writes.length = 0;
-  failWrite = /^\/app\/other\.qm-[0-9a-f]{12}\.part-1$/;
+  failWrite = ".part-1";
   await assert.rejects(
     client.writeAbs("mvm-1", "mvm-1.example.on.aws", "/app/other", new Uint8Array(10)),
     /part-1 failed \(500\)/,
