@@ -12,6 +12,7 @@ import {
   tracePhase,
   traceQueued,
 } from "../plugins/chassis/src/error-reporting.ts";
+import { createPgPool, withPgTransaction } from "../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";
@@ -262,4 +263,34 @@ test("first-token time lands on the run even when the stream calls back outside 
   const run = await arrived("detached-stream-run");
   assert.ok(run.measurements.time_to_first_token.value >= 20);
   assert.ok(run.spans.some((sent: { op: string }) => sent.op === "turn.dispatch"));
+});
+
+test("transaction bookkeeping sends no spans, so phases survive a chatty turn", { skip }, async () => {
+  const db = createPgPool(URL!);
+  const pool = new (await import("pg")).default.Pool({ connectionString: URL, max: 1 });
+  try {
+    await traceQueued(undefined, "chatty-run", {}, async () => {
+      await tracePhase("turn.prompt", async () => {
+        await db.query("SELECT 1", [], { timeoutMs: 5_000 });
+        await withPgTransaction(pool, (client) => client.query("UPDATE pg_settings SET setting = setting WHERE false"));
+      });
+      const dispatch = startDispatchTrace();
+      dispatch.modelRequest();
+      for (let i = 0; i < 1_500; i++) await db.query("SELECT $1::int", [i], { timeoutMs: 5_000 });
+      dispatch.end();
+    });
+    const run = await arrived("chatty-run");
+    const statements = run.spans.filter(
+      (span: { op: string; description: string }) => span.op === "db" && !span.description.endsWith(".connect"),
+    );
+    assert.deepEqual(
+      statements.slice(0, 2).map((span: { description: string }) => span.description),
+      ["SELECT", "UPDATE"],
+    );
+    assert.ok(run.spans.some((span: { op: string }) => span.op === "turn.prompt"));
+    assert.ok(run.spans.some((span: { op: string }) => span.op === "turn.dispatch"));
+  } finally {
+    await db.close();
+    await pool.end();
+  }
 });

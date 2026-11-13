@@ -390,6 +390,10 @@ export function tracePhase<T>(
   );
 }
 
+export function untraced<T>(work: () => T): T {
+  return client && tracing ? client.suppressTracing(work) : work();
+}
+
 export function startPhase(op: string): Phase | undefined {
   if (!client || !tracing || !client.getActiveSpan()) return undefined;
   return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
