@@ -48,7 +48,7 @@ const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
   store: DurableMap<SuggestedActivityProfile>;
-  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get">;
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get" | "scopeHasSessions">;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
   enabled: boolean;
@@ -112,9 +112,14 @@ export function createSuggestedActivityService(deps: {
         refresh = false,
       }: { timezone?: string; poll?: boolean; refresh?: boolean } = {},
     ): Promise<SuggestedActivityResult> {
-      if (!deps.enabled) return { activities: seeds.slice(0, GENERATED_COUNT), pending: false };
+      const ungenerated = { activities: seeds.slice(0, GENERATED_COUNT), pending: false };
+      if (!deps.enabled) return ungenerated;
       new Intl.DateTimeFormat("en-US", { timeZone: timezone });
-      let profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
+      let profile = await deps.store.get(principalId);
+      if (!profile) {
+        if (!(await deps.sessions.scopeHasSessions(scopeId("personal", principalId)))) return ungenerated;
+        profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
+      }
       const seen = poll ? {} : { lastSeenAt: now() };
       await deps.store.merge(principalId, { ...seen, seeds });
       profile = { ...profile, ...seen, seeds };

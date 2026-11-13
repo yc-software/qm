@@ -19,7 +19,7 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   icon: "🛠️",
 }));
 
-function fixture() {
+function fixture(used = true) {
   let time = Date.now();
   let output = JSON.stringify(activities);
   const store = testMap<SuggestedActivityProfile>();
@@ -51,7 +51,7 @@ function fixture() {
   });
   const deps = {
     store,
-    sessions,
+    sessions: used ? { ...sessions, scopeHasSessions: async () => true } : sessions,
     crons,
     enabled: true,
     now: () => time,
@@ -102,6 +102,18 @@ test("normal personal cron produces durable suggestions without a notification d
   assert.deepEqual(await f.deliveries.pending("slack"), []);
   const restarted = createSuggestedActivityService(f.deps);
   assert.deepEqual(await restarted.get("alice", []), { activities, pending: false });
+});
+
+test("someone who has not used QM yet gets the seeds and no generation job until their first session", async () => {
+  const f = fixture(false);
+  const person = `newcomer-${Date.now()}`;
+  assert.deepEqual(await f.service.get(person, activities), { activities, pending: false });
+  assert.deepEqual(await f.crons.list(), []);
+  assert.equal(await f.store.get(person), null);
+  await f.sessions.getOrCreateByThread(`web:${person}:first`, "dm", scopeId("personal", person));
+  assert.equal((await f.service.get(person, activities)).pending, true);
+  await f.settle();
+  assert.equal((await f.crons.list())[0]?.owner, person);
 });
 
 test("concurrent enrollment shares one cron and one first run", async () => {
