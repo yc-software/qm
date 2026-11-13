@@ -11,7 +11,7 @@ import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
-import { isWelcomeConversation } from "./welcome-session";
+import { welcomeLayout } from "./welcome-session";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -337,7 +337,6 @@ export function createChatSurface(
     earlierCount: 0,
     loadingEarlier: false,
     forkSession: null as CoreSession | null,
-    welcomeThread: null as string | null,
     inheritedMessages: [] as ReturnType<typeof itemsToMessages>,
     inheritedExpanded: false,
     inheritedLoaded: false,
@@ -527,12 +526,11 @@ export function createChatSurface(
     connectedConnectors.clear();
   }
 
-  function newChat(context?: { scopeId: string; name: string | null }, welcome = false): string {
+  function newChat(context?: { scopeId: string; name: string | null }): string {
     appState.currentView = "chats";
     renderSidebarTop();
     const user = appState.me?.user ?? "anon";
     const threadRef = `web:${user}:${crypto.randomUUID()}`;
-    chatState.welcomeThread = welcome ? threadRef : null;
     const carried = storedDraft(newChatDraftKey(user));
     if (carried) saveDraft(threadRef, carried);
     ctx.composer.resetComposer();
@@ -1711,13 +1709,16 @@ export function createChatSurface(
     prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
-    const showWelcome =
-      !ctx.inbox &&
-      !editingApp &&
-      (chatState.welcomeThread === chatState.threadRef ||
-        (appState.me && hasWelcomeScreen(appState.me)
-          ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
-          : isNewUser && !messages.length));
+    const welcome = welcomeLayout({
+      me: appState.me,
+      sessions: sessionsState.list,
+      threadRef: chatState.threadRef,
+      scopeId: chatState.scopeId,
+      isNewUser,
+      empty: !messages.length,
+      draft: Boolean(ctx.composer.state.draft),
+    });
+    const showWelcome = !ctx.inbox && !editingApp && welcome.show;
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
     if (messages.length) {
@@ -1729,13 +1730,11 @@ export function createChatSurface(
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
     const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
-    const seededWelcome = showWelcome && !messages.length && Boolean(appState.me?.welcome);
     const showSuggestions =
       !ctx.inbox &&
       emptyChat &&
       !editingApp &&
-      !(isNewUser && hasWelcomeScreen(appState.me)) &&
-      !(showWelcome && appState.me?.welcome) &&
+      !welcome.hideSuggestions &&
       !glanceTier &&
       (!ctx.pane || tier === "full") &&
       !chatState.sessionId &&
@@ -1827,7 +1826,7 @@ export function createChatSurface(
             <div class="chat-bottom-dock">
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}
-              ${seededWelcome && !ctx.composer.state.draft ? nothing : ctx.composer.composerForm(agent)}
+              ${showWelcome && welcome.hideComposer ? nothing : ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
             </div>
           </div>
