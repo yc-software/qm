@@ -5,6 +5,7 @@ import { boundTenant, isTenantId } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
@@ -39,6 +40,16 @@ export const MEMORY_BRAIN_DROP_AUD = "memory-brain-drop";
 interface BlobGrant {
   dir: "read" | "write";
   id?: string;
+}
+
+export async function botWorkInPersonsName(
+  users: Pick<UserStore, "resolve"> | undefined,
+  capability: Pick<CapabilityClaims, "actorId" | "botActor">,
+): Promise<boolean> {
+  return (
+    capability.botActor === true &&
+    (await users?.resolve([capability.actorId]))?.get(capability.actorId)?.kind === "person"
+  );
 }
 
 export async function personOrOwningBot(

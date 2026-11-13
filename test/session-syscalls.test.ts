@@ -3471,7 +3471,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   });
   const forTurn = (
     liveTurn: boolean,
-    opts: { readOnly?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
+    opts: { readOnly?: boolean; botActor?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
   ) =>
     factory.forTurn({
       session: room,
@@ -3484,6 +3484,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
         actor,
         origin: { kind: "human" },
         ...(opts.readOnly ? { readOnly: true } : {}),
+        ...(opts.botActor ? { botActor: true } : {}),
       } as Parameters<typeof factory.forTurn>[0]["request"],
     });
   const live = forTurn(true);
@@ -3541,7 +3542,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     await slack.read({ peer: true, target: peer.id }),
   ])
     assert.deepEqual(out, { ok: false, message: "sessions are a web UI feature and aren't available here." });
-  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true })]) {
+  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true }), forTurn(true, { botActor: true })]) {
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
