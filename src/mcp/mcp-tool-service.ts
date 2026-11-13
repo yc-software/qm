@@ -194,12 +194,17 @@ export function createMcpToolService(opts: {
   const tenantState = perTenant<{
     clients: Map<string, { client: McpClient; server: McpServer }>;
     snapshot: McpToolDescriptor[];
+    perUserServers: Map<string, McpServer>;
+    attestedServers: Map<string, McpServer>;
     catalogs: LRUCache<string, Promise<RemoteTool[]>>;
     loadedAt?: number;
+    version?: string;
     pending?: Promise<void>;
   }>(() => ({
     clients: new Map(),
     snapshot: [],
+    perUserServers: new Map(),
+    attestedServers: new Map(),
     catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
   }));
 
@@ -364,12 +369,15 @@ export function createMcpToolService(opts: {
 
   async function load(state: ReturnType<typeof tenantState>): Promise<void> {
     state.catalogs.clear();
+    state.version = await opts.servers.version();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
     const next = (await Promise.all(servers.map(serverTools))).flat();
     const seen = new Set<string>();
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+    state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
+    state.attestedServers = new Map(servers.filter((s) => s.attestActor).map((s) => [s.id, s]));
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -388,7 +396,11 @@ export function createMcpToolService(opts: {
   async function loaded(): Promise<ReturnType<typeof tenantState>> {
     const state = tenantState();
     if (state.loadedAt !== undefined || closed) {
-      refreshIfStale(state);
+      const version = closed
+        ? state.version
+        : await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
+      if (version === state.version) refreshIfStale(state);
+      else await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
       return state;
     }
     await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
@@ -400,12 +412,10 @@ export function createMcpToolService(opts: {
     audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<McpToolDescriptor[]> {
-    const { snapshot } = await loaded();
-    const servers = new Map((await opts.servers.list()).map((server) => [server.id, server]));
-    const gated = new Map([...servers].filter(([, s]) => s.enabled && !s.catalog && s.auth === "oauth-user"));
+    const { snapshot, perUserServers: gated, attestedServers } = await loaded();
     const current = snapshot.filter((t) => {
-      const server = servers.get(t.serverId);
-      return !server?.attestActor || attestsInAudience(server.attestAudience, principalId, audienceScopeId, actAsActor);
+      const attested = attestedServers.get(t.serverId);
+      return !attested || attestsInAudience(attested.attestAudience, principalId, audienceScopeId, actAsActor);
     });
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));

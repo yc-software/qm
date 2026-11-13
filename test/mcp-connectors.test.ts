@@ -599,13 +599,12 @@ test("MCP refresh contains registry failures on change and on a stale read, then
   await tick();
   assert.equal(list.mock.callCount(), 0);
   await store.put(server({ url: mcp.url }));
-  await tick();
-  assert.equal(list.mock.callCount(), 1);
+  await settle(async () => list.mock.callCount() === 1);
   assert.deepEqual(await service.toolDefs(), []);
   assert.equal(list.mock.callCount(), 1);
   clock += 100;
   await service.toolDefs();
-  await tick();
+  await settle(async () => errors.mock.callCount() === 2);
   assert.equal(list.mock.callCount(), 2);
   assert.equal(errors.mock.callCount(), 2);
   await assert.rejects(service.refresh(), /registry unavailable/);
