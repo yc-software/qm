@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import os
 
 enum QMTheme {
   static let conversationWidth: CGFloat = 760
@@ -8,13 +7,20 @@ enum QMTheme {
     NativeThemeStore.shared.active?.background.color ?? defaultPaper
   }
   @MainActor static var ink: Color {
-    NativeThemeStore.shared.active?.foreground.color ?? defaultInk
+    NativeThemeStore.shared.active?.readableForeground.color ?? defaultInk
   }
   @MainActor static var surface: Color {
+    NativeThemeStore.shared.active?.surface.color ?? defaultSurface
+  }
+  @MainActor static var warning: Color {
     if let palette = NativeThemeStore.shared.active {
-      return palette.background.mixed(with: palette.foreground, fraction: 0.08).color
+      let candidate = warningRGB(dark: palette.dark)
+      return
+        (candidate.contrast(with: palette.background) >= 4.5
+        && candidate.contrast(with: palette.surface) >= 4.5
+        ? candidate : palette.readableForeground).color
     }
-    return defaultSurface
+    return defaultWarning
   }
   static let lightPaper = Color(red: 0.969, green: 0.965, blue: 0.949)
   private static let defaultPaper = Color(
@@ -35,6 +41,17 @@ enum QMTheme {
         ? UIColor(red: 15 / 255, green: 24 / 255, blue: 34 / 255, alpha: 1)
         : UIColor(red: 0.96, green: 0.97, blue: 0.98, alpha: 1)
     })
+  private static let defaultWarning = Color(
+    uiColor: UIColor { traits in
+      let color = warningRGB(dark: traits.userInterfaceStyle == .dark)
+      return UIColor(
+        red: CGFloat(color.red), green: CGFloat(color.green), blue: CGFloat(color.blue), alpha: 1)
+    })
+  private static func warningRGB(dark: Bool) -> NativeThemePalette.RGB {
+    dark
+      ? .init(red: 1, green: 0.64, blue: 0.04)
+      : .init(red: 0.6, green: 0.25, blue: 0)
+  }
   @MainActor static var border: Color { ink.opacity(0.12) }
   static let navy = Color(red: 0.106, green: 0.188, blue: 0.263)
 }
@@ -91,22 +108,27 @@ struct QMPageHeading: View {
 struct MaritimeArtwork: View {
   private static let painting = Bundle.main.url(
     forResource: "becalmed-off-halfway-rock", withExtension: "webp"
-  )
-  .flatMap { UIImage(contentsOfFile: $0.path) }
+  ).flatMap { UIImage(contentsOfFile: $0.path) }
 
   var body: some View {
-    if let painting = Self.painting {
-      Image(uiImage: painting).resizable().scaledToFill()
-        .accessibilityHidden(true)
-    } else {
-      QMTheme.paper
+    GeometryReader { geometry in
+      if let painting = Self.painting {
+        Image(uiImage: painting)
+          .resizable()
+          .scaledToFill()
+          .frame(width: geometry.size.width, height: geometry.size.height, alignment: .trailing)
+          .clipped()
+      } else {
+        QMTheme.lightPaper
+      }
     }
+    .accessibilityHidden(true)
   }
 }
 
 struct WelcomeView: View {
   @Bindable var model: AppModel
-  @State private var choosingWorkspace = false
+  @Binding var choosingWorkspace: Bool
 
   var body: some View {
     GeometryReader { geometry in
@@ -114,56 +136,107 @@ struct WelcomeView: View {
         QMTheme.lightPaper.ignoresSafeArea()
         MaritimeArtwork()
           .frame(
-            width: geometry.size.width, height: geometry.size.height * 0.68, alignment: .trailing
+            width: geometry.size.width, height: geometry.size.height * 0.68,
+            alignment: .trailing
           )
-          .clipped().frame(maxHeight: .infinity, alignment: .top).ignoresSafeArea(edges: .top)
+          .clipped()
+          .frame(maxHeight: .infinity, alignment: .top)
+          .ignoresSafeArea(edges: .top)
         ScrollView {
           VStack(alignment: .leading, spacing: 22) {
-            Text("QM").font(.custom("IowanOldStyle-Roman", size: 52, relativeTo: .largeTitle))
-            Text("A clear horizon.").font(
-              .custom("IowanOldStyle-Roman", size: 34, relativeTo: .title))
+            Text("QM")
+              .font(.custom("IowanOldStyle-Roman", size: 52, relativeTo: .largeTitle))
+              .accessibilityAddTraits(.isHeader)
+            Text("A clear horizon.")
+              .font(.custom("IowanOldStyle-Roman", size: 34, relativeTo: .title))
             Text("Pick up your work. Hand off what’s next.")
-              .font(.body).foregroundStyle(QMTheme.navy.opacity(0.75))
+              .font(.body)
+              .foregroundStyle(QMTheme.navy.opacity(0.75))
+            if let error = model.error {
+              Text(error)
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .accessibilityLabel("Error: \(error)")
+            }
             if model.client != nil {
               Button {
-                Task { await model.authenticate() }
+                Task {
+                  if model.client?.hasSession == true {
+                    await model.restore()
+                  } else {
+                    await model.authenticate()
+                  }
+                }
               } label: {
-                HStack {
+                HStack(spacing: 14) {
+                  Image(systemName: "person.crop.circle")
+                    .accessibilityHidden(true)
                   Text(model.loading ? "Connecting…" : "Sign in to QM")
-                  Spacer()
+                  Spacer(minLength: 8)
                   if model.loading {
                     ProgressView().tint(.white)
                   } else {
-                    Image(systemName: "arrow.right")
+                    Image(systemName: "arrow.right").accessibilityHidden(true)
                   }
-                }.foregroundStyle(.white).padding(.vertical, 8)
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .foregroundStyle(.white)
               }
-              .buttonStyle(.borderedProminent).tint(QMTheme.navy)
-              .controlSize(.large).disabled(model.loading)
+              .buttonStyle(.borderedProminent)
+              .buttonBorderShape(.capsule)
+              .tint(QMTheme.navy)
+              .controlSize(.large)
+              .disabled(model.loading)
               .accessibilityIdentifier("signIn")
-              if let host = model.client?.baseURL.host {
-                Text(host).font(.footnote).foregroundStyle(QMTheme.navy.opacity(0.65))
-              }
-            } else {
-              Text("Connect to your workspace to sign in.")
-                .font(.callout)
             }
-            Button(model.client == nil ? "Choose workspace" : "Change workspace") {
+            Button {
               choosingWorkspace = true
-            }.disabled(model.loading)
+            } label: {
+              HStack(spacing: 14) {
+                Image(systemName: "globe").accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(model.client == nil ? "Choose workspace" : "Change workspace")
+                    .font(.headline)
+                  if let url = model.client?.baseURL {
+                    Text(
+                      url.host().map { host in
+                        url.port.map { "\(host):\($0)" } ?? host
+                      } ?? url.absoluteString
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(QMTheme.navy.opacity(0.7))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                  }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").accessibilityHidden(true)
+              }
+              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .tint(QMTheme.navy)
+            .controlSize(.large)
+            .accessibilityIdentifier("changeWorkspace")
           }
           .foregroundStyle(QMTheme.navy)
-          .padding(28).frame(maxWidth: 460, alignment: .leading)
+          .padding(28)
+          .frame(maxWidth: 460, alignment: .leading)
           .background(
-            QMTheme.lightPaper.opacity(0.94),
-            in: RoundedRectangle(cornerRadius: 20)
+            QMTheme.lightPaper.opacity(0.94), in: RoundedRectangle(cornerRadius: 20)
           )
           .padding(24)
+          .frame(maxWidth: .infinity)
         }
         .defaultScrollAnchor(.bottom)
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.hidden)
       }
     }
-    .sheet(isPresented: $choosingWorkspace) { WorkspacePicker(model: model) }
+    .toolbar(.hidden, for: .navigationBar)
+    .environment(\.colorScheme, .light)
   }
 }
 
@@ -190,12 +263,18 @@ struct WorkspaceMasthead: View {
 }
 
 struct NativeWave: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
+
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+    let moving = !reduceMotion && scenePhase == .active
+    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !moving)) { timeline in
       Canvas { context, size in
         let scale = size.width / 38.4
         let phase =
-          timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+          !moving
+          ? 0.5
+          : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
         var path = Path()
         let start = -24 - phase * 24
         path.move(to: CGPoint(x: start * scale, y: size.height / 2))
@@ -215,49 +294,5 @@ struct NativeWave: View {
     .frame(maxWidth: 25, maxHeight: 16)
     .clipped()
     .accessibilityLabel("Working")
-  }
-}
-
-struct NativeSuggestedActivities: View {
-  let client: APIClient
-  let identity: Identity
-  let select: (SuggestedActivity) -> Void
-  @State private var generated: [SuggestedActivity]?
-
-  var body: some View {
-    VStack(spacing: 8) {
-      ForEach(Array((generated ?? identity.suggestedActivities ?? []).prefix(3))) { activity in
-        Button {
-          select(activity)
-        } label: {
-          HStack(spacing: 10) {
-            Text(activity.title).multilineTextAlignment(.leading)
-            Spacer()
-            Image(systemName: "arrow.up.left").font(.caption)
-          }
-          .font(.subheadline)
-          .padding(14)
-          .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-        }.buttonStyle(.plain)
-      }
-    }
-    .task(id: identity.user) {
-      guard identity.suggestedActivitiesGeneration == true else { return }
-      let generation = client.generation
-      for _ in 0..<19 {
-        do {
-          let response: SuggestedActivitiesResponse = try await client.fetch(
-            "api/suggested-activities", body: ["timezone": TimeZone.current.identifier])
-          try Task.checkCancellation()
-          guard client.generation == generation else { return }
-          if !response.activities.isEmpty { generated = response.activities }
-          if response.pending != true { return }
-          try await Task.sleep(for: .seconds(10))
-        } catch {
-          Log.background.failure("Suggested activities", error)
-          return
-        }
-      }
-    }
   }
 }

@@ -16,14 +16,11 @@ final class WebAuthentication: NSObject, ASWebAuthenticationPresentationContextP
     let browser: Browser
   }
 
-  private let prefersEphemeralSession: Bool
   private let callbackScheme: String
   private let factory: Factory?
   private var pending: Pending?
 
-  init(callbackScheme: String = "qm", prefersEphemeralSession: Bool = true, factory: Factory? = nil)
-  {
-    self.prefersEphemeralSession = prefersEphemeralSession
+  init(callbackScheme: String = "qm", factory: Factory? = nil) {
     self.callbackScheme = callbackScheme
     self.factory = factory
   }
@@ -46,7 +43,7 @@ final class WebAuthentication: NSObject, ASWebAuthenticationPresentationContextP
           Task { @MainActor in
             let result: Result<URL, any Error>
             if let error {
-              result = .failure(error)
+              result = .failure(Self.normalized(error))
             } else if let url {
               result = .success(url)
             } else {
@@ -78,11 +75,21 @@ final class WebAuthentication: NSObject, ASWebAuthenticationPresentationContextP
     pending.continuation.resume(with: result)
   }
 
+  private static func normalized(_ error: any Error) -> any Error {
+    let error = error as NSError
+    if error.domain == ASWebAuthenticationSessionErrorDomain,
+      error.code == ASWebAuthenticationSessionError.Code.canceledLogin.rawValue
+    {
+      return CancellationError()
+    }
+    return error
+  }
+
   private func makeBrowser(_ url: URL, completion: @escaping Completion) -> Browser {
     let session = ASWebAuthenticationSession(
       url: url, callback: .customScheme(callbackScheme), completionHandler: completion)
     session.presentationContextProvider = self
-    session.prefersEphemeralWebBrowserSession = prefersEphemeralSession
+    session.prefersEphemeralWebBrowserSession = false
     return Browser(start: { session.start() }, cancel: { session.cancel() })
   }
 

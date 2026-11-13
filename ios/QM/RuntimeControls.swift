@@ -89,7 +89,7 @@ struct RuntimeControlsView: View {
             .font(.footnote).foregroundStyle(.secondary)
           }
           if let reason = configuration.unavailableReason {
-            Label(reason, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            Label(reason, systemImage: "exclamationmark.triangle").foregroundStyle(QMTheme.warning)
           }
           if configuration.models.isEmpty {
             Text("No models are available. Connect a model account or ask your administrator.")
@@ -139,7 +139,19 @@ struct RuntimeControlsView: View {
           }
         }
       } else if busy {
-        NativeWave().accessibilityLabel("Loading models")
+        VStack(alignment: .leading, spacing: 22) {
+          Text("Loading models…").font(.subheadline).foregroundStyle(.secondary)
+          ForEach(0..<3) { row in
+            VStack(alignment: .leading, spacing: 10) {
+              NativeSkeletonLine(fraction: 0.45, height: 14)
+              NativeSkeletonLine(fraction: 0.8)
+            }
+            .modifier(NativeLoadingPulse(phaseOffset: Double(row) * 0.18))
+          }
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading models")
       }
       if let error {
         Section {
@@ -160,7 +172,12 @@ struct RuntimeControlsView: View {
         }
       }
       ToolbarItem(placement: .confirmationAction) {
-        Button("Save") { Task { await save(inherit: false) } }.disabled(busy || !canSave)
+        Button {
+          Task { await save(inherit: false) }
+        } label: {
+          NativeActionLabel(
+            title: "Save", busyTitle: "Saving…", busy: busy && configuration != nil, compact: true)
+        }.disabled(busy || !canSave)
       }
     }
     .interactiveDismissDisabled(busy)

@@ -135,6 +135,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/suggested-activities", "/v1/suggested-activities"],
   ["POST /api/suggested-activities/dismiss", "/v1/suggested-activities/dismiss"],
   ["POST /api/connectors/:provider/start", "/v1/connectors/oauth/:provider/start"],
+  ["GET /api/app-return", "/v1/app-return"],
   ["GET /api/keychain/overview", "/v1/keychain/overview"],
   ["POST /api/keychain/grants/:id/revoke", "/v1/keychain/grants/:id/revoke"],
   ["POST /api/keychain/drops", "/v1/keychain/drops"],

@@ -2336,6 +2336,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
+            ...(input.botActor ? { botActor: true } : {}),
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
             ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),

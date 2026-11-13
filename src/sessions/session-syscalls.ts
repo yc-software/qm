@@ -633,7 +633,7 @@ async function steerRunningTurn(
     !live ||
     (request.readOnly && !live.request.readOnly) ||
     (request.memoryNotebookOnly && !live.request.memoryNotebookOnly) ||
-    (request.botActor && !live.request.botActor)
+    Boolean(request.botActor) !== Boolean(live.request.botActor)
   )
     return undefined;
   const steered = await deps.steerRun(live, {
