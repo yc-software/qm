@@ -99,7 +99,7 @@ function deniedFix(provider: string, code: string | undefined): string {
 function failedFix(provider: string, code: string | undefined, docs: string): string {
   if (code === "unreachable") return `Check that ${provider}'s host is up and reachable from QM (${docs}).`;
   if (code === "fact_not_found")
-    return `${provider} forgets only facts on the person's own member page; search memory again for current refs.`;
+    return `${provider} forgets only facts on the person's own member page. If the ref came from an older search, search memory again for its current ref; a fact on another page can be forgotten only by that page's member, or on the brain host with gbrain forget <fact-id>.`;
   return `Check ${provider}'s logs, URL and tool names (${docs}).`;
 }
 

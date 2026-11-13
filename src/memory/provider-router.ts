@@ -224,24 +224,23 @@ export function createRoutedMemoryService(opts: {
       const manager = notebookIds.length ? managerFor(scopeId) : undefined;
       if (notebookIds.length && !manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
       if (refs.length && manager?.facts) resolveIds(await manager.facts(scopeId), notebookIds);
-      const settled: MemoryProviderOutcome[] = [];
-      for (const { ref, brain, route, provider } of refs) {
-        const { error } = await attempt(
-          route,
-          scopeId,
-          "forget",
-          {
-            report: (outcome) => {
-              settled.push(outcome);
-              context?.report?.({ ...outcome, ref });
-            },
-          },
-          () => provider.delete!(scopeId, [ref.slice(brain.length + 1)], by, context),
-          settleChange,
-          undefined,
-        );
-        if (error) opts.onError?.(error, brain, "forget");
-      }
+      const settled = await Promise.all(
+        refs.map(async ({ ref, brain, route, provider }) => {
+          let outcome: MemoryProviderOutcome | undefined;
+          const { error } = await attempt(
+            route,
+            scopeId,
+            "forget",
+            { report: (reported) => (outcome = reported) },
+            () => provider.delete!(scopeId, [ref.slice(brain.length + 1)], by, context),
+            settleChange,
+            undefined,
+          );
+          if (error) opts.onError?.(error, brain, "forget");
+          return outcome ? [{ ...outcome, ref }] : [];
+        }),
+      ).then((outcomes) => outcomes.flat());
+      for (const outcome of settled) context?.report?.(outcome);
       if (manager?.delete && forgetKnown(settled)) await manager.delete(scopeId, notebookIds, by, context);
     },
 
