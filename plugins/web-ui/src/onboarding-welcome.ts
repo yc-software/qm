@@ -63,6 +63,7 @@ export class OnboardingWelcome extends LitElement {
     connections: { state: true },
     connectionError: { state: true },
     workspaceConnected: { state: true },
+    slackLinked: { state: true },
     workspaceError: { state: true },
   };
   declare me: Me | null;
@@ -84,6 +85,7 @@ export class OnboardingWelcome extends LitElement {
   private disconnecting = "";
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
+  private slackLinked = false;
   private workspaceError = false;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
@@ -244,6 +246,7 @@ export class OnboardingWelcome extends LitElement {
         (service) => this.authorize(service, this.staleAccount(service.id)),
         requested ? { query: "", expanded: false } : this.pickerState,
         requested,
+        !this.seeded,
       );
   }
   disconnectedCallback(): void {
@@ -440,12 +443,15 @@ export class OnboardingWelcome extends LitElement {
       this.authorizing = "";
     }
   }
+  private get seeded(): ActivitySeeds | undefined {
+    return this.setupOnly ? undefined : this.me?.welcome;
+  }
   private seededIntro(seeds: ActivitySeeds, name: string | undefined, toolkits: string[]) {
     const names = new Map(this.services.map((service) => [service.id, service.name]));
     const { activities, fresh } = welcomeActivities(
       seeds,
       [
-        ...(this.workspaceConnected ? [{ id: "slack", name: "Slack" }] : []),
+        ...(this.slackLinked ? [{ id: "slack", name: "Slack" }] : []),
         ...[...new Set(toolkits)].map((id) => ({ id, name: names.get(id) ?? id })),
       ],
       ["", "success"].includes(this.connectionOutcome) ? (this.retryService?.id ?? "") : "",
@@ -498,7 +504,7 @@ export class OnboardingWelcome extends LitElement {
     }
     const name = this.me?.displayName?.trim().split(/\s+/)[0];
     const cohort = this.me?.welcomeCohort;
-    const seeds = this.setupOnly ? undefined : this.me?.welcome;
+    const seeds = this.seeded;
     const paced = Boolean(cohort) && !seeds;
     const serviceName = this.retryService?.name ?? "App";
     const connected = this.preview
@@ -589,7 +595,7 @@ export class OnboardingWelcome extends LitElement {
       ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
       ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
       <div class="welcome-beat" style=${`--welcome-delay:${paced ? 3250 : 1100}ms`}>
-        ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+        ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()} @slack-account-status=${(event: CustomEvent<{ connected: boolean }>) => (this.slackLinked = event.detail.connected)}></qm-slack-account>` : nothing}
       </div>
       ${
         ["slack", "slack-account"].includes(this.widget)
@@ -599,7 +605,7 @@ export class OnboardingWelcome extends LitElement {
               ${
                 this.error
                   ? html`<div class="welcome-load">
-                      <strong>Connect your apps</strong>
+                      ${this.seeded ? nothing : html`<strong>Connect your apps</strong>`}
                       <p role="status">${this.error}</p>
                       <button
                         type="button"

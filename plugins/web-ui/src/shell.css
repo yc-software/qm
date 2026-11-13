@@ -3615,6 +3615,9 @@ qm-markdown .tok-in {
 }
 .suggested-activity-note {
   flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: var(--font-12-5);
   white-space: nowrap;
 }
