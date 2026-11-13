@@ -323,11 +323,9 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
           ) s
          WHERE s.held IS NOT NULL
       ), changes AS (
-        SELECT COALESCE(w.tenant_id, g.tenant_id) AS tenant_id, COALESCE(w.id, g.id) AS id, COALESCE(w.scope, g.scope) AS scope,
+        SELECT COALESCE(w.tenant_id, g.tenant_id) AS tenant_id, COALESCE(w.id, g.id) AS id,
                COALESCE(w.patch, '{}') || CASE WHEN g.id IS NULL THEN '{}' ELSE jsonb_build_object('shipActions', g.ship_actions) END
-                 AS patch,
-               COALESCE(w.source, g.source) || COALESCE(w.patch, '{}')
-                 || CASE WHEN g.id IS NULL THEN '{}' ELSE jsonb_build_object('heldShipActions', g.held) END AS detail
+                 AS patch
           FROM written w FULL JOIN gated g ON g.tenant_id = w.tenant_id AND g.id = w.id
       ), marked AS (
         UPDATE loops l SET json = l.json || c.patch
@@ -351,7 +349,9 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
       )
       INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
       SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, id, scope, detail::text
-        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope, detail FROM changes
+        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope, source || patch AS detail FROM written
+              UNION ALL
+              SELECT tenant_id, 'loop_update', id, scope, source || jsonb_build_object('heldShipActions', held) FROM gated
               UNION ALL
               SELECT tenant_id, 'cron_update', id, scope, detail FROM marked_crons
               UNION ALL
