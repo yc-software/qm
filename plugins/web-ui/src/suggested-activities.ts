@@ -89,11 +89,15 @@ export function suggestedActivities(
     onDismiss,
     redraw,
     collapsed = false,
+    count = VISIBLE_COUNT,
+    note,
   }: {
     onSelect: (activity: SuggestedActivity) => void;
     onDismiss?: (activity: SuggestedActivity) => void;
     redraw: () => void;
     collapsed?: boolean;
+    count?: number;
+    note?: (activity: SuggestedActivity) => { text: string; fresh: boolean } | undefined;
   },
 ): TemplateResult | typeof nothing {
   if (!activities || (!activities.length && !onDismiss)) return nothing;
@@ -106,9 +110,10 @@ export function suggestedActivities(
   >
     <div class="suggested-activities-list">
       ${suggestionRows(
-        activities.slice(0, VISIBLE_COUNT),
-        (activity, motion) =>
-          html`<div class="suggested-activity-row ${motion}" ?inert=${motion === "is-leaving"}>
+        activities.slice(0, count),
+        (activity, motion) => {
+          const noted = note?.(activity);
+          return html`<div class="suggested-activity-row ${motion}" ?inert=${motion === "is-leaving"}>
             <div class="suggested-activity-row-inner">
               <button
                 type="button"
@@ -120,6 +125,7 @@ export function suggestedActivities(
                   >${activity.icon === "yc" ? html`<span class="suggested-activity-yc">Y</span>` : (icons[activity.icon] ?? activity.icon)}</span
                 >
                 <span class="suggested-activity-title">${activity.title}</span>
+                ${noted ? html`<span class="suggested-activity-note ${noted.fresh ? "is-new" : ""}">${noted.text}</span>` : nothing}
               </button>
               ${
                 onDismiss
@@ -136,7 +142,8 @@ export function suggestedActivities(
                   : nothing
               }
             </div>
-          </div>`,
+          </div>`;
+        },
         redraw,
       )}
     </div>
