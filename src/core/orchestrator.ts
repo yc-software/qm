@@ -761,7 +761,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const editingApp = modeName === "mode-conversation" ? appEditSlug(conversation.threadRef, actor.id) : null;
       const appEdit = appEditTurnPolicy(editingApp !== null);
       const mcpToolsReady =
-        !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
+        !external && !appEdit && deps.mcp
+          ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, { actAsActor, botActor: input.botActor })
+          : undefined;
       const livePersonTurn = liveAuthorTurn && input.botActor !== true;
       const useMemory =
         !external && input.skipMemory !== true && !(input.botActor && scopeId === personalScope(actor.id));
