@@ -17,6 +17,13 @@ if (!AGENT_API_URL || !AGENT_API_TOKEN) {
 const reason = (error) => [error.message, error.cause?.code, error.cause?.message].filter(Boolean).join(": ");
 const headers = { "x-agent-capability": AGENT_API_TOKEN, "content-type": "application/json" };
 const ticketFile = `${resolve(dir)}.ticket`;
+const replaceRefused = (text) => {
+  try {
+    return ["human_consent_required", "inactive_run"].includes(JSON.parse(text).error);
+  } catch {
+    return false;
+  }
+};
 
 if (rest.includes("--start")) {
   const response = await fetch(`${AGENT_API_URL}/v1/keychain/login-tickets`, {
@@ -25,8 +32,9 @@ if (rest.includes("--start")) {
     body: JSON.stringify({ service }),
   }).catch((error) => ({ ok: false, status: 0, text: async () => reason(error) }));
   if (!response.ok) {
+    const text = await response.text();
     console.error(
-      `no sign-in ticket (${response.status}): ${await response.text()}; a new login still saves, but replacing an existing ${service} login needs the save to run in the person's own turn`,
+      `no sign-in ticket (${response.status}): ${text}${replaceRefused(text) ? `; a new login still saves, but replacing an existing ${service} login needs the save to run in the person's own turn` : ""}`,
     );
     process.exit(0);
   }
@@ -75,16 +83,9 @@ const response = await fetch(`${AGENT_API_URL}/v1/keychain/credentials`, {
   process.exit(1);
 });
 const text = await response.text();
-const keptExisting = () => {
-  try {
-    return ["human_consent_required", "inactive_run"].includes(JSON.parse(text).error);
-  } catch {
-    return false;
-  }
-};
 if (response.status === 400 || response.status === 413)
   discard(`keychain rejected the login (${response.status}): ${text}`);
-if (response.status === 403 && keptExisting())
+if (response.status === 403 && replaceRefused(text))
   discard(
     `keychain kept the existing ${service} login (403): ${text}; replacing it needs a sign-in started in the person's own running turn, so start again from step 1 there`,
   );

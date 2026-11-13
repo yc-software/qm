@@ -161,11 +161,12 @@ CREATE=$(kapi POST /browsers "{\"stealth\":true,\"headless\":false,\"timeout_sec
 CDP_URL=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('cdp_ws_url',''))")
 KERNEL_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id',''))")
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('browser_live_view_url',''))")
-[ -n "$KERNEL_SID" ] || [ "$SAVE" != true ] || curl -fsS -X DELETE \
-  "$AGENT_API_URL/v1/keychain/credentials/$PROFILE_ID/writer?holder=$HOLDER" -H "x-agent-capability: $AGENT_API_TOKEN" > /dev/null
+[ -n "$KERNEL_SID" ] || [ "$SAVE" != true ] || { curl -fsS -X DELETE \
+  "$AGENT_API_URL/v1/keychain/credentials/$PROFILE_ID/writer?holder=$HOLDER" -H "x-agent-capability: $AGENT_API_TOKEN" > /dev/null; SAVE=false; }
 ```
 
-When the create fails, that last line hands the lease back so a retry can take it.
+When the create fails, that last line hands the lease back and sets `SAVE` to `false`, so retry
+the whole block to take the lease again.
 `CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
 when you report: anything this run signs in to won't be kept.
 
