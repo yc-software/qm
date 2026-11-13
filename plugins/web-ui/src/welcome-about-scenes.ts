@@ -10,7 +10,7 @@ export const DEMO = {
   tool: {
     channel: "fundraising",
     ask: "make me a CRM to track our fundraise",
-    reply: "On it. Pulling investors from your inbox and your pipeline sheet.",
+    reply: "On it. Pulling investors from your inbox and the YC investor database.",
     card: { icon: "📊", title: "Seed round CRM", sub: "42 investors" },
   },
   ritual: {
