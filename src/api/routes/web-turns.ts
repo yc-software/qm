@@ -291,6 +291,7 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
       ...(request ? { request } : {}),
       ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
       ...(kind === "abort" && p.tree === true ? { tree: true } : {}),
+      ...(kind === "steer" && p.remark === true ? { remark: true } : {}),
     },
   });
 }

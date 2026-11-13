@@ -422,6 +422,7 @@ export function createTurnMethods(
         routed: Boolean(req.approval || req.spawned || replay),
         ...(req.botActor ? { bot: true } : {}),
       };
+      let botTurn: Run | undefined;
       if (deps.signals && !queuedBefore && mayMeetLiveTurn(incoming)) {
         const ambientRef =
           spineRouted && origin.kind === "human" && origin.messageTs
@@ -454,10 +455,7 @@ export function createTurnMethods(
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
-        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer" && live?.run) {
-          const botTurn = live.run;
-          await withCurrentProjectRoster(() => stopRun(botTurn, false, true));
-        }
+        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer") botTurn = live?.run;
         if (live?.run && route.kind !== "turn") {
           const target = live.run;
           const steerTs =
@@ -504,14 +502,16 @@ export function createTurnMethods(
           };
       }
 
-      const enqueue = () =>
-        deps.runs.enqueue({
+      const enqueued = await withCurrentProjectRoster(async () => {
+        const queued = await deps.runs.enqueue({
           sessionId: conversation.threadRef,
           request,
           maxAttempts: deps.maxAttempts,
           ...(dedupKey ? { dedupKey } : {}),
         });
-      const enqueued = await withCurrentProjectRoster(enqueue);
+        if (botTurn) await stopRun(botTurn, false, true);
+        return queued;
+      });
       if (!enqueued) return { status: "refused", reason: "project membership changed; retry from the current project" };
       const { run, deduped } = enqueued;
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
@@ -781,9 +781,10 @@ export function createTurnMethods(
       if (route.kind === "turn") {
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
-        if (route.reason === "bot-turn" && (signal.queuedRunId || request)) {
+        const stopsBot = route.reason === "bot-turn" && !signal.remark;
+        if (stopsBot && signal.queuedRunId) {
           await stopRun(run, false, true);
-          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
+          return { accepted: false, reason: "queued_started" };
         }
         if (signal.queuedRunId || !request) return { accepted: false, reason: "not_steerable", why: route.reason };
         const own = await methods.turn({
@@ -793,9 +794,9 @@ export function createTurnMethods(
           midTurn: "queue",
           async: true,
         });
-        return own.runId
-          ? { accepted: true, queuedRunId: own.runId }
-          : { accepted: false, reason: own.reason ?? own.status };
+        if (!own.runId) return { accepted: false, reason: own.reason ?? own.status };
+        if (stopsBot) await stopRun(run, false, true);
+        return { accepted: true, queuedRunId: own.runId };
       }
       const outbound = {
         ...signal,

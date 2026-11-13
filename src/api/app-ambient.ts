@@ -309,6 +309,24 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         audience = resolved;
       }
     }
+    if (!solicited && askedByPerson && batch.messages.some((m) => m.bot)) {
+      const bots = new Set(batch.messages.filter((m) => m.bot).map((m) => m.ts));
+      const errors = await Promise.all([
+        spawnAmbientWorker(
+          { ...batch, messages: batch.messages.filter((m) => bots.has(m.ts)) },
+          { act: true, ...(decision.reason ? { reason: decision.reason } : {}) },
+        ),
+        spawnAmbientWorker(
+          {
+            ...batch,
+            messages: batch.messages.filter((m) => !bots.has(m.ts)),
+            recent: batch.recent.filter((m) => !bots.has(m.ts)),
+          },
+          decision,
+        ),
+      ]);
+      return errors.filter(Boolean).join("; ") || undefined;
+    }
     const surfaceOrigin = sourceOrigin(batch, solicited?.message);
     const conversation = workerConversation(batch, threadRef, audience);
     if (decision.askedBy && !solicited)

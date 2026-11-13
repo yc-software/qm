@@ -37,6 +37,7 @@ private struct QueueMutationResponse: Decodable {
   let withdrawn: Bool?
   let accepted: Bool?
   let replayed: Bool?
+  let reason: String?
 }
 
 @MainActor
@@ -199,7 +200,10 @@ final class QueuedInputsModel {
         switch action {
         case .edit: confirmed = response.edited == true
         case .withdraw: confirmed = response.withdrawn == true
-        case .steer: confirmed = response.accepted == true || response.replayed == true
+        case .steer:
+          confirmed =
+            response.accepted == true || response.replayed == true
+            || response.reason == "queued_started"
         }
         guard confirmed else {
           throw QMError.message(
