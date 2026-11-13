@@ -29,7 +29,6 @@ import {
   type DocumentInput,
   loadDocumentInputs,
   MAX_DOCUMENT_BYTES,
-  MAX_DOCUMENT_TEXT_CHARS,
   MAX_DOCUMENTS,
   estimateDocumentTokens,
   turnDocumentMetas,
@@ -87,12 +86,7 @@ import type {
   SessionRoute,
 } from "../agent/agent.ts";
 import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
-import {
-  securityScreenChunks,
-  securityScreenPayloads,
-  UNSCREENED_REASON,
-  unscreenedNotice,
-} from "../security/security-posture.ts";
+import { securityScreenPayloads, UNSCREENED_REASON, unscreenedNotice } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import {
   applyTurnApprovals,
@@ -204,14 +198,12 @@ import {
   createSecurityClassifier,
   screenChunks,
   createDocumentScreen,
+  createInboundFileScreen,
   createSkillScreen,
   createToolResultScreen,
-  flaggedAudit,
-  oversizeVerdict,
   screenInboundInput,
   screenedFields,
   type SecurityScreenContext,
-  unscreenedVerdict,
 } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import {
@@ -862,14 +854,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      let personaBlock = persona ? personaPrompt(persona) : "";
-      if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
+      const personaBlock = persona ? personaPrompt(persona) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
       let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
       const turnContextBlocks: SystemContextBlocks = {};
+      if (typeof personaTurn === "string") turnContextBlocks["Personas"] = `## Personas\n${personaTurn}`;
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       let rosterMembers: DirectoryMember[] | undefined;
@@ -1756,6 +1748,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
         }
+        const fileScreenTurn = { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit };
+        const screenInboundFile = createInboundFileScreen(fileScreenTurn);
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,
           registration: ArtifactRegistration,
@@ -1770,26 +1764,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 blobTransfer,
                 registration,
                 inboxDir,
-                securityPolicy.screening !== "off"
-                  ? async ({ content, name, mimetype }) => {
-                      const payload = JSON.stringify({ name, mimetype, content });
-                      let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
-                      if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
-                        verdict = await screenChunks(
-                          securityScreenChunks("tool_result:inbound_file", payload),
-                          classifyAs({
-                            sessionId: session.id,
-                            hook: "tool_response",
-                            request: requestText,
-                            surface: "inbound_file",
-                          }),
-                          { batch: 4, signal: turnAbort.signal },
-                        );
-                      if (verdict.decision === "strict")
-                        audit(flaggedAudit("inbound_file", "withheld", verdict.reason, [name]));
-                      return verdict;
-                    }
-                  : undefined,
+                screenInboundFile(requestText),
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
         const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
@@ -1878,15 +1853,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const screenDocuments = createDocumentScreen({
-          deps,
-          session,
-          securityPolicy,
-          enforceScreen,
-          classifyAs,
-          turnAbort,
-          audit,
-        });
+        const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
           maxDocuments: MAX_DOCUMENTS,

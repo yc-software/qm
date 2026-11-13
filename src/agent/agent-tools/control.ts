@@ -331,7 +331,8 @@ export function controlPlaneTools(kit: ToolKit) {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "file")
-      description = "Share a Files record by ID (upload a sandbox path with POST /v1/files/uploads first).";
+      description =
+        "Share a Files record by ID (upload a sandbox path with the helper from GET /v1/files/upload-client first).";
     if (type === "deploy")
       description =
         "Change access to an app you own: `public`, or toScope/email for signed-in access (external emails view-only).";

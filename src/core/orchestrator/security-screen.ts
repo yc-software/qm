@@ -18,7 +18,7 @@ import {
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { securityScreenPayloads } from "../../security/security-posture.ts";
 import type { CommandApprovalGrant } from "../../types.ts";
-import { isVisionAttachment, safeAttachmentName, withheldName } from "../attachments.ts";
+import { isVisionAttachment, type materializeInbound, safeAttachmentName, withheldName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
 import {
   documentText,
@@ -53,19 +53,19 @@ const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
 const MAX_AUDITED_SOURCES = 20;
 
-export const unscreenedVerdict = (): SecurityScreenVerdict => ({
+const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
   unscreened: true,
   reason: UNSCREENED_REASON,
 });
 
-export const oversizeVerdict = (): SecurityScreenVerdict => ({
+const oversizeVerdict = (): SecurityScreenVerdict => ({
   decision: "strict",
   unscreened: true,
   reason: `too long for the security screen to read, over ${MAX_DOCUMENT_TEXT_CHARS} characters`,
 });
 
-export const flaggedAudit = (resource: string, status: string, reason: string | undefined, sources: string[]) => ({
+const flaggedAudit = (resource: string, status: string, reason: string | undefined, sources: string[]) => ({
   action: SECURITY_FLAGGED,
   resource,
   status,
@@ -268,17 +268,27 @@ export interface InboundScreenTurn {
 export function screenedFields(
   request: Pick<
     TurnRequest,
-    "text" | "gatewayContext" | "conversationHeader" | "overheard" | "attachments" | "inboundNotes"
+    | "text"
+    | "gatewayContext"
+    | "conversationHeader"
+    | "overheard"
+    | "attachments"
+    | "inboundNotes"
+    | "deliveryCandidates"
   > & {
     surface?: string;
     conversation: { kind: string };
   },
 ) {
   const dm = request.conversation.kind === "dm";
+  const destinations = (request.deliveryCandidates ?? []).map((c) => c.label);
   return {
     text: request.text,
     conversationHeader: request.conversationHeader ?? "",
-    place: shownPlace(request.surface, request.gatewayContext, dm),
+    place: {
+      ...shownPlace(request.surface, request.gatewayContext, dm),
+      ...(destinations.length ? { destinations } : {}),
+    },
     overheard: request.overheard ?? [],
     attachments: request.attachments ?? [],
     inboundNotes: request.inboundNotes ?? [],
@@ -675,6 +685,30 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
     });
     return { outcome: "unscreened" };
   };
+}
+
+export function createInboundFileScreen(turn: Parameters<typeof createDocumentScreen>[0]) {
+  const { session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
+  return (requestText: string): Parameters<typeof materializeInbound>[6] =>
+    securityPolicy.screening === "off"
+      ? undefined
+      : async ({ content, name, mimetype }) => {
+          const payload = JSON.stringify({ name, mimetype, content });
+          let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
+          if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
+            verdict = await screenChunks(
+              securityScreenChunks("tool_result:inbound_file", payload),
+              classifyAs({
+                sessionId: session.id,
+                hook: "tool_response",
+                request: requestText,
+                surface: "inbound_file",
+              }),
+              { batch: 4, signal: turnAbort.signal },
+            );
+          if (verdict.decision === "strict") audit(flaggedAudit("inbound_file", "withheld", verdict.reason, [name]));
+          return verdict;
+        };
 }
 
 export function createDocumentScreen(turn: {

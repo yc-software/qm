@@ -297,7 +297,7 @@ describe("surface-context pulls", async () => {
       },
     );
     const query = await fulfillNext(() => ({
-      file: { blobId: "blob-42", name: "wave.png", sizeBytes: 3, mimetype: "image/png", author: "Alice" },
+      attachments: [{ blobId: "blob-42", name: "wave.png", sizeBytes: 3, mimetype: "image/png", author: "Alice" }],
     }));
     assert.equal(query.channelId, "C-ENG");
     assert.deepEqual(query.file, { ts: "1699.5", name: "wave.png" });
@@ -322,7 +322,7 @@ describe("surface-context pulls", async () => {
       { ts: "1700.2", threadTs: "1700.0001" },
       { "x-agent-capability": await cap() },
     );
-    const query = await fulfillNext(() => ({ file: { blobId: "b2", name: "notes.txt", sizeBytes: 9 } }));
+    const query = await fulfillNext(() => ({ attachments: [{ blobId: "b2", name: "notes.txt", sizeBytes: 9 }] }));
     assert.equal(query.conversationTarget, "C9:1700.0001");
     assert.deepEqual(query.file, { ts: "1700.2", threadTs: "1700.0001" });
     assert.equal((await asking).status, 200);
@@ -343,7 +343,7 @@ describe("surface-context pulls", async () => {
       { channel: "warroom", ts: "1.0" },
       { "x-agent-capability": await cap({ actorId: "U-member" }) },
     );
-    const query = await fulfillNext(() => ({ file: { blobId: "b3", name: "secret.pdf", sizeBytes: 1 } }));
+    const query = await fulfillNext(() => ({ attachments: [{ blobId: "b3", name: "secret.pdf", sizeBytes: 1 }] }));
     assert.equal(query.channelId, "C-SECRET");
     assert.equal((await asking).status, 200);
   });
