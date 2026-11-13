@@ -35,28 +35,33 @@ import subprocess
 import tempfile
 import sys
 import urllib.parse
+from email import message_from_string
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formataddr, getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
 
-API = "https://gmail.googleapis.com/gmail/v1/users/me"
+HOST = "https://gmail.googleapis.com"
+USER_PATH = "/gmail/v1/users/me"
+API = f"{HOST}{USER_PATH}"
+BATCH_URL = f"{HOST}/batch/gmail/v1"
+BATCH_SIZE = 20
 
 
 ACCOUNT: str | None = None
 
 
-def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
+def send(method: str, url: str, what: str, body: dict | str | None = None,
+         content_type: str = "application/json") -> tuple[str, str]:
     global ACCOUNT
-    url = f"{API}/{path}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
     tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
     base, cap = os.environ.get("AGENT_API_URL", ""), os.environ.get("AGENT_API_TOKEN", "")
     head = None
     if tok:
         cmd = ["curl", "-sS", "--max-time", "60", "-X", method,
-               "-H", f"Authorization: Bearer {tok}", "-H", "Content-Type: application/json",
+               "-H", f"Authorization: Bearer {tok}", "-H", f"Content-Type: {content_type}",
                "-w", "\n%{http_code}", url]
-        payload = json.dumps(body) if body is not None else None
+        payload = body if body is None or isinstance(body, str) else json.dumps(body)
     elif base and cap:
         head = tempfile.NamedTemporaryFile(prefix="gmail-proxy-", delete=False)
         head.close()
@@ -65,6 +70,7 @@ def call(method: str, path: str, body: dict | None = None, query: dict | None = 
                "-w", "\n%{http_code}", f"{base}/v1/composio/proxy"]
         payload = json.dumps({"method": method, "url": url,
                               **({"body": body} if body is not None else {}),
+                              **({"headers": {"Content-Type": content_type}} if isinstance(body, str) else {}),
                               **({"accountId": ACCOUNT} if ACCOUNT else {})})
     else:
         sys.exit("no Gmail connection: ask the user to connect Gmail")
@@ -77,16 +83,75 @@ def call(method: str, path: str, body: dict | None = None, query: dict | None = 
         os.unlink(head.name)
         ACCOUNT = ACCOUNT or (seen[-1] if seen else None)
     if res.returncode != 0:
-        sys.exit(f"gmail api unreachable on {method} {path}: {res.stderr.strip()[:500]}")
+        sys.exit(f"gmail api unreachable on {what}: {res.stderr.strip()[:500]}")
     text, _, status = res.stdout.rpartition("\n")
     if not status.startswith("2"):
-        sys.exit(f"gmail api {status} on {method} {path}: {text[:500]}")
+        sys.exit(f"gmail api {status} on {what}: {text[:500]}")
+    return status, text
+
+
+def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
+    url = f"{API}/{path}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
+    status, text = send(method, url, f"{method} {path}", body)
     if not text:
         return {}
     try:
         return json.loads(text)
     except ValueError:
         sys.exit(f"gmail api {status} on {method} {path}: non-json response: {text[:500]}")
+
+
+def batch_get(paths: dict[str, str]) -> dict[str, tuple[int, str]]:
+    request = EmailMessage(policy=SMTP)
+    request["Content-Type"] = "multipart/mixed"
+    for key, path in paths.items():
+        part = EmailMessage(policy=SMTP)
+        part["Content-Type"] = "application/http"
+        part["Content-ID"] = f"<{key}>"
+        part.set_payload(f"GET {path}\r\n")
+        request.attach(part)
+    body = request.as_string().partition("\r\n\r\n")[2]
+    status, text = send("POST", BATCH_URL, "POST batch", body, request["Content-Type"])
+    boundary = text.lstrip().split("\n", 1)[0].strip().removeprefix("--")
+    reply = message_from_string(f'Content-Type: multipart/mixed; boundary="{boundary}"\n\n{text}')
+    if not reply.is_multipart():
+        sys.exit(f"gmail api {status} on POST batch: non-multipart response: {text}")
+    results = {}
+    try:
+        for part in reply.get_payload():
+            status_line, _, rest = part.get_payload().lstrip().partition("\n")
+            key = part["Content-ID"].strip().strip("<>").removeprefix("response-")
+            results[key] = (int(status_line.split()[1]), message_from_string(rest).get_payload())
+    except (AttributeError, IndexError, ValueError) as error:
+        sys.exit(f"gmail api {status} on POST batch: unreadable part ({error!r}): {text}")
+    if results.keys() != paths.keys():
+        sys.exit(f"gmail api {status} on POST batch: reply does not cover the requested messages: {text}")
+    return results
+
+
+def message_metadata(ids: list[str]) -> dict[str, dict]:
+    query = urllib.parse.urlencode({"format": "metadata", "metadataHeaders": ["From", "Date", "Subject"]}, doseq=True)
+    found: dict[str, dict] = {}
+    pending = ids
+    while pending:
+        limited: dict[str, str] = {}
+        for start in range(0, len(pending), BATCH_SIZE):
+            chunk = pending[start:start + BATCH_SIZE]
+            replies = batch_get({m: f"{USER_PATH}/messages/{m}?{query}" for m in chunk})
+            for mid, (status, body) in replies.items():
+                if status == 429:
+                    limited[mid] = body
+                    continue
+                if status != 200:
+                    sys.exit(f"gmail api {status} on GET messages/{mid}: {body}")
+                try:
+                    found[mid] = json.loads(body)
+                except ValueError:
+                    sys.exit(f"gmail api {status} on GET messages/{mid}: non-json response: {body}")
+        if len(limited) == len(pending):
+            sys.exit(f"gmail api 429 on GET messages/{pending[0]}: {limited[pending[0]]}")
+        pending = list(limited)
+    return found
 
 
 def read_body(path: str) -> str:
@@ -341,7 +406,6 @@ def main() -> None:
     ACCOUNT = a.account
 
     if a.cmd == "search":
-        meta_q = {"format": "metadata", "metadataHeaders": ["From", "Date", "Subject"]}
         msgs, page = [], None
         while len(msgs) < a.limit:
             q = {"q": a.query, "maxResults": min(a.limit - len(msgs), 100),
@@ -351,8 +415,9 @@ def main() -> None:
             page = res.get("nextPageToken")
             if not page:
                 break
+        metas = message_metadata([m["id"] for m in msgs])
         for m in msgs:
-            meta = call("GET", f"messages/{m['id']}", query=meta_q)
+            meta = metas[m["id"]]
             h = headers_of(meta["payload"])
             print(json.dumps({"id": m["id"], "threadId": meta.get("threadId"),
                               "from": h.get("from"), "date": h.get("date"),
