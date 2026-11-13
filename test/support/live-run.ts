@@ -23,3 +23,15 @@ export async function holdThread(runs: RunStore, threadRef: string): Promise<() 
     assert.ok(await runs.complete(run.id, claimed.leaseToken!, { status: "ok" }));
   };
 }
+
+const RUN = { runAttempt: 1, runLeaseToken: "live", threadRef: "dm:live" };
+const running = { status: "running", leaseToken: "live", attempts: 1, sessionId: "dm:live", leaseExpiresAt: Infinity };
+
+export const liveRunClaims = (actorId: string) => ({ ...RUN, liveActor: true, runId: `live:${actorId}` });
+
+export const liveRunStore = (runs?: RunStore) =>
+  ({
+    ...runs,
+    get: async (id: string) =>
+      id.startsWith("live:") ? { ...running, request: { actor: { id: id.slice(5) } } } : (runs?.get(id) ?? null),
+  }) as never;

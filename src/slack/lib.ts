@@ -42,6 +42,7 @@ export {
   channelPrivacyChange,
   createRefreshCoalescer,
   hasContent,
+  slackFileName,
   isThreadReply,
   createThreadTracker,
   channelThreadRef,
@@ -52,15 +53,14 @@ export {
 } from "./message-gating.ts";
 export {
   type SlackFile,
-  hydrateSlackFiles,
   MAX_ATTACHMENT_BYTES,
   isOversize,
   isTrustedSlackHost,
   attachmentFromBytes,
   MAX_ATTACHMENTS_PER_TURN,
-  oversizeMsg,
   downloadSlackFile,
   processInboundFiles,
+  stageSlackFiles,
   uploadAttachments,
   uploadFailureNote,
 } from "./attachments.ts";

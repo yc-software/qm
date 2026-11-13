@@ -2105,6 +2105,21 @@ test("an attachment's name stays out of the screen's source labels", async () =>
   assert.equal(parts.find((part) => part.content === "quarterly numbers")?.source, "attachment");
 });
 
+test("an attachment name over the file name limit reaches the inbox at 255 bytes and the agent is told", async () => {
+  const { app, blobTransfer } = freshApp();
+  const blob = await blobTransfer.put(Buffer.from("notes"));
+  const file = {
+    name: `${"a".repeat(300)}.txt`,
+    mimetype: "text/plain",
+    sizeBytes: blob.sizeBytes,
+    blobId: blob.blobId,
+  };
+  const reply = (await app.turn(dm("read these", { attachments: [file, file] }))).reply ?? "";
+  const note = "saved under a shortened name to fit the 255-byte file name limit (the shared name was 304 bytes).";
+  assert.ok(reply.includes(`${"a".repeat(251)}.txt), ${note}`), reply);
+  assert.ok(reply.includes(`${"a".repeat(249)}-2.txt), ${note}`), reply);
+});
+
 test("a later turn removes same-conversation and expired transfer files", async () => {
   const built = freshApp();
   const { app, sandbox } = built;
@@ -4819,6 +4834,31 @@ test("enforced screening flags strict-posture inbound data before model executio
     approval: { requestId: first.pendingApprovals![0]!.requestId, approved: true },
   });
   assert.equal(approved.status, "ok");
+});
+
+for (const [what, change] of [
+  ["place it shows", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK, moved" } } }],
+  ["file notes it carries", { inboundNotes: ["note"] }],
+] satisfies Array<[string, Partial<TurnRequest>]>) {
+  test(`an approved replay of held input is screened again when the ${what} changed`, async () => {
+    const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
+    const request = dm("hello", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK" } } });
+    const first = await built.app.turn(request);
+    assert.equal(first.status, "pending_approval");
+    const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
+    assert.equal((await built.app.turn({ ...request, ...change, approval })).status, "pending_approval");
+  });
+}
+
+test("an approved replay of held input goes through when it resends its file notes with details keys in another order", async () => {
+  const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
+  const request = dm("hello", {
+    gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK", id: "1" } },
+    inboundNotes: ["note"],
+  });
+  const first = await built.app.turn(request);
+  const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
+  assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
 });
 
 for (const failure of ["error", "timeout"] as const) {

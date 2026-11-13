@@ -29,7 +29,6 @@ import {
   type DocumentInput,
   loadDocumentInputs,
   MAX_DOCUMENT_BYTES,
-  MAX_DOCUMENT_TEXT_CHARS,
   MAX_DOCUMENTS,
   estimateDocumentTokens,
   turnDocumentMetas,
@@ -87,12 +86,7 @@ import type {
   SessionRoute,
 } from "../agent/agent.ts";
 import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
-import {
-  securityScreenChunks,
-  securityScreenPayloads,
-  UNSCREENED_REASON,
-  unscreenedNotice,
-} from "../security/security-posture.ts";
+import { securityScreenPayloads, UNSCREENED_REASON, unscreenedNotice } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import {
   applyTurnApprovals,
@@ -152,6 +146,7 @@ import {
 import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
@@ -203,13 +198,12 @@ import {
   createSecurityClassifier,
   screenChunks,
   createDocumentScreen,
+  createInboundFileScreen,
   createSkillScreen,
   createToolResultScreen,
-  flaggedAudit,
-  oversizeVerdict,
   screenInboundInput,
+  screenedFields,
   type SecurityScreenContext,
-  unscreenedVerdict,
 } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import {
@@ -536,6 +530,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
+      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation";
       const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
       const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
@@ -643,20 +638,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         thread: conversation.threadRef,
         ...(input.runId ? { runId: input.runId } : {}),
       } as const;
+      const homeChannel =
+        conversation.kind === "group" && conversation.channelRef
+          ? await deps.managedGroups
+              ?.slackChannel?.(conversation.channelRef)
+              .catch(swallowAs("orchestrator: project home channel read", undefined))
+          : undefined;
       const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        approvalRecord.request.text === input.text &&
-        JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
-        JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
-        (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
+        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
+          canonicalJson(screenedFields(input, homeChannel?.channelName));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
         approvalRecord.kind === "input" &&
         approvalReplaysFlaggedRequest;
-      const screenInbound = securityPolicy.screening !== "off" && !replaysHeldInput;
+      const screenInbound =
+        securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: TurnLlmRequestRecord[] = [];
       const recordScreenRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
@@ -686,6 +686,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input,
         actor,
         conversation,
+        homeChannelName: homeChannel?.channelName,
         scopeId,
         resolution,
         screenInbound,
@@ -727,6 +728,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               sessionId: session.id,
               command: "security-screen",
               reason: heldReason,
+              homeChannel: homeChannel?.channelName,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
@@ -863,14 +865,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      let personaBlock = persona ? personaPrompt(persona) : "";
-      if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
+      const personaBlock = persona ? personaPrompt(persona) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
       let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
       const turnContextBlocks: SystemContextBlocks = {};
+      if (typeof personaTurn === "string") turnContextBlocks["Personas"] = `## Personas\n${personaTurn}`;
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       let rosterMembers: DirectoryMember[] | undefined;
@@ -966,12 +968,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         conversation.kind === "dm" ? (cleanBrandingLabel(actor.displayName, 80) ?? personLabel(actor.id)) : undefined,
       );
       if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
-      const homeChannel =
-        conversation.kind === "group" && conversation.channelRef
-          ? await deps.managedGroups
-              ?.slackChannel?.(conversation.channelRef)
-              .catch(swallowAs("orchestrator: project home channel read", undefined))
-          : undefined;
       if (homeChannel) turnContextBlocks["Project home channel"] = renderProjectHomeChannel(homeChannel.channelName);
       turnContextBlocks["Where scheduled tasks post"] = cronBlock;
       const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);
@@ -1175,7 +1171,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         allInternal,
         liveTurn,
         liveAuthorTurn: livePersonTurn,
-        automatedTurn,
+        triggeredTurn,
         actAsActor,
         useMemory,
         memoryPolicy,
@@ -1757,6 +1753,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
         }
+        const fileScreenTurn = { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit };
+        const screenInboundFile = createInboundFileScreen(fileScreenTurn);
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,
           registration: ArtifactRegistration,
@@ -1771,26 +1769,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 blobTransfer,
                 registration,
                 inboxDir,
-                securityPolicy.screening !== "off"
-                  ? async ({ content, name, mimetype }) => {
-                      const payload = JSON.stringify({ name, mimetype, content });
-                      let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
-                      if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
-                        verdict = await screenChunks(
-                          securityScreenChunks("tool_result:inbound_file", payload),
-                          classifyAs({
-                            sessionId: session.id,
-                            hook: "tool_response",
-                            request: requestText,
-                            surface: "inbound_file",
-                          }),
-                          { batch: 4, signal: turnAbort.signal },
-                        );
-                      if (verdict.decision === "strict")
-                        audit(flaggedAudit("inbound_file", "withheld", verdict.reason, [name]));
-                      return verdict;
-                    }
-                  : undefined,
+                screenInboundFile(requestText),
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
         const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
@@ -1879,15 +1858,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const screenDocuments = createDocumentScreen({
-          deps,
-          session,
-          securityPolicy,
-          enforceScreen,
-          classifyAs,
-          turnAbort,
-          audit,
-        });
+        const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
           maxDocuments: MAX_DOCUMENTS,
@@ -2093,7 +2064,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
           ...(livePersonTurn ? { liveAuthor: true } : {}),
-          ...(automatedTurn ? { triggered: true } : {}),
+          ...(triggeredTurn ? { triggered: true } : {}),
         };
         const restoredRuntime =
           input.runId && isRetry
@@ -2369,6 +2340,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
+            ...(input.botActor ? { botActor: true } : {}),
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
             ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),

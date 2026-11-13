@@ -22,6 +22,7 @@ function renderSurfaceBriefing(surface: SurfaceBriefing): string {
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
     isObj(body) &&
+    typeof body.surface === "string" &&
     typeof body.text === "string" &&
     isObj(body.actor) &&
     typeof body.actor.externalId === "string" &&
@@ -154,6 +155,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
+  const { hostIds: _hostIds, ...callerGateway } = rest.gatewayContext ?? {};
   let conversationHeader = rest.conversationHeader;
   if (rawSurfaceBriefing !== undefined) {
     const parsed = surfaceBriefingSchema.safeParse(rawSurfaceBriefing);
@@ -163,6 +165,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   return {
     request: {
       ...rest,
+      ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(origin ? { origin } : {}),
       ...(clientTools?.length ? { clientTools } : {}),
@@ -350,7 +353,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "PATCH",
     path: "/v1/runs/:id/input",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "source",
     handle: patchQueuedRun,

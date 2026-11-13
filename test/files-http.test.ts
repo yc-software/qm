@@ -431,7 +431,7 @@ test("file grants name one Files record, not its path or another generation", as
   for (const ref of [input.path, "artifacts/original/report.txt", "nonexistent"])
     await assert.rejects(
       app.grant(tenant, { ...grant, ref }),
-      /put the file in Files first using POST \/v1\/files\/uploads/,
+      /put the file in Files first with the helper from GET \/v1\/files\/upload-client/,
     );
   assert.deepEqual(await acl.find(tenant, { ownerScopeId }), []);
   await app.grant(tenant, { ...grant, ref: original.id });

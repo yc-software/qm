@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { api } from "./core-bridge";
+import { api, isSharedScopeId } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { tip } from "./tooltip";
@@ -38,10 +38,6 @@ const ambientPolicyState = {
 let loadSeq = 0;
 let redraw: () => void = () => {};
 
-function ambientPolicyApplies(scopeId: string): boolean {
-  return scopeId.startsWith("channel:") || scopeId.startsWith("group:");
-}
-
 export function resetAmbientPolicy(): void {
   loadSeq += 1;
   ambientPolicyState.scope = null;
@@ -59,7 +55,7 @@ export function resetAmbientPolicy(): void {
 
 export async function loadAmbientPolicy(scopeId: string, onChange: () => void): Promise<void> {
   redraw = onChange;
-  if (!ambientPolicyApplies(scopeId) || ambientPolicyState.scope === scopeId) return;
+  if (!isSharedScopeId(scopeId) || ambientPolicyState.scope === scopeId) return;
   resetAmbientPolicy();
   const seq = ++loadSeq;
   ambientPolicyState.scope = scopeId;
@@ -222,7 +218,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
 }
 
 export function ambientPolicySection(scopeId: string): TemplateResult | typeof nothing {
-  if (!ambientPolicyApplies(scopeId)) return nothing;
+  if (!isSharedScopeId(scopeId)) return nothing;
   if (ambientPolicyState.scope !== scopeId) return nothing;
   if (ambientPolicyState.loading)
     return html`<section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
