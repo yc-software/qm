@@ -275,7 +275,7 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
          OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
         RETURN;
       END IF;
-      WITH bots AS MATERIALIZED (
+      WITH bots AS NOT MATERIALIZED (
         SELECT k.tenant_id, k.alias_id FROM user_links k
           JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
          WHERE u.kind = 'app'
