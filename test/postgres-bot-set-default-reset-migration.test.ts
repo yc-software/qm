@@ -31,8 +31,10 @@ test("a deploy clears a default computer only while a bot-marked turn's set is s
   };
   const [a, b, c, d] = ["channel:C1", "channel:C2", "channel:C3", "channel:C4"] as const;
   const from = await set(a, await computer(a), "admitted");
-  await environments.attach(a, (await environments.create({ id: "channel:C5" })).id, "U1");
+  const attach = () => app.attachScope({ scopeId: a, environmentId: "channel:C5", actorId: "U1" });
+  await environments.create({ id: "channel:C5" }).then(attach);
   await set(a, null, undefined, "channel:C5");
+  await attach();
   const kept = await computer(b);
   await set(b, kept, "admitted");
   const admin = { at: Date.now(), principalId: "U1", action: "sandbox.default", resource: kept, scopeLabel: b };

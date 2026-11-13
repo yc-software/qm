@@ -72,12 +72,13 @@ export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
       END IF;
       WITH tool_sets AS MATERIALIZED (
         SELECT c.tenant_id, c.session_id, ${msOf("res.created_at")} AS at, c.body ->> 'sandbox_id' AS sandbox_id,
-               r.id AS run_id, r.session_id AS thread_ref,
-               CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb ->> 'botActor' = 'true' END AS bot
+               r.id AS run_id, r.session_id AS thread_ref, COALESCE(r.started_at, ${msOf("res.created_at")}) AS started,
+               q.req ->> 'botActor' = 'true' AS bot, q.req #>> '{surfaceOrigin,audience}' = 'external' AS external
           FROM items c
           JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
                         AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
           LEFT JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.turn_id::text
+          CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb END AS req) q
          WHERE c.kind = 'ToolCall' AND c.tool = 'sandbox' AND c.body ->> 'action' = 'set_default'
            AND res.is_error IS NOT TRUE
       ), events AS (
@@ -86,8 +87,17 @@ export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
           FROM tool_sets t
           JOIN sessions s ON s.tenant_id = t.tenant_id AND s.id = t.session_id
           LEFT JOIN sandbox_resources sr ON sr.tenant_id = t.tenant_id AND sr.id = t.sandbox_id
-          LEFT JOIN environment_attachments ea ON ea.tenant_id = t.tenant_id AND ea.scope_id = s.scope_id
-                                               AND ea.attached_at <= t.at
+          LEFT JOIN LATERAL (
+            SELECT a.environment_id FROM (
+              SELECT resource AS environment_id, at FROM audit_log
+               WHERE tenant_id = t.tenant_id AND action = 'environment_attach' AND scope_label = s.scope_id
+              UNION ALL
+              SELECT environment_id, attached_at FROM environment_attachments
+               WHERE tenant_id = t.tenant_id AND scope_id = s.scope_id
+            ) a
+             WHERE sr.id IS NULL AND t.external IS NOT TRUE AND a.at <= t.started
+             ORDER BY a.at DESC LIMIT 1
+          ) ea ON true
         UNION ALL
         SELECT tenant_id, scope_label, at, NULLIF(resource, 'null'), false, NULL, NULL
           FROM audit_log WHERE action = 'sandbox.default'
