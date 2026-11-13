@@ -990,11 +990,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
         },
       );
-      const personaRuntime =
-        persona && !threadSession.runtime ? await deps.config.getRuntimeSelectionDurable(persona.scope) : null;
-      const session = personaRuntime
-        ? { ...threadSession, runtime: { modelId: personaRuntime.modelId } }
-        : threadSession;
+      const session =
+        persona?.modelId && !threadSession.runtime
+          ? { ...threadSession, runtime: { modelId: persona.modelId } }
+          : threadSession;
       screenSession.id = session.id;
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });

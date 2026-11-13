@@ -1,3 +1,4 @@
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { personIds } from "../directory/person.ts";
 import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
@@ -38,6 +39,7 @@ export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
   pinned?: boolean;
+  modelId?: string;
 }
 
 export interface PersonaService {
@@ -101,6 +103,7 @@ export function createPersonaService(deps: {
   sessions: Pick<SessionStore, "setPersona">;
   isActive: (principalId: string) => boolean;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
+  config?: Pick<ScopedConfigStore, "getRuntimeSelectionDurable">;
 }): PersonaService {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
@@ -296,7 +299,9 @@ export function createPersonaService(deps: {
       const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
+      const scope = personaScope(personaId);
+      const modelId = (await deps.config?.getRuntimeSelectionDurable(scope))?.modelId;
+      return { persona, scope, ...(pinned ? { pinned: true } : {}), ...(modelId ? { modelId } : {}) };
     },
   };
 }
