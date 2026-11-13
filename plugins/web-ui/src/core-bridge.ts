@@ -344,6 +344,10 @@ export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): 
   return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
 }
 
+export function isSharedScopeId(scopeId: string): boolean {
+  return scopeId.startsWith("channel:") || scopeId.startsWith("group:");
+}
+
 export function sharedContextLabel(scopeId: string | null, name: string | null): string | null {
   if (!scopeId) return null;
   if (scopeId.startsWith("channel:")) return name ? `#${name.replace(/^#/, "")}` : "Shared channel";
@@ -589,6 +593,7 @@ export interface RunPoll {
     reply?: string;
     reason?: string;
     refusalKind?: string;
+    errorCode?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;

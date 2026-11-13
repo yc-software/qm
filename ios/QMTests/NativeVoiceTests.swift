@@ -1,4 +1,5 @@
 import AVFAudio
+import Speech
 import XCTest
 import os
 
@@ -15,6 +16,37 @@ final class NativeVoiceTests: XCTestCase {
   }
 
   @MainActor
+  func testDictationAudioTapProcessesBuffersOffMainActor() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "qm-dictation-tap-\(UUID().uuidString).caf")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+    nonisolated(unsafe) let buffer = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128))
+    buffer.frameLength = 128
+    let samples = try XCTUnwrap(buffer.floatChannelData?.pointee)
+    for index in 0..<Int(buffer.frameLength) { samples[index] = 0.25 }
+    let recording = try AVAudioFile(forWriting: url, settings: format.settings)
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    let meter = DictationLevel()
+    let errors = OSAllocatedUnfairLock(initialState: [String]())
+    nonisolated(unsafe) let tap = dictationAudioTap(
+      request: request, recording: recording, meter: meter
+    ) { message in errors.withLock { $0.append(message) } }
+    let calledOnMainThread = await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .userInitiated).async {
+        tap(buffer, AVAudioTime(sampleTime: 0, atRate: 48_000))
+        continuation.resume(returning: Thread.isMainThread)
+      }
+    }
+    request.endAudio()
+    XCTAssertFalse(calledOnMainThread)
+    XCTAssertTrue(errors.withLock { $0.isEmpty })
+    XCTAssertEqual(recording.length, 128)
+    XCTAssertEqual(meter.read(), (20 * log10(0.25) + 50) / 50, accuracy: 0.0001)
+  }
+
+  @MainActor
   func testCanceledPreparationCannotStartTheMicrophoneOrChangeTheDraft() async {
     let provider = DelayedDictationProvider()
     let model = NativeDictationModel(provider: provider)
@@ -25,7 +57,7 @@ final class NativeVoiceTests: XCTestCase {
     }
     XCTAssertEqual(model.state, .preparing)
     model.cancel()
-    provider.continuation?.resume(returning: "OpenAI")
+    provider.continuation?.resume()
     for _ in 0..<10 { await Task.yield() }
     XCTAssertEqual(model.state, .idle)
     XCTAssertNil(model.completedText)
@@ -77,7 +109,7 @@ final class NativeVoiceTests: XCTestCase {
     let tool = try JSONDecoder().decode(
       Item.self,
       from: Data(
-        #"{"kind":"ToolCall","seq":2,"createdAt":1,"callId":"c1","tool":"search","body":{}}"#
+        #"{"createdAt":1,"seq":2,"kind":"ToolCall","callId":"c1","tool":"search","body":{}}"#
           .utf8))
     _ = transcript.append(speech("Checking.", 0))
     transcript.appendActivity([tool], runID: "run")
@@ -94,6 +126,58 @@ final class NativeVoiceTests: XCTestCase {
     XCTAssertEqual(activity.tool, "search")
     XCTAssertEqual(second.text, " Found it.")
     XCTAssertEqual(result, "One result")
+  }
+
+  @MainActor
+  func testVoiceMicrophoneDenialStopsConnectingAndOffersSettings() async {
+    let model = NativeVoiceModel(
+      client: APIClient(baseURL: URL(string: "https://voice-permission.example")!),
+      conversation: nil, microphonePermission: { false })
+    model.available = true
+    await model.start()
+    XCTAssertFalse(model.connecting)
+    XCTAssertFalse(model.connected)
+    XCTAssertFalse(model.stopping)
+    XCTAssertEqual(model.permissionError, .microphoneDenied)
+    XCTAssertEqual(model.permissionError?.canOpenSettings, true)
+    XCTAssertEqual(model.status, NativeAudioPermissionError.microphoneDenied.localizedDescription)
+  }
+
+  @MainActor
+  func testEndingVoiceDuringPermissionPromptIgnoresALateGrant() async throws {
+    let requested = expectation(description: "Microphone permission requested")
+    var permission: CheckedContinuation<Bool, Never>?
+    let model = NativeVoiceModel(
+      client: APIClient(baseURL: URL(string: "https://voice-permission.example")!),
+      conversation: nil
+    ) {
+      await withCheckedContinuation {
+        permission = $0
+        requested.fulfill()
+      }
+    }
+    model.available = true
+    let starting = Task { await model.start() }
+    defer {
+      permission?.resume(returning: false)
+      starting.cancel()
+      model.finish()
+    }
+    await fulfillment(of: [requested], timeout: 2)
+    let prompt = try XCTUnwrap(permission)
+    permission = nil
+    XCTAssertTrue(model.connecting)
+    model.finish()
+    let stoppedRevision = model.revision
+    let stoppedStatus = model.status
+    prompt.resume(returning: true)
+    await starting.value
+    XCTAssertFalse(model.connecting)
+    XCTAssertFalse(model.connected)
+    XCTAssertFalse(model.stopping)
+    XCTAssertNil(model.permissionError)
+    XCTAssertEqual(model.revision, stoppedRevision)
+    XCTAssertEqual(model.status, stoppedStatus)
   }
 
   @MainActor
@@ -237,11 +321,15 @@ final class NativeVoiceTests: XCTestCase {
 
 @MainActor
 private final class DelayedDictationProvider: SpeechToTextProvider {
-  var continuation: CheckedContinuation<String, any Error>?
-  func availability() async throws -> String {
+  var continuation: CheckedContinuation<Void, any Error>?
+  func availability() async throws {
     try await withCheckedThrowingContinuation { continuation = $0 }
   }
   func transcribe(file: URL) async throws -> String { "Unused" }
+  func recognizeLive(
+    request: SFSpeechAudioBufferRecognitionRequest,
+    onResult: @escaping @Sendable (String?, Bool, String?) -> Void
+  ) throws -> SFSpeechRecognitionTask? { nil }
 }
 
 final class VoiceTaskProtocol: URLProtocol, @unchecked Sendable {
@@ -249,22 +337,10 @@ final class VoiceTaskProtocol: URLProtocol, @unchecked Sendable {
   static let turnKeys = OSAllocatedUnfairLock(initialState: [String]())
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-  private var requestBody: Data {
-    if let body = request.httpBody { return body }
-    guard let stream = request.httpBodyStream else { return Data() }
-    stream.open()
-    defer { stream.close() }
-    var data = Data()
-    var buffer = [UInt8](repeating: 0, count: 4096)
-    while case let count = stream.read(&buffer, maxLength: buffer.count), count > 0 {
-      data.append(buffer, count: count)
-    }
-    return data
-  }
   override func startLoading() {
     let failed = request.url?.host?.hasPrefix("voice-failure") == true
     if request.url?.path == "/api/turn",
-      let object = try? JSONSerialization.jsonObject(with: requestBody) as? [String: Any],
+      let object = try? JSONSerialization.jsonObject(with: request.bodyData) as? [String: Any],
       let key = object["idempotencyKey"] as? String
     {
       Self.turnKeys.withLock { $0.append(key) }
@@ -274,7 +350,7 @@ final class VoiceTaskProtocol: URLProtocol, @unchecked Sendable {
       ? #"{"message":"Unavailable"}"#
       : request.url?.path == "/api/turn"
         ? #"{"runId":"run","status":"queued"}"#
-        : #"{"status":"running","replyComplete":true,"activity":[{"item":{"kind":"ToolCall","seq":1,"createdAt":1,"callId":"search-1","tool":"search","body":{}}}],"result":{"status":"ok","reply":"Verified result"}}"#
+        : #"{"status":"running","replyComplete":true,"activity":[{"seq":1,"createdAt":1,"kind":"ToolCall","callId":"search-1","tool":"search","body":{}}],"result":{"status":"ok","reply":"Verified result"}}"#
     if request.url?.host?.hasPrefix("metadata-") == true, request.url?.path != "/api/turn" {
       let count = Self.counts.withLock { values in
         values[request.url!.absoluteString, default: 0] += 1

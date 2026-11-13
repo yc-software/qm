@@ -30,8 +30,21 @@ struct NativeCredentialAsk: Decodable, Identifiable {
   let id: String
   let credentialId: String
   let requesterId: String
+  let requesterScopeId: String?
+  let requestedMode: String?
   let purpose: String
   let expiresAt: Double
+}
+private struct NativeAskDecision: Decodable {
+  struct Ask: Decodable { let status: String }
+  let ask: Ask
+}
+extension APIClient {
+  func decideCredentialAsk(_ id: String, decision: String) async throws -> String {
+    let result: NativeAskDecision = try await fetch(
+      "api/keychain/approvals/\(id.apiComponent)", body: ["decision": decision])
+    return result.ask.status
+  }
 }
 struct NativeConnectorCredential: Decodable {
   let credentialId: String
@@ -62,9 +75,9 @@ final class KeychainModel {
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
     await loader.run {
-      let connectors: NativeConnectors = try await client.fetch("api/connectors")
-      let keys: NativeKeychainOverview = try await client.fetch("api/keychain/overview")
-      return (connectors, keys)
+      async let connectors: NativeConnectors = try await client.fetch("api/connectors")
+      async let keys: NativeKeychainOverview = try await client.fetch("api/keychain/overview")
+      return try await (connectors, keys)
     } apply: { connectors, keys in
       providers = connectors.providers.filter {
         $0.value.available == true || $0.value.connected == true || $0.value.needsReconnect == true
@@ -80,6 +93,7 @@ final class KeychainModel {
     let attempt = UUID()
     authorizationRevision = attempt
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -92,14 +106,20 @@ final class KeychainModel {
       let request = try ConnectionRequest(
         body: ["authorizeUrl": start.authorizeUrl, "state": state, "returnTo": "/keychain"],
         base: client.baseURL)
-      let result = try await authorization.authorize(request, client: client)
-      guard let components = URLComponents(string: result),
-        components.queryItems?.first(where: { $0.name == "status" })?.value != "error"
+      let outcome = try await authorization.authorize(request, client: client)
+      let refusal = ConnectionAuthorization.refusal(in: outcome)
+      guard refusal == nil,
+        URLComponents(string: outcome)?.queryItems?.first(where: { $0.name == "status" })?.value
+          != "error"
       else {
-        throw QMError.message("The provider did not complete authorization. Try connecting again.")
+        throw QMError.message(
+          "The provider did not complete authorization\(refusal.map { " (\($0))" } ?? ""). Try connecting again."
+        )
       }
       await load(afterMutation: true)
-    } catch is CancellationError {} catch {
+    } catch is CancellationError {
+      if authorizationRevision == attempt { await load(afterMutation: true) }
+    } catch {
       if authorizationRevision == attempt && !Task.isCancelled {
         self.error = error.localizedDescription
       }
@@ -112,6 +132,7 @@ final class KeychainModel {
   func mutate(_ path: String, body: [String: Any] = [:], method: String = "POST") async {
     guard !busy else { return }
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -144,30 +165,38 @@ struct NativeKeychainView: View {
   }
   var body: some View {
     QMList {
+      if model.busy {
+        NativeActionLabel(
+          title: "Update keychain", busyTitle: "Updating keychain…", busy: model.busy)
+      }
       if let error = model.error { Text(error).foregroundStyle(.red) }
+      if model.loading && model.overview == nil && model.error == nil {
+        NativeCollectionLoading(label: "Loading keychain", symbol: "key")
+      }
       Section("Connections") {
         NavigationLink("Browse app connections") { NativeConnectedApps(client: model.client) }
         ForEach(model.providers.keys.sorted(), id: \.self) { provider in
           if let connection = model.providers[provider] {
-            VStack(alignment: .leading, spacing: 8) {
-              Text(label(provider)).font(.headline)
-              Text(
-                connection.needsReconnect == true
-                  ? "Needs reconnection"
-                  : connection.connected == true ? "Connected" : "Not connected"
-              ).font(.caption).foregroundStyle(.secondary)
-              if connection.connected == true {
-                Button("Disconnect", role: .destructive) { revokingProvider = provider }
-              }
+            NativeConnectionRow(
+              service: provider, name: label(provider),
+              detail: connection.needsReconnect == true
+                ? "Needs reconnection"
+                : connection.connected == true ? "Connected" : "Not connected",
+              needsAttention: connection.needsReconnect == true
+            ) {
               if connection.connected != true || connection.needsReconnect == true {
                 Button(connection.needsReconnect == true ? "Reconnect" : "Connect") {
                   Task { await model.connect(provider) }
                 }
+                .primaryConnectionAction()
               }
-            }.padding(.vertical, 6)
+              if connection.connected == true || connection.needsReconnect == true {
+                Button("Disconnect", role: .destructive) { revokingProvider = provider }
+              }
+            }
           }
         }
-        if model.providers.isEmpty && !model.loading {
+        if model.providers.isEmpty && model.overview != nil && model.error == nil {
           Text("No providers are configured for this workspace.").foregroundStyle(.secondary)
         }
       }
@@ -190,6 +219,11 @@ struct NativeKeychainView: View {
     }
     .disabled(model.busy).navigationTitle("Keychain")
     .scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.overview != nil || model.error != nil) && !model.busy,
+        label: "Refreshing keychain")
+    )
     .task { await model.load() }.refreshable { await model.load() }
     .onDisappear { model.cancel() }
     .sheet(isPresented: $adding, onDismiss: { Task { await model.load() } }) {
@@ -219,6 +253,10 @@ struct NativeCredentialDetail: View {
   @State private var revoke: NativeCredentialGrant?
   var body: some View {
     QMList {
+      if model.busy {
+        NativeActionLabel(
+          title: "Update credential", busyTitle: "Updating credential…", busy: model.busy)
+      }
       Section("Credential") {
         if let account = credential.accountLabel { LabeledContent("Account", value: account) }
         if let host = credential.host { LabeledContent("Host", value: host) }
@@ -231,8 +269,11 @@ struct NativeCredentialDetail: View {
         }
       }
       Section("Access grants") {
-        ForEach((model.overview?.grants ?? []).filter { $0.credentialId == credential.id }) {
-          grant in
+        ForEach(
+          (model.overview?.grants ?? []).filter {
+            $0.credentialId == credential.id && $0.status == "active"
+          }
+        ) { grant in
           VStack(alignment: .leading, spacing: 6) {
             Text(model.overview?.scopeNames?[grant.audienceScopeId] ?? grant.audienceScopeId).font(
               .headline)
@@ -247,15 +288,22 @@ struct NativeCredentialDetail: View {
       Section("Requests") {
         ForEach((model.overview?.asks ?? []).filter { $0.credentialId == credential.id }) { ask in
           VStack(alignment: .leading, spacing: 6) {
-            Text(ask.requesterId).font(.headline)
+            Text(
+              ask.requesterScopeId.map { model.overview?.scopeNames?[$0] ?? $0 } ?? ask.requesterId
+            ).font(.headline)
             Text(ask.purpose)
+            Text(
+              "\(ask.requestedMode == "once" ? "One-time" : "Standing") access · expires \(Date(timeIntervalSince1970: ask.expiresAt / 1000).formatted())"
+            ).font(.caption).foregroundStyle(.secondary)
             Text("Respond to this request in your conversation with QM.").font(.caption)
               .foregroundStyle(.secondary)
           }
         }
       }
       if let error = model.error { Text(error).foregroundStyle(.red) }
-      Button("Delete credential", role: .destructive) { deleting = true }
+      if credential.kind != "connector" {
+        Button("Delete credential", role: .destructive) { deleting = true }
+      }
     }
     .disabled(model.busy).navigationTitle(credential.service)
     .confirmationDialog("Permanently delete this credential?", isPresented: $deleting) {
@@ -313,7 +361,11 @@ struct NativeCredentialCreation: View {
           Button("Cancel") { dismiss() }.disabled(busy)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Save") { Task { await save() } }.disabled(
+          Button {
+            Task { await save() }
+          } label: {
+            NativeActionLabel(title: "Save", busyTitle: "Saving…", busy: busy, compact: true)
+          }.disabled(
             busy
               || [service, purpose, secret].contains {
                 $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -335,6 +387,7 @@ struct NativeCredentialCreation: View {
   private func save() async {
     guard !busy else { return }
     busy = true
+    error = nil
     defer { busy = false }
     do {
       struct Drop: Decodable { let url: String }

@@ -428,7 +428,7 @@ export function createSessionMethods(
       if (!found || !sessionVisibleTo(viewer, found)) return null;
       const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords, goals] = await Promise.all([
+      const [initialRead, pinRecords, goals, latestPromptAt] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -436,6 +436,7 @@ export function createSessionMethods(
         }),
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
+        window?.beforeSeq === undefined ? deps.sessions.latestVisiblePromptAt(sessionId, principalId) : undefined,
       ]);
       const goal = openGoal(goals.get(sessionId));
       const runtime = window?.beforeSeq === undefined ? found.runtime : undefined;
@@ -454,6 +455,7 @@ export function createSessionMethods(
       return {
         session,
         items: w.items,
+        ...(latestPromptAt !== undefined ? { latestPromptAt } : {}),
         ...(earlier > 0 ? { earlierItems: earlier } : {}),
         ...(pins.length ? { pins } : {}),
         ...(goal ? { goal: goalView(goal) } : {}),

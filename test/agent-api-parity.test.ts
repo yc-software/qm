@@ -45,3 +45,12 @@ test("every endpoint the agent API catalog advertises is served by a route an ag
   });
   assert.deepEqual(unreachable, []);
 });
+
+test("a q filter narrows the catalog to matching families with their usage notes", () => {
+  const args = [{ ...base }, { isAdmin: false }, { swarmsEnabled: false, personasEnabled: false }] as const;
+  const all = renderAgentApis(...args);
+  const files = renderAgentApis(...args, "Files upload");
+  assert.ok(files.endpoints.length > 0 && files.endpoints.length < all.endpoints.length);
+  assert.ok(files.endpoints.some((e) => e.path === "/v1/files/upload-client"));
+  assert.ok(files.guidance.some((g) => g.includes("upload-client")));
+});

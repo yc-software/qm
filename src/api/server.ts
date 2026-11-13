@@ -47,13 +47,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import {
-  apiAlias,
-  appHostRequest,
-  browserIdentity,
-  browserSessionTenant,
-  withBrowserActor,
-} from "./browser-session.ts";
+import { apiAlias, appHostRequest, browserIdentity, browserSessionTenant, withRouteActor } from "./browser-session.ts";
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const ADMIN_WRITE_NEEDS_PERSON =
@@ -262,7 +256,10 @@ async function gate(
     try {
       body = JSON.parse(raw);
     } catch {
-      sendJson(res, 400, { error: "bad_request", message: "invalid JSON body" });
+      sendJson(res, 400, {
+        error: "bad_request",
+        message: "invalid JSON body; GET /v1/apis lists the available calls and their bodies",
+      });
       return null;
     }
   }
@@ -324,7 +321,7 @@ async function gate(
           sendJson(res, 401, { error: "unauthorized", message });
           return null;
         }
-        if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
+        if (browser) body = withRouteActor(route?.actor, req, url, body, actor.p);
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
         const fields = [field, ...(browser && !route?.admin ? ["query.principalId", "body.principalId"] : [])];
         const claimed = [
@@ -339,6 +336,7 @@ async function gate(
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;
         }
+        body = withRouteActor(field, req, url, body, actorId);
       }
     }
   }
