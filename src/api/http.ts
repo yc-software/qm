@@ -9,6 +9,13 @@ export function refuseImpersonated(res: ServerResponse): void {
   sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
 }
 
+export function refuseWithoutPerson(res: ServerResponse): void {
+  sendJson(res, 403, {
+    error: "human_consent_required",
+    message: "Only the person can take this step. Ask them to do it themselves.",
+  });
+}
+
 export function sendProblem(res: ServerResponse, status: number, problem: Record<string, unknown>): void {
   sendBuffered(res, status, { "content-type": "application/problem+json" }, JSON.stringify({ status, ...problem }));
 }
