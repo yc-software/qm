@@ -2,7 +2,7 @@ import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
-import { isAgentReply, isUserItem, type Item, type NewItem } from "../sessions/items.ts";
+import { type Item, type NewItem } from "../sessions/items.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 import { withTenant } from "../tenants/context.ts";
@@ -15,7 +15,7 @@ const WRITE_GIVEUP_MS = 10 * 60_000;
 
 type WebTranscriptSessions = Pick<
   SessionStore,
-  "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "getItems" | "participantsOf"
+  "appendDelivery" | "get" | "getByThread" | "getItems" | "participantsOf"
 >;
 
 export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
@@ -65,16 +65,10 @@ export function withWebTranscriptDeliveries(
     if (await hasRunningRun(runs, session.threadRef)) return false;
     const note = d.destination.webTranscript;
     const reply = note?.kind === "slack_reply" ? note : undefined;
-    if (await sessions.hasDeliveryEntry(session.id, d.idempotencyKey, reply?.ts)) return true;
     const failure = note?.kind === "turn_failure" ? note : undefined;
     if (failure && turnRecordedFailure(await sessions.getItems(session.id, { limit: DEDUPE_SCAN_LIMIT }), failure))
       return true;
     const turnId = failure?.runId ?? d.id;
-    if (
-      !failure &&
-      (await sessions.getItems(session.id, { turnId })).some((item) => (reply ? isUserItem(item) : isAgentReply(item)))
-    )
-      return true;
     const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
     const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
     let item: NewItem;
@@ -90,7 +84,8 @@ export function withWebTranscriptDeliveries(
     } else {
       item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
     }
-    await sessions.appendMany({ sessionId: session.id, turnId }, [item]);
+    const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item);
+    if (!inserted) return true;
     if (states) {
       const participants = await sessions.participantsOf(session.id);
       states.emit({
