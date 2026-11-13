@@ -1,5 +1,3 @@
-import { errMessage } from "./errors.ts";
-
 const activityIcons = ["schedule", "app", "deck", "people", "calendar", "book"] as const;
 
 export interface SuggestedActivity {
@@ -36,7 +34,6 @@ function activityProblem(item: Record<string, unknown>, ids: Set<string>): strin
   if (typeof title !== "string" || !title.trim()) return "title is required";
   if (title.length > 65) return `title is ${title.length} characters and a suggestion row fits 65`;
   if (typeof prompt !== "string" || !prompt.trim()) return "prompt is required";
-  if (prompt.length > 1200) return `prompt is ${prompt.length} characters and the limit is 1200`;
   if (typeof icon !== "string" || !validIcon(icon)) return "icon must be one emoji or a built-in icon name";
   if (source !== undefined && (typeof source !== "string" || !source.trim())) return "source must be text";
   if (replaces !== undefined && typeof replaces !== "string") return "replaces must be an activity id";
@@ -78,13 +75,7 @@ export function parseSuggestedActivities(value: string | undefined): SuggestedAc
   return activitiesFrom(parsed, where);
 }
 
-export function parseActivitySeeds(value: string, where: string): ActivitySeeds {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch (cause) {
-    throw new Error(`${where} is not valid JSON: ${errMessage(cause)}`, { cause });
-  }
+export function parseActivitySeeds(parsed: unknown, where: string): ActivitySeeds {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${where} must be a JSON object`);
   const { activities, apps = {} } = parsed as Record<string, unknown>;
   if (!apps || typeof apps !== "object" || Array.isArray(apps)) throw new Error(`${where}: apps must be an object`);

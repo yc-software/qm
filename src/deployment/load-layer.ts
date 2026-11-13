@@ -10,8 +10,6 @@ import {
 } from "./deployment-layer.ts";
 import { credentialServiceForPath } from "../credentials/resident-paths.ts";
 import type { CommandRule } from "../types.ts";
-import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
-import { parseActivitySeeds, type ActivitySeeds } from "../../plugins/chassis/src/suggested-activities.ts";
 
 export interface DeploymentLayerRuntime {
   dir: string;
@@ -23,10 +21,7 @@ export interface DeploymentLayerRuntime {
   brokeredTools: BrokeredLayerTool[];
   commandRules: CommandRule[];
   installFiles: LayerInstallFile[];
-  activitySeeds: Map<string, ActivitySeeds>;
 }
-
-export type ResolvedDeploymentLayer = Omit<DeploymentLayerRuntime, "dir" | "activitySeeds">;
 
 export interface BrokeredLayerTool {
   service: string;
@@ -52,23 +47,7 @@ export function emptyDeploymentLayer(): DeploymentLayerRuntime {
     brokeredTools: [],
     commandRules: [],
     installFiles: [],
-    activitySeeds: new Map(),
   };
-}
-
-const ACTIVITY_SEEDS = "activity-seeds/";
-
-export function layerActivitySeeds(
-  files: ReadonlyArray<{ path: string; content: string }>,
-): Map<string, ActivitySeeds> {
-  return new Map(
-    files.map((file) => {
-      const org = file.path.endsWith(".json") ? file.path.slice(ACTIVITY_SEEDS.length, -".json".length) : "";
-      if (!file.path.startsWith(ACTIVITY_SEEDS) || !isDnsLabel(org))
-        throw new Error(`deployment layer activity seeds path must be activity-seeds/<org>.json: ${file.path}`);
-      return [org, parseActivitySeeds(file.content, file.path)];
-    }),
-  );
 }
 
 function assertDistinctInstallTargets(tools: ToolDescriptor[]): void {
@@ -131,7 +110,6 @@ export function resolvedDeploymentLayer(
   dir: string,
   tools: ToolDescriptor[],
   installFiles: LayerInstallFile[] = [],
-  activitySeeds = new Map<string, ActivitySeeds>(),
 ): DeploymentLayerRuntime {
   assertDisjointCredentialLinks(tools);
   assertDistinctInstallTargets(tools);
@@ -169,7 +147,6 @@ export function resolvedDeploymentLayer(
       })),
     ),
     installFiles,
-    activitySeeds,
   };
 }
 
@@ -187,8 +164,6 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
   ] as const) {
     target[key].splice(0, target[key].length, ...(source[key] as never[]));
   }
-  target.activitySeeds.clear();
-  for (const [org, seeds] of source.activitySeeds) target.activitySeeds.set(org, seeds);
 }
 
 const JUNK_FILE = /^(?:\.DS_Store|Thumbs\.db|\._.*)$/;
@@ -229,13 +204,7 @@ export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
   const installFiles = declaredInstallFiles(tools, (tool, file) =>
     readLayerTextFile(join(toolDirs.get(tool.id)!, file.from)),
   );
-  const seedsDir = join(dir, ACTIVITY_SEEDS);
-  const seedFiles = existsSync(seedsDir)
-    ? readdirSync(seedsDir)
-        .filter((name) => !JUNK_FILE.test(name))
-        .map((name) => ({ path: ACTIVITY_SEEDS + name, content: readLayerTextFile(join(seedsDir, name)) }))
-    : [];
-  return resolvedDeploymentLayer(dir, tools, installFiles, layerActivitySeeds(seedFiles));
+  return resolvedDeploymentLayer(dir, tools, installFiles);
 }
 
 function readLayerTextFile(path: string): string {

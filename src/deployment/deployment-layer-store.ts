@@ -27,11 +27,8 @@ import {
   replaceDeploymentLayer,
   resolvedDeploymentLayer,
   type DeploymentLayerRuntime,
-  layerActivitySeeds,
   type LayerInstallFile,
-  type ResolvedDeploymentLayer,
 } from "./load-layer.ts";
-import type { ActivitySeeds } from "../../plugins/chassis/src/suggested-activities.ts";
 
 interface DeploymentLayerFile {
   path: string;
@@ -43,7 +40,6 @@ export interface DeploymentLayerBundle {
   contract: 1;
   tools: DeploymentLayerFile[];
   skills: DeploymentLayerFile[];
-  activitySeeds?: DeploymentLayerFile[];
 }
 
 export interface StoredDeploymentLayer {
@@ -52,7 +48,7 @@ export interface StoredDeploymentLayer {
   updatedAt: number;
   updatedBy: string;
   bundle: DeploymentLayerBundle;
-  resolved: ResolvedDeploymentLayer;
+  resolved: Omit<DeploymentLayerRuntime, "dir">;
   pendingAudits?: DeploymentLayerAuditRevision[];
 }
 
@@ -71,9 +67,8 @@ export interface DeploymentLayerStore {
   live(): {
     source: "durable" | "filesystem" | "none";
     contentHash: string | null;
-    resolved: ResolvedDeploymentLayer | null;
+    resolved: Omit<DeploymentLayerRuntime, "dir"> | null;
   };
-  activitySeeds(org: string): ActivitySeeds | undefined;
 }
 
 export class DeploymentLayerValidationError extends Error {}
@@ -100,12 +95,7 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
   if (input.contract !== 1 || !Array.isArray(input.tools) || !Array.isArray(input.skills)) {
     throw new Error("deployment layer requires contract: 1, tools[], and skills[]");
   }
-  if (input.activitySeeds !== undefined && !Array.isArray(input.activitySeeds))
-    throw new Error("deployment layer activitySeeds must be a list of files");
-  const normalize = (
-    kind: "tools" | "skills" | "activity-seeds",
-    files: DeploymentLayerFile[],
-  ): DeploymentLayerFile[] => {
+  const normalize = (kind: "tools" | "skills", files: DeploymentLayerFile[]): DeploymentLayerFile[] => {
     const seen = new Set<string>();
     return files
       .map((file) => {
@@ -131,13 +121,7 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
       })
       .sort(pathOrder);
   };
-  const activitySeeds = normalize("activity-seeds", input.activitySeeds ?? []);
-  return {
-    contract: 1,
-    tools: normalize("tools", input.tools),
-    skills: normalize("skills", input.skills),
-    ...(activitySeeds.length ? { activitySeeds } : {}),
-  };
+  return { contract: 1, tools: normalize("tools", input.tools), skills: normalize("skills", input.skills) };
 }
 
 function toolDescriptors(files: DeploymentLayerFile[]): { tools: ToolDescriptor[]; installFiles: LayerInstallFile[] } {
@@ -231,8 +215,8 @@ function contentHash(bundle: DeploymentLayerBundle): string {
   return createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
 }
 
-function publicResolved(runtime: DeploymentLayerRuntime): ResolvedDeploymentLayer {
-  const { dir: _dir, activitySeeds: _activitySeeds, ...resolved } = runtime;
+function publicResolved(runtime: DeploymentLayerRuntime): Omit<DeploymentLayerRuntime, "dir"> {
+  const { dir: _dir, ...resolved } = runtime;
   return resolved;
 }
 
@@ -260,8 +244,7 @@ function validateBundle(
   const bundle = normalizedBundle(input);
   const { tools, installFiles } = toolDescriptors(bundle.tools);
   const manifests = skillManifests(bundle.skills);
-  const activitySeeds = layerActivitySeeds(bundle.activitySeeds ?? []);
-  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles, activitySeeds) };
+  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles) };
 }
 
 export function createDeploymentLayerStore(opts: {
@@ -468,7 +451,6 @@ export function createDeploymentLayerStore(opts: {
   };
 
   return {
-    activitySeeds: (org) => opts.runtime.activitySeeds.get(org),
     isApplied: async (hash) => {
       if (appliedHash !== hash) return false;
       try {

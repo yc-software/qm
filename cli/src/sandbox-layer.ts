@@ -259,9 +259,7 @@ export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
     try {
       const body = JSON.stringify(deploymentLayerBundle(sandboxDir));
       if (Buffer.byteLength(body) > 1_000_000) {
-        out.errors.push(
-          "deployment layer (skills/, tool descriptors and activity-seeds/) exceeds the core API's 1 MB request limit",
-        );
+        out.errors.push("deployment layer (skills/ + tool descriptors) exceeds the core API's 1 MB request limit");
       }
     } catch (e) {
       out.errors.push(errMessage(e));
