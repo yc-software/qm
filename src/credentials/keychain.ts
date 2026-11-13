@@ -94,6 +94,7 @@ export interface KeychainCredential {
   fingerprint: string;
   origin?: string;
   expiresAt?: number;
+  writer?: { holder: string; until: number };
   createdAt: number;
   updatedAt: number;
 }
@@ -384,6 +385,9 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
+  create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
+  claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
+  releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean>;
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<string[]>;
   writebackBaseline(
     source: FileCredentialSource,
@@ -478,6 +482,10 @@ function keychainFilePath(path: string): string {
   } catch {
     throw new KeychainError(400, `file path must be home-relative: ${path}`);
   }
+}
+
+export function keychainService(service: string): string {
+  return service.trim().toLowerCase();
 }
 
 function credId(ownerId: string, service: string, slot: string): string {
@@ -878,8 +886,8 @@ export function createKeychain(deps: {
     return unexpiredAccessToken(rec);
   }
 
-  async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
-    const service = input.service.trim().toLowerCase();
+  function credentialRecord(input: SaveCredentialInput) {
+    const service = keychainService(input.service);
     if (!service) throw new KeychainError(400, "service required");
     let files: CredentialFile[] | undefined;
     if (input.files?.length) {
@@ -944,6 +952,11 @@ export function createKeychain(deps: {
         updatedAt: t,
       };
     };
+    return { id, buildRec };
+  }
+
+  async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
+    const { id, buildRec } = credentialRecord(input);
     const rec = buildRec(await deps.creds.get(id));
     await deps.creds.put(id, rec);
     return toMeta(rec);
@@ -1094,6 +1107,34 @@ export function createKeychain(deps: {
 
   return {
     save: saveCredential,
+
+    async create(input) {
+      const { id, buildRec } = credentialRecord(input);
+      const rec = buildRec();
+      return (await deps.creds.insertIfAbsent(id, rec)) ? toMeta(rec) : null;
+    },
+
+    async claimWriter(ownerId, id, writer) {
+      let claimed: boolean | null = null;
+      await deps.creds.update(id, (current) => {
+        if (!samePerson(current.ownerId, ownerId)) return current;
+        claimed = !current.writer || current.writer.holder === writer.holder || current.writer.until <= now();
+        return claimed ? { ...current, writer } : current;
+      });
+      return claimed;
+    },
+
+    async releaseWriter(ownerId, id, holder) {
+      let owned = false;
+      await deps.creds.update(id, (current) => {
+        if (!samePerson(current.ownerId, ownerId)) return current;
+        owned = true;
+        if (current.writer?.holder !== holder) return current;
+        const { writer: _, ...rest } = current;
+        return rest;
+      });
+      return owned;
+    },
 
     async updateFiles(materialized, files) {
       if (!materialized.writeback) return [];

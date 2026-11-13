@@ -11,13 +11,16 @@ to the keychain with the script shipped with this skill. Never log in against th
 keychain handle is. Use the same explicit `sandbox_id` for the skill read, login,
 and save-login commands so the temporary home and save script stay on one computer.
 
-1. Make a fresh directory and start the login with `execute(background:true)` with every config
-   location pointed into it. Copy in any config the CLI needs first (for AWS, the
+1. In the person's own turn, make a fresh directory and start the sign-in with the script
+   shipped with this skill, under the absolute directory the skill read reported. It gets a
+   one-time ticket that lets step 3 replace this service's existing login even after the turn
+   ends. Then start the login with `execute(background:true)` with every config location
+   pointed into the directory. Copy in any config the CLI needs first (for AWS, the
    `[profile …]`/`[sso-session …]` blocks in `.aws/config`); everything under that
    directory becomes the saved login.
 
    ```bash
-   d=$(mktemp -d) && echo "$d"
+   d=$(mktemp -d) && node <skill dir>/scripts/save-login.mjs aws "$d" --start && echo "$d"
    in_d() { env HOME="$d" XDG_CONFIG_HOME="$d/.config" XDG_DATA_HOME="$d/.local/share" XDG_STATE_HOME="$d/.local/state" XDG_CACHE_HOME="$d/.cache" "$@"; }
    in_d aws sso login --profile work --use-device-code --no-browser
    in_d gh auth login --hostname github.com --git-protocol https --web
@@ -32,8 +35,7 @@ and save-login commands so the temporary home and save script stay on one comput
    `background` action `send_input`. Use its `watch` or `poll` action with the returned
    `process_id`; never stop the job while the person is approving.
 
-3. When it exits successfully, save the directory with the script under the absolute
-   directory the skill read reported:
+3. When it exits successfully, save the directory with the same script:
 
    ```bash
    node <skill dir>/scripts/save-login.mjs aws "$d" --label "work (123456789012)"
@@ -43,7 +45,9 @@ and save-login commands so the temporary home and save script stay on one comput
    prints the credential handle. It also removes a directory that holds no usable login.
    Never remove the directory yourself; if the save fails, run the script again.
    Saving the same service again replaces that entry in place: its id, handle, owner and
-   grants stay the same.
+   grants stay the same. A replace needs the ticket from step 1 or the person's own running
+   turn; without either the script keeps the directory and says so, and running it again
+   in the person's turn saves it.
 
 4. Use the login only by naming the handle in `credentials` on `execute` (including `background:true`), including to check that it works. The files are staged in a private home for
    that command or job, and refreshes the CLI writes are saved back when it ends.

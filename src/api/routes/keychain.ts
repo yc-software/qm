@@ -2,6 +2,7 @@ import {
   connectorHandle,
   credentialHandle,
   KeychainError,
+  keychainService,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
@@ -92,7 +93,8 @@ const keychainRoute =
     }
   };
 
-const saveCredential = keychainRoute(async ({ res, deps, tenant, body }, kc, { actorId, scopeId }) => {
+const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
+  const { res, deps, tenant, body } = ctx;
   const b = body as {
     service?: unknown;
     secret?: unknown;
@@ -104,6 +106,7 @@ const saveCredential = keychainRoute(async ({ res, deps, tenant, body }, kc, { a
     accountLabel?: unknown;
     origin?: unknown;
     expiresAt?: unknown;
+    loginTicket?: unknown;
   };
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
   if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
@@ -152,7 +155,7 @@ const saveCredential = keychainRoute(async ({ res, deps, tenant, body }, kc, { a
       message: "service plus secret, files[], or fields[] required",
     });
   }
-  const meta = await kc.save({
+  const input = {
     ownerId: actorId,
     service: b.service,
     ...(typeof b.secret === "string" ? { secret: b.secret } : {}),
@@ -164,7 +167,19 @@ const saveCredential = keychainRoute(async ({ res, deps, tenant, body }, kc, { a
     ...(typeof b.accountLabel === "string" ? { accountLabel: b.accountLabel } : {}),
     origin: typeof b.origin === "string" ? b.origin : `agent-session:${scopeId}`,
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
-  });
+  };
+  const ticket =
+    typeof b.loginTicket === "string" && deps.secretDrops ? await deps.secretDrops.redeem(b.loginTicket) : null;
+  const signedIn =
+    ticket?.ok === true &&
+    ticket.rec.kind === "login" &&
+    samePerson(ticket.rec.ownerId, actorId) &&
+    ticket.rec.service === keychainService(b.service);
+  let meta = await kc.create(input);
+  if (!meta) {
+    if (!signedIn && !(await livePersonTurn(ctx))) return;
+    meta = await kc.save(input);
+  }
   audit(
     { deps, tenant },
     {
@@ -175,6 +190,42 @@ const saveCredential = keychainRoute(async ({ res, deps, tenant, body }, kc, { a
     },
   );
   return sendJson(res, 200, { credential: meta });
+});
+
+const startLogin = keychainRoute(async (ctx, _kc, { actorId }) => {
+  const { res, deps, body } = ctx;
+  const { service } = body as { service?: unknown };
+  if (typeof service !== "string" || !service.trim())
+    return sendJson(res, 400, { error: "bad_request", message: "service required" });
+  if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (!(await livePersonTurn(ctx))) return;
+  const { dropId } = await deps.secretDrops.mint({
+    kind: "login",
+    ownerId: actorId,
+    service: keychainService(service),
+    purpose: "login",
+    requestedBy: actorId,
+    requiresToken: true,
+  });
+  return sendJson(res, 200, { loginTicket: dropId });
+});
+
+const claimWriter = keychainRoute(async ({ res, body, params }, kc, { actorId }) => {
+  const b = body as { holder?: unknown; until?: unknown };
+  const until = normalizeInboundExpiresAt(b.until, "until");
+  if (typeof b.holder !== "string" || !b.holder.trim() || !until.ok || until.value === undefined)
+    return sendJson(res, 400, { error: "bad_request", message: "expected { holder, until }" });
+  const claimed = await kc.claimWriter(actorId, params.id!, { holder: b.holder.trim(), until: until.value });
+  if (claimed === null) return sendJson(res, 404, { error: "not_found" });
+  return claimed ? sendJson(res, 200, { ok: true }) : sendJson(res, 409, { error: "writer_held" });
+});
+
+const releaseWriter = keychainRoute(async ({ res, url, params }, kc, { actorId }) => {
+  const holder = url.searchParams.get("holder")?.trim();
+  if (!holder) return sendJson(res, 400, { error: "bad_request", message: "holder required" });
+  return (await kc.releaseWriter(actorId, params.id!, holder))
+    ? sendJson(res, 200, { ok: true })
+    : sendJson(res, 404, { error: "not_found" });
 });
 
 const listCredentials = keychainRoute(async ({ res }, kc, { actorId }) => {
@@ -416,6 +467,21 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", actor: "system", auth: "either", handle: saveCredential },
+  { method: "POST", path: "/v1/keychain/login-tickets", actor: "system", auth: "either", handle: startLogin },
+  {
+    method: "POST",
+    path: "/v1/keychain/credentials/:id/writer",
+    actor: "system",
+    auth: "either",
+    handle: claimWriter,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/keychain/credentials/:id/writer",
+    actor: "system",
+    auth: "either",
+    handle: releaseWriter,
+  },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: listCredentials },
   {
     method: "GET",

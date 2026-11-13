@@ -11,6 +11,7 @@ export interface SecretDropField {
 }
 
 export interface SecretDropRecord {
+  kind?: "login";
   ownerId: string;
   orgId?: string;
   service: string;

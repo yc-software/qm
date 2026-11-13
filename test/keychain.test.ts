@@ -31,6 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -1075,7 +1076,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
       sessions: built.sessions,
-      runs: built.runs,
+      runs: liveRunStore(built.runs),
+      secretDrops: built.secretDrops,
       signals: built.signals,
       identity: built.identity,
     });
@@ -1300,6 +1302,50 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(body.connectorCredentials[0].credentialId, connector.credentialId);
     assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
     assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
+  });
+  it("replacing a saved login needs the owner's running turn or a one-time ticket that turn started", async () => {
+    const owner = "RELOGIN_OWNER";
+    const later = await capFor(owner, undefined, { triggered: true });
+    const save = (secret: string, cap: string, loginTicket?: string) =>
+      post("/v1/keychain/credentials", { service: "gh", secret, ...(loginTicket ? { loginTicket } : {}) }, cap);
+    const { credential } = (await (await save("first", later)).json()) as any;
+    const secret = () => built.keychain!.readOwnSecret(owner, credential.id);
+
+    assert.equal((await save("swapped", later)).status, 403);
+    assert.equal((await save("swapped", await capFor(owner, undefined, { botActor: true }))).status, 403);
+    assert.equal((await post("/v1/keychain/login-tickets", { service: "gh" }, later)).status, 403);
+    assert.equal(await secret(), "first");
+
+    const live = await capFor(owner, undefined, liveRunClaims(owner));
+    const { loginTicket } = (await (await post("/v1/keychain/login-tickets", { service: "GH" }, live)).json()) as any;
+    assert.equal((await save("relogin", later, loginTicket)).status, 200);
+    assert.equal((await save("again", later, loginTicket)).status, 403);
+    assert.equal(await secret(), "relogin");
+    assert.equal((await save("typed", live)).status, 200);
+    assert.equal(await secret(), "typed");
+  });
+
+  it("a credential's writer lease admits one holder until it is released or ends", async () => {
+    const owner = "LEASE_OWNER";
+    const cap = await capFor(owner, undefined, { triggered: true });
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "kernel-profile", envKey: "KERNEL_PROFILE", secret: "p" }, cap)
+    ).json()) as any;
+    const path = `/v1/keychain/credentials/${credential.id}/writer`;
+    const claim = async (holder: string, until = Date.now() + 60_000, as = cap) =>
+      (await post(path, { holder, until }, as)).status;
+    const release = async (holder: string) =>
+      (await fetch(`${base}${path}?holder=${holder}`, { method: "DELETE", headers: { "x-agent-capability": cap } }))
+        .status;
+
+    assert.equal(await claim("a"), 200);
+    assert.equal(await claim("b"), 409);
+    assert.equal(await claim("b", undefined, await capFor("U2")), 404);
+    assert.equal(await release("b"), 200);
+    assert.equal(await claim("b"), 409);
+    assert.equal(await release("a"), 200);
+    assert.equal(await claim("b", Date.now() - 1), 200);
+    assert.equal(await claim("c"), 200);
   });
 });
 

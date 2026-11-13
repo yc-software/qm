@@ -16,6 +16,13 @@ Re-saving a service replaces the entry in place. The credential id is derived fr
 service and slot, so the handle, owner and grants are unchanged; `createdAt` is kept, while
 files, origin, label and expiry come from the new save.
 
+Only the owner's own running turn may replace an existing entry; saving a new service needs
+nothing. The skill's save often runs after the sign-in's turn has ended,
+so step 1 runs `save-login.mjs <service> <dir> --start` in the person's turn. That calls
+`POST /v1/keychain/login-tickets`, which keeps a one-time `kind: "login"` record for the owner
+and service in the secret-drop store and returns its id. The save sends it back as
+`loginTicket` and the route redeems it, so it allows one replace of that service.
+
 ## Execution
 
 In a shared conversation, every command that names a saved login runs on the turn's
