@@ -592,12 +592,16 @@ export function createMessagingMethods(
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
       }
-      if (input.edit && baseDestination.type !== "slack" && baseDestination.type !== "group") {
+      const editable = hasNamedTarget
+        ? baseDestination.type === "slack" || baseDestination.type === "group"
+        : deps.surfaces.get(baseDestination.type)?.capabilities.mirrored === true;
+      if (input.edit && !editable) {
         return {
           ok: false,
           status: 400,
           error: "bad_request",
-          message: "edit rewrites a Slack message in a channel, group DM, or this Slack conversation",
+          message:
+            "edit rewrites a message in this chat conversation, or a Slack message in a named channel or group DM",
         };
       }
       if (input.threadTs) {

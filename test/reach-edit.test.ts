@@ -46,7 +46,9 @@ describe("POST /v1/reach with edit", () => {
   };
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
+    built = buildApp(
+      testConfig({ signingSecret: SECRET, partnerChat: { url: "https://chat.example", secret: SECRET } }),
+    );
     await built.app.upsertDirectory([
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
@@ -79,7 +81,16 @@ describe("POST /v1/reach with edit", () => {
     assert.equal(d.text, "fixed");
   });
 
-  it("refuses an edit outside Slack", async () => {
+  it("with no target, edits in this conversation on another chat surface", async () => {
+    const here: Destination = { type: "partner-chat", target: "partner-chat:7001:dm:88" };
+    const res = await post({ edit: { ts: "1793649600.00000000000000001002" }, text: "42 widgets" }, here);
+    assert.equal(res.status, 200, await res.clone().text());
+    const { deliveryId } = (await res.json()) as { deliveryId: string };
+    const d = (await built.app.pendingDeliveries("partner-chat")).find((x) => x.id === deliveryId);
+    assert.deepEqual(d?.destination.edit, { messageTs: "1793649600.00000000000000001002" });
+  });
+
+  it("refuses an edit outside a chat surface", async () => {
     const web: Destination = { type: "web", target: "web:carol:s1", audienceScopeId: scopeId("personal", "U-carol") };
     const res = await post({ edit: { ts: TS }, text: "fixed" }, web);
     assert.equal(res.status, 400);
