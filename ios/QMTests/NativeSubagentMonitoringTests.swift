@@ -14,7 +14,7 @@ private final class SubagentMonitoringProtocol: URLProtocol, @unchecked Sendable
 
   static let registry = OSAllocatedUnfairLock(initialState: [String: State]())
   private static let session =
-    #""id":"agent","scopeId":"personal:test","threadRef":"web:test:agent","surface":"web","canContinue":true,"parentSessionId":"parent""#
+    #""id":"agent","scopeId":"personal:test","threadRef":"web:test:agent","surface":"web","canContinue":false,"parentSessionId":"parent""#
 
   static func advance(_ host: String, to phase: Phase) {
     let stream = registry.withLock { states in
@@ -126,7 +126,7 @@ final class NativeSubagentMonitoringTests: XCTestCase {
     try client.saveSession("test")
     let chat = ChatModel(
       conversation: Conversation(
-        id: "agent", scopeId: "personal:test", threadRef: "web:test:agent", canContinue: true,
+        id: "agent", scopeId: "personal:test", threadRef: "web:test:agent", canContinue: false,
         working: true, parentSessionId: "parent"),
       client: client, user: "test", knownSession: true)
     let queued = QueuedInputsModel(

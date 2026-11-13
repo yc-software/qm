@@ -113,6 +113,10 @@ private struct NativeAgentTrailContent: View {
       guard polling else { return }
       while !Task.isCancelled {
         await model.refresh()
+        guard
+          isExpanded || !pendingLaunches.isEmpty
+            || model.branches.contains(where: { $0.state == .working || $0.state == .waiting })
+        else { return }
         do { try await Task.sleep(for: .seconds(5)) } catch { return }
       }
     }
@@ -168,7 +172,7 @@ private struct NativeAgentTrailContent: View {
             .accessibilityLabel(
               "\(branch.name), \(model.stale ? "last known: " : "")\(branch.state.rawValue)"
             )
-            .accessibilityHint("View read-only agent conversation")
+            .accessibilityHint("View agent conversation")
             .accessibilityIdentifier("agentShortcut-\(branch.id)")
           }
           ForEach(pendingLaunches) { item in
@@ -210,7 +214,7 @@ private struct NativeAgentTrailContent: View {
         launchLabel(item)
       }
       .buttonStyle(.plain)
-      .accessibilityHint("View read-only agent conversation")
+      .accessibilityHint("View agent conversation")
     } else {
       launchLabel(item)
     }
@@ -271,7 +275,7 @@ private struct NativeAgentTrailContent: View {
             }
             Section {
             } footer: {
-              Text("Agents are read-only and update automatically.")
+              Text("Agent conversations update automatically.")
                 .font(.footnote).foregroundStyle(.secondary)
             }
           }
@@ -327,7 +331,7 @@ private struct NativeAgentTrailContent: View {
       }
       .buttonStyle(.plain)
       .accessibilityElement(children: .combine)
-      .accessibilityHint("View read-only agent conversation")
+      .accessibilityHint("View agent conversation")
       .accessibilityIdentifier("agentBranch-\(branch.id)")
     }
   }

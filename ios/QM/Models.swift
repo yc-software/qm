@@ -122,7 +122,7 @@ struct Conversation: Codable, Identifiable, Hashable {
   }
   var needsInput: Bool { awaitingInput == true || (subagents?.waiting ?? 0) > 0 }
   var isSubagent: Bool { parentSessionId?.isEmpty == false }
-  var canReply: Bool { !isSubagent && (localOnly == true || canContinue == true) }
+  var canReply: Bool { localOnly == true || canContinue == true }
 }
 
 enum ConversationFilter: String, CaseIterable {
@@ -225,38 +225,43 @@ final class EntryPayload: Decodable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
-    details = try? NativeActivityValue(from: decoder)
-    let c = try? decoder.container(keyedBy: CodingKeys.self)
-    text = try? c?.decode(String.self, forKey: .text)
-    display = try? c?.decode(String.self, forKey: .display)
-    playground = (try? c?.decode(Display.self, forKey: .display))?.artifact
-    hidden = try? c?.decode(Bool.self, forKey: .hidden)
-    attachments = try? c?.decode([DeliveredFile].self, forKey: .attachments)
-    files = try? c?.decode([DeliveredFile].self, forKey: .files)
-    action = try? c?.decode(String.self, forKey: .action)
-    tool = try? c?.decode(String.self, forKey: .tool)
-    callId = try? c?.decode(String.self, forKey: .callId)
-    ok = try? c?.decode(Bool.self, forKey: .ok)
-    isError = try? c?.decode(Bool.self, forKey: .isError)
-    denied = try? c?.decode(Bool.self, forKey: .denied)
-    blocked = try? c?.decode(String.self, forKey: .blocked)
-    error =
-      (try? c?.decode(String.self, forKey: .error))
-      ?? ((c?.contains(.error) == true && (try? c?.decodeNil(forKey: .error)) != true
-        && (try? c?.decode(Bool.self, forKey: .error)) != false) ? "error" : nil)
-    kind = try? c?.decode(String.self, forKey: .kind)
-    message = try? c?.decode(String.self, forKey: .message)
-    name = try? c?.decode(String.self, forKey: .name)
-    silent = try? c?.decode(Bool.self, forKey: .silent)
-    runId = try? c?.decode(String.self, forKey: .runId)
-    steered = try? c?.decode(Bool.self, forKey: .steered)
-    thinking = try? c?.decode(String.self, forKey: .thinking)
-    redacted = try? c?.decode(Bool.self, forKey: .redacted)
-    approved = try? c?.decode(Bool.self, forKey: .approved)
-    command = try? c?.decode(String.self, forKey: .command)
-    scope = try? c?.decode(String.self, forKey: .scope)
-    requestId = try? c?.decode(String.self, forKey: .requestId)
-    ts = try? c?.decode(String.self, forKey: .ts)
+    details = try NativeActivityValue(from: decoder)
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    text = c.logged(String.self, forKey: .text)
+    display = details?["display"]?.string
+    if case .object = details?["display"] {
+      playground = c.logged(Display.self, forKey: .display)?.artifact
+    } else {
+      playground = nil
+    }
+    hidden = c.logged(Bool.self, forKey: .hidden)
+    attachments = c.logged([DeliveredFile].self, forKey: .attachments)
+    files = c.logged([DeliveredFile].self, forKey: .files)
+    action = c.logged(String.self, forKey: .action)
+    tool = c.logged(String.self, forKey: .tool)
+    callId = c.logged(String.self, forKey: .callId)
+    ok = c.logged(Bool.self, forKey: .ok)
+    isError = c.logged(Bool.self, forKey: .isError)
+    denied = c.logged(Bool.self, forKey: .denied)
+    blocked = c.logged(String.self, forKey: .blocked)
+    switch details?["error"] {
+    case .string(let message): error = message
+    case nil, .null, .bool(false): error = nil
+    default: error = "error"
+    }
+    kind = c.logged(String.self, forKey: .kind)
+    message = c.logged(String.self, forKey: .message)
+    name = c.logged(String.self, forKey: .name)
+    silent = c.logged(Bool.self, forKey: .silent)
+    runId = c.logged(String.self, forKey: .runId)
+    steered = c.logged(Bool.self, forKey: .steered)
+    thinking = c.logged(String.self, forKey: .thinking)
+    redacted = c.logged(Bool.self, forKey: .redacted)
+    approved = c.logged(Bool.self, forKey: .approved)
+    command = c.logged(String.self, forKey: .command)
+    scope = c.logged(String.self, forKey: .scope)
+    requestId = c.logged(String.self, forKey: .requestId)
+    ts = c.logged(String.self, forKey: .ts)
   }
 
   var succeeded: Bool {
@@ -388,11 +393,12 @@ func presentedChatMessages(
           id: "activity:\(first.id)", role: "assistant", text: "", runID: runID,
           activity: remainingActivity), at: index + 1)
     }
+    func insertionAfterRun() -> Int {
+      run.runID.flatMap { id in messages.lastIndex { $0.runID == id }.map { $0 + 1 } }
+        ?? messages.endIndex
+    }
     if let reply = run.reply, !reply.isEmpty, !replyRecorded {
-      let position =
-        run.runID.flatMap { id in
-          messages.lastIndex { $0.runID == id }.map { $0 + 1 }
-        } ?? messages.endIndex
+      let position = insertionAfterRun()
       messages.insert(
         ChatMessage(
           id: "reply:\(run.id)", role: "assistant", text: reply, runID: run.runID,
@@ -401,10 +407,7 @@ func presentedChatMessages(
     } else if run.finished, !remainingActivity.isEmpty,
       !messages.contains(where: { $0.runID == run.runID && $0.role == "assistant" })
     {
-      let position =
-        run.runID.flatMap { id in
-          messages.lastIndex { $0.runID == id }.map { $0 + 1 }
-        } ?? messages.endIndex
+      let position = insertionAfterRun()
       messages.insert(
         ChatMessage(
           id: "activity:\(run.id)", role: "assistant", text: "", runID: run.runID,
@@ -414,10 +417,7 @@ func presentedChatMessages(
     if let failure = run.failure,
       run.runID == nil || !messages.contains(where: { $0.role == "error" && $0.runID == run.runID })
     {
-      let position =
-        run.runID.flatMap { id in
-          messages.lastIndex { $0.runID == id }.map { $0 + 1 }
-        } ?? messages.endIndex
+      let position = insertionAfterRun()
       messages.insert(
         ChatMessage(id: "failure:\(run.id)", role: "error", text: failure, runID: run.runID),
         at: position)

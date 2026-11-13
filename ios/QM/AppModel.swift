@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 import os
 
@@ -104,13 +105,6 @@ final class AppModel {
 
   private static func workspaceInputWithScheme(_ input: String) -> String {
     guard !input.contains("://") else { return input }
-    #if DEBUG
-      if let host = URLComponents(string: "http://\(input)")?.host,
-        isLocalDevelopmentHost(host)
-      {
-        return "http://\(input)"
-      }
-    #endif
     return "https://\(input)"
   }
 
@@ -118,17 +112,13 @@ final class AppModel {
     let host = rawHost.lowercased().trimmingCharacters(
       in: CharacterSet(charactersIn: "[]"))
     if host == "localhost" || host == "::1" || host.hasSuffix(".local") { return true }
-    if host.contains(":")
-      && (host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe8")
-        || host.hasPrefix("fe9") || host.hasPrefix("fea") || host.hasPrefix("feb"))
-    {
-      return true
+    if let address = IPv6Address(host) {
+      let bytes = address.rawValue
+      return address == .loopback || bytes[0] & 0xfe == 0xfc
+        || (bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80)
     }
-
-    let octets = host.split(separator: ".", omittingEmptySubsequences: false).compactMap {
-      UInt8($0)
-    }
-    guard octets.count == 4 else { return false }
+    guard let address = IPv4Address(host) else { return false }
+    let octets = address.rawValue
     return octets[0] == 10 || octets[0] == 127
       || (octets[0] == 172 && (16...31).contains(octets[1]))
       || (octets[0] == 192 && octets[1] == 168)
@@ -392,11 +382,17 @@ final class AppModel {
       conversations[index].unread = false
       ids.append(conversations[index].id)
     }
-    for id in ids {
-      do {
-        let _: ConversationUpdate = try await client.fetch(
-          "api/sessions/\(id)", body: ["unread": false])
-      } catch { Log.background.failure("Marking a conversation read", error) }
+    let generation = client.generation
+    await withTaskGroup(of: Void.self) { group in
+      for id in ids {
+        group.addTask { @MainActor in
+          guard client.generation == generation else { return }
+          do {
+            let _: ConversationUpdate = try await client.fetch(
+              "api/sessions/\(id)", body: ["unread": false])
+          } catch { Log.background.failure("Marking a conversation read", error) }
+        }
+      }
     }
   }
 

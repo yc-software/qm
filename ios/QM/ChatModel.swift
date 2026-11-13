@@ -916,6 +916,7 @@ final class ChatModel {
 
   @discardableResult
   private func recordSyncFailure(_ failure: Error) -> Bool {
+    Log.background.failure("Conversation sync", failure)
     switch failure {
     case QMError.signedOut, QMError.rejected:
       syncError = failure.localizedDescription

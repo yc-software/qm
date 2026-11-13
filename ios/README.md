@@ -1,6 +1,6 @@
 # QM for iOS
 
-An iOS 18+ SwiftUI client for QM deployments. Product screens, navigation, editors, conversation controls, and voice controls are native. There is no embedded WebKit product UI; the one web view draws app-catalog logos, which the logo service serves as SVG. It uses the existing authenticated APIs and runs no agent or model on the phone. External authentication uses ASWebAuthenticationSession; external links and user-created web apps open in the browser.
+An iOS 18+ SwiftUI client for QM deployments. Product screens, navigation, editors, conversation controls, and voice controls are native. App-catalog SVG logos use SVGView with URLSession’s HTTP cache; there is no embedded WebKit UI. It uses the existing authenticated APIs and runs no agent or model on the phone. External authentication uses ASWebAuthenticationSession; external links and user-created web apps open in the browser.
 
 ## Run
 
@@ -95,7 +95,7 @@ This archive opens workspace selection and is not installable or distributable u
 
 ## Dictation
 
-The composer microphone records locally with AVAudioEngine and shows a live transcript using Apple's Speech framework. Recognition requires on-device support for the current language and never uploads dictation audio to the workspace. Finishing dictation transcribes the saved recording and appends the result to the editable draft; it never sends a chat message automatically. Recording finishes automatically at 55 seconds. Interrupted recordings wait for an explicit Transcribe action. Failed recognition can be retried; cancellation, leaving the conversation, or backgrounding deletes the temporary audio.
+The composer microphone records locally with AVAudioEngine and shows a live transcript using Apple's Speech framework. Recognition requires on-device support for the current language and never uploads dictation audio to the workspace. Finishing dictation transcribes the saved recording and appends the result to the editable draft; it never sends a chat message automatically. Interrupted recordings wait for an explicit Transcribe action. Failed recognition can be retried; cancellation, leaving the conversation, or backgrounding deletes the temporary audio.
 
 QM requests microphone and Speech Recognition permission when dictation starts. If the current language lacks on-device recognition, use the device keyboard microphone. The web UI's `/api/dictation` endpoint and `WEB_UI_STT_*` settings are separate and do not control iOS dictation.
 

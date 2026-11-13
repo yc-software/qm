@@ -10,6 +10,9 @@ configFiles:
   Debug: Configuration.xcconfig
   Release: Configuration.xcconfig
 packages:
+  SVGView:
+    url: https://github.com/exyte/SVGView.git
+    exactVersion: 1.0.6
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     exactVersion: 153.0.0
@@ -34,6 +37,7 @@ targets:
     dependencies:
       - package: WebRTC
       - package: MarkdownUI
+      - package: SVGView
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(QM_BUNDLE_ID)

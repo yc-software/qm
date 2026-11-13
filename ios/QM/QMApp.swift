@@ -25,8 +25,6 @@ struct RootView: View {
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
   @State private var search = ""
-  @State private var collapsedScopes = Set<String>()
-  @State private var expandedFolderScopes = Set<String>()
   @State private var rename: Conversation?
   @State private var renamedTitle = ""
   @State private var choosingWorkspace = false
@@ -55,91 +53,6 @@ struct RootView: View {
     model.visibleConversations(search: searchTerm, webOnly: webOnly)
   }
 
-  @ViewBuilder
-  private func conversationSection(
-    _ section: NativeConversationSection, contexts: [String: WorkspaceContext]
-  ) -> some View {
-    let expanded = !search.isEmpty || !collapsedScopes.contains(section.id)
-    Button {
-      if !collapsedScopes.insert(section.id).inserted {
-        collapsedScopes.remove(section.id)
-      }
-    } label: {
-      HStack(spacing: 8) {
-        Image(systemName: expanded ? section.icon : "chevron.right")
-          .frame(width: 18)
-        Text(section.title).lineLimit(1)
-        Spacer(minLength: 0)
-        if !section.members.isEmpty { NativeGroupAvatars(members: section.members) }
-        if expanded { Image(systemName: "chevron.down").font(.caption2) }
-      }
-      .font(.subheadline)
-      .foregroundStyle(.secondary)
-      .frame(minHeight: 40)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel(
-      section.title
-        + (section.members.isEmpty
-          ? "" : ", with " + section.members.map(\.displayName).joined(separator: ", "))
-    )
-    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-    .accessibilityHint("Show or hide conversations in this section")
-    .disabled(!search.isEmpty)
-    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
-    .listRowSeparator(.hidden)
-    ForEach(
-      expanded
-        ? section.preview(
-          showAll: expandedFolderScopes.contains(section.id), searching: !search.isEmpty,
-          selectedID: selectedConversation?.id) : []
-    ) { conversation in
-      Button {
-        open(conversation)
-      } label: {
-        NativeConversationRow(
-          conversation: conversation,
-          showsContext: section.id == "pinned",
-          contextTitle: contexts[conversation.scopeId].flatMap {
-            $0.isPersonal ? nil : $0.title
-          },
-          updating: model.updatingConversationIDs.contains(conversation.id),
-          selected: selectedConversation?.id == conversation.id)
-      }
-      .buttonStyle(.plain)
-      .listRowInsets(
-        EdgeInsets(
-          top: 0, leading: section.id == "pinned" ? 16 : 32, bottom: 0, trailing: 16)
-      )
-      .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
-      .contextMenu { conversationActions(conversation) }
-      .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-        conversationActions(conversation)
-      }
-    }
-    if expanded, search.isEmpty, section.hasPreview {
-      Button(expandedFolderScopes.contains(section.id) ? "Show less" : "Show more") {
-        if !expandedFolderScopes.insert(section.id).inserted {
-          expandedFolderScopes.remove(section.id)
-        }
-      }
-      .font(.subheadline).foregroundStyle(.secondary)
-      .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-      .accessibilityLabel(
-        (expandedFolderScopes.contains(section.id) ? "Show less in " : "Show more in ")
-          + section.title
-      )
-      .accessibilityValue(
-        expandedFolderScopes.contains(section.id) ? "Expanded" : "Collapsed"
-      )
-      .listRowInsets(EdgeInsets(top: 0, leading: 40, bottom: 0, trailing: 16))
-      .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
-    }
-  }
-
   private var home: some View {
     let contexts = Dictionary(uniqueKeysWithValues: model.contexts.map { ($0.scopeId, $0) })
     return NavigationStack(path: $homePath) {
@@ -162,9 +75,12 @@ struct RootView: View {
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                 .listRowSeparator(.hidden)
             }
-            ForEach(
-              NativeConversationSection.grouped(visibleConversations, contexts: contexts)
-            ) { section in conversationSection(section, contexts: contexts) }
+            NativeConversationSections(
+              conversations: visibleConversations, contexts: contexts, search: search,
+              selectedID: selectedConversation?.id, updatingIDs: model.updatingConversationIDs,
+              onOpen: open, actions: conversationActions
+            )
+            .id(model.client?.baseURL)
             loadMoreRow
             emptyState(identity)
               .listRowBackground(QMTheme.paper)
@@ -302,8 +218,6 @@ struct RootView: View {
       homePath = []
       showingConversations = true
       search = ""
-      collapsedScopes = []
-      expandedFolderScopes = []
     }
     .onChange(of: openConversation?.threadRef) {
       let opened = openConversation
@@ -323,8 +237,6 @@ struct RootView: View {
         selectedConversation = nil
         homePath = []
         showingConversations = true
-        collapsedScopes = []
-        expandedFolderScopes = []
         model.resetAfterSessionLoss()
       }
     }

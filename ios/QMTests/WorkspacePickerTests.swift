@@ -143,12 +143,14 @@ final class WorkspacePickerTests: XCTestCase {
     #if DEBUG
       XCTAssertEqual(
         AppModel.workspaceURL("10.0.0.2:8113")?.absoluteString,
-        "http://10.0.0.2:8113")
+        "https://10.0.0.2:8113")
       XCTAssertEqual(
         AppModel.workspaceURL("http://192.168.1.20:8113/")?.absoluteString,
         "http://192.168.1.20:8113")
       XCTAssertNil(AppModel.workspaceURL("http://remote.example:8113"))
       XCTAssertNil(AppModel.workspaceURL("http://fc.example:8113"))
+      XCTAssertNil(AppModel.workspaceURL("http://foo.10.0.0.1"))
+      XCTAssertNil(AppModel.workspaceURL("http://10.0.0.1.foo"))
     #endif
   }
 

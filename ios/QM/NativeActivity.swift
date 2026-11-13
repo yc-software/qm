@@ -276,11 +276,6 @@ struct NativeWorkItem: Identifiable {
         return NativeActivityService(host: host)
       }
     }
-    if ["execute", "sandbox", "computer"].contains(entry.payload?.tool ?? ""),
-      let purpose = details?["purpose"]?.string
-    {
-      return NativeActivityService.named(purpose: purpose)
-    }
     return nil
   }
 
@@ -434,22 +429,6 @@ struct NativeActivityService {
     return nil
   }
 
-  static func named(purpose: String) -> Self? {
-    let words = purpose.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
-    if words.contains("google") {
-      for (word, service) in [
-        ("sheets", "googlesheets"), ("drive", "googledrive"),
-        ("calendar", "googlecalendar"),
-      ] where words.contains(word) {
-        return Self(identifier: service)
-      }
-    }
-    for word in words where !["x", "linear", "notion"].contains(word) {
-      let service = Self(identifier: word)
-      if service.logo != nil { return service }
-    }
-    return nil
-  }
 }
 
 private struct NativeActivityIcon: View {

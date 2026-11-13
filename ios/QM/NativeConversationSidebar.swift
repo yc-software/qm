@@ -150,3 +150,107 @@ struct NativeGroupAvatars: View {
     return url
   }
 }
+
+struct NativeConversationSections<Actions: View>: View {
+  let conversations: [Conversation]
+  let contexts: [String: WorkspaceContext]
+  let search: String
+  let selectedID: String?
+  let updatingIDs: Set<String>
+  let onOpen: (Conversation) -> Void
+  @ViewBuilder let actions: (Conversation) -> Actions
+  @State private var collapsedScopes = Set<String>()
+  @State private var expandedFolderScopes = Set<String>()
+
+  var body: some View {
+    ForEach(NativeConversationSection.grouped(conversations, contexts: contexts)) { section in
+      conversationSection(section, contexts: contexts)
+    }
+  }
+
+  @ViewBuilder
+  private func conversationSection(
+    _ section: NativeConversationSection, contexts: [String: WorkspaceContext]
+  ) -> some View {
+    let expanded = !search.isEmpty || !collapsedScopes.contains(section.id)
+    Button {
+      if !collapsedScopes.insert(section.id).inserted {
+        collapsedScopes.remove(section.id)
+      }
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: expanded ? section.icon : "chevron.right")
+          .frame(width: 18)
+        Text(section.title).lineLimit(1)
+        Spacer(minLength: 0)
+        if !section.members.isEmpty { NativeGroupAvatars(members: section.members) }
+        if expanded { Image(systemName: "chevron.down").font(.caption2) }
+      }
+      .font(.subheadline)
+      .foregroundStyle(.secondary)
+      .frame(minHeight: 40)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(
+      section.title
+        + (section.members.isEmpty
+          ? "" : ", with " + section.members.map(\.displayName).joined(separator: ", "))
+    )
+    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+    .accessibilityHint("Show or hide conversations in this section")
+    .disabled(!search.isEmpty)
+    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
+    .listRowSeparator(.hidden)
+    ForEach(
+      expanded
+        ? section.preview(
+          showAll: expandedFolderScopes.contains(section.id), searching: !search.isEmpty,
+          selectedID: selectedID) : []
+    ) { conversation in
+      Button {
+        onOpen(conversation)
+      } label: {
+        NativeConversationRow(
+          conversation: conversation,
+          showsContext: section.id == "pinned",
+          contextTitle: contexts[conversation.scopeId].flatMap {
+            $0.isPersonal ? nil : $0.title
+          },
+          updating: updatingIDs.contains(conversation.id),
+          selected: selectedID == conversation.id)
+      }
+      .buttonStyle(.plain)
+      .listRowInsets(
+        EdgeInsets(
+          top: 0, leading: section.id == "pinned" ? 16 : 32, bottom: 0, trailing: 16)
+      )
+      .listRowSeparator(.hidden)
+      .listRowBackground(QMTheme.paper)
+      .contextMenu { actions(conversation) }
+      .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        actions(conversation)
+      }
+    }
+    if expanded, search.isEmpty, section.hasPreview {
+      Button(expandedFolderScopes.contains(section.id) ? "Show less" : "Show more") {
+        if !expandedFolderScopes.insert(section.id).inserted {
+          expandedFolderScopes.remove(section.id)
+        }
+      }
+      .font(.subheadline).foregroundStyle(.secondary)
+      .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+      .accessibilityLabel(
+        (expandedFolderScopes.contains(section.id) ? "Show less in " : "Show more in ")
+          + section.title
+      )
+      .accessibilityValue(
+        expandedFolderScopes.contains(section.id) ? "Expanded" : "Collapsed"
+      )
+      .listRowInsets(EdgeInsets(top: 0, leading: 40, bottom: 0, trailing: 16))
+      .listRowSeparator(.hidden)
+      .listRowBackground(QMTheme.paper)
+    }
+  }
+
+}

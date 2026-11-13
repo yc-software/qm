@@ -56,6 +56,7 @@ final class ConnectedAppsModel {
   private var searchRevision = UUID()
   private var cursors = Set<String>()
   private var loadingCursor: String?
+  private var catalogTask: Task<Bool, Never>?
   private let authorization: ConnectionAuthorization
   init(client: APIClient, authorization: ConnectionAuthorization = ConnectionAuthorization()) {
     self.client = client
@@ -77,8 +78,8 @@ final class ConnectedAppsModel {
   func search() async {
     let current = searchRevision
     while !Task.isCancelled && current == searchRevision && !connecting && disconnecting == nil {
-      if loading {
-        do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+      if let catalogTask {
+        guard await catalogTask.value else { return }
         continue
       }
       guard error == nil, !loaded || (!query.isEmpty && nextCursor != nil) else { return }
@@ -88,17 +89,35 @@ final class ConnectedAppsModel {
   func cancel() {
     revision = UUID()
     searchRevision = UUID()
+    catalogTask?.cancel()
+    catalogTask = nil
     loading = false
     authorization.cancel()
   }
   @discardableResult
   func load(more: Bool = false) async -> Bool {
-    guard !Task.isCancelled, !busy, !more || nextCursor != nil else { return false }
+    guard !Task.isCancelled, catalogTask == nil, !busy, !more || nextCursor != nil else {
+      return false
+    }
+    let task = Task { await fetchCatalog(more: more) }
+    catalogTask = task
+    return await withTaskCancellationHandler {
+      await task.value
+    } onCancel: {
+      task.cancel()
+    }
+  }
+  private func fetchCatalog(more: Bool) async -> Bool {
     loading = true
     loadingCursor = more ? nextCursor : nil
     let current = UUID()
     revision = current
-    defer { if current == revision { loading = false } }
+    defer {
+      if current == revision {
+        loading = false
+        catalogTask = nil
+      }
+    }
     do {
       let cursor = loadingCursor
       async let connected: Void = try await (more ? () : refreshAccounts(current: current))
@@ -167,6 +186,8 @@ final class ConnectedAppsModel {
   func connect(_ toolkit: NativeToolkit) async -> String? {
     guard !connecting, disconnecting == nil else { return nil }
     connecting = true
+    catalogTask?.cancel()
+    catalogTask = nil
     loading = false
     error = nil
     searchRevision = UUID()

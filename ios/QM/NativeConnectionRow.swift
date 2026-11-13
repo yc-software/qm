@@ -1,6 +1,6 @@
 import AVFoundation
+import SVGView
 import SwiftUI
-import WebKit
 
 struct NativeServiceLogo: View {
   let service: String
@@ -38,73 +38,35 @@ struct NativeServiceLogo: View {
   }
 }
 
-@MainActor @Observable
-final class NativeRemoteLogos {
-  static let shared = NativeRemoteLogos()
-  var images: [URL: UIImage] = [:]
-}
-
 private struct NativeRemoteLogo: View {
   let url: URL
+  @State private var vector: SVGView?
+  @State private var bitmap: UIImage?
 
   var body: some View {
-    if let image = NativeRemoteLogos.shared.images[url] {
-      Image(uiImage: image).resizable().scaledToFit()
-    } else {
-      NativeRemoteLogoPage(url: url)
+    Group {
+      if let bitmap { Image(uiImage: bitmap).resizable().scaledToFit() } else { vector }
     }
-  }
-}
-
-private struct NativeRemoteLogoPage: UIViewRepresentable {
-  private static let store = WKWebsiteDataStore.nonPersistent()
-  let url: URL
-
-  func makeUIView(context: Context) -> WKWebView {
-    let configuration = WKWebViewConfiguration()
-    configuration.websiteDataStore = Self.store
-    configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-    let view = WKWebView(frame: .zero, configuration: configuration)
-    view.isOpaque = false
-    view.backgroundColor = .clear
-    view.scrollView.backgroundColor = .clear
-    view.scrollView.isScrollEnabled = false
-    view.isUserInteractionEnabled = false
-    view.navigationDelegate = context.coordinator
-    return view
-  }
-
-  func updateUIView(_ view: WKWebView, context: Context) {
-    guard context.coordinator.url != url else { return }
-    context.coordinator.url = url
-    view.loadHTMLString(
-      """
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>html,body{margin:0;height:100%;background:transparent}
-      img{width:100%;height:100%;object-fit:contain}</style>
-      <img src="\(url.absoluteString)" alt="">
-      """, baseURL: nil)
-  }
-
-  func makeCoordinator() -> Coordinator { Coordinator() }
-
-  final class Coordinator: NSObject, WKNavigationDelegate {
-    var url: URL?
-
-    func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
-      guard let url else { return }
-      Task {
-        do {
-          for _ in 0..<20 where NativeRemoteLogos.shared.images[url] == nil && view.window != nil {
-            try await Task.sleep(for: .milliseconds(100))
-            let image = try await view.takeSnapshot(configuration: nil)
-            if let pixels = image.cgImage?.dataProvider?.data as Data?,
-              pixels.contains(where: { $0 != 0 })
-            {
-              NativeRemoteLogos.shared.images[url] = image
-            }
+    .task(id: url) {
+      do {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
+          throw QMError.message("The app logo could not be downloaded.")
+        }
+        try Task.checkCancellation()
+        if let loaded = UIImage(data: data) {
+          bitmap = loaded
+          vector = nil
+        } else {
+          let loaded = SVGView(data: data)
+          guard loaded.svg != nil else {
+            throw QMError.message("The app logo is not a supported image.")
           }
-        } catch { Log.background.failure("Remote logo snapshot", error) }
+          vector = loaded
+          bitmap = nil
+        }
+      } catch {
+        Log.background.failure("App logo", error)
       }
     }
   }

@@ -1,4 +1,5 @@
 import AVFAudio
+import Accelerate
 import Speech
 import SwiftUI
 
@@ -139,14 +140,9 @@ final class DictationLevel: @unchecked Sendable {
     guard let samples = buffer.floatChannelData?.pointee else { return }
     let count = Int(buffer.frameLength)
     guard count > 0 else { return }
-    var power = 0.0
-    var sampled = 0
-    for index in stride(from: 0, to: count, by: 8) {
-      let sample = Double(samples[index])
-      power += sample * sample
-      sampled += 1
-    }
-    let decibels = 20 * log10(max(sqrt(power / Double(sampled)), 0.0001))
+    var rms: Float = 0
+    vDSP_rmsqv(samples, vDSP_Stride(buffer.stride), &rms, vDSP_Length(count))
+    let decibels = 20 * log10(max(Double(rms), 0.0001))
     let level = max(0, min(1, (decibels + 50) / 50))
     lock.withLock { value = level }
   }
@@ -268,10 +264,6 @@ final class NativeDictationModel {
           while current == revision, state == .recording, !Task.isCancelled {
             elapsed = ProcessInfo.processInfo.systemUptime - startedAt
             level = meter.read()
-            if elapsed >= 55 {
-              finish()
-              return
-            }
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
           }
         }

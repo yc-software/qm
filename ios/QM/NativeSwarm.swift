@@ -82,7 +82,8 @@ final class SwarmModel {
       let loaded: SwarmView = try await client.fetch("api/sessions/\(sessionID)/swarm")
       guard !Task.isCancelled else { return }
       view = loaded.workers.isEmpty ? nil : loaded
-    } catch QMError.rejected {
+    } catch let failure as QMError {
+      Log.background.failure("Swarm load", failure)
       view = nil
     } catch {
       Log.background.failure("Swarm load", error)

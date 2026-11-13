@@ -627,20 +627,16 @@ struct WorkspaceTests {
         .canReply)
   }
 
-  @Test func subagentsStayReadOnlyEvenWhenContinuationIsAllowed() {
+  @Test func subagentsUseTheServersContinuationPermission() {
     var conversation = Conversation(
       id: "agent", scopeId: "personal:test", threadRef: "web:test:agent", surface: "web",
       canContinue: true, parentSessionId: "parent")
     #expect(conversation.isSubagent)
-    #expect(!conversation.canReply)
-    conversation.localOnly = true
-    #expect(!conversation.canReply)
-    conversation.parentSessionId = ""
-    #expect(!conversation.isSubagent)
     #expect(conversation.canReply)
+    conversation.canContinue = false
+    #expect(!conversation.canReply)
     conversation.parentSessionId = nil
-    #expect(!conversation.isSubagent)
-    #expect(conversation.canReply)
+    #expect(!conversation.canReply)
   }
 
   @Test func slackLinksUseWorkspaceAndThreadIdentifiers() {

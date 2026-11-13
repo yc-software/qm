@@ -3,24 +3,9 @@ import XCTest
 @testable import QM
 
 final class NativeActivityTests: XCTestCase {
-  func testNonObjectPayloadDoesNotRejectTranscript() throws {
-    let source = #"""
-      {"entries":[
-        {"type":"system","createdAt":1,"payload":"notice"},
-        {"type":"system","createdAt":2,"payload":["notice",{"code":1}]},
-        {"type":"system","createdAt":3,"payload":null},
-        {"type":"user","createdAt":4,"payload":{"text":"Continue"}}
-      ]}
-      """#
-    let transcript = try JSONDecoder().decode(Transcript.self, from: Data(source.utf8))
-    XCTAssertEqual(transcript.entries.count, 4)
-    XCTAssertEqual(transcript.entries[0].payload?.details, .string("notice"))
-    XCTAssertEqual(
-      transcript.entries[1].payload?.details,
-      .array([.string("notice"), .object(["code": .number(1)])]))
-    XCTAssertNil(transcript.entries[0].payload?.text)
-    XCTAssertNil(transcript.entries[2].payload)
-    XCTAssertEqual(chatMessages(transcript.entries).map(\.text), ["Continue"])
+  func testNonObjectPayloadReportsDecodingFailure() {
+    let source = #"{"type":"user","createdAt":1,"payload":"broken"}"#
+    XCTAssertThrowsError(try JSONDecoder().decode(Entry.self, from: Data(source.utf8)))
   }
 
   func testActivityPreservesUnknownStructuredFieldsAndExactIdentifiers() throws {
@@ -170,9 +155,9 @@ final class NativeActivityTests: XCTestCase {
     let entries = try JSONDecoder().decode([Entry].self, from: Data(source.utf8))
     let items = NativeWorkItem.items(entries)
     XCTAssertEqual(
-      items.map { $0.service?.name }, ["GitHub", "Slack", "Notion", "example.org", "GitHub", nil])
+      items.map { $0.service?.name }, ["GitHub", "Slack", "Notion", "example.org", nil, nil])
     XCTAssertEqual(
-      items.map { $0.service?.logo }, ["github", "slack", "notion", nil, "github", nil])
+      items.map { $0.service?.logo }, ["github", "slack", "notion", nil, nil, nil])
   }
 
   func testAgentContextUsesResolvedConversationIdentityAndLeavesAggregateWorkUnlinked() throws {

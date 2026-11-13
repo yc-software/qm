@@ -96,6 +96,7 @@ enum FilePreviewResource {
       } catch is CancellationError {
         throw CancellationError()
       } catch {
+        Log.background.failure("Saved attachment preview", error)
         throw QMError.message(
           "Couldn’t open the saved attachment. Remove it and attach the file again.")
       }
