@@ -24,7 +24,6 @@ import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { buildWakeEnvelope, type WakeMessage } from "../wake/wake-envelope.ts";
 import { liveTurnOf, routeIncoming } from "../wake/route-incoming.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import { isTerminal } from "../runs/run-store.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { withModelRequestContext } from "../model/request-context.ts";
 
@@ -427,27 +426,27 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     activeIds: string[],
   ): Promise<boolean> {
     const prefix = `${batch.surface}:${batch.container}:ambient:`;
-    const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
-    if (!liveRef) return false;
-    const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status)) return false;
-    const route = routeIncoming(
-      {
-        origin: "ambient",
-        person: asked,
-        text: req.text,
-        hasFiles: Boolean(req.attachments?.length),
-        actorId: req.actor.externalId,
-        modelAccount: "company",
-        ...(req.botActor ? { bot: true } : {}),
-        ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
-        routed: false,
-      },
-      liveTurnOf(live),
-      { midTurn: "steer" },
+    const live = await deps.runs.activeForThreads(
+      activeIds.filter((id) => id.startsWith(prefix) && id !== req.conversation.threadRef),
     );
-    if (route.kind !== "steer") return false;
-    await h.steerRun(live, {
+    const incoming = {
+      origin: "ambient" as const,
+      person: asked,
+      text: req.text,
+      hasFiles: Boolean(req.attachments?.length),
+      actorId: req.actor.externalId,
+      modelAccount: "company",
+      ...(req.botActor ? { bot: true } : {}),
+      ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
+      routed: false,
+    };
+    const target = [...live.values()].find(
+      (run) =>
+        run.request.actor.id === ambientActorId() &&
+        routeIncoming(incoming, liveTurnOf(run), { midTurn: "steer" }).kind === "steer",
+    );
+    if (!target) return false;
+    await h.steerRun(target, {
       kind: "steer",
       text: req.text,
       ts: latestTs,
