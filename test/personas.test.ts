@@ -535,3 +535,26 @@ test("a persona pinned in a channel is worn by every conversation there until it
   const group = { kind: "group" as const, channelRef: "G_PIN", threadRef: "grp:G_PIN:t1" };
   assert.match((await sysprompt(CAROL, group)).reply, /## Persona: Ada/);
 });
+
+test("a persona's default model starts its new conversations, unless the turn asks for another", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: "channel:C_MODEL", role: "read", pinned: true },
+    ]),
+  );
+  await built.config.setRuntimeSelection(scopeId("persona", ada.id), { modelId: "gpt-5.5" });
+  const turn = (n: number, model?: string) =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: ALICE },
+      conversation: { kind: "channel", channelRef: "C_MODEL", threadRef: `channel:C_MODEL:t${n}` },
+      text: "hi",
+      ...(model ? { model } : {}),
+    });
+  assert.equal((await turn(1)).runtime?.modelId, "gpt-5.5");
+  assert.notEqual((await turn(2, "claude-sonnet-4-6")).runtime?.modelId, "gpt-5.5");
+});

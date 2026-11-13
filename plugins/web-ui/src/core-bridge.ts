@@ -321,7 +321,8 @@ export interface CoreContext {
   groupMembers?: Array<{ principalId: string; displayName: string; avatarUrl?: string }>;
 }
 
-export type ProjectIcon = { kind: "emoji"; value: string } | { kind: "custom"; name: string };
+export type ProjectIcon =
+  { kind: "emoji"; value: string } | { kind: "custom"; name: string } | { kind: "image"; url: string };
 
 export interface CoreProject {
   id: string;

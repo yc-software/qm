@@ -89,7 +89,8 @@ export function isProjectGroupRef(ref: string): boolean {
   return ref.startsWith(PROJECT_GROUP_PREFIX);
 }
 
-export type ProjectIcon = { kind: "emoji"; value: string } | { kind: "custom"; name: string };
+export type ProjectIcon =
+  { kind: "emoji"; value: string } | { kind: "custom"; name: string } | { kind: "image"; url: string };
 
 const ONE_EMOJI = /^\p{RGI_Emoji}$/v;
 
@@ -101,12 +102,23 @@ export function validProjectIcon(value: unknown): value is ProjectIcon | null {
     return Object.keys(icon).length === 2 && typeof icon.value === "string" && ONE_EMOJI.test(icon.value);
   if (icon.kind === "custom")
     return Object.keys(icon).length === 2 && typeof icon.name === "string" && icon.name.length > 0;
+  if (icon.kind === "image")
+    return Object.keys(icon).length === 2 && typeof icon.url === "string" && imageUrl(icon.url);
   return false;
+}
+
+function imageUrl(value: string): boolean {
+  if (value.length > 2048) return false;
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function sameIcon(a: ProjectIcon | null | undefined, b: ProjectIcon | null | undefined): boolean {
   if (!a || !b) return !a && !b;
-  return a.kind === "emoji" ? b.kind === "emoji" && a.value === b.value : b.kind === "custom" && a.name === b.name;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function cleanName(name: string): string {

@@ -157,15 +157,22 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
   assert.ok(same.status === "ok" && !same.changed);
 });
 
-test("validProjectIcon accepts exactly one emoji or a named custom emoji", () => {
+test("validProjectIcon accepts one emoji, a named custom emoji, or an https image URL", () => {
   const emoji = (value: string) => ({ kind: "emoji", value });
-  for (const ok of [...["🚢", "👩🏽‍💻", "🏳️‍🌈", "🇺🇸", "❤️"].map(emoji), { kind: "custom", name: "party_parrot" }])
+  for (const ok of [
+    ...["🚢", "👩🏽‍💻", "🏳️‍🌈", "🇺🇸", "❤️"].map(emoji),
+    { kind: "custom", name: "party_parrot" },
+    { kind: "image", url: "https://example.com/a.png" },
+  ])
     assert.ok(validProjectIcon(ok), `accepts ${JSON.stringify(ok)}`);
   assert.ok(validProjectIcon(null));
   for (const bad of [
     ...["", "abc", "🚢 ship", "🚢🚢", "©️🚢", "<img>"].map(emoji),
     { kind: "custom", name: "" },
     { kind: "custom", name: "x", extra: 1 },
+    { kind: "image", url: "http://example.com/a.png" },
+    { kind: "image", url: "data:image/png;base64,YWJj" },
+    { kind: "image", url: `https://example.com/${"a".repeat(2048)}` },
     "🚢",
     ":shipit:",
     42,

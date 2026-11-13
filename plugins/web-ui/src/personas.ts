@@ -17,7 +17,7 @@ import {
   Trash2,
   X,
 } from "lucide";
-import { api, ApiError, isSharedScopeId, type CoreSession, type ProjectIcon } from "./core-bridge";
+import { api, ApiError, fetchRuntimeConfig, isSharedScopeId, type CoreSession, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
@@ -28,8 +28,10 @@ import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
+import { loadRuntimeConfig, saveRuntimeConfig } from "./runtime-config-store";
+import { runtimeModelOptions, type ModelOption } from "./model-options";
 import { peopleResults, type DirectoryMatch } from "./people-results";
-import { avatarTpl, menuSelect } from "./ui";
+import { avatarTpl, fieldSelect, menuSelect } from "./ui";
 import { canvasToast } from "./split";
 import { tip } from "./tooltip";
 import { openSkillById, startSkillCreateIn } from "./skills";
@@ -968,6 +970,9 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
 interface FormState {
   icon: ProjectIcon | null;
   iconChanged: boolean;
+  model: string;
+  savedModel: string;
+  models: ModelOption[];
   error: string;
   saving: boolean;
 }
@@ -999,6 +1004,11 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
         persona ? `/api/personas/${encodeURIComponent(persona.id)}` : "/api/personas",
         { method: persona ? "PATCH" : "POST", body: JSON.stringify(body) },
       );
+      if (state.model !== state.savedModel)
+        await saveRuntimeConfig(
+          `persona:${saved.persona.id}`,
+          state.model ? { modelId: state.model } : { inherit: true },
+        );
       setPersonaList([...personasState.list.filter((p) => p.id !== saved.persona.id), saved.persona]);
       await openPersona(saved.persona.id, persona ? "Saved." : "");
     } catch (err) {
@@ -1043,6 +1053,21 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
           .value=${persona?.instructions ?? ""}
         ></textarea>
       </label>
+      <label
+        >Default model <span class="hint">(new conversations with this persona start on it)</span>
+        ${fieldSelect({
+          ariaLabel: "Default model",
+          value: state.model,
+          options: [
+            html`<option value="">Same as the conversation's default</option>`,
+            ...state.models.map((option) => html`<option value=${option.value}>${option.label}</option>`),
+          ],
+          onChange: (value) => {
+            state.model = value;
+            redraw();
+          },
+        })}
+      </label>
       <div class="form-error" role="alert">${state.error}</div>
       <div class="actions">
         <button class="btn primary" type="submit" ?disabled=${state.saving}>
@@ -1053,10 +1078,26 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
   `;
 }
 
+async function loadPersonaModels(personaId: string | null, state: FormState, redraw: () => void): Promise<void> {
+  const config = personaId ? await loadRuntimeConfig(`persona:${personaId}`) : await fetchRuntimeConfig();
+  if (!config) return;
+  state.models = runtimeModelOptions(config.models, config.modelCatalog);
+  if (personaId) state.model = state.savedModel = config.scopeOverride?.modelId ?? "";
+  redraw();
+}
+
 function showNewPersonaForm(): void {
   const host = paneHost();
   if (!host) return;
-  const state: FormState = { icon: null, iconChanged: false, error: "", saving: false };
+  const state: FormState = {
+    icon: null,
+    iconChanged: false,
+    model: "",
+    savedModel: "",
+    models: [],
+    error: "",
+    saving: false,
+  };
   const draw = () =>
     render(
       html`<div class="resource-detail persona-detail">
@@ -1067,6 +1108,7 @@ function showNewPersonaForm(): void {
       host,
     );
   draw();
+  void loadPersonaModels(null, state, draw);
   host.querySelector<HTMLInputElement>('input[name="name"]')?.focus();
 }
 
@@ -1075,7 +1117,15 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
   if (!host) return;
   syncPersonaUrl(persona.id);
   actionError = "";
-  const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
+  const state: FormState = {
+    icon: persona.icon ?? null,
+    iconChanged: false,
+    model: "",
+    savedModel: "",
+    models: [],
+    error: "",
+    saving: false,
+  };
   const editable = canEditPersona(persona.role);
   const draw = () =>
     render(
@@ -1115,6 +1165,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
     );
   redrawDetail = draw;
   draw();
+  if (editable) void loadPersonaModels(persona.id, state, draw);
 }
 
 async function deletePersona(persona: PersonaView): Promise<void> {

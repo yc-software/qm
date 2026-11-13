@@ -125,8 +125,22 @@ const { vite, dom, close } = await browserEnv({
     if (path.startsWith("/api/runtime-config"))
       return json({
         scopeId: new URL(path, "http://localhost").searchParams.get("scopeId") ?? "personal:tester",
-        models: [],
-        modelCatalog: {},
+        models: ["alpha"],
+        modelCatalog: {
+          alpha: {
+            id: "alpha",
+            name: "Alpha",
+            label: "Alpha",
+            buttonLabel: "Alpha",
+            provider: "openai",
+            api: "openai-responses",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 100_000,
+            maxTokens: 4096,
+          },
+        },
         orgDefault: { modelId: null, revision: 0 },
         effective: {},
         scopeOverride: null,
@@ -565,6 +579,26 @@ test("an owner changes a person's role and removes them from the row, keeping an
     main.querySelector(".persona-action-error[role=alert]")?.textContent?.trim(),
     "a persona must keep at least one owner",
   );
+});
+
+test("an editor picks the persona's default model, and Save stores it on the persona's scope", async () => {
+  const { main } = await mountPage();
+  button(main, "Edit", "Bo").click();
+  await settle();
+  const form = main.querySelector<HTMLFormElement>("form.persona-form")!;
+  const select = form.querySelector<HTMLSelectElement>('select[aria-label="Default model"]')!;
+  assert.deepEqual(
+    [...select.options].map((o) => o.value),
+    ["", "alpha"],
+  );
+  select.value = "alpha";
+  select.dispatchEvent(new window.Event("change"));
+  await settle();
+  calls = [];
+  form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  await settle();
+  const put = calls.find((c) => c.method === "PUT" && c.path === "/api/runtime-config");
+  assert.deepEqual(put?.body, { modelId: "alpha", scopeId: "persona:p-bo" });
 });
 
 test("a search answered after the query changed shows nothing for the old query", async () => {

@@ -13092,12 +13092,17 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-size: var(--font-12-5);
   color: var(--destructive);
 }
-.project-icon-search {
+.project-icon-search,
+.project-icon-url {
   display: flex;
   gap: 6px;
   padding: 10px 10px 4px;
 }
-.project-icon-search input {
+.project-icon-url {
+  padding-top: 2px;
+}
+.project-icon-search input,
+.project-icon-url input {
   flex: 1;
   min-width: 0;
   height: 30px;
@@ -13110,9 +13115,21 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-size: var(--font-13, 13px);
   outline: none;
 }
-.project-icon-search input:focus {
+.project-icon-search input:focus,
+.project-icon-url input:focus {
   border-color: var(--ring, var(--border));
   background: var(--background);
+}
+.project-icon-url button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--font-13, 13px);
+  cursor: pointer;
 }
 .project-icon-random {
   width: 30px;

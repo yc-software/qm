@@ -87,7 +87,7 @@ function fieldsFrom(input: unknown, requireName: boolean): PersonaFields | strin
   if (requireName && !fields.name) return "name required";
   if (body.icon !== undefined) {
     if (!validProjectIcon(body.icon))
-      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<custom emoji name>}, or null';
+      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<custom emoji name>}, {kind:"image",url:<https image URL>}, or null';
     fields.icon = body.icon;
   }
   return fields;

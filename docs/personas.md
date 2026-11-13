@@ -89,7 +89,7 @@ destination: replies, posts to other conversations, and cron output. Slack posts
 edits those messages under the persona's name and icon, ahead of any deployment-wide
 `SLACK_BOT_DISPLAY_NAME`/`SLACK_BOT_ICON_EMOJI` override (needs `chat:write.customize`, which
 the app manifest requests) (a Unicode emoji maps to its Slack
-shortcode; a custom emoji is used by name; no icon keeps the default), and ends them with a
+shortcode; a custom emoji is used by name; an image icon is sent as its URL; no icon keeps the default), and ends them with a
 `Persona: <name>` context line linking to the persona's page, next to the cron settings
 link when there is one. File uploads and the in-progress task card still show the app's own
 identity, since Slack doesn't let an app rename those.
@@ -138,3 +138,11 @@ access are never copied.
 `?before=&limit=`; who and when, with content only on `&full=1`),
 `POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.
+
+## Default model
+
+A persona can carry a default model, stored as the runtime selection of its `persona:<id>`
+scope and set from the persona editor (or `PUT /v1/runtime-config` with that scope; writers
+only). A conversation wearing the persona starts on that model when it has no model of its
+own yet; a model the person picks for the turn still wins, and later turns keep whatever
+model the conversation last used.
