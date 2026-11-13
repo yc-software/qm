@@ -151,7 +151,8 @@ describeTwoTenants("monitor, approval, skill and swarm sweeps bind each row's te
         } as PendingApprovalRecord),
       );
     const enqueued: Array<[string | undefined, string]> = [];
-    const approvals = createApprovalStore(backing, {
+    const sessions = { get: async () => null };
+    const approvals = createApprovalStore(backing, sessions, {
       enqueue: async (delivery) => {
         enqueued.push([delivery.destination.commandApprovalId, currentTenant()]);
         return { id: "d1" } as never;

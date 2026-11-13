@@ -3,8 +3,10 @@ import test from "node:test";
 import { createApprovalStore } from "../src/slack/approval-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
-import type { PendingApprovalRecord } from "../src/types.ts";
+import type { PendingApprovalRecord, Session } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+
+const noSessions = { get: async () => null };
 
 function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
   return {
@@ -26,7 +28,7 @@ for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
   test(`saving approval immediately delivers a native request for ${threadRef}`, async () => {
     const backing = testMap<PendingApprovalRecord>();
     const deliveries = createDeliveryStore();
-    const approvals = createApprovalStore(backing, deliveries);
+    const approvals = createApprovalStore(backing, noSessions, deliveries);
     await approvals.put("A1", record(threadRef));
     const [delivery] = await deliveries.pending("principal");
     assert.equal(delivery?.destination.commandApprovalId, "A1");
@@ -44,7 +46,7 @@ for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
 
 test("persisted approvals recover after enqueue failure and restart without failing the turn", async () => {
   const backing = testMap<PendingApprovalRecord>();
-  const failed = createApprovalStore(backing, {
+  const failed = createApprovalStore(backing, noSessions, {
     enqueue: async () => {
       throw new Error("delivery unavailable");
     },
@@ -52,26 +54,30 @@ test("persisted approvals recover after enqueue failure and restart without fail
   await failed.put("A1", record("agent:main:subagent:child"));
   assert.ok(await backing.get("A1"));
   const deliveries = createDeliveryStore();
-  const restarted = createApprovalStore(backing, deliveries);
+  const restarted = createApprovalStore(backing, noSessions, deliveries);
   await restarted.deliverPending();
   await restarted.deliverPending();
   assert.equal((await deliveries.pending("principal")).length, 1);
 });
 
-test("web approvals remain on their native surface", async () => {
+test("approvals reach Slack only when they block a Slack conversation", async () => {
   const deliveries = createDeliveryStore();
-  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
-  const approval = record("web:U1");
-  approval.request!.surface = "web";
-  await approvals.put("A1", approval);
+  const sessions = { get: async (id: string) => (id === "dm:D1" ? ({ surface: "slack" } as Session) : null) };
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), sessions, deliveries);
+  for (const [threadRef, surface] of Object.entries({ "dm:D1": "secret-drop", "web:U1": "web", "cron:C1": "cron" })) {
+    const approval = record(threadRef);
+    approval.request!.surface = surface;
+    await approvals.put(threadRef, approval);
+  }
   await approvals.deliverPending();
-  assert.equal((await deliveries.pending("principal")).length, 0);
+  const approvalIds = (await deliveries.pending("principal")).map((d) => d.destination.commandApprovalId);
+  assert.deepEqual(approvalIds, ["dm:D1"]);
 });
 
 test("system approvals stay pending without enqueuing or reviving an impossible Slack DM", async () => {
   const backing = testMap<PendingApprovalRecord>();
   const deliveries = createDeliveryStore({ maxAgeMs: 0 });
-  const approvals = createApprovalStore(backing, deliveries);
+  const approvals = createApprovalStore(backing, noSessions, deliveries);
   const approval = record("slack:C1:ambient:1.0");
   approval.request!.actor.externalId = "system:ambient:acme";
   const stale = await deliveries.enqueue({
@@ -86,7 +92,7 @@ test("system approvals stay pending without enqueuing or reviving an impossible 
   await approvals.put("A1", approval);
   await approvals.put("A2", approval);
   await approvals.deliverPending();
-  await createApprovalStore(backing, deliveries).deliverPending();
+  await createApprovalStore(backing, noSessions, deliveries).deliverPending();
 
   assert.deepEqual(await backing.get("A1"), approval, "the protected action still requires approval");
   assert.deepEqual(await backing.get("A2"), approval);
@@ -97,7 +103,7 @@ test("system approvals stay pending without enqueuing or reviving an impossible 
 test("approvals requested from a Slack DM thread are delivered into that thread", async () => {
   for (const threadRef of ["dm:D1:1700.1", "agent:main:subagent:child"]) {
     const deliveries = createDeliveryStore();
-    const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+    const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), noSessions, deliveries);
     const approval = record(threadRef);
     approval.request!.surfaceOrigin = slackSurfaceOrigin({
       accountId: "default",
@@ -110,7 +116,7 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
     assert.equal(delivery?.destination.threadTs, "1700.1");
   }
   const deliveries = createDeliveryStore();
-  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), noSessions, deliveries);
   const channel = record("channel:C1:1700.2");
   channel.request!.conversation = { kind: "channel", threadRef: "channel:C1:1700.2" } as never;
   channel.request!.surfaceOrigin = slackSurfaceOrigin({
@@ -127,7 +133,7 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
 
 test("a Slack-originated approval goes to the Slack author even when the actor is a linked non-Slack principal", async () => {
   const deliveries = createDeliveryStore();
-  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), noSessions, deliveries);
   const approval = record("dm:D1");
   approval.request!.actor.externalId = "oidc:linked-principal";
   approval.request!.surfaceOrigin = slackSurfaceOrigin({ accountId: "default", teamId: "T1", userId: "U9" });
