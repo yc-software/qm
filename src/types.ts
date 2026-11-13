@@ -116,6 +116,7 @@ export interface ChildIsolation {
 export interface SpawnMeta {
   surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
+  liveReplies?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
   openFingerprint?: string;

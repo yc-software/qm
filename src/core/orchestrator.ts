@@ -2512,7 +2512,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
-          if (!liveReplies || input.surfaceTools || !input.runId) return undefined;
+          if (!liveReplies || sessionTurn || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;

@@ -167,6 +167,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   return {
     origin,
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
+    ...(input.liveReplies ? { liveReplies: true } : {}),
     ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
     ...(input.surfaceOrigin?.audience === "external" ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
@@ -430,6 +431,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
+    ...(meta.liveReplies ? { liveReplies: true } : {}),
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
     ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
