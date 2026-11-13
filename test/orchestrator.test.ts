@@ -450,27 +450,30 @@ test("a channel with a non-internal audience member is refused (internal-only, o
   assert.match(res.reason ?? "", /internal-only/);
 });
 
-test("an attested connector is offered and called only in the speaker's own DM, never where others read the answer", async () => {
-  const offered: Record<string, string[]> = {};
-  const called: Record<string, string> = {};
+test("a connector that acts as the person serves only their own turns: an attested one only in their DM, neither one a Slack bot's work in their name", async () => {
+  const turns: Record<string, string> = {};
   const mock = createMockAgent();
   const agent: Agent = {
     ...mock,
     runTurn: async (input) => {
-      offered[input.scopeLabel] = (input.mcpTools ?? []).map((tool) => tool.name);
-      called[input.scopeLabel] = await input.tools.callMcpTool("records", { operation: "search" }).then(
-        () => "answered",
-        (e: Error) => (/answers only to them/.test(e.message) ? "refused" : "sent"),
+      const outcome = (e: Error) => (/acts as the person/.test(e.message) ? "refused" : "sent");
+      const outcomes = await Promise.all(
+        [input.tools.callMcpTool("records", { operation: "search" }), input.tools.callMcpTool("orders_search", {})].map(
+          (call) => call.then(() => "answered", outcome),
+        ),
       );
+      turns[input.session.threadRef] = `${(input.mcpTools ?? []).map((tool) => tool.name)} ${outcomes}`;
       return mock.runTurn(input);
     },
   };
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-")) });
   config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
   const built = buildApp(config, { agent });
-  for (const [id, attestActor] of [
-    ["records", true],
-    ["wiki", false],
+  const tools = [{ name: "search", description: "", inputSchema: {} }];
+  for (const [id, partial] of [
+    ["records", { attestActor: true }],
+    ["wiki", {}],
+    ["orders", { auth: "oauth-user", credentialScope: "per-user", credentialHost: "h.example", catalog: false, tools }],
   ] as const) {
     await built.mcpServers.put({
       id,
@@ -480,13 +483,14 @@ test("an attested connector is offered and called only in the speaker's own DM, 
       bearerToken: "t",
       credentialScope: "shared",
       catalog: true,
-      ...(attestActor ? { attestActor } : {}),
       readOnly: true,
       enabled: true,
       updatedAt: Date.now(),
       updatedBy: "admin",
+      ...partial,
     });
   }
+  await built.connectorTokens.setConnectorToken("h.example", "U1", { accessToken: "u1-orders" });
   await built.mcpToolService.refresh();
   for (const request of [
     dm("hello"),
@@ -497,17 +501,20 @@ test("an attested connector is offered and called only in the speaker's own DM, 
       conversation: { kind: "group" as const, threadRef: "grp:G1:t1", channelRef: "G1", audience: [internalActor] },
       text: "hello",
     },
+    dm("hello", { botActor: true, conversation: { kind: "dm", threadRef: "dm:U1:bot" } }),
+    channel("hello", { botActor: true, conversation: { ...channel("").conversation, threadRef: "ch:C1:bot" } }),
   ])
     assert.equal((await built.app.turn(request)).status, "ok");
-  assert.deepEqual(offered, {
-    "personal:U1": ["records", "wiki"],
-    "channel:C1": ["wiki"],
-    "group:G1": ["wiki"],
+  assert.deepEqual(turns, {
+    "dm:U1:t1": "orders_search,records,wiki sent,sent",
+    "ch:C1:t1": "orders_search,wiki refused,sent",
+    "grp:G1:t1": "orders_search,wiki refused,sent",
+    "dm:U1:bot": "wiki refused,refused",
+    "ch:C1:bot": "wiki refused,refused",
   });
-  assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
 });
 
-test("a scheduled turn attests its owner only when the answer goes back to the owner alone", async (t) => {
+test("a scheduled turn attests its owner only when the answer goes back to the owner alone, and never when a Slack bot scheduled it", async (t) => {
   const knowledge = await startMcpTestServer(t, {
     tools: ["search_knowledge", "write_knowledge"].map((name) => ({ name, inputSchema: { type: "object" as const } })),
     clients: { ro: "x", rw: "y" },
@@ -609,6 +616,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
     destination: Destination,
     ownerScopeId = scopeId("personal", "U1"),
     surface = "cron",
+    botActor = false,
   ) => {
     turn = undefined;
     credentialToken = undefined;
@@ -622,6 +630,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
         fireKey: `${surface}:${name}:1`,
         surface,
         destination,
+        botActor,
       },
     );
     assert.equal(out.status, "ok", out.note);
@@ -671,6 +680,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
   t.after(() => installPrincipalLinks(null));
   assert.deepEqual(
     {
+      botDmToOwner: await fire("bot-dm-to-owner", principalDestination("U1", "U1"), undefined, undefined, true),
       dmToTeammate: await fire("dm-to-teammate", principalDestination("U2", "U1")),
       personalToChannel: await fire("personal-to-channel", {
         type: "slack",
@@ -686,6 +696,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
       dmWebhookToTeammate: await fire("dm-webhook-to-teammate", principalDestination("U2", "U1"), undefined, "webhook"),
     },
     {
+      botDmToOwner: { ...refused, offered: ["wiki"], calledAny: "refused", brokerAny: "private_only" },
       dmToTeammate: refused,
       personalToChannel: refused,
       channelToOwner: refused,
