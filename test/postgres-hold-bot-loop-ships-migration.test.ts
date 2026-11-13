@@ -18,6 +18,7 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
   const base = { owner: "U1", createdBy: "U1", ownerScopeId: scope, playbook: "p", successCondition: "done" };
   const make = async (name: string, more = {}) => (await loops.store.create({ ...base, name, ...more })).loop;
   const [a, b] = [await make("a", gates), await make("b", { botActor: true, ...gates })];
+  const c = await make("c", { owner: "release-bot", createdBy: "release-bot", ...gates });
   const e = await make("e", { botActor: true, shipActions: [{ action: "send_email", gate: "hold" }] });
   const grant = (id: string, loopId: string, shipAction: string, actorId: string) =>
     loops.grants.put({ id, loopId, shipAction, actorId, policyVersion: 1, createdAt: Date.now() });
@@ -27,7 +28,7 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
   await grant("gr", b.id, "post_slack", "release-bot");
   await loops.grants.revoke("gr", "U1");
   const state = async () => ({
-    loops: await Promise.all([a, b, e].map((loop) => loops.store.get(loop.id))),
+    loops: await Promise.all([a, b, c, e].map((loop) => loops.store.get(loop.id))),
     grants: await Promise.all(["gb", "pa", "ge", "gr"].map((id) => loops.grants.get(id))),
   });
   const [before, pg] = [await state(), createPgPool(url)];
@@ -38,14 +39,14 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
     WHERE principal_id = 'system:migration' ORDER BY action, resource`);
   await pg.close();
   const revocation = { revokedAt: after.grants[0]?.revokedAt, revokedBy: "system:migration" };
-  const [la, lb, le] = before.loops;
+  const [[la, lb, lc, le], held] = [before.loops, gates.shipActions.map((p) => ({ ...p, gate: "hold" }))];
   assert.deepEqual(after, {
-    loops: [la, { ...lb, shipActions: gates.shipActions.map((p) => ({ ...p, gate: "hold" })) }, le],
+    loops: [la, { ...lb, shipActions: held }, { ...lc, shipActions: held }, le],
     grants: before.grants.map((g) => (["gb", "ge"].includes(g!.id) ? { ...g, ...revocation } : g)),
   });
   assert.ok(revocation.revokedAt! >= before.grants[0]!.createdAt);
   assert.deepEqual(audit.map(Object.values), [
-    ["loop_update", b.id, scope, { heldShipActions: ["send_email", "post_slack"] }],
+    ...[b.id, c.id].sort().map((id) => ["loop_update", id, scope, { heldShipActions: ["send_email", "post_slack"] }]),
     ["ship_grant_revoke", "gb", scope, { loopId: b.id }],
     ["ship_grant_revoke", "ge", scope, { loopId: e.id }],
   ]);
