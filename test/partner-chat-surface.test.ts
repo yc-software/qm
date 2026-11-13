@@ -35,6 +35,7 @@ import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
 const tenantFor = async () => TEST_TENANT;
+const NO_BLOBS = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
 
 interface Received {
@@ -328,6 +329,7 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
 function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
   const send = partnerChatSender({
     client: createPartnerChatClient({ url, secret: SECRET }),
+    blobs: NO_BLOBS,
     app: {
       tenantFor,
       readSurfaceMessages: async () => [],
@@ -867,6 +869,7 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const deliveries = createDeliveryStore();
   const sent: string[] = [];
   const send = partnerChatSender({
+    blobs: NO_BLOBS,
     app: { tenantFor, readSurfaceMessages: async () => [], ingestSurfaceEvents: async () => ({ upserted: 0 }) },
     client: createPartnerChatClient({
       url: "https://chat.example",
@@ -905,7 +908,7 @@ test("a status post becomes the final reply in place, and the agent can revise o
     client: createPartnerChatClient({ url: partnerChat.url, secret: SECRET }),
     app: built.app,
   };
-  const send = partnerChatSender({ ...ops, app: built.app });
+  const send = partnerChatSender({ ...ops, app: built.app, blobs: NO_BLOBS });
   const thread = { account: "7001", kind: "group" as const, chat: "88", thread: "1009" };
   const status = () =>
     withTenant(TEST_TENANT, () => postPartnerChatMessage(ops, thread, { text: "On it", idempotencyKey: "status:r1" }));

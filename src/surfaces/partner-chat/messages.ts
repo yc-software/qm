@@ -41,13 +41,14 @@ async function recordChange(
 export async function postPartnerChatMessage(
   deps: PartnerChatMessages,
   where: PartnerChatRef,
-  message: { text: string; idempotencyKey: string | undefined },
+  message: { text: string; idempotencyKey: string | undefined; fileIds?: readonly string[] },
 ): Promise<string | undefined> {
   const parsed = await deps.client.call(where.account, "/agent_app/messages", {
     client_message_id: message.idempotencyKey,
     chat_id: where.chat,
     ...(where.thread ? { thread_id: where.thread } : {}),
     body: message.text,
+    ...(message.fileIds?.length ? { file_ids: message.fileIds } : {}),
   });
   if (typeof parsed.message_id !== "string" && typeof parsed.message_id !== "number") return undefined;
   const messageId = String(parsed.message_id);

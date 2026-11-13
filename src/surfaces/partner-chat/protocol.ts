@@ -15,6 +15,12 @@ const user = z.object({
   name: z.string().optional(),
   bot: z.boolean().optional(),
 });
+const file = z.object({
+  id: messageId,
+  name: z.string().min(1),
+  content_type: z.string().min(1),
+  size_bytes: z.number().int().nonnegative().optional(),
+});
 const eventSchema = z.object({
   event_id: z.string().min(1),
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
@@ -27,12 +33,14 @@ const eventSchema = z.object({
     body: z.string(),
     mentions_agent: z.boolean().default(false),
     app_post: z.boolean().default(false),
+    files: z.array(file).default([]),
     created_at: z.iso.datetime({ offset: true }),
   }),
 });
 
 export type PartnerChatUser = z.infer<typeof user>;
 export type PartnerChatEvent = z.infer<typeof eventSchema>;
+export type PartnerChatFile = z.infer<typeof file>;
 
 export interface PartnerChatRef {
   account: string;
