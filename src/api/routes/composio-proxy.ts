@@ -2,7 +2,6 @@ import {
   ACCOUNT_ID,
   type ComposioAccountRecord,
   EXECUTE_TIMEOUT_MS,
-  activeRun,
   composioUserIds,
   credential,
   activeOwnedAccount,
@@ -18,7 +17,7 @@ import { APP_CONNECTION_ROUTES } from "../../connectors/app-connection-routes.ts
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
-import { audit } from "./shared.ts";
+import { activeRun, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);

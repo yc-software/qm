@@ -5,7 +5,7 @@ import { LIVE_EDIT_PUBLISH_DELAY_MS } from "../../deploy/live-edits.ts";
 const FAILURE_HEADER_LINES = 5;
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
 import type { TurnRequest } from "../../types.ts";
-import { sendJson } from "../http.ts";
+import { refuseImpersonated, sendJson } from "../http.ts";
 import { inboxView } from "./inbox.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
 import { postRunSignal, postTurn } from "./turns.ts";
@@ -139,7 +139,7 @@ async function webTurnBase(
     clientSurface: clientSurfaceOf(ctx.req.headers),
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
-    origin: { kind: "human" },
+    origin: ctx.actor?.imp ? { kind: "direct" } : { kind: "human" },
     deliveryTarget: threadRef,
     ...(inbox ? { conversationHeader: inbox } : {}),
     ...(appSlug ? { conversationHeader: appEditNote(appSlug, liveEdit !== null, failedPublish) } : {}),
@@ -194,6 +194,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
   const threadRef = webThreadRef(p.threadRef) ?? `web:${user}:default`;
   const attachments = attachmentsOf(p.attachments);
   const approval = approvalOf(p.approval);
+  if (approval && ctx.actor?.imp) return refuseImpersonated(ctx.res);
   const proactiveOpener = p.proactiveOpener === true;
   if (!text.trim() && attachments.length === 0 && !approval && !proactiveOpener)
     return sendJson(ctx.res, 400, { error: "empty message" });
@@ -212,7 +213,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     ...(typeof p.thinkingLevel === "string" && p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
     ...(typeof p.fastMode === "boolean" ? { fastMode: p.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
-    ...(privateConversation && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
+    ...(privateConversation && !ctx.actor?.imp && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
     ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(approval ? { approval } : {}),
@@ -240,6 +241,7 @@ async function webApproval(ctx: ApiCtx): Promise<void> {
   const { res } = ctx;
   const user = ctx.actor?.p;
   if (!user) return sendJson(res, 401, { error: "unauthorized" });
+  if (ctx.actor?.imp) return refuseImpersonated(res);
   const requestId = ctx.params.requestId!;
   if (!requestId || requestId.includes("/")) return sendJson(res, 404, { error: "not_found" });
   const p = isObj(ctx.body) ? ctx.body : {};
@@ -273,6 +275,7 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
   if (!user) return sendJson(ctx.res, 401, { error: "unauthorized" });
   const p = isObj(ctx.body) ? ctx.body : {};
   const kind = typeof p.kind === "string" ? p.kind : "";
+  if ((kind === "steer" || kind === "client_result") && ctx.actor?.imp) return refuseImpersonated(ctx.res);
   const text = typeof p.text === "string" ? p.text : undefined;
   const threadRef = webThreadRef(p.threadRef);
   let request: TurnRequest | undefined;

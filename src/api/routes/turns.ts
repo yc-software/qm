@@ -355,7 +355,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "PATCH",
     path: "/v1/runs/:id/input",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "source",
     handle: patchQueuedRun,

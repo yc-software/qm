@@ -11,7 +11,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const config = testConfig({ signingSecret: "web-turn-browser-signing-secret-0123456" });
 const built = stopAtEnd(buildApp(config));
@@ -190,6 +190,24 @@ test("the server writes who sent a turn and where it goes; the browser's own cla
   assert.equal(turn.conversationHeader, undefined);
   assert.equal(turn.async, true);
   assert.equal((await sentTurn({ threadRef: "dm:D1" })).conversation.threadRef, "web:alice:default");
+});
+
+test("while impersonating someone, a new message reaches the agent as a direct turn and nothing else reaches a run", async () => {
+  const cookie = `${browserSessionCookie("admin-carol")}; ${browserImpersonationCookie("admin-carol", "alice")}`;
+  const body = { text: "hi", threadRef: "web:alice:t1", clientTools: [scroll] };
+  assert.equal((await post("/api/turn", body, { cookie })).status, 202);
+  const { actor, origin, clientTools } = turns.at(-1)!;
+  assert.deepEqual([actor.externalId, origin, clientTools], ["alice", { kind: "direct" }, undefined]);
+  const counts = [turns.length, signals.length];
+  for (const [path, body] of [
+    ["/api/turn", { threadRef: "web:alice:t1", approval: { requestId: "a-1", approved: true } }],
+    ["/api/approvals/a-1", { approved: true }],
+    ["/api/runs/r1/signal", { kind: "steer", text: "more", threadRef: "web:alice:t1" }],
+    ["/api/runs/r1/signal", { kind: "client_result", callId: "c1", result: {} }],
+  ] as const)
+    assert.equal((await post(path, body, { cookie })).status, 403, path);
+  assert.deepEqual([turns.length, signals.length], counts);
+  assert.equal((await post("/api/runs/r1/signal", { kind: "abort" }, { cookie })).status, 200);
 });
 
 test("a turn with nothing to send is refused before it reaches the agent", async () => {
