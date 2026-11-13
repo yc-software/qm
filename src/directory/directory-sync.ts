@@ -253,17 +253,17 @@ export function createDirectorySync(deps: {
       return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
         await client.query(
           `WITH dropped AS (
-             DELETE FROM directory_groups WHERE org_id = $1 AND from_sync AND NOT (group_id = ANY($2::text[]))
+             DELETE FROM directory_groups WHERE org_id = $1 AND surface = 'slack' AND NOT (group_id = ANY($2::text[]))
              RETURNING group_id)
            DELETE FROM directory_group_members WHERE org_id = $1 AND group_id IN (SELECT group_id FROM dropped)`,
           [orgId, listedIds],
         );
         if (listedIds.length) {
           await client.query(
-            `INSERT INTO directory_groups (org_id, group_id, roster_known, from_sync)
-             SELECT $1, *, TRUE FROM unnest($2::text[], $3::boolean[])
+            `INSERT INTO directory_groups (org_id, group_id, roster_known, surface)
+             SELECT $1, *, 'slack' FROM unnest($2::text[], $3::boolean[])
              ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET
-               roster_known = directory_groups.roster_known OR EXCLUDED.roster_known, from_sync = TRUE`,
+               roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
             [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
           );
         }
@@ -281,7 +281,7 @@ export function createDirectorySync(deps: {
       });
     },
 
-    async upsertGroup(groupId, principalIds) {
+    async upsertGroup(groupId, principalIds, surface) {
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
       const roster = await q(
@@ -294,9 +294,9 @@ export function createDirectorySync(deps: {
       await withPgTransaction(await pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query(
-          `INSERT INTO directory_groups (org_id, group_id, roster_known, from_sync) VALUES ($1, $2, TRUE, FALSE)
+          `INSERT INTO directory_groups (org_id, group_id, roster_known, surface) VALUES ($1, $2, TRUE, $3)
            ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
-          [orgId, groupId],
+          [orgId, groupId, surface],
         );
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
         await client.query(
@@ -304,13 +304,11 @@ export function createDirectorySync(deps: {
            SELECT $1, $2, * FROM unnest($3::text[])`,
           [orgId, groupId, ids],
         );
-        const all = await client.query("SELECT group_id, principal_id FROM directory_group_members WHERE org_id = $1", [
-          orgId,
-        ]);
-        await client.query(
-          "UPDATE directory_sync SET groups_hash = $2, updated_at = $3 WHERE org_id = $1 AND groups_hash IS NOT NULL",
-          [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
-        );
+        if (surface === "slack")
+          await client.query(
+            "UPDATE directory_sync SET groups_hash = '', updated_at = $2 WHERE org_id = $1 AND groups_hash IS NOT NULL",
+            [orgId, Date.now()],
+          );
       });
     },
   };

@@ -205,14 +205,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         resolveRecipient: (q) => deps.directory.resolve(q),
         resolveChannel: (q) => deps.directory.resolveChannel(q),
         channelMember: (c, p) => deps.directory.channelMember(c, p),
-        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts),
+        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, "slack"),
         groupMember: (g, p) => deps.directory.groupMember(g, p),
         directoryMember: (p) => deps.directory.get(p),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
                 openGroupViaSurface((query) => deps.surfaceContext!.pull("slack", query), parts),
-              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts),
+              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts, "slack"),
             }
           : {}),
       },

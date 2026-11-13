@@ -2597,7 +2597,7 @@ export function buildApp(
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           unansweredReply: partnerChatNotices.unanswered,
           turns: partnerChatTurns,
-          registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds),
+          registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, PARTNER_CHAT),
           onAction: createPartnerChatApprovals({
             client: partnerChatClient,
             app,

@@ -78,11 +78,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     resolveRecipient: (q) => deps.directory.resolve(q),
     resolveChannel: (q) => deps.directory.resolveChannel(q),
     channelMember: (c, p) => deps.directory.channelMember(c, p),
-    resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts),
+    resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, "slack"),
     groupMember: (g, p) => deps.directory.groupMember(g, p),
     directoryMember: (p) => deps.directory.get(p),
     openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull("slack", query), parts),
-    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts),
+    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts, "slack"),
   };
   const resolveReachTargetFor = (
     target: ReachTarget,
