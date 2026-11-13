@@ -87,9 +87,9 @@ export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
         SELECT tenant_id, scope_label, at, resource, false, NULL, NULL
           FROM audit_log WHERE action = 'sandbox.default' AND resource <> 'null'
       ), latest AS (
-        SELECT DISTINCT ON (d.tenant_id, d.id) d.tenant_id, d.id, e.sandbox_id, e.bot, e.run_id, e.thread_ref
-          FROM sandbox_defaults d JOIN events e ON e.tenant_id = d.tenant_id AND e.scope = d.id
-         ORDER BY d.tenant_id, d.id, e.at DESC, e.bot IS TRUE
+        SELECT DISTINCT ON (tenant_id, scope) tenant_id, scope AS id, sandbox_id, bot, run_id, thread_ref
+          FROM events
+         ORDER BY tenant_id, scope, at DESC, bot IS TRUE
       ), cleared AS (
         UPDATE sandbox_defaults d SET json = '{"sandboxId": null}'::jsonb
           FROM latest l WHERE l.bot AND d.tenant_id = l.tenant_id AND d.id = l.id AND d.json ->> 'sandboxId' = l.sandbox_id
