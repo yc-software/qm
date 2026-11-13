@@ -265,14 +265,14 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
   };
 }
 
-export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
-  id: "users/v2/0010-mark-bot-written-loops",
+export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
+  id: "users/v2/0010-hold-bot-loop-ships",
   statements: [
     `SET LOCAL statement_timeout = 0`,
     `DO $$
     BEGIN
       IF to_regclass('items') IS NULL OR to_regclass('runs') IS NULL OR to_regclass('loops') IS NULL
-         OR to_regclass('crons') IS NULL OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
+         OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
         RETURN;
       END IF;
       WITH bot_runs AS MATERIALIZED (
@@ -288,22 +288,6 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
           JOIN items c ON c.tenant_id = r.tenant_id AND c.turn_id = r.turn_id AND c.kind = 'ToolCall'
           JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
                         AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
-      ), found AS (
-        SELECT l.tenant_id, l.id, any_value(l.json ->> 'ownerScopeId') AS scope, any_value(l.json ->> 'cronId') AS cron_id,
-               any_value(l.json @> '{"botActor": true}') AS marked,
-               (array_agg(b.source ORDER BY b.started DESC) FILTER (WHERE h -> 'version' = '1'))[1] AS created_by,
-               (array_agg(b.source ORDER BY b.started DESC) FILTER (WHERE h -> 'version' = l.json -> 'playbookVersion'
-                 AND l.json ->> 'taskAuthor' IS DISTINCT FROM 'automation'))[1] AS rewritten_by
-          FROM loops l
-          CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'playbookHistory') h
-          JOIN bot_calls b ON b.tenant_id = l.tenant_id AND b.minute = (h ->> 'at')::bigint / 60000
-                          AND (h ->> 'at')::bigint BETWEEN b.started AND b.ended AND strpos(b.evidence, l.id) > 0
-         WHERE h -> 'version' = '1' OR h -> 'version' = l.json -> 'playbookVersion'
-         GROUP BY l.tenant_id, l.id
-      ), written AS (
-        SELECT *, CASE WHEN created_by IS NULL THEN '{}' ELSE '{"botActor": true}'::jsonb END
-                    || CASE WHEN rewritten_by IS NULL THEN '{}' ELSE '{"taskAuthor": "automation"}'::jsonb END AS patch
-          FROM found WHERE NOT marked AND (created_by IS NOT NULL OR rewritten_by IS NOT NULL)
       ), granted AS (
         SELECT DISTINCT ON (g.tenant_id, g.id) g.tenant_id, g.id, l.json ->> 'ownerScopeId' AS scope,
                l.id AS loop_id, g.json ->> 'shipAction' AS ship_action, b.source
@@ -318,9 +302,7 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
         SELECT x.tenant_id, x.id, x.scope, x.source, jsonb_agg(DISTINCT p ->> 'action') AS actions
           FROM (SELECT tenant_id, loop_id AS id, scope, source, ship_action AS action FROM granted
                 UNION ALL
-                SELECT l.tenant_id, l.id, l.json ->> 'ownerScopeId', f.created_by, NULL
-                  FROM loops l LEFT JOIN found f ON f.tenant_id = l.tenant_id AND f.id = l.id
-                 WHERE l.json @> '{"botActor": true}' OR f.created_by IS NOT NULL) x
+                SELECT tenant_id, id, json ->> 'ownerScopeId', NULL, NULL FROM loops WHERE json @> '{"botActor": true}') x
           JOIN loops l ON l.tenant_id = x.tenant_id AND l.id = x.id
           CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'shipActions') p
          WHERE p ->> 'gate' = 'auto' AND (x.action IS NULL OR p ->> 'action' = x.action)
@@ -334,20 +316,10 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
           JOIN loops l ON l.tenant_id = h.tenant_id AND l.id = h.id
           CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'shipActions') WITH ORDINALITY AS a(p, n)
          GROUP BY l.tenant_id, l.id
-      ), changes AS (
-        SELECT COALESCE(w.tenant_id, g.tenant_id) AS tenant_id, COALESCE(w.id, g.id) AS id,
-               COALESCE(w.patch, '{}') || CASE WHEN g.id IS NULL THEN '{}' ELSE jsonb_build_object('shipActions', g.ship_actions) END
-                 AS patch
-          FROM written w FULL JOIN gated g ON g.tenant_id = w.tenant_id AND g.id = w.id
-      ), marked AS (
-        UPDATE loops l SET json = l.json || c.patch
-          FROM changes c WHERE l.tenant_id = c.tenant_id AND l.id = c.id
+      ), held AS (
+        UPDATE loops l SET json = l.json || jsonb_build_object('shipActions', g.ship_actions)
+          FROM gated g WHERE l.tenant_id = g.tenant_id AND l.id = g.id
         RETURNING l.tenant_id
-      ), marked_crons AS (
-        UPDATE crons k SET json = k.json || '{"botActor": true}'::jsonb
-          FROM written w WHERE w.created_by IS NOT NULL AND k.tenant_id = w.tenant_id AND k.id = w.cron_id
-           AND k.json ->> 'botActor' IS DISTINCT FROM 'true'
-        RETURNING k.tenant_id, k.id, k.json ->> 'ownerScopeId' AS scope, w.created_by || '{"botActor": true}'::jsonb AS detail
       ), revoked AS (
         UPDATE loop_ship_grants g
            SET json = g.json || jsonb_build_object('revokedAt', ${msOf("now()")}, 'revokedBy', 'system:migration')
@@ -355,24 +327,17 @@ export const MARK_BOT_WRITTEN_LOOPS_MIGRATION = {
         RETURNING g.tenant_id
       ), versions AS (
         UPDATE durable_map_versions SET v = v + 1
-         WHERE tbl = 'loops' AND tenant_id IN (SELECT tenant_id FROM marked)
-            OR tbl = 'crons' AND tenant_id IN (SELECT tenant_id FROM marked_crons)
+         WHERE tbl = 'loops' AND tenant_id IN (SELECT tenant_id FROM held)
             OR tbl = 'loop_ship_grants' AND tenant_id IN (SELECT tenant_id FROM revoked)
       )
       INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
       SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, id, scope, detail::text
-        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope, created_by || '{"botActor": true}'::jsonb AS detail
-                FROM written WHERE created_by IS NOT NULL
-              UNION ALL
-              SELECT tenant_id, 'loop_update', id, scope, rewritten_by || '{"taskAuthor": "automation"}'::jsonb
-                FROM written WHERE rewritten_by IS NOT NULL
-              UNION ALL
-              SELECT tenant_id, 'loop_update', id, scope, COALESCE(source, '{}') || jsonb_build_object('heldShipActions', actions)
+        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope,
+                     COALESCE(source, '{}') || jsonb_build_object('heldShipActions', actions) AS detail
                 FROM holds
               UNION ALL
-              SELECT tenant_id, 'cron_update', id, scope, detail FROM marked_crons
-              UNION ALL
-              SELECT tenant_id, 'ship_grant_revoke', id, scope, source || jsonb_build_object('loopId', loop_id) FROM granted) entries;
+              SELECT tenant_id, 'ship_grant_revoke', id, scope, source || jsonb_build_object('loopId', loop_id)
+                FROM granted) entries;
     END $$`,
   ],
 };
