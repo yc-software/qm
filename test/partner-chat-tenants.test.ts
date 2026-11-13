@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import type { App } from "../src/api/app-types.ts";
 import { createPartnerChatInbound } from "../src/surfaces/partner-chat/inbound.ts";
+import { createPartnerChatClient } from "../src/surfaces/partner-chat/client.ts";
 import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
 import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
@@ -21,7 +22,10 @@ describeTwoTenants("partner chat on a shared host", (db) => {
   const isInternalEmail = async () => true;
   const unansweredReply = async () => {};
   const inbound = createPartnerChatInbound({ secret, app, surfaceCache, isInternalEmail, unansweredReply });
-  const send = partnerChatSender({ url: "https://chat.example", secret, app, fetch: async () => Response.json({}) });
+  const send = partnerChatSender({
+    app,
+    client: createPartnerChatClient({ url: "https://chat.example", secret, fetch: async () => Response.json({}) }),
+  });
 
   async function deliver(account: string): Promise<number> {
     const ada = { id: "5", email: "ada@x.test" };

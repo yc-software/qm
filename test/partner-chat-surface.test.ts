@@ -12,8 +12,9 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { partnerChatPrincipal, createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
-import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
-import { signPartnerChat, signPartnerChatPost } from "../src/surfaces/partner-chat/protocol.ts";
+import { PARTNER_CHAT_CLAIM_MS, createPartnerChatClient } from "../src/surfaces/partner-chat/client.ts";
+import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
+import { signPartnerChat, signPartnerChatRequest } from "../src/surfaces/partner-chat/protocol.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -53,7 +54,13 @@ async function fakePartnerChat(status = 200) {
           req.headers["x-agent-app-account"] === "7001" &&
           req.headers.authorization === undefined &&
           req.headers["x-agent-app-signature"] ===
-            signPartnerChatPost(SECRET, String(req.headers["x-agent-app-request-timestamp"]), "7001", raw) &&
+            signPartnerChatRequest(
+              SECRET,
+              String(req.headers["x-agent-app-request-timestamp"]),
+              "7001",
+              req.url ?? "",
+              raw,
+            ) &&
           Math.abs(Date.now() / 1000 - Number(req.headers["x-agent-app-request-timestamp"])) <= 300,
       });
       const id = String(++next);
@@ -303,8 +310,7 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
 
 function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
   const send = partnerChatSender({
-    url,
-    secret: SECRET,
+    client: createPartnerChatClient({ url, secret: SECRET }),
     app: { tenantFor, ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
   });
   return { deliveries, mirrored, settled: (until: () => Promise<boolean>) => relayUntil(deliveries, send, until) };
@@ -809,7 +815,10 @@ test("a thread under one of the agent's older posts is still recognised as engag
 test("partner-chat event and post signatures follow the agent-app scheme", () => {
   const hmac = (data: string) => createHmac("sha256", SECRET).update(data).digest("hex");
   assert.equal(signPartnerChat(SECRET, "1793649600", "{}"), `v0=${hmac("v0:1793649600:{}")}`);
-  assert.equal(signPartnerChatPost(SECRET, "1793649600", "7001", "{}"), `v0=${hmac("v0:1793649600:7001:{}")}`);
+  assert.equal(
+    signPartnerChatRequest(SECRET, "1793649600", "7001", "/agent_app/messages", "{}"),
+    `v0=${hmac("v0:1793649600:7001:/agent_app/messages:{}")}`,
+  );
 });
 
 test("a run-end notice lost before its enqueue is recovered by the run-result sweep, once", async () => {
@@ -855,16 +864,18 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const deliveries = createDeliveryStore();
   const sent: string[] = [];
   const send = partnerChatSender({
-    url: "https://chat.example",
-    secret: SECRET,
     app: { tenantFor, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
-    fetch: async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
-      sent.push(body.body);
-      return body.chat_id === "88"
-        ? new Response(JSON.stringify({ error: "busy" }), { status: 503 })
-        : new Response(JSON.stringify({ message_id: String(50 + sent.length) }), { status: 200 });
-    },
+    client: createPartnerChatClient({
+      url: "https://chat.example",
+      secret: SECRET,
+      fetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
+        sent.push(body.body);
+        return body.chat_id === "88"
+          ? new Response(JSON.stringify({ error: "busy" }), { status: 503 })
+          : new Response(JSON.stringify({ message_id: String(50 + sent.length) }), { status: 200 });
+      },
+    }),
   });
   for (const [chat, text] of [
     ["88", "first in 88"],

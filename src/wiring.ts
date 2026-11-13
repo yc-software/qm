@@ -420,7 +420,8 @@ import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
 import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
-import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
+import { PARTNER_CHAT_CLAIM_MS, createPartnerChatClient } from "./surfaces/partner-chat/client.ts";
+import { partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
@@ -2580,7 +2581,7 @@ export function buildApp(
   const partnerChatDelivery = config.partnerChat
     ? createDeliveryRelay(deliveries, {
         type: "partner-chat",
-        send: partnerChatSender({ url: config.partnerChat.url, secret: config.partnerChat.secret, app }),
+        send: partnerChatSender({ client: createPartnerChatClient(config.partnerChat), app }),
         claimMs: PARTNER_CHAT_CLAIM_MS,
       })
     : null;

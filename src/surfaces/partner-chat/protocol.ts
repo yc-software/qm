@@ -49,8 +49,14 @@ export function signPartnerChat(secret: string, timestamp: string, rawBody: stri
   return `v0=${hmacHex(secret, `v0:${timestamp}:${rawBody}`)}`;
 }
 
-export function signPartnerChatPost(secret: string, timestamp: string, account: string, rawBody: string): string {
-  return signPartnerChat(secret, timestamp, `${account}:${rawBody}`);
+export function signPartnerChatRequest(
+  secret: string,
+  timestamp: string,
+  account: string,
+  path: string,
+  rawBody: string,
+): string {
+  return signPartnerChat(secret, timestamp, `${account}:${path}:${rawBody}`);
 }
 
 export function verifyPartnerChat(
