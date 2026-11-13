@@ -449,7 +449,7 @@ struct NativeAppPermissions: View {
           Button(person.displayName) { selected = person }
         }
         if search.searching {
-          NativePeopleSearchLoading(label: "Searching people for \"\(searchTerm)\"...")
+          NativePeopleSearchLoading(label: "Searching people for \"\(searchTerm)\"…")
         } else if let searchError = search.error {
           Text(searchError).foregroundStyle(.red)
           Button("Try search again") { searchAttempt += 1 }
