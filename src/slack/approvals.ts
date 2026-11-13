@@ -3,13 +3,10 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { slackSectionBlocks } from "./mrkdwn.ts";
 import {
-  APPROVAL_ACTION_IDS,
-  type ApprovalActionId,
   type StoredApproval,
   approvalDecisionMessage,
   approvalMessage,
   clip,
-  type ApprovalDecisionRecord,
   createApprovalRegistry,
   createThreadTracker,
   recoveredApprovalContext,
@@ -19,6 +16,14 @@ import {
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
+import {
+  APPROVAL_ACTION_IDS,
+  APPROVAL_EXPIRED,
+  APPROVAL_REQUESTER_ONLY,
+  AWAITING_APPROVAL,
+  type ApprovalDecisionRecord,
+  approvalDecision,
+} from "../surfaces/approval-cards.ts";
 import { stripAckPrefix } from "../core/orchestrator/turn-helpers.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -53,15 +58,6 @@ interface SlackApprovalContext {
   slackIdsByPrincipal?: ReadonlyMap<string, string>;
   ackedFirstBlock?: string;
   recovered?: boolean;
-}
-
-type ApprovalScope = "once" | "session" | "always";
-
-function approvalScope(actionId: ApprovalActionId): ApprovalScope | "deny" {
-  if (actionId === "hilo_allow_once") return "once";
-  if (actionId === "hilo_allow_session") return "session";
-  if (actionId === "hilo_allow_always") return "always";
-  return "deny";
 }
 
 export interface Approvals {
@@ -182,18 +178,15 @@ export function createApprovals(deps: {
     if (fetched.state === "gone") {
       pendingSlackApprovals.settle(requestId);
       if (channel && messageTs) {
-        await updateSlackMessage(
-          client,
-          channel,
-          messageTs,
-          "_That approval request expired or was withdrawn — let me know when you want to try again._",
-        ).catch(swallowAs("slack: update approval message", undefined));
+        await updateSlackMessage(client, channel, messageTs, `_${APPROVAL_EXPIRED}_`).catch(
+          swallowAs("slack: update approval message", undefined),
+        );
       } else if (channel && clickerId) {
         await client.chat
           .postEphemeral({
             channel,
             user: clickerId,
-            text: "That approval request expired or was withdrawn — let me know when you want to try again.",
+            text: APPROVAL_EXPIRED,
           })
           .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
@@ -223,18 +216,15 @@ export function createApprovals(deps: {
 
     if (!ctx) {
       if (channel && messageTs) {
-        await updateSlackMessage(
-          client,
-          channel,
-          messageTs,
-          "_That approval request expired or was withdrawn — let me know when you want to try again._",
-        ).catch(swallowAs("slack: update approval message", undefined));
+        await updateSlackMessage(client, channel, messageTs, `_${APPROVAL_EXPIRED}_`).catch(
+          swallowAs("slack: update approval message", undefined),
+        );
       } else if (channel && clickerId) {
         await client.chat
           .postEphemeral({
             channel,
             user: clickerId,
-            text: "That approval request expired or was withdrawn — let me know when you want to try again.",
+            text: APPROVAL_EXPIRED,
           })
           .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
@@ -249,7 +239,7 @@ export function createApprovals(deps: {
         .postEphemeral({
           channel,
           user: clickerId,
-          text: "Only the person who requested this command can approve or deny it.",
+          text: APPROVAL_REQUESTER_ONLY,
         })
         .catch(swallowAs("slack: chat.postEphemeral", undefined));
       return;
@@ -268,7 +258,7 @@ export function createApprovals(deps: {
     }
     if (begun.state !== "ready") return;
 
-    const selected = approvalScope(actionId);
+    const selected = approvalDecision(actionId);
     const approval = {
       requestId,
       approved: selected !== "deny",
@@ -305,7 +295,7 @@ export function createApprovals(deps: {
         const retained = result.pendingApprovals?.find((item) => item.requestId === requestId);
         if (result.status !== "pending_approval" || (result.pendingApprovals?.length && !retained)) return false;
         pendingSlackApprovals.remember(requestId, ctx);
-        const note = result.reason ?? "This conversation is waiting on a pending approval.";
+        const note = result.reason ?? AWAITING_APPROVAL;
         const retry = approvalMessage([
           {
             requestId,

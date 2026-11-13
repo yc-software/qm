@@ -74,6 +74,7 @@ import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
+import { AWAITING_APPROVAL } from "../surfaces/approval-cards.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
@@ -678,7 +679,7 @@ export function createTurnHandler(deps: {
       const pendingApprovals = result.pendingApprovals ?? [];
       if (!pendingApprovals.length) {
         await settleAck();
-        const note = result.reason ?? "This conversation is waiting on a pending approval.";
+        const note = result.reason ?? AWAITING_APPROVAL;
         if (inc.unprompted) {
           console.error(`[slack-plugin] turn.pending_approval (no card) ch=${inc.channel} ts=${inc.ts}: ${note}`);
         } else if (ack?.postedAck()) {

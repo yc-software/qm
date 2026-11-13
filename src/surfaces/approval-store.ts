@@ -1,34 +1,22 @@
 import { swallowAs } from "../util/errors.ts";
-import type { PendingApprovalRecord } from "../types.ts";
+import type { Destination, PendingApprovalRecord, TurnRequest } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import { principalDestination } from "../reach/reach.ts";
 import { claimThenBind } from "../tenants/claim.ts";
-import { approvalDeliveryRecipient } from "./approval-cards.ts";
+import { approvalDeliveryKey } from "./approval-cards.ts";
 
-export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalRecord, "createdAt">): string {
-  return `command-approval:${id}:${record.createdAt ?? 0}`;
-}
+export type ApprovalCardRoute = (request: TurnRequest) => Destination | undefined;
 
 export function createApprovalStore(
   backing: DurableMap<PendingApprovalRecord>,
   deliveries: Pick<DeliveryStore, "enqueue">,
+  routes: Readonly<Record<string, ApprovalCardRoute>>,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
-    if (record.request?.surface !== "slack") return;
-    const actorId = record.request.actor.externalId;
-    const recipient = approvalDeliveryRecipient(record.request);
-    if (!actorId || !recipient) return;
-    const origin = record.request.surfaceOrigin;
-    const threadTs = record.request.conversation?.kind === "dm" ? origin?.replyThread : undefined;
+    const destination = record.request && routes[record.request.surface]?.(record.request);
+    if (!destination) return;
     await deliveries.enqueue({
-      destination: {
-        ...principalDestination(actorId, actorId),
-        target: recipient,
-        commandApprovalId: id,
-        ...(threadTs ? { threadTs } : {}),
-        ...(origin ? { account: { id: origin.author.account, workspace: origin.workspace } } : {}),
-      },
+      destination: { ...destination, commandApprovalId: id },
       text: `Approval needed: ${record.summary ?? record.command}`,
       idempotencyKey: approvalDeliveryKey(id, record),
     });
