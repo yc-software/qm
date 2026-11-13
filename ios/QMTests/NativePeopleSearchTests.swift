@@ -175,13 +175,13 @@ final class NativePeopleSearchTests: XCTestCase {
       .init(
         body: """
           {"hits":[{"id":"c1","kind":"crons","title":"Launch digest","snippet":""}],
-           "failed":["deploys"],"limited":["crons"]}
+           "failed":["apps"],"limited":["crons"]}
           """)
     ])
     model.query = "launch"
     await model.search()
     XCTAssertEqual(model.groups.map(\.kind), [.crons])
-    XCTAssertEqual(model.failedResourceKinds, ["deploys"])
+    XCTAssertEqual(model.failedResourceKinds, ["apps"])
     XCTAssertTrue(model.resourcesLimited)
     XCTAssertNotNil(model.resourceNotice)
     XCTAssertNil(model.resourceError)
@@ -358,12 +358,12 @@ final class NativePeopleSearchTests: XCTestCase {
     }
     let skill = try await detail("skills", "sk1")
     let cron = try await detail("crons", "c1")
-    let app = try await detail("deploys", "d1")
+    let app = try await detail("apps", "d1")
     let webhook = try await detail("webhooks", "w1")
     let project = try await detail("contexts", "channel:C1")
     let removed = try await detail("crons", "gone")
     let removedSkill = try await detail("skills", "gone")
-    let removedApp = try await detail("deploys", "gone")
+    let removedApp = try await detail("apps", "gone")
     let unknown = try await detail("loops", "l1")
     XCTAssertEqual(skill, "skill sk1")
     XCTAssertEqual(cron, "cron c1")

@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { parseScopeId, scopeId, type Destination } from "../../../types.ts";
-import { appUrlOf } from "../../../deploy/deploy-store.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -81,7 +80,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         createdByName: named(d.createdBy),
         createdAt: d.versions[0]?.createdAt,
         lastAccessAt: d.lastAccessAt,
-        publicUrl: appUrlOf(d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }),
+        publicUrl: app.appUrl(d),
       }));
     return sendJson(res, 200, { scopeId: scope, deployments: publishedApps });
   }

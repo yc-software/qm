@@ -49,8 +49,7 @@ test("parseDeepLink reads the view from the path", () => {
   assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1", item: null });
 });
 
-test("legacy deploys links resolve to Apps while new links use /apps", () => {
-  assert.deepEqual(parseDeepLink("", "/deploys", ""), { view: "apps", session: null, item: null });
+test("apps links resolve to the Apps view", () => {
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/apps", ""), {
     view: "apps",
     session: null,

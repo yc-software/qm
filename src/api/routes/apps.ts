@@ -33,7 +33,7 @@ import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../de
 import { appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
-import { appSubdomainUrlOf, appUrlOf } from "../../deploy/deploy-store.ts";
+import { appSubdomainUrlOf } from "../../deploy/deploy-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
@@ -99,7 +99,12 @@ async function proxyApp(ctx: BaseCtx): Promise<void> {
       }
     }
   }
-  if (method === "GET" && String(req.headers["sec-fetch-dest"] ?? "") === "document") {
+  if (
+    deps.deployGateSecret &&
+    deps.deployAppsSessionSecret &&
+    method === "GET" &&
+    String(req.headers["sec-fetch-dest"] ?? "") === "document"
+  ) {
     const d = await app.getApp(id).catch(swallowAs("apps: load app", null));
     const subdomainUrl = d && appSubdomainUrlOf(d, deps.deployAppsDomain);
     if (subdomainUrl) {
@@ -1316,11 +1321,6 @@ async function createPublishedApp(ctx: ApiCtx): Promise<void> {
   }
 }
 
-function webUrlOf(ctx: ApiCtx, d: Parameters<typeof appUrlOf>[0]): { webUrl?: string } {
-  const webUrl = appUrlOf(d, { sharedWebUrl: ctx.deps.portalUrl, appsDomain: ctx.deps.deployAppsDomain });
-  return webUrl ? { webUrl } : {};
-}
-
 async function listApps(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, actor } = ctx;
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
@@ -1427,10 +1427,11 @@ export async function getApp(ctx: ApiCtx): Promise<void> {
   const permission = stored ? await app.appGitPermissionFor(stored.id, viewer) : null;
   if (!stored || !permission) return sendJson(res, 404, { error: "not_found" });
   const draft = permission === "write" ? (await app.appLiveEdit(stored.id))?.draft : null;
+  const webUrl = app.appUrl(stored);
   const publishedApp = {
     ...appView(stored),
     permission,
-    ...webUrlOf(ctx, stored),
+    ...(webUrl ? { webUrl } : {}),
     ...(draft
       ? {
           savedEdits: {
@@ -1610,7 +1611,7 @@ async function visibleAppsExport(ctx: BaseCtx): Promise<void> {
     id: d.id,
     ...(d.name ? { name: d.name } : {}),
     ...(d.displayName ? { displayName: d.displayName } : {}),
-    url: appUrlOf(publishedApp, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
+    url: app.appUrl(publishedApp) ?? null,
     createdBy: d.createdBy,
     owned: d.ownerScopeId === personalScope(principalId),
     permission,

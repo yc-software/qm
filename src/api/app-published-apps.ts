@@ -24,6 +24,7 @@ export function createAppMethods(
   | "shareApp"
   | "inviteToApp"
   | "appGrantees"
+  | "appUrl"
   | "listAppsForViewer"
   | "effectiveAppPermission"
   | "appGitPermissionFor"
@@ -141,6 +142,9 @@ export function createAppMethods(
     },
     appGrantees(idOrName) {
       return deps.deploy.appGrantees(idOrName);
+    },
+    appUrl(publishedApp) {
+      return deps.deploy.appUrl?.(publishedApp);
     },
     async listAppsForViewer(tenant, viewer) {
       const publishedApps = await deps.deploy.listApps();

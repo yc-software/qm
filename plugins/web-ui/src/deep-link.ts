@@ -58,7 +58,6 @@ export function parseDeepLink(
   const requestedView = params.get("view") ?? viewFor();
   let view = requestedView;
   if (view === "connectors") view = "keychain";
-  else if (view === "deploys") view = "apps";
   const itemFor = (): string | null => {
     if (sessionRoute) return null;
     if (pathView === "projects" && projectKind && projectItem) return `${projectKind}:${projectItem}`;

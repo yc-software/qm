@@ -30,13 +30,13 @@ struct ResourceSearchResults: Decodable {
 }
 
 enum ResourceSearchKind: String, CaseIterable {
-  case skills, crons, deploys, webhooks, contexts
+  case skills, crons, apps, webhooks, contexts
 
   var label: String {
     switch self {
     case .skills: "Skills"
     case .crons: "Crons"
-    case .deploys: "Apps"
+    case .apps: "Apps"
     case .webhooks: "Webhooks"
     case .contexts: "Projects"
     }
@@ -46,7 +46,7 @@ enum ResourceSearchKind: String, CaseIterable {
     switch self {
     case .skills: "shippingbox"
     case .crons: "clock"
-    case .deploys: "square.stack.3d.up"
+    case .apps: "square.stack.3d.up"
     case .webhooks: "bolt.horizontal"
     case .contexts: "folder"
     }
@@ -300,7 +300,7 @@ enum NativeResourceTarget {
       await model.load()
       try loaded(model.error)
       return (model.owned + model.shared).first { $0.id == hit.id }.map { .cron(model, $0) }
-    case .deploys:
+    case .apps:
       struct Found: Decodable { let deployment: NativeApp? }
       let found: Found = try await client.fetch(
         "api/apps/\(hit.id.apiComponent)", accepting: [404])

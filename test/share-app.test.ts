@@ -54,6 +54,7 @@ function makeDeploy(
     ...(canManageEmail ? { canManageEmail } : {}),
     externalSharingAllowed: async () => externalSharing,
     publicLinksAvailable,
+    publicWebUrl: "https://web.example",
     deployDir: mkdtempSync(join(tmpdir(), "share-api-")),
   });
   return { deploy, acl, aclUrl };
@@ -127,7 +128,7 @@ function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityCla
     params: { id },
     capability,
     secret: "test-secret",
-    deps: { apiBaseUrl: "https://api.example", publicUrl: "https://web.example", portalUrl: "https://web.example" },
+    deps: { apiBaseUrl: "https://api.example", publicUrl: "https://web.example" },
     url: new URL(`http://localhost/v1/apps/${id}`),
     req: { headers: { host: "localhost" } },
   } as unknown as ApiCtx;

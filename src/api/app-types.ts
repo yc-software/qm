@@ -683,6 +683,7 @@ export interface App {
     invitation: AppInvitation;
   }>;
   appGrantees(idOrName: string): Promise<AppGrantee[]>;
+  appUrl(publishedApp: PublishedApp): string | undefined;
   appGitRepoPath(id: string): Promise<string | null>;
   runAppGitPush<T>(
     id: string,
