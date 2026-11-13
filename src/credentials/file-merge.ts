@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { CredentialFile } from "./keychain.ts";
 
 const TOKEN_CACHES: ReadonlyArray<{ directory: string; expiry: readonly string[]; tokens?: readonly string[] }> = [
@@ -48,12 +49,9 @@ function refreshRefusal(
     }
   });
   if (!refreshed || !current) return "unreadable";
-  const fixed = [...new Set([...Object.keys(refreshed), ...Object.keys(current)])].filter(
-    (key) => !tokens.includes(key),
-  );
-  return fixed.every((key) => JSON.stringify(refreshed[key]) === JSON.stringify(current[key]))
-    ? undefined
-    : "changed beyond its token fields";
+  const rest = (value: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(value).filter(([key]) => !tokens.includes(key)));
+  return isDeepStrictEqual(rest(refreshed), rest(current)) ? undefined : "changed beyond its token fields";
 }
 
 export interface CredentialFileMerge {

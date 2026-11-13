@@ -28,13 +28,15 @@ conversation shares that computer through an environment.
 command and writes them back with `keychain.updateFiles`, which rejects stale writes. Only
 the owner's executions write back; a grant uses the saved files as they are. The owner's live
 turn writes back everything: a turn the owner's own message started in an all-internal
-conversation (a live ambient wake included), a subagent delegated from one, the turn that
-resumes when that subagent reports back, a conversation such a turn starts or forks, and a
-background job any of these started. Every other run writes back only a token refresh: a file
-the saved login already holds in `.aws/sso/cache/` in which only `accessToken`, `expiresAt` and
-`refreshToken` changed. That covers cron, loop, watch and webhook fires, swarm workers (a
-swarm a live turn started included), resumes after a credential request or secret drop,
-reaction turns, messages between sessions, bot-marked and impersonated turns, and the jobs they
+conversation, meaning a DM or a room whose recorded members are all internal (a live ambient
+wake included), a subagent delegated from one, the turn that resumes when that subagent
+reports back, a conversation such a turn starts or forks, and a background job any of these
+started. Every other run writes back only a token refresh: a file the saved login already
+holds in `.aws/sso/cache/` in which only `accessToken`, `expiresAt` and `refreshToken` changed.
+That covers cron, loop, watch and webhook fires, swarm workers (a swarm a live turn started
+included), resumes after a credential request or secret drop, reaction turns, messages between
+sessions, bot-marked and impersonated turns, the owner's own messages in a web conversation in
+a shared channel or group that isn't a project (those record no members), and the jobs they
 start. Anything else such a run changed keeps the stored version; the core log names each path
 and why, and a foreground command's stderr says so. Each execution removes its own directory
 in `finally`.
