@@ -11,6 +11,7 @@ import {
   createBackendBlobStaging,
   createExecExport,
   createExecFileOps,
+  tempPathBeside,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -262,7 +263,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
     const fs = sprite(name).filesystem();
-    const tmp = `${absPath}.part.${randomUUID()}`;
+    const tmp = `${tempPathBeside(absPath)}.part`;
     await attempt(`write ${absPath} failed`, async () => {
       await fs.writeFile(tmp, Buffer.from(data));
       await fs.rename(tmp, absPath);

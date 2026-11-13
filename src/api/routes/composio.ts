@@ -16,7 +16,7 @@ import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, audit } from "./shared.ts";
+import { activePrincipal, activeRun, audit } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
@@ -29,30 +29,6 @@ export function composioUserId(org: string, principal: string): string {
 
 export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
-}
-
-export async function activeRun(ctx: ApiCtx): Promise<boolean> {
-  const cap = ctx.capability;
-  if (!cap) return true;
-  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
-  if (
-    !run ||
-    run.status !== "running" ||
-    !cap.runLeaseToken ||
-    run.leaseToken !== cap.runLeaseToken ||
-    run.attempts !== cap.runAttempt ||
-    run.sessionId !== cap.threadRef ||
-    !samePerson(run.request.actor.id, cap.actorId) ||
-    (run.leaseExpiresAt ?? 0) <= Date.now()
-  ) {
-    sendJson(ctx.res, 403, {
-      error: "inactive_run",
-      message:
-        "Connected app access requires this run's current capability: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses connected-app access; make these calls from a foreground command in a live turn (a cron fire is one).",
-    });
-    return false;
-  }
-  return true;
 }
 
 export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
