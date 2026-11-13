@@ -306,29 +306,51 @@ qm-onboarding-welcome {
   font-size: 15px;
 }
 .welcome-content .welcome-hero h1 {
-  margin: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.3em;
+  margin: 0 0 0.5em;
   font-size: clamp(30px, 4.1cqi, 48px);
   font-weight: 600;
   letter-spacing: -0.035em;
   line-height: 1.1;
+}
+.welcome-hero h1 img {
+  width: 1.3em;
+  height: 1.3em;
+  object-fit: contain;
 }
 .welcome-section {
   margin-bottom: clamp(20px, 3vh, 32px);
   text-align: center;
 }
 .welcome-section + .welcome-section {
-  margin-top: clamp(40px, 7vh, 72px);
+  margin-top: clamp(56px, 9vh, 96px);
 }
 .welcome-section h2 {
-  margin: 0 0 12px;
+  margin: 0 0 18px;
   font-size: clamp(19px, 2.2cqi, 25px);
   font-weight: 600;
   letter-spacing: -0.02em;
 }
-.welcome-section .suggested-activities {
+.custom-chat-shell.empty-chat .welcome-section .suggested-activities {
   width: auto;
   margin: 0;
   padding: 0;
+}
+.welcome-section h3 {
+  margin: 0 0 8px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+.welcome-section .suggested-activity-title {
+  color: color-mix(in srgb, var(--foreground) 70%, var(--muted-foreground));
+}
+.welcome-section .suggested-activity:hover .suggested-activity-title {
+  color: var(--foreground);
 }
 .welcome-seeded > :not(.welcome-hero, .welcome-section, .connection-preview-label) {
   max-width: 480px;
@@ -336,6 +358,6 @@ qm-onboarding-welcome {
 }
 @container chat (min-width: 471px) {
   .message-stack.empty-stack:has(.welcome-seeded) {
-    width: min(var(--content-w), 100%);
+    width: min(720px, 100%);
   }
 }

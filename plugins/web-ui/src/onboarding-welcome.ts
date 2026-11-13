@@ -458,10 +458,11 @@ export class OnboardingWelcome extends LitElement {
     );
     return html`<div class="welcome-hero welcome-beat" style="--welcome-delay:0ms">
         ${name ? html`<p>Hi ${name}!</p>` : nothing}
-        <h1>Welcome to QM!</h1>
+        <h1>Welcome to QM! <img src=${`${this.base}qm.png`} alt="" /></h1>
       </div>
       <div class="welcome-section welcome-beat" style="--welcome-delay:300ms">
         <h2>Where to start</h2>
+        ${this.me?.companyName?.trim() ? html`<h3>Ideas for ${this.me.companyName.trim()}</h3>` : nothing}
         ${suggestedActivities(activities, {
           onSelect: (activity) => this.onIdea?.(activity.prompt),
           redraw: () => this.requestUpdate(),

@@ -3609,6 +3609,19 @@ qm-markdown .tok-in {
   font-size: var(--font-12-5);
   white-space: nowrap;
 }
+.suggested-activity-go {
+  display: inline-flex;
+  flex: none;
+  opacity: 0.5;
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+}
+.suggested-activity:hover .suggested-activity-go,
+.suggested-activity:focus-visible .suggested-activity-go {
+  opacity: 1;
+  transform: translate(1px, -1px);
+}
 .suggested-activity-note.is-new {
   color: var(--primary);
 }
