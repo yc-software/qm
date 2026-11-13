@@ -59,6 +59,7 @@ interface ChatState {
   earlierCount: number;
   loadingEarlier: boolean;
   forkSession: CoreSession | null;
+  welcomeThread: string | null;
   inheritedMessages: ReturnType<typeof itemsToMessages>;
   inheritedExpanded: boolean;
   inheritedLoaded: boolean;
@@ -76,7 +77,7 @@ export interface ChatSurface {
   isStopping(): boolean;
   currentTurnOptions(): TurnOptions;
   turnRuntime(): TurnRuntime | null;
-  newChat(context?: { scopeId: string; name: string | null }): string;
+  newChat(context?: { scopeId: string; name: string | null }, welcome?: boolean): string;
   teardown(): void;
   resetChatState(): void;
   mountContinuable(

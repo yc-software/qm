@@ -451,7 +451,7 @@ export class OnboardingWelcome extends LitElement {
       ["", "success"].includes(this.connectionOutcome) ? (this.retryService?.id ?? "") : "",
     );
     return html`<div class="welcome-hero welcome-beat" style="--welcome-delay:0ms">
-        <p>${name ? `Hi ${name}!` : "Hi there!"}</p>
+        ${name ? html`<p>Hi ${name}!</p>` : nothing}
         <h1>Welcome to QM!</h1>
       </div>
       <div class="welcome-section welcome-beat" style="--welcome-delay:300ms">
