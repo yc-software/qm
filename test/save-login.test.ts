@@ -71,3 +71,18 @@ test("save-login uploads a private login home and re-saving keeps the entry and 
   assert.equal(Buffer.from(token.contentBase64, "base64").toString(), "second");
   assert.equal(token.mode, 0o600);
 });
+
+test("save-login removes the sign-in directory when the keychain keeps the existing login", async (t) => {
+  const server = createServer((_req, res) => res.writeHead(403).end('{"error":"human_consent_required"}'));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const home = await mkdtemp(join(tmpdir(), "login-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(join(home, "token"), "synthetic");
+  await writeFile(`${home}.ticket`, "synthetic-ticket");
+  const { port } = server.address() as { port: number };
+  const env = { ...process.env, AGENT_API_URL: `http://127.0.0.1:${port}`, AGENT_API_TOKEN: "synthetic-token" };
+  await assert.rejects(run("node", [script, "aws", home], { env }), /start again from step 1/);
+  await assert.rejects(access(home));
+  await assert.rejects(access(`${home}.ticket`));
+});

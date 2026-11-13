@@ -77,12 +77,10 @@ const response = await fetch(`${AGENT_API_URL}/v1/keychain/credentials`, {
 const text = await response.text();
 if (response.status === 400 || response.status === 413)
   discard(`keychain rejected the login (${response.status}): ${text}`);
-if (response.status === 403) {
-  console.error(
-    `keychain kept the existing ${service} login (403): ${text}; replacing it needs the person's own running turn, so run this again there`,
+if (response.status === 403)
+  discard(
+    `keychain kept the existing ${service} login (403): ${text}; replacing it needs a sign-in started in the person's own running turn, so start again from step 1 there`,
   );
-  process.exit(1);
-}
 if (!response.ok) {
   console.error(`keychain save failed (${response.status}): ${text}; run this again to retry`);
   process.exit(1);

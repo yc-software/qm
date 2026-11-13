@@ -185,29 +185,33 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
   };
   const service = keychainService(b.service);
   const ticketId = typeof b.loginTicket === "string" ? b.loginTicket : undefined;
-  const ticket = ticketId && deps.secretDrops ? await deps.secretDrops.peek(ticketId) : null;
-  const refusal = ticket && loginTicketRefusal(ticket, actorId, service, threadRef);
-  if (refusal) console.warn(`[keychain] loginTicket not used for ${service}: ${refusal}`);
-  const signedIn = ticket !== null && refusal === null;
-  let meta = await kc.create(input);
-  if (!meta) {
-    if (!signedIn && !(await livePersonTurn(ctx))) return;
-    meta = await kc.save(input);
-  }
-  if (signedIn) {
-    const spent = await deps.secretDrops!.redeem(ticketId!);
-    if (!spent.ok) console.warn(`[keychain] loginTicket for ${service} was spent by another save: ${spent.reason}`);
-  }
-  audit(
-    { deps, tenant },
-    {
-      principalId: actorId,
-      action: "keychain.save",
-      resource: `${meta.service}:${meta.id}`,
-      scopeLabel: scopeId,
-    },
-  );
-  return sendJson(res, 200, { credential: meta });
+  const store = async () => {
+    const ticket = ticketId && deps.secretDrops ? await deps.secretDrops.peek(ticketId) : null;
+    const refusal = ticket && loginTicketRefusal(ticket, actorId, service, threadRef);
+    if (refusal) console.warn(`[keychain] loginTicket not used for ${service}: ${refusal}`);
+    const signedIn = ticket !== null && refusal === null;
+    let meta = await kc.create(input);
+    if (!meta) {
+      if (!signedIn && !(await livePersonTurn(ctx))) return;
+      meta = await kc.save(input);
+    }
+    if (signedIn) {
+      const spent = await deps.secretDrops!.redeem(ticketId!);
+      if (!spent.ok)
+        console.warn(`[keychain] loginTicket for ${service} was not spent after the save: ${spent.reason}`);
+    }
+    audit(
+      { deps, tenant },
+      {
+        principalId: actorId,
+        action: "keychain.save",
+        resource: `${meta.service}:${meta.id}`,
+        scopeLabel: scopeId,
+      },
+    );
+    return sendJson(res, 200, { credential: meta });
+  };
+  return ticketId ? kc.withLoginTicket(ticketId, store) : store();
 });
 
 const startLogin = keychainRoute(async (ctx, _kc, { actorId, scopeId, threadRef }) => {

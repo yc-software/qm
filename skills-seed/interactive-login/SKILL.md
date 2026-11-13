@@ -46,8 +46,8 @@ and save-login commands so the temporary home and save script stay on one comput
    Never remove the directory yourself; if the save fails, run the script again.
    Saving the same service again replaces that entry in place: its id, handle, owner and
    grants stay the same. A replace needs the ticket from step 1 or the person's own running
-   turn; without either the script keeps the directory and says so, and running it again
-   in the person's turn saves it.
+   turn; without either the script removes the directory and says so, and the sign-in
+   starts again from step 1 in the person's own turn.
 
 4. Use the login only by naming the handle in `credentials` on `execute` (including `background:true`), including to check that it works. The files are staged in a private home for
    that command or job, and refreshes the CLI writes are saved back when it ends.

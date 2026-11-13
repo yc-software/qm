@@ -19,6 +19,7 @@ import {
   KeychainError,
   type Keychain,
   type KeychainGrant,
+  type KeychainCredential,
 } from "../src/credentials/keychain.ts";
 import { type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
@@ -490,6 +491,21 @@ describe("connectors are grantable like any keychain record", () => {
     });
     assert.doesNotMatch(md, /Alex|gmail|[a-f0-9]{16}/);
   });
+});
+
+test("a save keeps a writer lease claimed while the save runs", async () => {
+  const creds = testMap<KeychainCredential>();
+  const keychain = (map: DurableMap<KeychainCredential>) =>
+    createKeychain({ lock: testAdvisoryLock(), creds: map, grants: testMap(), asks: testMap(), key: KEY });
+  const k = keychain(creds);
+  const { id } = await k.save(GH);
+  const writer = { holder: "A", until: Date.now() + 60_000 };
+  const claim = () => k.claimWriter(GH.ownerId, id, writer);
+  const get = async (key: string) => [await creds.get(key), await claim()][0] as KeychainCredential | null;
+  const mutateMany: typeof creds.mutateMany = async (updates) =>
+    (await Promise.all([creds.mutateMany(updates), claim()]))[0];
+  await keychain({ ...creds, get, mutateMany }).save(GH);
+  assert.deepEqual((await creds.get(id))?.writer, writer);
 });
 
 test("revoking a once-grant that is claimed mid-revoke keeps it used", async () => {
@@ -1321,8 +1337,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal((await save("swapped", later, dropId)).status, 403);
     assert.equal((await built.secretDrops!.peek(dropId)).ok, true);
     const { loginTicket } = (await (await post("/v1/keychain/login-tickets", { service: "GH" }, live)).json()) as any;
-    assert.equal((await save("relogin", later, loginTicket)).status, 200);
-    assert.equal((await save("again", later, loginTicket)).status, 403);
+    const racing = await Promise.all([save("relogin", later, loginTicket), save("relogin", later, loginTicket)]);
+    assert.deepEqual(racing.map((response) => response.status).sort(), [200, 403]);
     assert.equal(await secret(), "relogin");
     assert.equal((await save("typed", live)).status, 200);
     assert.equal(await secret(), "typed");

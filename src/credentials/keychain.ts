@@ -386,6 +386,7 @@ interface GrantListFilter {
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
+  withLoginTicket<T>(ticketId: string, fn: () => Promise<T>): Promise<T>;
   claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
   releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean | null>;
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<string[]>;
@@ -958,9 +959,8 @@ export function createKeychain(deps: {
 
   async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
     const { id, buildRec } = credentialRecord(input);
-    const rec = buildRec(await deps.creds.get(id));
-    await deps.creds.put(id, rec);
-    return toMeta(rec);
+    const [rec] = await deps.creds.mutateMany([{ id, apply: buildRec }]);
+    return toMeta(rec!);
   }
 
   async function materializeConnectorEnv(
@@ -1114,6 +1114,8 @@ export function createKeychain(deps: {
       const rec = buildRec();
       return (await deps.creds.insertIfAbsent(id, rec)) ? toMeta(rec) : null;
     },
+
+    withLoginTicket: (ticketId, fn) => lock.withLock(`keychain-login-ticket:${ticketId}`, fn),
 
     async claimWriter(ownerId, id, writer) {
       let claimed: boolean | null = null;
