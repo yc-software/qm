@@ -325,6 +325,43 @@ test("the consent-mint route takes only the oauth-consent token of a running tur
   }
 });
 
+test("removing a connection or a saved login takes a running turn with a person at the keyboard", async () => {
+  const srv = await start();
+  try {
+    await srv.built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U9", { accessToken: "kept" });
+    const exp = Date.now() + CAPABILITY_TTL_MS;
+    const send = async (method: string, path: string, claims: object = {}, principalId?: string) => {
+      const cap = await mintCapabilityToken(
+        { ...RUN, actorId: "U1", scopeId: "personal:U1", liveActor: true, exp, ...claims },
+        SECRET,
+      );
+      const res = await fetch(`${srv.base}${path}`, {
+        method,
+        headers: { "content-type": "application/json", "x-agent-capability": cap },
+        body: method === "POST" ? JSON.stringify({ provider: "google", principalId }) : null,
+      });
+      const json = (await res.json()) as { error?: string; principalId?: string };
+      return `${res.status} ${json.error ?? json.principalId}`;
+    };
+    const revoke = "/v1/connectors/oauth/revoke";
+    const login = "/v1/keychain/credentials/x";
+    const grant = "/v1/keychain/grants/x/revoke";
+    assert.equal(await send("POST", revoke), "200 U1");
+    assert.equal(await send("POST", revoke, { keychainMembers: [{ id: "U2", type: "internal" }] }, "U2"), "200 U2");
+    assert.equal(await send("POST", revoke, {}, "U9"), "400 bad_request");
+    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U9"), "kept");
+    assert.equal(await send("POST", revoke, { triggered: true }), "403 human_consent_required");
+    assert.equal(await send("POST", revoke, { botActor: true }), "403 human_consent_required");
+    assert.equal(await send("POST", revoke, { runId: "finished-run" }), "403 inactive_run");
+    assert.equal(await send("DELETE", login), "404 not_found");
+    assert.equal(await send("DELETE", login, { triggered: true }), "403 human_consent_required");
+    assert.equal(await send("POST", grant, { botActor: true }), "403 human_consent_required");
+    assert.equal(await send("POST", grant, { runId: "finished-run" }), "403 inactive_run");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("an oauth-consent token cannot drive control-plane routes (crons)", async () => {
   const srv = await start();
   try {

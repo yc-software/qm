@@ -137,15 +137,16 @@ test("publisher cancels an unfinished upload when the file changed", async () =>
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   origin = `http://127.0.0.1:${address.port}`;
-  const source = join(directory, "state.md");
+  const name = `${"s".repeat(252)}.md`;
+  const source = join(directory, name);
   const token =
     Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
   await writeFile(source, "new contents");
   await writeFile(
-    source + ".qm-upload.json",
+    join(directory, `.qm-upload-${createHash("sha256").update(name).digest("hex")}.json`),
     JSON.stringify({
       id: "a".repeat(32),
-      manifest: { name: "state.md", mimetype: "text/markdown", sizeBytes: 3, checksums: ["old"] },
+      manifest: { name, mimetype: "text/markdown", sizeBytes: 3, checksums: ["old"] },
       destination: { origin, actor: "user", scope: "personal:user" },
       next: 1,
     }),
@@ -202,7 +203,7 @@ test("publisher starts a fresh upload when the saved session was aborted or expi
     await writeFile(source, "abc");
     const checksum = createHash("sha256").update("abc").digest("base64");
     await writeFile(
-      source + ".qm-upload.json",
+      join(directory, `.qm-upload-${createHash("sha256").update("note.txt").digest("hex")}.json`),
       JSON.stringify({
         id: stale,
         manifest: { name: "note.txt", mimetype: "text/plain", sizeBytes: 3, checksums: [checksum] },
