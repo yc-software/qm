@@ -102,7 +102,7 @@ function commandDetail(p: ApprovalSubject): string {
     .join("\n");
 }
 
-export function commandApprovalCard(p: PendingApproval): Card {
+function commandApprovalCard(p: PendingApproval): Card {
   const title = toolTitle(p);
   let heading = title ? `🔒 **Approval needed:** ${title}` : "🔒 **Approval needed.**";
   if (p.kind === "input") heading = "🔒 **My security screen flagged part of this message. Allow it?**";
@@ -118,13 +118,13 @@ export function commandApprovalCard(p: PendingApproval): Card {
   return { body: lines.filter(Boolean).join("\n\n"), actions: approvalButtons(p, reviewable).map(surfaceAction) };
 }
 
-export function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?: string): string {
+function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?: string): string {
   const subject = p.kind === "input" ? "flagged message" : (toolTitle(p) ?? inline(headSlice(p.command, SUBJECT_MAX)));
   const who = by ? ` by ${by}` : "";
   return `${decision === "deny" ? "" : "✅ "}${APPROVAL_DECISION_LABEL[decision]}${who} · ${subject}`;
 }
 
-export function keychainCard(view: KeychainApprovalView): Card {
+function keychainCard(view: KeychainApprovalView): Card {
   const { pending, duration, status } = keychainCardWording(view);
   const summary = `Use your **${headSlice(view.service, 150)}** credential in ${view.conversation}${duration}.`;
   return {

@@ -21,7 +21,7 @@ const uploadSchema = z.object({
   upload: z.object({ url: storageUrl, fields: z.record(z.string(), z.string()) }),
 });
 
-export async function fetchPartnerChatFile(
+async function fetchPartnerChatFile(
   client: PartnerChatClient,
   account: string,
   fileId: string,

@@ -17,7 +17,7 @@ export interface PartnerChatMessageIds {
   messageId: string;
 }
 
-export function partnerChatReactionName(raw: string): { name: string; skin_tone?: number } | null {
+function partnerChatReactionName(raw: string): { name: string; skin_tone?: number } | null {
   const [alias, tone] = (normalizeReaction(raw) ?? "").split(SKIN_TONE);
   const char = alias ? EMOJI_CHAR_BY_NAME[alias] : undefined;
   if (!alias || !char) return null;
