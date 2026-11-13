@@ -423,6 +423,7 @@ import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
 import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
 import { PARTNER_CHAT_CLAIM_MS, createPartnerChatClient } from "./surfaces/partner-chat/client.ts";
 import { partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
+import { createPartnerChatTurns } from "./surfaces/partner-chat/turns.ts";
 import { createPartnerChatApprovals, partnerChatApprovalCardRoute } from "./surfaces/partner-chat/approvals.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
@@ -2574,8 +2575,18 @@ export function buildApp(
   };
   const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
   const partnerChatClient = config.partnerChat ? createPartnerChatClient(config.partnerChat) : null;
+  const partnerChatTurns = partnerChatClient
+    ? createPartnerChatTurns({
+        app,
+        client: partnerChatClient,
+        blobs: slackCore,
+        runs,
+        turnStream,
+        pickAckEmoji: slackCore.pickAckEmoji,
+      })
+    : null;
   const partnerChatInbound =
-    partnerChatNotices && partnerChatClient && config.partnerChat
+    partnerChatNotices && partnerChatClient && partnerChatTurns && config.partnerChat
       ? createPartnerChatInbound({
           secret: config.partnerChat.secret,
           client: partnerChatClient,
@@ -2584,6 +2595,7 @@ export function buildApp(
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           unansweredReply: partnerChatNotices.unanswered,
+          turns: partnerChatTurns,
           onAction: createPartnerChatApprovals({
             client: partnerChatClient,
             app,
@@ -2591,19 +2603,21 @@ export function buildApp(
           }).invoke,
         })
       : null;
-  const partnerChatDelivery = partnerChatClient
-    ? createDeliveryRelay(deliveries, {
-        type: "partner-chat",
-        send: partnerChatSender({
-          client: partnerChatClient,
-          blobs: slackCore,
-          app,
-          ...(keychainApprovals ? { keychainApprovals } : {}),
-        }),
-        fail: (id, reason) => app.failDelivery(id, reason),
-        claimMs: PARTNER_CHAT_CLAIM_MS,
-      })
-    : null;
+  const partnerChatDelivery =
+    partnerChatClient && partnerChatTurns
+      ? createDeliveryRelay(deliveries, {
+          type: "partner-chat",
+          send: partnerChatSender({
+            client: partnerChatClient,
+            blobs: slackCore,
+            app,
+            ...(keychainApprovals ? { keychainApprovals } : {}),
+          }),
+          fail: (id, reason) => app.failDelivery(id, reason),
+          claimMs: PARTNER_CHAT_CLAIM_MS,
+          held: partnerChatTurns.held,
+        })
+      : null;
   const webhookDelivery = createDeliveryRelay(deliveries, {
     type: "webhook",
     send: webhookSender(config.signingSecret),

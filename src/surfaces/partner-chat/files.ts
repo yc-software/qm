@@ -12,6 +12,7 @@ import type { PartnerChatClient } from "./client.ts";
 import type { PartnerChatFile } from "./protocol.ts";
 
 const TRANSFER_TIMEOUT_MS = 300_000;
+export const UPLOAD_FAILED = "I couldn't attach the file(s). Try again in a moment.";
 
 const storageUrl = z.string().startsWith("https://");
 const downloadSchema = z.object({ url: storageUrl });

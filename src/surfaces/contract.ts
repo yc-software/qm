@@ -49,7 +49,7 @@ export interface SurfaceAction {
   style: "primary" | "danger" | "default";
 }
 
-interface SurfaceCapabilities {
+export interface SurfaceCapabilities {
   mirrored: boolean;
   liveReplies: boolean;
   nativeActor: boolean;

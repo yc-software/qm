@@ -335,6 +335,7 @@ export function createTurnMethods(
         desktopClientId: desktopClientForTurn({ ...req, origin }),
         ...(req.clientSurface ? { clientSurface: req.clientSurface } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
+        ...(req.liveReplies ? { liveReplies: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),

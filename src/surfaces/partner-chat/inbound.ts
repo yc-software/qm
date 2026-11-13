@@ -24,6 +24,7 @@ import {
   type PartnerChatActionEvent,
   type PartnerChatReactionEvent,
 } from "./protocol.ts";
+import type { PartnerChatTurns } from "./turns.ts";
 
 const SURFACE = "partner-chat";
 const CONTEXT_SCAN = 500;
@@ -43,6 +44,7 @@ export function createPartnerChatInbound(deps: {
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
+  turns: Pick<PartnerChatTurns, "start">;
   onAction: (click: PartnerChatActionClick) => Promise<void>;
   now?: () => number;
 }) {
@@ -224,26 +226,31 @@ export function createPartnerChatInbound(deps: {
     );
     if (!surfaces) return { status: 200, body: { ok: true, ignored: "no_stake" } };
     const authorName = message.user.name?.trim();
-    await deps.app.turn({
-      ...turnFrame(
-        event,
-        reactor,
-        reaction.user.id,
-        who.humans,
-        event.thread_id ?? (chat.kind === "group" ? message.id : undefined),
-      ),
-      text: buildReactionTurnText({
-        surfaceLabel: "Chat",
-        reactorName: reactor.displayName || "Someone",
-        emoji: reaction.name,
-        added,
-        onBotMessage,
-        ...(!onBotMessage && authorName && message.user.id !== reaction.user.id ? { authorName } : {}),
-        ...(message.body ? { messageText: message.body } : {}),
-      }),
-      origin: { kind: "ambient" },
-      async: true,
-      redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:reaction:${event.event_id}`,
+    const replyThread = event.thread_id ?? (chat.kind === "group" ? message.id : undefined);
+    await deps.turns.start({
+      where: {
+        account: event.account,
+        kind: chat.kind,
+        chat: chat.id,
+        ...(replyThread ? { thread: replyThread } : {}),
+      },
+      authorId: reaction.user.id,
+      trigger: partnerChatTs(message.created_at, message.id),
+      unprompted: true,
+      synthetic: true,
+      body: {
+        ...turnFrame(event, reactor, reaction.user.id, who.humans, replyThread),
+        text: buildReactionTurnText({
+          surfaceLabel: "Chat",
+          reactorName: reactor.displayName || "Someone",
+          emoji: reaction.name,
+          added,
+          onBotMessage,
+          ...(!onBotMessage && authorName && message.user.id !== reaction.user.id ? { authorName } : {}),
+          ...(message.body ? { messageText: message.body } : {}),
+        }),
+        redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:reaction:${event.event_id}`,
+      },
     });
     return { status: 200, body: { ok: true } };
   }
@@ -311,6 +318,28 @@ export function createPartnerChatInbound(deps: {
           deps.storageFetch,
         )
       : undefined;
+    if (event.protocol === 2) {
+      await deps.turns.start({
+        where: {
+          account: event.account,
+          kind: chat.kind,
+          chat: chat.id,
+          ...(replyThread ? { thread: replyThread } : {}),
+        },
+        authorId: message.user.id,
+        trigger: ts,
+        body: {
+          ...frame,
+          text: message.body,
+          ...(staged?.attachments.length ? { attachments: staged.attachments } : {}),
+          ...(staged?.issues.length ? { inboundNotes: staged.issues } : {}),
+          ...(followed && thread ? await threadDetection(container, thread, followed, ts) : {}),
+          redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
+        },
+        ...(followed && thread ? { unprompted: true } : {}),
+      });
+      return { status: 200, body: { ok: true } };
+    }
     const queued = await deps.app.turn({
       ...frame,
       text: message.body,

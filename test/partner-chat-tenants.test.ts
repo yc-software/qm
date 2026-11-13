@@ -27,6 +27,7 @@ describeTwoTenants("partner chat on a shared host", (db) => {
     secret,
     client,
     stageBlob,
+    turns: { start: async () => {} },
     app,
     surfaceCache,
     isInternalEmail,

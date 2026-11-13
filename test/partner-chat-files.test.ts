@@ -5,6 +5,9 @@ import { createPartnerChatClient } from "../src/surfaces/partner-chat/client.ts"
 import { createPartnerChatInbound } from "../src/surfaces/partner-chat/inbound.ts";
 import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
 import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
+import { createPartnerChatTransport } from "../src/surfaces/partner-chat/transport.ts";
+import { runSurfaceTurn } from "../src/surfaces/turn-driver.ts";
+import type { TurnFlow } from "../src/surfaces/turn-flow.ts";
 import type { Delivery, TurnRequest } from "../src/types.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
@@ -47,9 +50,11 @@ test("files attached to a chat message reach the turn as staged attachments, and
     surfaceCache: { readMessages: async () => [] },
     isInternalEmail: async () => true,
     unansweredReply: async () => {},
+    turns: { start: async (turn) => void turns.push(turn.body as TurnRequest) },
   });
   const ada = { id: "5", email: "ada@example.com", name: "Ada Lovelace" };
-  const raw = JSON.stringify({
+  const event = (protocol?: 2) => ({
+    ...(protocol ? { protocol } : {}),
     event_id: "ev-1",
     type: "message.created",
     account: "7001",
@@ -66,11 +71,14 @@ test("files attached to a chat message reach the turn as staged attachments, and
     },
   });
   const ts = String(Math.floor(Date.now() / 1000));
-  assert.equal((await inbound.handle(ts, signPartnerChat(SECRET, ts, raw), raw)).status, 200);
-  assert.deepEqual(calls, [
+  for (const raw of [JSON.stringify(event()), JSON.stringify(event(2))])
+    assert.equal((await inbound.handle(ts, signPartnerChat(SECRET, ts, raw), raw)).status, 200);
+  assert.deepEqual(calls.slice(2), [
     { path: "/agent_app/files/url", body: { file_id: "31" } },
     { path: "/agent_app/files/url", body: { file_id: "32" } },
   ]);
+  const { origin: _origin, async: _async, ...sharedRequest } = turns[0]!;
+  assert.deepEqual(turns[1], sharedRequest);
   assert.deepEqual(turns[0]?.attachments, [
     {
       name: "deck.pdf",
@@ -184,4 +192,70 @@ test("a delivery whose files cannot be uploaded still posts its text and says th
       body: "Here you go.\n\nI couldn't attach the file(s). Try again in a moment.",
     },
   });
+});
+
+test("a live turn shows typing, posts its status, then posts the reply with its files once and adds the reaction it asked for", async () => {
+  const { client, calls } = chatHost((path, body) =>
+    Response.json(
+      path === "/agent_app/files/upload"
+        ? { file_id: "61", upload: { url: "https://storage.example/up", fields: {} } }
+        : { message_id: body.client_message_id === "run:r1" ? "44" : "43" },
+    ),
+  );
+  const transport = createPartnerChatTransport(
+    {
+      client,
+      app: { readSurfaceMessages: async () => [], ingestSurfaceEvents: async () => ({ upserted: 1 }) },
+      blobs: { readBlob: async () => Buffer.from("chart bytes"), readFileArtifact: async () => Buffer.alloc(0) },
+      storageFetch: async () => new Response(null, { status: 204 }),
+    },
+    { where: { account: "7001", kind: "dm", chat: "88" }, authorId: "5", trigger: "1793649600.00000000000000001001" },
+  );
+  const acked: string[] = [];
+  const editRefs: string[][] = [];
+  const flow: TurnFlow = {
+    inFlightRuns: { add() {}, delete() {}, has: () => false },
+    ackRunDelivery: (runId) => void acked.push(runId),
+    callCore: async (_body, hooks) => {
+      await hooks?.onQueued?.("r1");
+      hooks?.onReplying?.();
+      hooks?.onFirstBlock?.("On it.");
+      await new Promise((r) => setTimeout(r, 50));
+      const attachments = [{ name: "chart.png", mimetype: "image/png", sizeBytes: 11, blobId: "b1" }];
+      return { status: "ok", reply: "Here is the chart. [[react: tada]]", attachments };
+    },
+  };
+  await runSurfaceTurn(
+    { flow, label: "partner-chat", reportEditRef: async (runId, ref) => void editRefs.push([runId, ref]) },
+    transport,
+    {
+      kind: "dm",
+      trigger: "1793649600.00000000000000001001",
+      where: "test",
+      ackEmoji: { candidates: () => ["eyes"], pick: async () => undefined },
+      prepare: async () => ({ text: "chart please" }) as never,
+    },
+  );
+  assert.deepEqual(
+    calls.map(({ path, body }) => [
+      path.replace("/agent_app/", ""),
+      body.client_message_id ?? body.typing ?? body.name,
+    ]),
+    [
+      ["typing", true],
+      ["messages", "status:run:r1"],
+      ["typing", false],
+      ["files/upload", "chart.png"],
+      ["messages", "run:r1"],
+      ["reactions/add", "tada"],
+    ],
+  );
+  assert.deepEqual(calls[4]!.body, {
+    client_message_id: "run:r1",
+    chat_id: "88",
+    body: "Here is the chart.",
+    file_ids: ["61"],
+  });
+  assert.deepEqual(calls[5]!.body, { chat_id: "88", message_id: "1001", name: "tada" });
+  assert.deepEqual([acked, editRefs.map(([runId]) => runId)], [["r1"], ["r1"]]);
 });

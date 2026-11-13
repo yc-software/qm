@@ -8,13 +8,12 @@ import type { AddressFetch } from "../../util/network.ts";
 import type { BlobSource } from "../attachments.ts";
 import { partnerChatCard } from "./approvals.ts";
 import { PartnerChatHttpError, type PartnerChatClient } from "./client.ts";
-import { uploadPartnerChatFiles } from "./files.ts";
+import { UPLOAD_FAILED, uploadPartnerChatFiles } from "./files.ts";
 import { deletePartnerChatMessage, editPartnerChatMessage, postPartnerChatMessage } from "./messages.ts";
 import { partnerChatMessageId, parsePartnerChatRef } from "./protocol.ts";
 import { UnknownPartnerChatReaction, addPartnerChatReaction } from "./reactions.ts";
 
 const MESSAGE_ID = /^\d+$/;
-const UPLOAD_FAILED = "I couldn't attach the file(s). Try again in a moment.";
 
 class UnsupportedDelivery extends Error {}
 

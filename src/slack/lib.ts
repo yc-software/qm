@@ -1,4 +1,4 @@
-export { refusalDelivery, postThenAckRunDelivery, refusalNote } from "./refusals.ts";
+export { refusalDelivery, postThenAckRunDelivery, refusalNote } from "../surfaces/refusals.ts";
 export { inlineCode, clip, sleep } from "./util.ts";
 export { safeChunks } from "./safe-cut.ts";
 export {
@@ -79,17 +79,17 @@ export {
   decodeTs,
   REACTION_INSTRUCTION,
   REACTION_DETECT_GUIDANCE,
-  MAX_REACTIONS_PER_TURN,
   normalizeReaction,
   normalizeReactions,
   applyReactions,
   type ReactionDirective,
-  parseReactionGroup,
   resolveReactionTargets,
-  extractReactions,
-  stripReactionDirectives,
 } from "./reactions.ts";
 export {
+  MAX_REACTIONS_PER_TURN,
+  parseReactionGroup,
+  extractReactions,
+  stripReactionDirectives,
   type ReactionTally,
   summarizeReactions,
   shouldSurfaceReaction,
@@ -131,7 +131,6 @@ export {
   postWithVerify,
   findPostedByKey,
   recoveryVerifyOldest,
-  statusPlaceholderKey,
   deliveryMetadata,
   type DeliveryMetadata,
   type PostedPart,
@@ -139,12 +138,12 @@ export {
   SLACK_POST_SPLIT_LIMIT,
   SLACK_TEXT_LIMIT,
 } from "./delivery.ts";
+export { statusPlaceholderKey } from "../surfaces/turn-driver.ts";
+export { DEFAULT_ACK_REACTIONS, CURATED_ACK_EMOJI } from "./ack-emoji.ts";
 export {
-  DEFAULT_ACK_REACTIONS,
-  CURATED_ACK_EMOJI,
   createAckPresenter,
   renderGoalNotice,
   type GoalNoticeView,
   type GoalNoticePresenter,
   createGoalNoticePresenter,
-} from "./presenters.ts";
+} from "../surfaces/turn-presenters.ts";

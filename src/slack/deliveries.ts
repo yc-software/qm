@@ -32,7 +32,7 @@ import {
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { Delivery } from "../types.ts";
-import type { TurnFlow } from "./turn-flow.ts";
+import { liveRunHoldsDelivery, runDeliveryId, type TurnFlow } from "../surfaces/turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
@@ -60,7 +60,6 @@ const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
 
 const DELIVERY_CLAIM_MARGIN_MS = 2_000;
 
-const RUN_RECOVERY_GRACE_MS = 15_000;
 const STATUS_PLACEHOLDER_LOOKBACK_MS = 6 * 3_600_000;
 
 function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown {
@@ -228,7 +227,7 @@ export function createDeliveryPoller(deps: {
         const destinationClient = deliveryClient(defaultClient, d.destination);
         if (!destinationClient) return;
         const client = destinationClient;
-        const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
+        const runId = runDeliveryId(d);
         const account = d.destination.account;
         const namespace = deps.externalNamespace?.(account?.id ?? "default");
         if (
@@ -240,8 +239,7 @@ export function createDeliveryPoller(deps: {
           await ackDelivery(d.id);
           return;
         }
-        if (runId && inFlightRuns.has(runId)) return;
-        if (runId && typeof d.createdAt === "number" && Date.now() - d.createdAt < RUN_RECOVERY_GRACE_MS) return;
+        if (liveRunHoldsDelivery(inFlightRuns, d)) return;
         let slackApiMs: number | undefined;
         await deliverWithRetry({
           tracker: deliveryTracker,

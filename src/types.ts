@@ -425,6 +425,7 @@ export interface TurnRequest {
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
+  liveReplies?: boolean;
   envelopeWrapped?: boolean;
   displayText?: string;
   turnWallClockMs?: number;

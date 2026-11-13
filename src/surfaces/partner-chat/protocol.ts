@@ -23,6 +23,7 @@ const file = z.object({
   size_bytes: z.number().int().nonnegative().optional(),
 });
 const eventSchema = z.object({
+  protocol: z.literal(2).optional(),
   event_id: z.string().min(1),
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,

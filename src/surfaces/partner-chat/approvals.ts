@@ -135,7 +135,7 @@ export function keychainCard(view: KeychainApprovalView): Card {
 
 export function partnerChatApprovalCardRoute(request: TurnRequest): Destination | undefined {
   const ref = request.deliveryTarget ? parsePartnerChatRef(request.deliveryTarget) : null;
-  if (!ref || isSystemActor(request.actor.externalId)) return undefined;
+  if (!ref || !request.liveReplies || isSystemActor(request.actor.externalId)) return undefined;
   return {
     type: "partner-chat",
     target: request.deliveryTarget!,

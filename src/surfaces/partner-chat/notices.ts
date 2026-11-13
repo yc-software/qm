@@ -5,18 +5,25 @@ import type { Run } from "../../runs/run-store.ts";
 import type { Destination, TurnResult } from "../../types.ts";
 
 import { AWAITING_APPROVAL } from "../approval-cards.ts";
+import { drivenLive } from "../turn-flow.ts";
 
-function noticeText(result: Partial<TurnResult>): string | undefined {
+function noticeText(result: Partial<TurnResult>, cards = false): string | undefined {
   if (result.status === "pending_approval")
-    return result.pendingApprovals?.length ? undefined : (result.reason ?? AWAITING_APPROVAL);
+    return cards && result.pendingApprovals?.length ? undefined : (result.reason ?? AWAITING_APPROVAL);
   if (result.status === "refused" && result.refusalKind !== "approval_denied")
     return unfinishedTurnText(userFacingFailureClause(result));
   return undefined;
 }
 
 export function partnerChatRunNotice(run: Run): string | undefined {
-  if (run.request.surface !== "partner-chat" || run.request.origin.kind !== "human" || !run.result) return undefined;
-  return noticeText(run.result);
+  if (
+    run.request.surface !== "partner-chat" ||
+    run.request.origin.kind !== "human" ||
+    drivenLive(run.request) ||
+    !run.result
+  )
+    return undefined;
+  return noticeText(run.result, run.request.liveReplies === true);
 }
 
 export function createPartnerChatNotices(deps: { deliveries: DeliveryStore }) {

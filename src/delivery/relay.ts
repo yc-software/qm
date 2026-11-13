@@ -17,7 +17,14 @@ export function createDeliveryRelay(
     send,
     claimMs,
     fail = (id, reason) => deliveries.fail(id, reason, Date.now()),
-  }: { type: string; send: Send; claimMs: number; fail?: (id: string, reason: string) => Promise<unknown> },
+    held,
+  }: {
+    type: string;
+    send: Send;
+    claimMs: number;
+    fail?: (id: string, reason: string) => Promise<unknown>;
+    held?: (d: Delivery) => boolean | Promise<boolean>;
+  },
 ) {
   let stopped = true;
   const inFlight = new Set<Promise<void>>();
@@ -26,6 +33,7 @@ export function createDeliveryRelay(
     void work.finally(() => inFlight.delete(work));
   };
   const deliver = async (d: Delivery, tenant: Tenant): Promise<void> => {
+    if (await held?.(d)) return;
     const outcome = await send(d, tenant).catch((e: unknown) => {
       reportFailure(`${type} delivery: not accepted; retrying once its claim lapses`, e, `delivery=${d.id}`);
       return null;
