@@ -3,10 +3,10 @@ import { refusedStatus, type Send } from "../../delivery/relay.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { Delivery } from "../../types.ts";
 import { PartnerChatHttpError, type PartnerChatClient } from "./client.ts";
-import { partnerChatMessageId, partnerChatRef, partnerChatTs, parsePartnerChatRef } from "./protocol.ts";
+import { postPartnerChatMessage } from "./post.ts";
+import { partnerChatMessageId, parsePartnerChatRef } from "./protocol.ts";
 
 const MESSAGE_ID = /^\d+$/;
-const SELF_AUTHOR = "self";
 
 class UnsupportedDelivery extends Error {}
 
@@ -15,8 +15,6 @@ export function partnerChatSender(deps: {
   app: Pick<App, "ingestSurfaceEvents" | "tenantFor">;
   now?: () => number;
 }): Send {
-  const now = deps.now ?? Date.now;
-
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
     const body = d.text.trim();
@@ -31,35 +29,13 @@ export function partnerChatSender(deps: {
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
     if (thread !== undefined && !MESSAGE_ID.test(thread))
       throw new UnsupportedDelivery(`partner-chat: bad thread id ${thread}`);
-    const parsed = await deps.client.call(ref.account, "/agent_app/messages", {
-      client_message_id: d.idempotencyKey,
-      chat_id: ref.chat,
-      ...(thread ? { thread_id: thread } : {}),
+    const ts = await postPartnerChatMessage(deps, {
+      chat: ref,
+      ...(thread ? { thread } : {}),
       body,
+      key: d.idempotencyKey,
     });
-    const messageId = parsed.message_id;
-    if (typeof messageId !== "string" && typeof messageId !== "number") {
-      console.log(`[partner-chat] delivery ${d.id} posted without a message id`);
-      return;
-    }
-    const at = now();
-    await deps.app.ingestSurfaceEvents(
-      [
-        {
-          surface: "partner-chat",
-          container: partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat }),
-          ts: partnerChatTs(new Date(at).toISOString(), String(messageId)),
-          sub: thread ?? null,
-          authorId: SELF_AUTHOR,
-          text: body,
-          self: true,
-          bot: true,
-          handled: true,
-          createdAt: at,
-        },
-      ],
-      "partner-chat",
-    );
+    if (!ts) console.log(`[partner-chat] delivery ${d.id} posted without a message id`);
   }
 
   return async (d, tenant) => {
