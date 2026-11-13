@@ -423,6 +423,7 @@ import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
 import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
 import { PARTNER_CHAT_CLAIM_MS, createPartnerChatClient } from "./surfaces/partner-chat/client.ts";
 import { partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
+import { createPartnerChatApprovals, partnerChatApprovalCardRoute } from "./surfaces/partner-chat/approvals.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
@@ -2079,6 +2080,7 @@ export function buildApp(
   });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
     slack: slackApprovalCardRoute,
+    "partner-chat": partnerChatApprovalCardRoute,
   });
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
@@ -2571,20 +2573,30 @@ export function buildApp(
     }
   };
   const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
+  const partnerChatClient = config.partnerChat ? createPartnerChatClient(config.partnerChat) : null;
   const partnerChatInbound =
-    partnerChatNotices && config.partnerChat
+    partnerChatNotices && partnerChatClient && config.partnerChat
       ? createPartnerChatInbound({
           secret: config.partnerChat.secret,
           app,
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           unansweredReply: partnerChatNotices.unanswered,
+          onAction: createPartnerChatApprovals({
+            client: partnerChatClient,
+            app,
+            ...(keychainApprovals ? { keychainApprovals } : {}),
+          }).invoke,
         })
       : null;
-  const partnerChatDelivery = config.partnerChat
+  const partnerChatDelivery = partnerChatClient
     ? createDeliveryRelay(deliveries, {
         type: "partner-chat",
-        send: partnerChatSender({ client: createPartnerChatClient(config.partnerChat), app }),
+        send: partnerChatSender({
+          client: partnerChatClient,
+          app,
+          ...(keychainApprovals ? { keychainApprovals } : {}),
+        }),
         claimMs: PARTNER_CHAT_CLAIM_MS,
       })
     : null;

@@ -6,6 +6,7 @@ import { inTenant } from "../../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow, detectInputs } from "../context-window.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
+import type { PartnerChatActionClick } from "./approvals.ts";
 import {
   findMessage,
   partnerChatRef,
@@ -31,6 +32,7 @@ export function createPartnerChatInbound(deps: {
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
+  onAction: (click: PartnerChatActionClick) => Promise<void>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -96,7 +98,8 @@ export function createPartnerChatInbound(deps: {
   async function accept(event: PartnerChatEvent) {
     const { message, chat } = event;
     const members = chat.members.filter((m) => !m.bot);
-    if (chat.kind === "dm" && (members.length !== 1 || members[0]!.id !== message.user.id)) {
+    const sender = event.action?.user ?? message.user;
+    if (chat.kind === "dm" && (members.length !== 1 || members[0]!.id !== sender.id)) {
       console.log(
         `[partner-chat] ignoring dm ${chat.id}: it lists ${members.length} non-bot member(s), and a dm must list only its author`,
       );
@@ -114,6 +117,21 @@ export function createPartnerChatInbound(deps: {
         `[partner-chat] ignoring chat ${chat.id}: ${guests} member(s) not vouched for as internal, author listed: ${Boolean(listed)}`,
       );
       return { status: 200, body: { ok: true, ignored: "unvouched_participants" } };
+    }
+    if (event.type === "action.invoked") {
+      const clicker = humans[members.findIndex((m) => m.id === event.action?.user.id)];
+      if (!event.action || !clicker) return { status: 200, body: { ok: true, ignored: "not_a_member" } };
+      await deps.onAction({
+        eventId: event.event_id,
+        account: event.account,
+        chat: chat.id,
+        ...(event.thread_id ? { thread: event.thread_id } : {}),
+        messageId: message.id,
+        actionId: event.action.id,
+        userId: event.action.user.id,
+        actor: clicker,
+      });
+      return { status: 200, body: { ok: true } };
     }
     const bot = listed.bot === true;
     const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;

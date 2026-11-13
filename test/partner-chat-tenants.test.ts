@@ -21,7 +21,8 @@ describeTwoTenants("partner chat on a shared host", (db) => {
   const surfaceCache = { readMessages: async () => [] };
   const isInternalEmail = async () => true;
   const unansweredReply = async () => {};
-  const inbound = createPartnerChatInbound({ secret, app, surfaceCache, isInternalEmail, unansweredReply });
+  const onAction = async () => {};
+  const inbound = createPartnerChatInbound({ secret, app, surfaceCache, isInternalEmail, unansweredReply, onAction });
   const send = partnerChatSender({
     app,
     client: createPartnerChatClient({ url: "https://chat.example", secret, fetch: async () => Response.json({}) }),

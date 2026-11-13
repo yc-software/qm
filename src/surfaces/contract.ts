@@ -43,6 +43,12 @@ interface OutboundMessage {
   provenance: DeliveryProvenance;
 }
 
+export interface SurfaceAction {
+  id: string;
+  label: string;
+  style: "primary" | "danger" | "default";
+}
+
 interface SurfaceCapabilities {
   mirrored: boolean;
   liveReplies: boolean;

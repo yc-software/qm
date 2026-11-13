@@ -7,6 +7,7 @@ const MAX_CLOCK_SKEW_S = 300;
 const MESSAGE_ID_WIDTH = 20;
 
 const ID = /^[A-Za-z0-9_-]+$/;
+const ACTION_ID = /^[\w.:%~-]{1,255}$/;
 const id = z.string().regex(ID);
 const messageId = z.string().regex(/^\d{1,20}$/);
 const user = z.object({
@@ -17,7 +18,7 @@ const user = z.object({
 });
 const eventSchema = z.object({
   event_id: z.string().min(1),
-  type: z.enum(["message.created", "message.updated", "message.deleted"]),
+  type: z.enum(["message.created", "message.updated", "message.deleted", "action.invoked"]),
   account: id,
   chat: z.object({ id, kind: z.enum(["group", "dm"]), name: z.string().optional(), members: z.array(user) }),
   thread_id: messageId.nullish(),
@@ -29,6 +30,7 @@ const eventSchema = z.object({
     app_post: z.boolean().default(false),
     created_at: z.iso.datetime({ offset: true }),
   }),
+  action: z.object({ id: z.string().regex(ACTION_ID), user }).optional(),
 });
 
 export type PartnerChatUser = z.infer<typeof user>;
