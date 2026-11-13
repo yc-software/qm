@@ -141,7 +141,9 @@ const linear: Verifier = {
 
 const token: Verifier = {
   verify({ secret, presentedToken }) {
-    return Boolean(secret) && presentedToken !== undefined && constantTimeEqual(presentedToken, secret!);
+    if (!secret) return false;
+    if (presentedToken === undefined) return "no token presented";
+    return constantTimeEqual(presentedToken, secret) || "token does not match";
   },
   deliveryId({ rawBody }) {
     return bodyHash(rawBody);

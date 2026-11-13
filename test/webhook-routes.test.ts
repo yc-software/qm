@@ -321,12 +321,15 @@ test("a token webhook accepts its secret as a bearer header or on the URL, and n
         method: "POST",
         headers: { "content-type": "application/json", ...(authorization ? { authorization } : {}) },
         body: JSON.stringify({ alarm: n }),
-      }).then((res) => res.status);
+      }).then(async (res) => (res.status === 401 ? ((await res.json()) as { message: string }).message : res.status));
     assert.equal(await deliver(1, "", `Bearer ${HOOK_SECRET}`), 202);
     assert.equal(await deliver(2, `?token=${HOOK_SECRET}`), 202);
-    assert.equal(await deliver(3, ""), 401);
-    assert.equal(await deliver(4, "?token=wrong"), 401);
-    assert.equal(await deliver(5, `?token=${HOOK_SECRET}`, "Bearer wrong"), 401);
+    assert.equal(await deliver(3, ""), "verification failed: no token presented");
+    assert.equal(await deliver(4, "?token=wrong"), "verification failed: token does not match");
+    assert.equal(
+      await deliver(5, `?token=${HOOK_SECRET}`, "Bearer wrong"),
+      "verification failed: token does not match",
+    );
     await settle(async () => (await deliver(1, "", `Bearer ${HOOK_SECRET}`)) === 200);
   } finally {
     await srv.close();
