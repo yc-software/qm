@@ -322,6 +322,12 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
     assert.equal(adminStatusFromGrants(await built.admin.listGrants(tenant), "casey@acme.test").isAdmin, false);
+    await built.users.record({ id: "B0BOT", source: "turn", at: Date.now() });
+    await built.users.markApps(["B0BOT"]);
+    for (const [principalId, canonicalId] of Object.entries({ B0BOT: "casey@acme.test", [OIDC]: "B0BOT" })) {
+      const linked = JSON.stringify({ principalId, canonicalId, evidence: EVIDENCE });
+      assert.equal((await signed("POST", "/v1/admin/principal-links", linked, admin)).status, 400);
+    }
     const created = await signed("POST", "/v1/admin/principal-links", body, admin);
     assert.equal(created.status, 200);
     const listed = (await (await signed("GET", "/v1/admin/principal-links", "", admin)).json()) as {

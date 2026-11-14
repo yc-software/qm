@@ -29,7 +29,7 @@ test("a person joins the roster once, folded to one row, and keeps their first a
   assert.equal((await roster.list()).filter((u) => u.principalId === pat).length, 1);
 });
 
-test("a user is a person until marked as an app; marking never creates a row", async () => {
+test("a user is a person until marked as an app; marking never creates a row or reaches a linked sign-in", async () => {
   const bot = `U-${randomUUID().slice(0, 8)}`;
   const absent = `U-${randomUUID().slice(0, 8)}`;
   const roster = store();
@@ -39,6 +39,9 @@ test("a user is a person until marked as an app; marking never creates a row", a
   assert.equal((await roster.get(bot))?.kind, "app");
   assert.equal(await roster.markApps([bot]), 0, "marking again changes nothing");
   assert.equal(await roster.get(absent), null);
+  const pat = unique("pat");
+  await roster.link({ principalId: absent, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() });
+  assert.deepEqual([await roster.markApps([absent]), (await roster.get(pat))?.kind], [0, "person"]);
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {

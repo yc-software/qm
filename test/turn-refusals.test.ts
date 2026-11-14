@@ -49,4 +49,7 @@ test("a web turn starts new threads only under the caller's own IDs and refuses 
   assert.deepEqual([channel.status, channel.reason], ["refused", "you're not a member of that context"]);
   await built.principalLinks.link({ principalId: "sso:a", canonicalId: "alice", evidence: "x", linkedBy: "t" });
   assert.notEqual((await built.app.turn(webTurn("sso:a"))).status, "refused");
+  await built.principalLinks.link({ principalId: "B0BOT", canonicalId: "alice", evidence: "x", linkedBy: "t" });
+  assert.match((await built.app.turn(webTurn("B0BOT", { botActor: true }))).reason ?? "", /^A bot can't act/);
+  assert.notEqual((await built.app.turn(webTurn("B1BOT", { botActor: true }))).status, "refused");
 });
