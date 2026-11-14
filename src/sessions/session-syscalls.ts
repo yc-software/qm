@@ -28,6 +28,8 @@ import type { Run, RunStore } from "../runs/run-store.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
 import {
@@ -150,6 +152,23 @@ export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<S
   return viewer.botActor !== true || session.spawnMeta?.botActor === true;
 }
 
+export function doesBotWork(session: Pick<Session, "spawnMeta"> | null, request: { botActor?: boolean }): boolean {
+  return request.botActor === true || session?.spawnMeta?.botActor === true;
+}
+
+export async function forkOfBotWork(
+  tenant: Tenant,
+  session: Pick<Session, "id" | "forkedFrom"> | null,
+  deps: { sessions: Pick<SessionStore, "forkOrigin">; swarms?: Pick<SwarmService, "botStartedWorker"> },
+): Promise<boolean> {
+  if (!session?.forkedFrom) return false;
+  const origin = await deps.sessions.forkOrigin(tenant, session.id);
+  if (!origin || origin.forkedFrom) return true;
+  if (isSubagentThreadRef(origin.threadRef)) return origin.spawnMeta?.botActor === true;
+  if (!origin.threadRef.startsWith("swarm:")) return false;
+  return !deps.swarms || (await deps.swarms.botStartedWorker(origin));
+}
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
@@ -167,6 +186,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   return {
     origin,
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
+    ...(input.liveReplies ? { liveReplies: true } : {}),
     ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
     ...(input.surfaceOrigin?.audience === "external" ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
@@ -430,6 +450,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
+    ...(meta.liveReplies ? { liveReplies: true } : {}),
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
     ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
@@ -1255,6 +1276,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
             };
           if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
+          if (binding.request.botActor)
+            return { ok: false, message: "a turn doing a Slack bot's work cannot create sessions." };
           const text = input.text?.trim();
           if (!input.fork && !text)
             return { ok: false, message: "new requires `text`: the new session's first message." };

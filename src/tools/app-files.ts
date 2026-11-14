@@ -1,17 +1,11 @@
-import type {
-  AppSourceReader,
-  DeployService,
-  DeploymentSource,
-  SourceEdit,
-  SourceSaved,
-} from "../deploy/deploy-service.ts";
+import type { AppSourceReader, DeployService, AppSource, SourceEdit, SourceSaved } from "../deploy/deploy-service.ts";
 import type { ScopeId } from "../types.ts";
 
 export interface AppFiles {
   readonly app: string;
   sourceReader(): Promise<AppSourceReader | undefined>;
-  source(paths?: string[], commit?: string): Promise<DeploymentSource>;
-  save(edit: (read: (paths: string[]) => Promise<DeploymentSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
+  source(paths?: string[], commit?: string): Promise<AppSource>;
+  save(edit: (read: (paths: string[]) => Promise<AppSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
 }
 
 export function createAppFiles(deps: {
@@ -23,7 +17,7 @@ export function createAppFiles(deps: {
 }): AppFiles {
   const { deploy, app } = deps;
   const caller = { actorId: deps.actorId, botActor: deps.botActor };
-  const canManage = () => deploy.canManageDeployment(app, caller, deps.actingScopeId);
+  const canManage = () => deploy.canManageApp(app, caller, deps.actingScopeId);
   const assertMayEdit = async (): Promise<void> => {
     if (!(await canManage()))
       throw new Error(`you need write access to the app ${JSON.stringify(app)} to read or change its files`);

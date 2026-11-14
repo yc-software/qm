@@ -15,7 +15,7 @@ import {
   parseUploadedFileIds,
   slackErrorCode,
 } from "../src/slack/payloads.ts";
-import { APPROVAL_ACTION_IDS } from "../src/slack/approval-cards.ts";
+import { APPROVAL_ACTION_IDS } from "../src/surfaces/approval-cards.ts";
 
 test("parseEventId pulls event_id and tolerates junk", () => {
   assert.equal(parseEventId({ event_id: "Ev123", type: "event_callback" }), "Ev123");

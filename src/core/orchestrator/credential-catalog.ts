@@ -462,14 +462,14 @@ export async function loadServiceCredentialGrants(turn: {
           conversation.audience,
           scopeId,
           resolution.orgScopeId,
-          entitledScopes,
+          entitledScopes(false),
         )
       ).map((g) => parseRef(g.ref).id),
     );
   const orgWideAudience =
     conversation.audience.length > 0 &&
     conversation.audience.every((p) =>
-      principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
+      principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId, false),
     );
   const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
     const granted = await aclGrantedServiceCredSlugs();

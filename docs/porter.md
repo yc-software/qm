@@ -177,7 +177,7 @@ principal with `AmazonEKSClusterAdminPolicy`, then `aws eks update-kubeconfig`.
 
 App serving is tiered so the zero-config path works first. With nothing set, every
 published app is reachable signed-in at `/d/<app>/` on the portal, private to its owner
-and whoever the deployment is shared with; proxied HTML is served under a sandbox CSP so
+and whoever the app is shared with; proxied HTML is served under a sandbox CSP so
 app code cannot act on the portal's origin. Setting `DEPLOY_APPS_DOMAIN` to a wildcard
 domain you control (e.g. `apps.example.com`, with `*.apps.example.com` pointed at the
 instance) upgrades every app to its own origin — `https://<app>.apps.example.com/` — with

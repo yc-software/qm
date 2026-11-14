@@ -100,7 +100,7 @@ import { openSessionAtMessage, showLinkedSession } from "./open-message";
 import { closeBrowse, openBrowse, sidebarDestinations } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { openDeployById, renderDeploys } from "./deploys";
+import { openAppById, renderApps } from "./apps-page";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
 import {
@@ -174,7 +174,7 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
 }
 
 function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
-  if (view === "deploys" && item) openDeployById(item);
+  if (view === "apps" && item) openAppById(item);
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
@@ -254,7 +254,7 @@ const ICON = {
   contexts: Folder,
   files: Files,
   keychain: KeyRound,
-  deploys: Rocket,
+  apps: Rocket,
   webhooks: Webhook,
   crons: Clock,
   loops: Repeat,
@@ -767,8 +767,8 @@ function showView(v: View): void {
     case "keychain":
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
@@ -838,8 +838,8 @@ function refreshActiveView(v: View): void {
       clearConnectorNotice();
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
@@ -1203,7 +1203,7 @@ export async function boot(): Promise<void> {
       const status = params.get("status");
       if (provider && status) noteConnectorResult(provider, status);
     }
-    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
+    if (wanted === "contexts" || wanted === "files" || wanted === "apps") {
       const scope =
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;

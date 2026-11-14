@@ -64,7 +64,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         url: `/d/${input.name ?? "dep-1"}/`,
       };
     },
-    async setDeploymentPublic(id, isPublic) {
+    async setAppPublic(id, isPublic) {
       return { id, name: id, public: isPublic };
     },
     async createPlayground(input) {
@@ -179,6 +179,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
           createdAt: 0,
           schedule: { everyMs: 3_600_000 },
           title: "Gmail digest",
+          botActor: true,
         },
       };
     },
@@ -2051,7 +2052,8 @@ test("cron note rejects arguments exceeding the advertised cap before dispatch",
 
 test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async () => {
   assert.match(textOut(await call(tool("cron"), { action: "list" })), /cron-1/);
-  assert.match(textOut(await call(tool("cron"), { action: "get", id: "cron-1" })), /Gmail digest/);
+  const got = textOut(await call(tool("cron"), { action: "get", id: "cron-1" }));
+  assert.ok(got.includes("Gmail digest") && got.includes("authority: none"), got);
   assert.match(textOut(await call(tool("cron"), { action: "runs", id: "cron-1", limit: 1 })), /checked inbox/);
   assert.match(
     textOut(await call(tool("cron"), { action: "patch", id: "cron-1", title: "renamed" })),
@@ -3749,7 +3751,7 @@ test("resource actions preserve sharing targets and file contents", async () => 
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
     },
-    async setDeploymentPublic(id: string, isPublic: boolean) {
+    async setAppPublic(id: string, isPublic: boolean) {
       publicChanges.push({ id, isPublic });
       return { id, name: id, public: isPublic };
     },

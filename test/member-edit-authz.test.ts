@@ -11,7 +11,7 @@ import { createSkillStore } from "../src/skills/skill-store.ts";
 import { type PersistedSoul, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -64,8 +64,8 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
     participantScopes: async () => [] as { scopeId: string }[],
   };
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const deployRows: Deployment[] = [];
-  const deploy = { listDeployments: async () => deployRows };
+  const deployRows: PublishedApp[] = [];
+  const deploy = { listApps: async () => deployRows };
   return {
     files,
     crons,

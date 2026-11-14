@@ -69,6 +69,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     ...(config.browserErrors && !actor.imp ? { browserErrors: config.browserErrors } : {}),
     mode: "portal",
     slackWorkspaceUrl: workspaceUrl,
+    chatSurfaces: app.chatSurfaces(),
     individualModelAuth: auth.individualModelAuth,
     modelAuthConnected: auth.connections.some(
       (c) => !auth.account || auth.account === "personal" || auth.account === c.provider,

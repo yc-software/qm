@@ -199,6 +199,7 @@ async function mintControlPlaneTokens(
       sessionId: session.id,
       origin,
       ...(turnSurface ? { surface: turnSurface } : {}),
+      ...(input.liveReplies ? { liveReplies: true } : {}),
     };
     connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
       controlClaims,
@@ -220,7 +221,7 @@ async function mintControlPlaneTokens(
         deps.capabilitySecret ?? deps.signingSecret,
       );
     }
-    if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
+    if (allInternal && securityPolicy.posture !== "strict") {
       connectorEnv.MODEL_GATEWAY_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}${SANDBOX_MODEL_PREFIX}`;
       connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
         { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
@@ -228,7 +229,7 @@ async function mintControlPlaneTokens(
         deps.capabilityTokenCompression,
       );
       turnContextBlocks["Model access"] =
-        "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
+        "## Model access\nSandbox code can call this company's models through core at `$MODEL_GATEWAY_URL` with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`; `GET $MODEL_GATEWAY_URL/v1/models` lists them. The token expires with this turn; never send it anywhere but `$MODEL_GATEWAY_URL`.";
     }
     connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
       {
