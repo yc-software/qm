@@ -1,10 +1,13 @@
 import { test } from "node:test";
+import pg from "pg";
 import assert from "node:assert/strict";
 import {
   createPostgresProcessRegistry,
   isDeclaredKind,
   type ProcessRegistry,
 } from "../src/processes/process-registry.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import type { Principal } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 function backends(): Array<{ name: string; make: () => ProcessRegistry }> {
@@ -215,4 +218,44 @@ test("registry preserves purpose without replacing the command and accepts legac
     assert.equal((await registry.get(row.processId))?.purpose, purpose);
     assert.equal((await registry.get(row.processId))?.command, "bg: node server.js");
   }
+});
+
+test("a running job whose run was a bot's turn is claimed as that bot's job, while a person's job and a job whose run Postgres can't read as JSON are not", async () => {
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const registry = createPostgresProcessRegistry(url);
+  const job = async (processId: string, actor: Principal, botActor: boolean) => {
+    const threadRef = `slack:C1:${processId}`;
+    const { run } = await runs.enqueue({
+      sessionId: threadRef,
+      request: {
+        surface: "slack",
+        actor,
+        conversation: { kind: "channel", threadRef, channelRef: "C1", audience: [actor] },
+        origin: { kind: "human", messageTs: "1700000000.000100" },
+        ...(botActor ? { botActor: true } : {}),
+        text: "run the build",
+      },
+    });
+    await registry.register({
+      processId,
+      scopeId: "channel:C1",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "npm run build",
+      ttlMs: 600_000,
+      runId: run.id,
+    });
+    return run.id;
+  };
+  await job("bot-job", { id: "release-bot", type: "internal" }, true);
+  await job("person-job", { id: "alice", type: "internal" }, false);
+  const unreadable = await job("unreadable-job", { id: "release-bot", type: "internal" }, true);
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  await raw.query("UPDATE runs SET request = $2 WHERE id = $1", [unreadable, '{"text":"\\u0000"}']);
+  await raw.end();
+  const claimed = (await registry.claimLiveBotJobs()).map((row) => row.id);
+  assert.deepEqual(claimed, ["bot-job"]);
+  assert.equal((await registry.get("bot-job"))?.botActor, "release-bot");
+  assert.equal((await registry.get("person-job"))?.botActor, undefined);
 });

@@ -189,6 +189,7 @@ export interface Resolution {
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
   guidance?: string;
+  soulScopeId?: ScopeId;
 }
 
 export type Permission = "read" | "write";
