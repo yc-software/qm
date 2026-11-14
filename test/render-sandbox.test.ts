@@ -572,8 +572,8 @@ test("Render disposes a new native checkpoint when its staging record write fail
 test("Render retains the provider reason when a native checkpoint fails", async (t) => {
   const { make, fake, store, scope } = setup(t);
   const create = fake.client.createSnapshot;
-  fake.client.createSnapshot = async (id, name) => {
-    const saved = fake.snapshots.get((await create(id, name)).id)!;
+  fake.client.createSnapshot = async (...args) => {
+    const saved = fake.snapshots.get((await create(...args)).id)!;
     saved.status = "failed";
     saved.error = "Provider: insufficient snapshot capacity";
     return { ...saved };
@@ -619,7 +619,7 @@ test("Render removes a destroyed scope at once and deletes a retired checkpoint 
   const handle = await sandbox.provision(scope);
   await sandbox.teardown(handle);
   const before = (await store.get(scope))!;
-  const stray = await fake.client.createSnapshot(before.sandboxId, "qm-stray");
+  const stray = await fake.client.createSnapshot(before.sandboxId, "qm-stray", "runtime");
   fake.snapshots.get(stray.id)!.status = "creating";
   await store.merge(scope, { retiredResources: [{ checkpoint: { ...stray, status: "creating" } }] });
   await assert.rejects(sandbox.destroyScope!(scope), /snapshot_creating/);
@@ -713,8 +713,8 @@ test("Render refuses a write that starts during its idle-stop checkpoint", async
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   const create = fake.client.createSnapshot;
   let late: Promise<unknown> | undefined;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     late ??= sandbox.writeFile(handle, "late", "refused").catch((error: unknown) => error);
     await late;
     return snapshot;
@@ -740,8 +740,8 @@ test("Render reports a write that finishes during a restart instead of losing it
     landed.resolve();
   });
   const create = fake.client.createSnapshot;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     gate.resolve();
     await landed.promise;
     return snapshot;
@@ -884,8 +884,8 @@ test("Render preserves a write that arrives during native snapshot capture", asy
   const captured = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const create = fake.client.createSnapshot;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     captured.resolve();
     await release.promise;
     return snapshot;
@@ -1299,8 +1299,8 @@ test("Render keeps process reads available during a background checkpoint", asyn
   const captured = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const create = fake.client.createSnapshot;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     captured.resolve();
     await release.promise;
     return snapshot;
@@ -1399,6 +1399,40 @@ test("Render restarts a computer from its checkpoint so the same turn keeps work
   assert.equal(restarted.stopped, undefined);
   assert.equal((await sandbox.run(handle, "cat restart-marker.txt")).stdout, "still here");
   assert.equal(computerVerdict(await sandbox.computerStatus!(scope)), "ok");
+});
+
+test("Render boots a computer fresh from a filesystem snapshot on restart and keeps runtime snapshots otherwise", async (t) => {
+  const { make, fake, store, scope } = setup(t, { http: true });
+  const sandbox = make(0);
+  const handle = await sandbox.provision(scope);
+  await sandbox.writeFile(handle, "kept", "before restart");
+  await sandbox.teardown(handle);
+  const saved = (await store.get(scope))!;
+  assert.equal(fake.snapshotSource(saved.checkpoint!.id)?.kind, "runtime");
+  await sandbox.restartComputer!(scope);
+  const restarted = (await store.get(scope))!;
+  assert.equal(fake.snapshotSource(restarted.checkpoint!.id)?.kind, "filesystem");
+  assert.equal(fake.createdFrom.at(-1), restarted.checkpoint!.id);
+  assert.equal(fake.sandboxes.get(saved.sandboxId)?.status, "terminated");
+  assert.equal(await sandbox.readFile(await sandbox.provision(scope), "kept"), "before restart");
+});
+
+test("Render restores a stopped computer and then boots it fresh on restart", async (t) => {
+  const { make, fake, store, scope } = setup(t, { http: true });
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  await sandbox.writeFile(handle, "kept", "before the stop");
+  await sandbox.teardown(handle);
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+  assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 1 });
+  const stopped = (await store.get(scope))!;
+  assert.equal(fake.snapshotSource(stopped.checkpoint!.id)?.kind, "runtime");
+  await sandbox.restartComputer!(scope);
+  const restarted = (await store.get(scope))!;
+  assert.equal(fake.snapshotSource(restarted.checkpoint!.id)?.kind, "filesystem");
+  assert.deepEqual(fake.createdFrom.slice(-2), [stopped.checkpoint!.id, restarted.checkpoint!.id]);
+  assert.equal(restarted.stopped, undefined);
+  assert.equal(await sandbox.readFile(await sandbox.provision(scope), "kept"), "before the stop");
 });
 
 test("Render reports a stopped computer that has a checkpoint as paused without probing it", async (t) => {

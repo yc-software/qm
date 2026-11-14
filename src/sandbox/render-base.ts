@@ -94,7 +94,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     const builder = await client.create({ image: imageId, lifetimeSec: BUILDER_LIFETIME_SEC });
     let progress: Progress = "failed";
     try {
-      const staged = await client.createSnapshot(builder.id, image.name);
+      const staged = await client.createSnapshot(builder.id, image.name, "runtime");
       await store.merge(image.digest, { snapshot: staged });
       progress = await finish(staged);
       return progress;
