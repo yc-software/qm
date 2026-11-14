@@ -164,7 +164,7 @@ export function createTurnMethods(
         return {
           status: "refused",
           reason:
-            "A bot can't act as a person. An org admin must delete the principal link that joins this bot to someone (docs/principal-links.md).",
+            "a bot can't act as a person; an org admin must delete the principal link that joins this bot to someone (docs/principal-links.md)",
         };
       if (!deps.identity.isInternal(actor)) {
         return {
