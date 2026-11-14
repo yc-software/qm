@@ -5,9 +5,19 @@ export interface SuggestedActivity {
   title: string;
   prompt: string;
   icon: string;
+  source?: string;
 }
 
-function validIcon(value: string): boolean {
+interface AppActivity extends SuggestedActivity {
+  replaces?: string;
+}
+
+export interface ActivitySeeds {
+  activities: SuggestedActivity[];
+  apps: Record<string, AppActivity[]>;
+}
+
+export function validIcon(value: string): boolean {
   if ([...activityIcons, "yc"].includes(value)) return true;
   return (
     value.length <= 32 &&

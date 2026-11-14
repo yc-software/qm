@@ -6,6 +6,7 @@ import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
 import { scopeId } from "../types.ts";
+import { personIds } from "../directory/person.ts";
 import type { Cron } from "../triggers/types.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate five suggested activities for the owner of this personal session's new-chat screen.
@@ -48,7 +49,7 @@ const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
   store: DurableMap<SuggestedActivityProfile>;
-  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get">;
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get" | "personHasAuthoredTurns">;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
   enabled: boolean;
@@ -61,7 +62,7 @@ export function createSuggestedActivityService(deps: {
 
   const managedPrefix = `${SUGGESTED_ACTIVITIES_TASK}\n\nDeployment guidance:\n`;
   const actionFor = (seeds: SuggestedActivity[], dismissed: DismissedActivity[] = []) =>
-    `${managedPrefix}${deps.context ?? "No special deployment context."}\n\nFallback seed activities:\n${JSON.stringify(seeds)}${
+    `${managedPrefix}${deps.context ?? "No special deployment context."}\n\nFallback seed activities:\n${JSON.stringify(seeds.map(({ id, title }) => ({ id, title })))}${
       dismissed.length
         ? `\n\nThe owner dismissed these suggestions. Do not suggest them or close variants again:\n${JSON.stringify(dismissed.map((entry) => entry.title))}`
         : ""
@@ -112,9 +113,14 @@ export function createSuggestedActivityService(deps: {
         refresh = false,
       }: { timezone?: string; poll?: boolean; refresh?: boolean } = {},
     ): Promise<SuggestedActivityResult> {
-      if (!deps.enabled) return { activities: seeds.slice(0, GENERATED_COUNT), pending: false };
+      const ungenerated = { activities: seeds.slice(0, GENERATED_COUNT), pending: false };
+      if (!deps.enabled) return ungenerated;
       new Intl.DateTimeFormat("en-US", { timeZone: timezone });
-      let profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
+      let profile = await deps.store.get(principalId);
+      if (!profile) {
+        if (!(await deps.sessions.personHasAuthoredTurns(personIds(principalId)))) return ungenerated;
+        profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
+      }
       const seen = poll ? {} : { lastSeenAt: now() };
       await deps.store.merge(principalId, { ...seen, seeds });
       profile = { ...profile, ...seen, seeds };

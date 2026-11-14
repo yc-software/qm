@@ -69,11 +69,29 @@ characters), `title` (up to 65 characters), `prompt` (up to 1,200 characters), a
 accepts up to 12 entries and 20,000 characters. Invalid configuration fails startup
 without printing its contents. Restart the web service after changing it.
 
+An organization can instead have its own starters, set with the org-scoped
+`activity-seeds` admin resource (`PUT /v1/admin/scopes/<org scope>/activity-seeds` with
+`{ "seeds": { "activities": [...], "apps": {...} } }`, or `{ "seeds": null }` to clear).
+Seeds reach only people the `company_welcome` feature flag covers (that person's
+personal scope or the whole organization); for them the organization's `activities`
+take the place of `WEB_UI_SUGGESTED_ACTIVITIES`, as the fallback and as the seeds the
+generator starts from. Each entry needs an `id` (up to 64 characters, the longest id a
+dismissal accepts), a `title`, a `prompt` and an `icon`; an organization activity may
+carry a `source` shown beside its title. The `apps` lists add activities once the
+signed-in person has connected that app themselves (a Composio toolkit id, or `slack`
+for their own linked Slack account); an app's activity may name the organization
+activity it `replaces`. Ids are unique across the whole document, and any other field
+is refused. A rejected write names the path and the rule it broke.
+
 The authenticated `/me` response supplies the configured fallback and whether generation is enabled.
 Fixed starters are organization-wide; keep them free of personal activity or credentials.
 
 When enabled, opening a new personal chat enrolls the user in an ordinary personal
-cron named **Refresh my suggested activities**. Its first run starts immediately;
+cron named **Refresh my suggested activities**, once they have sent QM a message under
+any of their linked ids, in any conversation. Being added to a channel or receiving a
+delivery does not count. Before that they see the fallback starters and nothing is
+generated. The cron receives
+each seed's id and title, not its prompt. Its first run starts immediately;
 subsequent runs happen around 2am in the browser's timezone, with the minute
 staggered by user. The cron runner uses the normal owner-scoped session, runtime
 selection, memory, history, tools, and authorized data access. It has no delivery
@@ -264,6 +282,8 @@ Gmail, Google Calendar, Google Drive, and Google Sheets artwork comes from
 (CC0) and is bundled locally with the existing connector SVG artwork.
 
 ## Cohort welcome and app picker
+
+A company with activity seeds gets a welcome built from them in a new user's empty chat: a greeting, the company's starters under "Where to start" (all of them, with any from apps the person has connected first), and the app picker under "Connect your accounts". Selecting a starter fills the composer without sending. `/onboard` opens that welcome in a new chat for anyone, including people who already have conversations.
 
 Set `WEB_UI_WELCOME_COHORT=F26` on the web surface to show the cohort welcome in a new user's empty chat. It replaces the automatic first agent turn for that deployment; ordinary chat starts when the user sends a message. The greeting uses the signed-in display name. The welcome remains above the messages in the earliest personal web conversation, including when reopened. It is selected from persisted session creation times. The champagne and soft flutter sequence replays on refresh only before the first message and respects reduced motion.
 

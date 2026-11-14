@@ -19,7 +19,7 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   icon: "🛠️",
 }));
 
-function fixture() {
+function fixture(used = true) {
   let time = Date.now();
   let output = JSON.stringify(activities);
   const store = testMap<SuggestedActivityProfile>();
@@ -51,7 +51,7 @@ function fixture() {
   });
   const deps = {
     store,
-    sessions,
+    sessions: used ? { ...sessions, personHasAuthoredTurns: async () => true } : sessions,
     crons,
     enabled: true,
     now: () => time,
@@ -102,6 +102,29 @@ test("normal personal cron produces durable suggestions without a notification d
   assert.deepEqual(await f.deliveries.pending("slack"), []);
   const restarted = createSuggestedActivityService(f.deps);
   assert.deepEqual(await restarted.get("alice", []), { activities, pending: false });
+});
+
+test("someone who has not sent QM a message gets the seeds and no generation job until they do", async () => {
+  const f = fixture(false);
+  const person = `newcomer-${Date.now()}`;
+  const dm = await f.sessions.getOrCreateByThread(`web:${person}:first`, "dm", scopeId("personal", person));
+  await f.sessions.append({ sessionId: dm.id }, { kind: "AgentMessage", text: "A delivery for you" });
+  assert.deepEqual(await f.service.get(person, activities), { activities, pending: false });
+  assert.deepEqual(await f.crons.list(), []);
+  assert.equal(await f.store.get(person), null);
+  await f.sessions.append({ sessionId: dm.id }, { kind: "UserMessage", text: "hi", author: person });
+  assert.equal((await f.service.get(person, activities)).pending, true);
+  await f.settle();
+  const cron = (await f.crons.list())[0]!;
+  assert.equal(cron.owner, person);
+  assert.ok(cron.action!.includes('[{"id":"app","title":"Build my app"}'));
+  assert.ok(!cron.action!.includes("Help me with this project."));
+  const speaker = `speaker-${Date.now()}`;
+  const channel = await f.sessions.getOrCreateByThread(`slack:C1:${speaker}`, "channel", scopeId("channel", "C1"));
+  await f.sessions.addParticipant(channel.id, speaker);
+  assert.equal((await f.service.get(speaker, activities)).pending, false);
+  await f.sessions.append({ sessionId: channel.id }, { kind: "UserMessage", text: "hey", author: speaker });
+  assert.equal((await f.service.get(speaker, activities)).pending, true);
 });
 
 test("concurrent enrollment shares one cron and one first run", async () => {

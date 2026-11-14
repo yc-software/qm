@@ -1,4 +1,4 @@
-import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+import type { ActivitySeeds, SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
 export type AuthMode = "portal" | "dev";
 
@@ -8,6 +8,7 @@ export interface Me {
   companyName?: string | null;
   workspace?: string | null;
   welcomeCohort?: string;
+  welcome?: ActivitySeeds;
   suggestedActivities?: SuggestedActivity[];
   suggestedActivitiesGeneration?: boolean;
   individualModelAuth?: boolean;
@@ -62,3 +63,5 @@ export function canView(view: View): boolean {
   if (view === "inbox" || view === "calendar") return can("inbox");
   return true;
 }
+
+export const hasWelcomeScreen = (me: Me | null | undefined): boolean => Boolean(me?.welcomeCohort || me?.welcome);
