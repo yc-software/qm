@@ -25,6 +25,30 @@ final class NativeConversationSidebarTests: XCTestCase {
       sections.map { $0.conversations.map(\.id) }, [["pinned"], ["first", "second"], ["personal"]])
   }
 
+  func testProjectSectionsUseTheIconPickedOnWeb() throws {
+    let json = """
+      {"contexts": [
+        {"scopeId": "group:a", "kind": "group", "sessionCount": 1, "project": {"id": "a",
+         "name": "Launch", "ownerId": "o", "memberIds": [], "scopeId": "group:a", "members": [],
+         "icon": {"kind": "emoji", "value": "🚀"}}},
+        {"scopeId": "group:b", "kind": "group", "sessionCount": 1, "project": {"id": "b",
+         "name": "Party", "ownerId": "o", "memberIds": [], "scopeId": "group:b", "members": [],
+         "icon": {"kind": "custom", "name": "partyparrot"}}},
+        {"scopeId": "group:c", "kind": "group", "sessionCount": 1, "project": {"id": "c",
+         "name": "Plain", "ownerId": "o", "memberIds": [], "scopeId": "group:c", "members": [],
+         "icon": {"kind": "sticker", "value": "x"}}}
+      ]}
+      """
+    let contexts = try JSONDecoder().decode(WorkspaceContexts.self, from: Data(json.utf8))
+      .contexts
+    let sections = NativeConversationSection.grouped(
+      ["a", "b", "c"].map { Conversation(id: $0, scopeId: "group:\($0)", threadRef: "web:\($0)") },
+      contexts: Dictionary(uniqueKeysWithValues: contexts.map { ($0.scopeId, $0) }))
+    XCTAssertEqual(sections.map { $0.projectIcon?.value }, ["🚀", nil, nil])
+    XCTAssertEqual(sections.map { $0.projectIcon?.name }, [nil, "partyparrot", nil])
+    XCTAssertEqual(sections.map(\.icon), ["folder", "folder", "folder"])
+  }
+
   func testConversationsRemainAccessibleWhenContextMetadataIsUnavailable() {
     let conversations = [
       Conversation(

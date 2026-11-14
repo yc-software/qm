@@ -3,6 +3,7 @@ import SwiftUI
 extension EnvironmentValues {
   @Entry var qmIdentity: Identity? = nil
   @Entry var qmSessionID: String? = nil
+  @Entry var qmCustomEmoji: [String: URL] = [:]
 }
 
 @main
@@ -179,6 +180,7 @@ struct RootView: View {
       }
     }
     .environment(\.qmIdentity, model.identity)
+    .environment(\.qmCustomEmoji, model.customEmoji)
     .environment(model)
     .alert(
       "Rename conversation",

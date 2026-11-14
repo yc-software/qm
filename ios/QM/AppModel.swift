@@ -18,6 +18,8 @@ final class AppModel {
   var identity: Identity?
   var conversations: [Conversation] = []
   var contexts: [WorkspaceContext] = []
+  var customEmoji: [String: URL] = [:]
+  private var customEmojiLoad: Task<Void, Never>?
   private var contextsLoaded = false
   var error: String?
   var loading = false
@@ -209,6 +211,9 @@ final class AppModel {
         }
         contexts = result.contexts
         contextsLoaded = true
+        if customEmojiLoad == nil, contexts.contains(where: { $0.projectIcon?.kind == "custom" }) {
+          customEmojiLoad = Task { await loadCustomEmoji(client) }
+        }
       }
       error = nil
       let left = leftThreads
@@ -426,7 +431,23 @@ final class AppModel {
     leftThreads = []
     contexts = []
     contextsLoaded = false
+    customEmojiLoad?.cancel()
+    customEmojiLoad = nil
+    customEmoji = [:]
     hasLoadedConversations = false
     updatingConversationIDs = []
+  }
+
+  private func loadCustomEmoji(_ client: APIClient) async {
+    struct Catalog: Decodable { let emoji: [String: String]? }
+    do {
+      let catalog: Catalog = try await client.fetch("api/custom-emoji")
+      guard self.client === client else { return }
+      customEmoji = (catalog.emoji ?? [:]).compactMapValues(URL.init(string:))
+    } catch {
+      Log.background.failure("Loading custom emoji", error)
+      // Let the next contexts load try again.
+      if self.client === client { customEmojiLoad = nil }
+    }
   }
 }
