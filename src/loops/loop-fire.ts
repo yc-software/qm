@@ -357,6 +357,12 @@ function notDone(stage: string, outcome: TriggerOutcome): { error: Error; userMe
   return { error: new Error(`${stage}: not done — ${reason}`), userMessage: reason };
 }
 
+function clearlyNotDone(outcome: TriggerOutcome): boolean {
+  if (!outcome.ran || outcome.heldForApproval) return true;
+  if (outcome.status === "refused" || outcome.status === "pending_approval") return true;
+  return liftBlock(outcome.reply ?? "", "done").record?.done === false;
+}
+
 const REPLY_EXCERPT_MAX = 400;
 
 const THREAD_MESSAGE_MAX = 4000;
@@ -926,6 +932,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         return deps.outputs.markUnconfirmed(outputId, claimToken);
       }
       const undelivered = stageFailure("ship", outcome) ?? notDone("ship", outcome);
+      if (undelivered && !clearlyNotDone(outcome)) return deps.outputs.markUnconfirmed(outputId, claimToken);
       if (undelivered) {
         await deps.outputs.failShipping(outputId, claimToken);
         throw undelivered.error;

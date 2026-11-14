@@ -266,9 +266,6 @@ test("a ship, an item action or a work turn counts only when the agent reports i
   await s.fire.fire(loop.id, "f1");
   const [held] = await s.outputs.awaitingReview(loop.id);
   const declines = [
-    { status: "ok", reply: "I could not send it." },
-    { status: "ok", reply: "" },
-    { status: "silent" },
     { status: "ok", reply: '{"done": false, "reason": "no destination"}' },
     { status: "ok", reply: '{"done": true}', pendingApprovals: [{}] },
   ] as TurnResult[];
@@ -284,7 +281,7 @@ test("a ship, an item action or a work turn counts only when the agent reports i
   } as never;
   assert.equal((await s.fire.shipOutput(loop.id, held!.id, "josh"))?.state, "shipped");
   next = undefined;
-  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 6);
+  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 3);
 
   const other = await makeLoop(s.loops, { name: "Second" });
   await s.fire.fire(other.id, "f2");
@@ -303,6 +300,26 @@ test("a ship, an item action or a work turn counts only when the agent reports i
   const fired = await s.fire.fire(third.id, "f3");
   assert.deepEqual(fired.summary?.shipped, []);
   assert.match(fired.summary?.failures[0] ?? "", /no readable outputs block/);
+});
+
+test("a ship turn that may have acted without reporting done is left unconfirmed, so no second turn runs", async () => {
+  let next: TurnResult | undefined;
+  const s = service(HAPPY, { dynamicResult: () => next });
+  const uncertain = [
+    { status: "failed", reply: "Sent the email, then the API timed out." },
+    { status: "ok", reply: "I could not send it." },
+    { status: "silent" },
+  ] as TurnResult[];
+  for (const [i, result] of uncertain.entries()) {
+    const loop = await makeLoop(s.loops, { name: `Loop ${i}` });
+    next = undefined;
+    await s.fire.fire(loop.id, `f${i}`);
+    const [output] = await s.outputs.awaitingReview(loop.id);
+    next = result;
+    assert.equal((await s.fire.shipOutput(loop.id, output!.id, "josh"))?.state, "unconfirmed");
+    assert.equal((await s.fire.shipOutput(loop.id, output!.id, "josh"))?.state, "shipped");
+  }
+  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, uncertain.length);
 });
 
 test("returning one output supersedes active siblings before requeueing the item", async () => {
