@@ -92,15 +92,13 @@ test(
 
 test("pg delivery store: one target's same-millisecond rows are claimed in creation order", { skip }, async (t) => {
   const store = createPostgresDeliveryStore(URL!);
+  const enqueue = (i: number, text: string) =>
+    store.enqueue({ destination: { type: "webhook", target: `tie-${i}` }, text, idempotencyKey: `tie-${i}-${text}` });
+  for (let i = 0; i < 20; i += 2) await enqueue(i, "second");
+  await createPostgresDeliveryStore(URL!, { maxAgeMs: 0 }).claimDue("webhook", 60_000);
   const now = Date.now();
   t.mock.method(Date, "now", () => now);
-  for (let i = 0; i < 20; i++)
-    for (const text of ["first", "second"])
-      await store.enqueue({
-        destination: { type: "webhook", target: `tie-${i}` },
-        text,
-        idempotencyKey: `tie-${i}-${text}`,
-      });
+  for (let i = 0; i < 20; i++) for (const text of ["first", "second"]) await enqueue(i, text);
   t.mock.restoreAll();
   const sent = new Map<string, string[]>();
   for (let rows; (rows = await store.claimDue("webhook", 60_000)).length;)

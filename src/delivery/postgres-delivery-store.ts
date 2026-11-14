@@ -213,6 +213,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                attachments = EXCLUDED.attachments,
                provenance = EXCLUDED.provenance,
                created_at = EXCLUDED.created_at,
+               seq = DEFAULT,
                shadow = EXCLUDED.shadow,
                expired_at = NULL,
                claim_expires_at = NULL
