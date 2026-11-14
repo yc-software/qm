@@ -132,6 +132,14 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         ),
       ],
     },
+    {
+      id: "processes/registry/0008-bot-limited-runs",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `DO $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN ALTER TABLE runs ADD COLUMN IF NOT EXISTS bot_limited BOOLEAN NOT NULL DEFAULT false; END IF; END $$`,
+        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN r.bot_limited OR r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND pg_input_is_valid(r.request, 'jsonb')${servingTenant("p.tenant_id")}; END IF; END $$`,
+      ],
+    },
   ]);
 
   const migration = {
