@@ -559,7 +559,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (
         storedSession &&
         !(swarmBinding && swarmBinding.rootSessionId !== storedSession.id) &&
-        !ownsSessionContext(conversation.threadRef, input) &&
+        !(ownsSessionContext(conversation.threadRef, input) && input.origin.kind !== "automation") &&
         (await hiddenFromBotWork(tenant, input, storedSession, deps))
       ) {
         console.error(
