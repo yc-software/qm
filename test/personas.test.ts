@@ -199,7 +199,7 @@ test("skills written into a persona show for everyone with a role on it, and nob
   });
   assert.equal(skill?.scopeId, scopeId("persona", ada.id));
   const sees = async (who: string) =>
-    (await built.app.listVisibleSkills(who)).some((row) => row.skill?.id === skill!.id);
+    (await built.app.listVisibleSkills(who, false)).some((row) => row.skill?.id === skill!.id);
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);

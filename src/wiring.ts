@@ -357,7 +357,7 @@ import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sw
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import { createSessionWork } from "./sessions/session-work.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
-import { createJobComputerSweep } from "./processes/job-computers.ts";
+import { claimBarredBotJobs, createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine } from "./skills/skill-sync-engine.ts";
@@ -1669,7 +1669,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          ...(processes ? { processes, sweepProcesses: () => processReaper!.sweepNow() } : {}),
+          ...(processes ? { sweepProcesses: () => processReaper!.sweepNow() } : {}),
           authorize: async (claims) => {
             await identity.refresh();
             return (
@@ -2925,7 +2925,7 @@ export function buildApp(
         ...(supportsProcessSessions(sandbox)
           ? {
               kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
-              claimOwed: swarms?.claimOwedStops,
+              claimOwed: () => claimBarredBotJobs({ processes: processes!, resources: sandboxResources, swarms }),
               afterSweep: createJobComputerSweep({
                 resources: sandboxResources,
                 sandbox,

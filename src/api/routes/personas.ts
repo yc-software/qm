@@ -5,6 +5,7 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -56,7 +57,7 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
     result.value.access.map(async (grant) => ({ ...grant, label: await granteeLabel(ctx, grant.scopeId) })),
   );
   const home = `persona:${result.value.id}`;
-  const skills = (await ctx.app.listVisibleSkills(principalId))
+  const skills = (await ctx.app.listVisibleSkills(principalId, isOwnScopeBotWork(ctx.capability)))
     .flatMap((row) => (row.skill?.scopeId === home ? [row.skill] : []))
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));

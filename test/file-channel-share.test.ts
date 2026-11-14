@@ -97,7 +97,7 @@ test("a file delivered in a PUBLIC channel is auto-shared (read) with the org â€
   const u2 = await app.listFilesForViewer(tenant, "U2");
   assert.equal(u2.owned.length, 0, "U2 doesn't own it");
   assert.equal(u2.shared.length, 1, "the org read grant surfaces it to U2");
-  const opened = await app.openFileForViewer(tenant, u2.shared[0]!.id, "U2");
+  const opened = await app.openFileForViewer(tenant, u2.shared[0]!.id, "U2", false);
   assert.ok(opened, "the org grant authorizes the bytes");
 });
 
