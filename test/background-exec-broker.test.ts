@@ -291,13 +291,14 @@ test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (inva
 });
 
 test("reattach by FULL command key: a second start of the same command reattaches to ONE process", async () => {
-  const { broker, registry, starts } = build();
+  const { broker, registry, starts, sandbox } = build();
   const first = await broker.start(handle, "npm test", "Run background tests");
   const second = await broker.start(handle, "npm test", "Run background tests");
   assert.equal(starts.length, 1, "no second startProcess");
-  assert.equal(second.processId, first.processId);
-  assert.equal(second.reattached, true);
+  assert.deepEqual([second.processId, second.reattached], [first.processId, true]);
   assert.equal((await registry.listByScope(SCOPE)).filter((r) => r.kind === "background").length, 1);
+  const refused = { sandbox, registry, scopeId: SCOPE, assertComputerUsable: () => Promise.reject(new Error("no")) };
+  await assert.rejects(createBackgroundBroker(refused).start(handle, "npm test", "Run background tests"), /no/);
 });
 
 test("start does NOT reattach to a matching command whose process has already exited", async () => {
