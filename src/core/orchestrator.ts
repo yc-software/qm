@@ -558,9 +558,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input = { ...input, botActor: true };
       if (
         storedSession &&
-        !swarmBinding &&
+        !(swarmBinding && swarmBinding.rootSessionId !== storedSession.id) &&
         !ownsSessionContext(conversation.threadRef, input) &&
-        !sessionVisibleTo(input, storedSession)
+        !sessionVisibleTo(input, storedSession) &&
+        !(await forkOfBotWork(tenant, storedSession, deps))
       ) {
         console.error(
           `[orchestrator] turn.silent (bot-flagged turn in a conversation hidden from bot work) thread=${conversation.threadRef}`,

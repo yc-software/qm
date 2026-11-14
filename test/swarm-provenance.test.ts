@@ -49,7 +49,7 @@ test("a swarm worker started by a Slack bot's turn keeps the bot marker and bind
   await assert.rejects(f.service.binding(unmarked), /forged swarm provenance/);
 });
 
-test("a turn doing a bot's work starts a swarm whose workers do the bot's work", async () => {
+test("a turn doing a bot's work starts a swarm whose workers do the bot's work and mail a hidden root", async () => {
   const f = await swarmFixture({ claims: { botActor: true } });
   const runId = f.caller.kind === "agent" ? f.caller.claims.runId! : "";
   await f.runs.markBotLimited(testTenant, runId);
@@ -59,6 +59,11 @@ test("a turn doing a bot's work starts a swarm whose workers do the bot's work",
   await service.sweep();
   const caller = await f.workerCaller(worker!.id);
   assert.equal(caller.kind === "agent" && caller.claims.botActor, true);
+  await service.send(caller, { requestId: "report", audience: [f.root.id], text: "done" });
+  await service.sweep();
+  assert.deepEqual((await f.store.get(f.root.id))!.messages.at(-1)!.notifications, {
+    [f.root.id]: { state: "mailbox" },
+  });
   await service.notePersonUse({ swarmId: f.root.id });
   assert.ok(aborted.includes(runId), "a person's use of the swarm's computers stops the turn that started it");
 });
