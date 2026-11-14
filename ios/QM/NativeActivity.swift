@@ -618,6 +618,7 @@ struct NativeTimelineActivityGroup: View {
   var reasoningText: (RunReasoning) -> String = { $0.text }
   var onShowAgents: (() -> Void)? = nil
   var onInspect: () -> Void = {}
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var expanded: Binding<Bool> {
     disclosure.binding(
       for: section.id, initiallyExpanded: section.workState == .approval, onInspect: onInspect)
@@ -698,7 +699,9 @@ struct NativeTimelineActivityGroup: View {
     let binding = disclosure.binding(for: "reasoning:\(id)", onInspect: onInspect)
     return VStack(alignment: .leading, spacing: 0) {
       Button {
-        binding.wrappedValue.toggle()
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+          binding.wrappedValue.toggle()
+        }
       } label: {
         HStack(spacing: 6) {
           Image("Activity-brain").resizable().renderingMode(.template).scaledToFit()
@@ -719,8 +722,10 @@ struct NativeTimelineActivityGroup: View {
         .padding(.leading, 10)
         .overlay(alignment: .leading) { Rectangle().fill(QMTheme.border).frame(width: 2) }
         .padding(.leading, 21).padding(.bottom, 8)
+        .transition(.opacity.combined(with: .offset(y: -4)))
       }
     }
+    .clipped()
     .foregroundStyle(QMTheme.ink.opacity(0.6))
   }
 }
