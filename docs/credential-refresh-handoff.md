@@ -25,8 +25,20 @@ conversation shares that computer through an environment.
 
 `src/credentials/execute-files.ts` stages requested bundles in a private
 `/tmp/qm-credentials.<random>/home`, points the CLI at it, captures changed files after the
-command and writes them back with `keychain.updateFiles`, which rejects stale writes. Only
-the owner's executions write back; a grant uses the saved files as they are. Each execution
+command and writes them back with `keychain.updateFiles`, which rejects stale writes. Only the
+owner's executions write back; a grant uses the saved files as they are. The owner's live turn
+writes back everything: a turn the owner's own message started in an all-internal conversation,
+meaning a DM or a room whose turn carries a member list in which everyone is internal (a live
+ambient wake included), a subagent delegated from one, the turn that resumes when that subagent
+reports back, a conversation such a turn starts or forks, and a background job any of these
+started. Every other run writes back only a token refresh: a file the saved login already holds
+in `.aws/sso/cache/` in which only `accessToken`, `expiresAt` and `refreshToken` changed. That
+covers cron, loop, watch and webhook fires, swarm workers (a swarm a live turn started
+included), resumes after a credential request or secret drop, reaction turns, messages between
+sessions, bot-marked and impersonated turns, the owner's own messages in a room whose turns
+carry no member list (a web shared channel or group that isn't a project, and a partner-chat
+group chat), and the jobs they start. Anything else such a run changed keeps the stored version;
+the core log names each path and why, and a foreground command's stderr says so. Each execution
 removes its own directory in `finally`.
 
 Background jobs accept the same `credentials` handles. The staging plan, credential ids,
@@ -49,3 +61,5 @@ remove each other's files.
   Another process running as the same user during the command can read it.
 - No proactive refresh for idle AWS sessions; the CLI refreshes only when a command runs.
 - Refreshes made through a grant are not saved.
+- An unattended refresh of a CLI that rotates its refresh token outside the declared token
+  caches is not saved, so the next use asks the owner to sign in again.
