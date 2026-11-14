@@ -513,8 +513,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
              UPDATE user_links l SET user_id = c.id, evidence = 'primary', linked_by = NULL
                FROM moving m JOIN created c ON c.primary_alias = m.alias_id
               WHERE l.alias_id = m.alias_id
-             RETURNING m.user_id AS from_user, c.id AS to_user, m.alias_id, m.evidence,
-                       (SELECT b.primary_alias FROM users b WHERE b.id = m.linked_by) AS linked_by`,
+             RETURNING m.user_id AS from_user, c.id AS to_user, m.alias_id, m.evidence, m.linked_by`,
             [[...bots]],
           )
         ).rows;

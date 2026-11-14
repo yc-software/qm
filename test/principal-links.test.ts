@@ -630,7 +630,11 @@ describe("directory sync and bot sign-ins", () => {
         "system:directory-sync",
         person.id,
         "users",
-        { movedSignIns: [{ alias: "U0BOT", userId: bot.id, evidence: EVIDENCE, linkedBy: "admin-alice" }] },
+        {
+          movedSignIns: [
+            { alias: "U0BOT", userId: bot.id, evidence: EVIDENCE, linkedBy: (await app.users.get("admin-alice"))?.id },
+          ],
+        },
       ],
     );
     assert.deepEqual(
