@@ -155,6 +155,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
     },
 
+    async forkOrigin(tenant, sessionId): Promise<Session | null> {
+      const rows = await db.forTenant(tenant).q(
+        `WITH RECURSIVE chain(id, source_id) AS (
+           SELECT id, forked_from_session_id FROM sessions WHERE tenant_id = $1 AND id = $2
+           UNION
+           SELECT s.id, s.forked_from_session_id FROM chain c JOIN sessions s ON s.tenant_id = $1 AND s.id = c.source_id
+         )
+         SELECT s.* FROM chain c JOIN sessions s ON s.tenant_id = $1 AND s.id = c.id
+          WHERE NOT EXISTS (SELECT 1 FROM chain source WHERE source.id = c.source_id)`,
+        [tenant.id, sessionId],
+      );
+      return rows[0] ? rowToSession(rows[0]) : null;
+    },
+
     async expandSideChat(sessionId) {
       await q(
         "UPDATE sessions SET side_chat = jsonb_set(side_chat, '{expanded}', 'true') WHERE id = $1 AND side_chat IS NOT NULL",
