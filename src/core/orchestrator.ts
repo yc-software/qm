@@ -731,14 +731,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
         const heldReason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
-        if (noApprover)
-          return unavailableApprovalRefusal(audit, session.id, "security-screen", heldReason, botRequester);
-        let approval: PendingApproval;
         try {
-          approval = await withManagedRosterVersion(async () => {
+          return await withManagedRosterVersion(async (): Promise<TurnResult> => {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
-            return issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
+            if (noApprover)
+              return unavailableApprovalRefusal(audit, session.id, "security-screen", heldReason, botRequester);
+            const approval = await issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
               reason: heldReason,
@@ -748,12 +747,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
               ...(flaggedScreenedInput.onceOnly ? { grantModes: { session: false, always: false } } : {}),
             });
+            return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
           });
         } catch (err) {
           if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
           throw err;
         }
-        return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
