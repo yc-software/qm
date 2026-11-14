@@ -8,6 +8,11 @@ import { createPostgresRunStore, type PostgresRuntime } from "../src/runs/postgr
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/persistence/durable-map.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
+import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createTenantSlackRuntimes } from "../src/surfaces/slack-tenants.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -58,6 +63,7 @@ test("background claims skip work owned by a tenant that is not serving", { skip
       await runtime.runs.enqueue({ sessionId: `thread:${tenant}`, request: turn(`thread:${tenant}`) });
       await deliveries.enqueue({ destination: { type: "slack", target: tenant }, text: "hi", idempotencyKey: tenant });
       await probes.put(tenant, { n: 1 });
+      await maps.map("slack_installation").put(tenant, { teamId: tenant });
     });
 
   const claimed = (await runtime.runs.claim("worker", 60_000, 10)).map((run) => run.sessionId);
@@ -78,6 +84,43 @@ test("background claims skip work owned by a tenant that is not serving", { skip
   await owner.query("UPDATE process_sessions SET bot_actor = 'bot'");
   const botJobTenants = (await processes.claimLiveBotJobs()).map((row) => row.tenantId);
   assert.deepEqual(botJobTenants, [serving]);
+  const tenantsOf = (rows: { tenantId: string }[]) => rows.map((row) => row.tenantId);
+  assert.deepEqual(tenantsOf(await processes.claimExpired(Date.now() + 2e9)), [serving]);
+
+  const uploads = createPostgresFileUploadStore(url);
+  const vectors = createPostgresVectorStore(url);
+  const signals = createPostgresRunSignalStore(url);
+  await Promise.all([uploads.claimExpired(0), vectors.claimTenants(), signals.pendingRuns()]);
+  const both = "FROM tenants WHERE id IN ($1, $2)";
+  await owner.query(
+    `INSERT INTO file_uploads(tenant_id, id, actor_id, state, size_bytes, expires_at, data) SELECT id, id, 'a', 'pending', 1, 0, '{}' ${both}`,
+    [serving, parked],
+  );
+  await owner.query(
+    `INSERT INTO memory_facts(tenant_id, scope_id, text, sensitivity, source_unknown, created_at, updated_at) SELECT id, 's', 'f', 'internal', false, 0, 0 ${both}`,
+    [serving, parked],
+  );
+  await owner.query(`INSERT INTO run_signals(tenant_id, run_id, kind, created_at) SELECT id, id, 'steer', 0 ${both}`, [
+    serving,
+    parked,
+  ]);
+  assert.deepEqual(tenantsOf(await uploads.claimExpired(Date.now())), [serving]);
+  assert.deepEqual(tenantsOf(await vectors.claimTenants()), [serving]);
+  assert.deepEqual(tenantsOf(await signals.pendingRuns()), [serving]);
+
+  const discovered: string[] = [];
+  const sessions = createPostgresSessionStore(url);
+  const discovery = createTenantSlackRuntimes({
+    runtimeFor: (tenant) => {
+      discovered.push(tenant);
+      return { start: () => undefined, reconcile: async () => undefined, stop: async () => undefined };
+    },
+    tenants: () => sessions.tenantLookup.slackTenants(),
+    onError: (error) => assert.ifError(error),
+  });
+  discovery.start();
+  await discovery.stop();
+  assert.deepEqual(discovered, [serving]);
 });
 
 test("the reaper leaves an expired lease of a tenant that is not serving alone", { skip }, async () => {

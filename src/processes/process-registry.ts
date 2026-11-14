@@ -132,6 +132,17 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         ),
       ],
     },
+    {
+      id: "processes/registry/0008-serving-claim-expired",
+      statements: [
+        claimFunction(
+          "claim_expired_process_sessions",
+          "bigint",
+          `SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at <= $1${servingTenant("tenant_id")}
+             ORDER BY expires_at, process_id`,
+        ),
+      ],
+    },
   ]);
 
   const migration = {
