@@ -99,6 +99,7 @@ export interface SandboxResources {
   retire(actorId: string, id: string): Promise<void>;
   notePersonUse(id: string): Promise<SandboxResource>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
+  cleanUp(id: string, action: () => Promise<void>, exclusive?: boolean): Promise<void>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
   load(id: string): Promise<LoadSample | null>;
@@ -240,14 +241,19 @@ export function createSandboxResources(opts: {
       throw error;
     }
   };
-  const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
-    const guarded = async (): Promise<T> => {
-      const current = await get(id);
-      if (current.state === "retired") throw new Error("sandbox has been retired");
+  const locked = <T>(id: string, exclusive: boolean, action: () => Promise<T>): Promise<T> =>
+    exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, action) : action();
+  const use = <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> =>
+    locked(id, exclusive, async () => {
+      if ((await get(id)).state === "retired") throw new Error("sandbox has been retired");
       return action();
-    };
-    return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
-  };
+    });
+  const cleanUp = (id: string, action: () => Promise<void>, exclusive = false): Promise<void> =>
+    locked(id, exclusive, async () => {
+      await initialize();
+      const current = await opts.records.get(id);
+      if (current && current.state !== "retired") await action();
+    });
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
       .filter(([, backend]) => !!backend)
@@ -281,6 +287,7 @@ export function createSandboxResources(opts: {
     use,
     recordLoad: (id, sample) => opts.loads.put(id, sample),
     load: (id) => opts.loads.get(id),
+    cleanUp,
     async hold(id, runId) {
       await opts.records.update(id, (current) =>
         current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },

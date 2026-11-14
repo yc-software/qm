@@ -102,6 +102,7 @@ function stubResources(defaults: Record<string, SandboxResource | null>, extra: 
         held--;
       }
     },
+    cleanUp: (id: string, action: () => Promise<void>, exclusive = false) => stub.use(id, action, exclusive),
   };
   return stub as typeof stub & SandboxResources;
 }
