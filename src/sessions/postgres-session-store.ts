@@ -93,8 +93,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           s.surfaceBinding = facts.surfaceBinding;
         }
         if (facts?.context && canonicalJson(s.spawnMeta) !== canonicalJson(facts.context)) {
-          await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [s.id, JSON.stringify(facts.context)]);
+          const [healed] = await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1 RETURNING bot_work", [
+            s.id,
+            JSON.stringify(facts.context),
+          ]);
           s.spawnMeta = facts.context;
+          if (healed?.bot_work === true) s.botWork = true;
+          else delete s.botWork;
         }
         return s;
       };

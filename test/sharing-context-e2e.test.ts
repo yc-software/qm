@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { credentialHandle } from "../src/credentials/keychain.ts";
-import { sessionVisibleTo } from "../src/sessions/session-syscalls.ts";
+import { sessionVisibleTo } from "../src/sessions/session-rows.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";

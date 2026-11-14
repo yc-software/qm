@@ -4,7 +4,7 @@ import type { SessionStore } from "./session-store.ts";
 import { xmlEscape } from "../util/message-tag.ts";
 import { snippet } from "../util/text.ts";
 import { mailOf, pendingWork } from "./subagent-mail.ts";
-import { sessionVisibleTo } from "./session-syscalls.ts";
+import { sessionVisibleTo } from "./session-rows.ts";
 
 type RunState = "running" | "pending" | "idle";
 

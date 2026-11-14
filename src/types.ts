@@ -159,6 +159,7 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  botWork?: true;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   personaId?: string;
