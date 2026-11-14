@@ -25,6 +25,7 @@ import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { TENANT } from "./items.ts";
 import {
   GENERIC_CHAT_TENANT,
+  SERVING_SLACK_TENANTS,
   SLACK_TENANTS,
   SLACK_BRIDGE_TENANT,
   TENANT_LOOKUPS,
@@ -69,6 +70,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     SLACK_TENANTS,
     SLACK_BRIDGE_TENANT,
     GENERIC_CHAT_TENANT,
+    SERVING_SLACK_TENANTS,
   ]);
   const { pool, q } = db;
 
