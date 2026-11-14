@@ -161,9 +161,9 @@ export async function forkOfBotWork(
   session: Pick<Session, "id" | "forkedFrom"> | null,
   deps: { sessions: Pick<SessionStore, "forkOrigin">; swarms?: Pick<SwarmService, "botStartedWorker"> },
 ): Promise<boolean> {
-  const origin = session?.forkedFrom ? await deps.sessions.forkOrigin(tenant, session.id) : null;
-  if (!origin) return false;
-  if (origin.forkedFrom) return true;
+  if (!session?.forkedFrom) return false;
+  const origin = await deps.sessions.forkOrigin(tenant, session.id);
+  if (!origin || origin.forkedFrom) return true;
   if (isSubagentThreadRef(origin.threadRef)) return origin.spawnMeta?.botActor === true;
   if (!origin.threadRef.startsWith("swarm:")) return false;
   return !deps.swarms || (await deps.swarms.botStartedWorker(origin));

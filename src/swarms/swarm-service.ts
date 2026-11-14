@@ -406,7 +406,7 @@ export function createSwarmService(deps: {
       text: "",
       ...(source.scopeVersion ? { scopeVersion: source.scopeVersion } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
-      ...(source.botActor ? { botActor: true } : {}),
+      ...(source.botActor || (caller.kind === "agent" && caller.claims.botActor) ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
       ...(source.memoryNotebookOnly ||
       session.spawnMeta?.memoryNotebookOnly ||

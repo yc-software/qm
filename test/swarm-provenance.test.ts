@@ -49,6 +49,14 @@ test("a swarm worker started by a Slack bot's turn keeps the bot marker and bind
   await assert.rejects(f.service.binding(unmarked), /forged swarm provenance/);
 });
 
+test("a turn doing a bot's work starts a swarm whose workers do the bot's work", async () => {
+  const f = await swarmFixture({ claims: { botActor: true } });
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
+  await f.service.sweep();
+  const caller = await f.workerCaller(worker!.id);
+  assert.equal(caller.kind === "agent" && caller.claims.botActor, true);
+});
+
 test("a fork of a worker in a swarm a Slack bot started does the bot's work", async () => {
   for (const botActor of [true, false]) {
     const f = await dispatch(botActor ? { runtime: { botActor } } : {});
