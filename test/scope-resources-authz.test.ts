@@ -6,7 +6,7 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
@@ -64,8 +64,8 @@ function makeDeps() {
     participantScopes: async (_p: string) => [],
   };
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const deployRows: Deployment[] = [];
-  const deploy = { listDeployments: async () => deployRows };
+  const deployRows: PublishedApp[] = [];
+  const deploy = { listApps: async () => deployRows };
   return { files, crons, webhooks, acl, identity, directory, sessions, skills, deploy, deployRows };
 }
 
@@ -178,7 +178,7 @@ async function setup(): Promise<{ app: App; deps: ReturnType<typeof makeDeps> }>
   return { app: createApp(deps as unknown as AppDeps), deps };
 }
 
-test("a member sees a channel's files (incl. personally-owned deliverables), webhooks, crons, deployments and skills", async () => {
+test("a member sees a channel's files (incl. personally-owned deliverables), webhooks, crons, apps and skills", async () => {
   const { app } = await setup();
   const out = await app.listScopeResources(tenant, U1, channelScope);
   assert.ok(out, "U1 is a member of C1");
@@ -191,10 +191,10 @@ test("a member sees a channel's files (incl. personally-owned deliverables), web
   assert.equal(out!.webhooks.length, 1);
   assert.equal(out!.webhooks[0]!.action, "triage");
   assert.deepEqual(
-    out!.deployments.map((d) => d.name),
+    out!.apps.map((d) => d.name),
     ["C1 dashboard"],
   );
-  assert.equal(out!.deployments[0]!.permission, "write");
+  assert.equal(out!.apps[0]!.permission, "write");
   assert.deepEqual(
     out!.skills.map((s) => s.name),
     ["triage"],
@@ -259,7 +259,7 @@ test("historical participation grants neither context listing nor current scope 
   assert.ok(!(await app.listContexts("U2")).some((context) => context.scopeId === channelScope));
   assert.equal(await app.listScopeResources(tenant, "U2", channelScope), null);
   assert.equal(await app.belongsToScope("U2", channelScope), false);
-  assert.ok(!(await app.listVisibleSkills("U2")).some((result) => result.skill?.scopeId === channelScope));
+  assert.ok(!(await app.listVisibleSkills("U2", false)).some((result) => result.skill?.scopeId === channelScope));
 });
 
 test("a context view never leaks another scope's files or crons", async () => {
@@ -275,8 +275,8 @@ test("a context view never leaks another scope's files or crons", async () => {
     "no cron from C2 appears",
   );
   assert.ok(
-    out!.deployments.every((d) => d.id === "d-c1"),
-    "no deployment created in C2 appears",
+    out!.apps.every((d) => d.id === "d-c1"),
+    "no app created in C2 appears",
   );
   assert.ok(
     out!.skills.every((s) => s.name === "triage"),

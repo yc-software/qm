@@ -24,7 +24,7 @@ import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-r
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { TENANT } from "./items.ts";
 import {
-  PARTNER_CHAT_TENANT,
+  GENERIC_CHAT_TENANT,
   SLACK_TENANTS,
   SLACK_BRIDGE_TENANT,
   TENANT_LOOKUPS,
@@ -68,7 +68,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     TENANT_LOOKUPS,
     SLACK_TENANTS,
     SLACK_BRIDGE_TENANT,
-    PARTNER_CHAT_TENANT,
+    GENERIC_CHAT_TENANT,
   ]);
   const { pool, q } = db;
 
@@ -153,6 +153,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         principalId === undefined ? [sessionId] : [principalId, sessionId],
       );
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
+    },
+
+    async forkOrigin(tenant, sessionId): Promise<Session | null> {
+      const rows = await db.forTenant(tenant).q(
+        `WITH RECURSIVE chain(id, source_id) AS (
+           SELECT id, forked_from_session_id FROM sessions WHERE tenant_id = $1 AND id = $2
+           UNION
+           SELECT s.id, s.forked_from_session_id FROM chain c JOIN sessions s ON s.tenant_id = $1 AND s.id = c.source_id
+         )
+         SELECT s.* FROM chain c JOIN sessions s ON s.tenant_id = $1 AND s.id = c.id
+          WHERE NOT EXISTS (SELECT 1 FROM chain source WHERE source.id = c.source_id)`,
+        [tenant.id, sessionId],
+      );
+      return rows[0] ? rowToSession(rows[0]) : null;
     },
 
     async expandSideChat(sessionId) {

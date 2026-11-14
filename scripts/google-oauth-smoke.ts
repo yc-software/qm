@@ -1,16 +1,15 @@
-import { createServer as createNetServer } from "node:net";
 import { parseEnv } from "node:util";
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
-import type { AddressInfo } from "node:net";
 import { startQm } from "../src/start.ts";
 import { loadConfig } from "../src/config.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
 import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
+import { freePort } from "./dev/lib/proc.ts";
 
 type Json = Record<string, unknown>;
 
@@ -35,17 +34,6 @@ function loadEnvFallbacks(): string[] {
     loaded.push(path);
   }
   return [...new Set(loaded)];
-}
-
-async function freePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const server = createNetServer();
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as AddressInfo).port;
-      server.close(() => resolvePort(port));
-    });
-    server.on("error", reject);
-  });
 }
 
 async function waitFor(url: string, timeoutMs: number): Promise<void> {

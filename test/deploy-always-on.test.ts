@@ -91,7 +91,7 @@ for (const operation of ["redeploy", "rollback"] as const) {
       await assert.rejects(
         operation === "redeploy"
           ? deploy.redeploy(d.id, { entrypoint: "third", files: [], alwaysOn: !initial })
-          : deploy.rollbackDeployment(d.id, 1, { alwaysOn: !initial }),
+          : deploy.rollbackApp(d.id, 1, { alwaysOn: !initial }),
         /publication failed/,
       );
       assert.equal(seen.at(-1), !initial);
@@ -99,23 +99,23 @@ for (const operation of ["redeploy", "rollback"] as const) {
       assert.equal(!!after.alwaysOn, initial);
       assert.equal(after.appliedVersion, accepted.appliedVersion);
       assert.deepEqual(after.endpoint, accepted.endpoint);
-      await deploy.setDeploymentAlwaysOn(d.id, !initial);
+      await deploy.setAppAlwaysOn(d.id, !initial);
       assert.deepEqual(toggled, [!initial]);
       assert.equal((await deployStore.get(d.id))!.alwaysOn, !initial);
     });
   }
 }
 
-test("setDeploymentAlwaysOn flips the flag on and off, and persists", async () => {
+test("setAppAlwaysOn flips the flag on and off, and persists", async () => {
   const { deploy, deployStore } = svc();
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
   assert.equal((await deployStore.get(d.id))!.alwaysOn, undefined);
 
-  const on = await deploy.setDeploymentAlwaysOn(d.id, true);
+  const on = await deploy.setAppAlwaysOn(d.id, true);
   assert.equal(on.alwaysOn, true);
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  const off = await deploy.setDeploymentAlwaysOn(d.id, false);
+  const off = await deploy.setAppAlwaysOn(d.id, false);
   assert.ok(!off.alwaysOn);
   assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
 });
@@ -193,31 +193,31 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
     await deployStore.setAlwaysOn(d.id, true);
     return listed.map((row) => ({ ...row, alwaysOn: undefined }));
   };
-  const stopped = await deploy.reapIdleDeployments(1, Date.now() + 1_000_000);
+  const stopped = await deploy.reapIdleApps(1, Date.now() + 1_000_000);
   assert.equal(stopped, 0);
   assert.equal(destroys, 0);
   assert.equal((await deployStore.get(d.id))!.status, "running");
 });
 
-test("maintainDeployments re-ensures a live endpoint only for running always-on deployments", async () => {
+test("maintainApps re-ensures a live endpoint only for running always-on apps", async () => {
   const ctx = svc({ resolve: async () => ({ host: "127.0.0.1", port: 5001 }) });
   const { deploy } = ctx;
   const cold = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
   const warm = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(warm.id, true);
+  await deploy.setAppAlwaysOn(warm.id, true);
   const resolvesBefore = ctx.resolves;
 
-  const warmed = await deploy.maintainDeployments();
+  const warmed = await deploy.maintainApps();
   assert.equal(warmed, 1);
   assert.equal(ctx.resolves, resolvesBefore + 1);
   assert.ok(cold.id !== warm.id);
 });
 
-test("maintainDeployments skips a deployment whose flag was turned off after it was claimed", async () => {
+test("maintainApps skips an app whose flag was turned off after it was claimed", async () => {
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(d.id, true);
   const realList = deployStore.list.bind(deployStore);
   deployStore.list = async () => {
     const listed = await realList();
@@ -225,25 +225,25 @@ test("maintainDeployments skips a deployment whose flag was turned off after it 
     return listed;
   };
   const appliesBefore = ctx.applies;
-  const warmed = await deploy.maintainDeployments();
+  const warmed = await deploy.maintainApps();
   assert.equal(warmed, 0);
   assert.equal(ctx.applies, appliesBefore);
 });
 
-test("maintainDeployments relaunches when the platform has torn the app down", async () => {
+test("maintainApps relaunches when the platform has torn the app down", async () => {
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(d.id, true);
   const appliesBefore = ctx.applies;
 
-  const warmed = await deploy.maintainDeployments();
+  const warmed = await deploy.maintainApps();
   assert.equal(warmed, 1);
   assert.ok(ctx.applies > appliesBefore, "expected a re-apply when no live endpoint exists");
   assert.equal((await deployStore.get(d.id))!.status, "running");
 });
 
-test("maintainDeployments replaces a due app's machine in the background and parks the replacement", async () => {
+test("maintainApps replaces a due app's machine in the background and parks the replacement", async () => {
   const due = new Set<string>();
   const parked: string[] = [];
   const ctx = svc({
@@ -259,7 +259,7 @@ test("maintainDeployments replaces a due app's machine in the background and par
   due.add(stale.id);
   const appliesBefore = ctx.applies;
 
-  const maintained = await deploy.maintainDeployments();
+  const maintained = await deploy.maintainApps();
   assert.equal(maintained, 1, "only the due app is rotated");
   assert.equal(ctx.applies, appliesBefore + 1);
   assert.equal((await deployStore.get(stale.id))!.status, "running");
@@ -276,13 +276,13 @@ test("always-on reaches the provider before persisting and retains the flag on f
     },
   });
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(d.id, true);
   assert.deepEqual(seen, [true]);
   reject = true;
-  await assert.rejects(deploy.setDeploymentAlwaysOn(d.id, false), /provider unavailable/);
+  await assert.rejects(deploy.setAppAlwaysOn(d.id, false), /provider unavailable/);
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
-  await deploy.archiveDeployment(d.id);
-  await deploy.setDeploymentAlwaysOn(d.id, false);
+  await deploy.archiveApp(d.id);
+  await deploy.setAppAlwaysOn(d.id, false);
   assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
   assert.deepEqual(seen, [true]);
 });

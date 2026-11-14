@@ -24,7 +24,7 @@ export async function swarmFixture(
     runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode" | "botActor">;
     request?: Pick<OrchestratorInput, "memoryNotebookOnly" | "scopeVersion">;
     spawnMeta?: Pick<SpawnMeta, "memoryNotebookOnly">;
-    claims?: Pick<CapabilityClaims, "memory" | "scopeVersion">;
+    claims?: Pick<CapabilityClaims, "memory" | "scopeVersion" | "botActor">;
     channel?: string;
   } = {},
 ) {

@@ -14,8 +14,14 @@ import { approvalCardDestination } from "../../credentials/keychain-approval.ts"
 import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { audit, livePersonTurn, personalCapability, resolveCapabilityDestination } from "./shared.ts";
+import { botWorkInPersonsName, type CapabilityClaims } from "../../auth/capability-token.ts";
+import {
+  audit,
+  BOT_WORK_PERSON_CREDENTIAL,
+  livePersonTurn,
+  personalCapability,
+  resolveCapabilityDestination,
+} from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
@@ -391,6 +397,8 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
     return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
   }
+  if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
+    return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   let credentialId = typeof b.credential === "string" ? b.credential : undefined;
   if (credentialId === undefined) {
     const target = await resolveAskTarget(ctx, kc, capability.scopeId, b.owner as string, b.service as string);

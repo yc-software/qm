@@ -52,7 +52,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const pending: Array<{ sourceId: string; name: string; mimetype: string; data: Buffer }> = [];
   let totalBytes = 0;
   for (const id of ids) {
-    const file = await app.openFileForViewer(tenantOf(ctx), id, viewer);
+    const file = await app.openFileForViewer(tenantOf(ctx), id, viewer, false);
     if (!file)
       return sendJson(res, 409, {
         error: "attachment_unavailable",

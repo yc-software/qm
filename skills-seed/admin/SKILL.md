@@ -204,7 +204,7 @@ GET /v1/admin/sessions/<id>?scope=            → a transcript
 GET /v1/admin/sessions/<id>/llm?scope=        → captured provider requests — what the model actually saw (debugging "why did it do X")
 GET /v1/admin/files?scope=                    → document store; read?id= / download?id= for content
 GET /v1/admin/volumes?scope=                  → a scope's computer/backup contents (sizes only)
-GET /v1/admin/crons|deployments|skills?scope= → artifacts by owner
+GET /v1/admin/crons|apps|skills?scope= → artifacts by owner
 ```
 
 ## Observability

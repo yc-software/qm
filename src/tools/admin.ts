@@ -91,7 +91,7 @@ export const adminOperations = {
     value: Type.Object({ blobId: string, name: string, mimetype: optionalString }, { additionalProperties: false }),
   }),
   crons: operation("List crons belonging to a scope.", "GET", "/crons", scope),
-  deployments: operation("List apps belonging to a scope.", "GET", "/deployments", scope),
+  deployments: operation("List apps belonging to a scope.", "GET", "/apps", scope),
   skills: operation("List skills belonging to a scope.", "GET", "/skills", scope),
   skill: operation("Read one skill.", "GET", "/skills/:id", scopedId),
   archive_skill: operation("Archive a skill.", "DELETE", "/skills/:id", scopedId),

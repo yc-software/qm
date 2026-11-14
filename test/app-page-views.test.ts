@@ -149,7 +149,7 @@ test("page loads of a published app are recorded with viewer, auth mode and requ
     await settle();
     assert.equal(views.length, 1, "denied and signed-out requests that never reach the app are not recorded");
 
-    await h.app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    await h.app.setAppPublic("mysite", true, { createdBy: "alice@example.com" });
     await get(h.port, "/", { Accept: "text/html", "x-qm-client-ip": "198.51.100.9" });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("mallory@example.com") });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("guest@example.org", true) });

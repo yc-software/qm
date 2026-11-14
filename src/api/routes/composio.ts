@@ -12,7 +12,7 @@ import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledScopes } from "../../resolution/context-filter.ts";
-import { sendJson } from "../http.ts";
+import { refuseImpersonated, refuseWithoutPerson, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
@@ -93,7 +93,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
       audience,
       ctx.capability?.scopeId ?? personal,
       org,
-      entitledScopes,
+      entitledScopes(false),
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
@@ -317,8 +317,8 @@ async function connections(ctx: ApiCtx): Promise<void> {
 }
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
-  if ((ctx.capability && !personAtKeyboard(ctx.capability)) || ctx.actor?.imp)
-    return sendJson(ctx.res, 403, { error: "human_consent_required" });
+  if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
+  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
   const access = await credential(ctx);
   if (!access) return;
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;

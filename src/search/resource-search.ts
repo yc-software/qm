@@ -4,7 +4,7 @@ import { searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-sea
 import type { ScopeId } from "../types.ts";
 import type { Cron } from "../triggers/types.ts";
 
-export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
+export type ResourceKind = "skills" | "crons" | "apps" | "webhooks";
 export interface ResourceCandidate {
   id: string;
   title: string;
@@ -39,7 +39,7 @@ const sources = {
     title: "coalesce(json->>'title', '')",
     description: "coalesce(json->>'action', '') || ' ' || coalesce(json->>'message', '')",
   },
-  deploys: {
+  apps: {
     table: "deployments",
     title: "coalesce(json->>'displayName', json->>'name', '')",
     description: "coalesce(json->>'name', '')",

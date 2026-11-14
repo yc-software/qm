@@ -70,15 +70,15 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   return { app, deploy, acl, identity, base, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-async function gitUrl(base: string, deploymentId: string, permission: "read" | "write"): Promise<string> {
+async function gitUrl(base: string, appId: string, permission: "read" | "write"): Promise<string> {
   const token = await mintDeployGitAccess(SECRET, {
-    deploymentId,
+    deploymentId: appId,
     permission,
     principalId: "U1",
     exp: Date.now() + 60_000,
   });
-  const url = new URL(`/v1/deployments/${encodeURIComponent(deploymentId)}/git`, base);
-  url.username = "deployment";
+  const url = new URL(`/v1/apps/${encodeURIComponent(appId)}/git`, base);
+  url.username = "app";
   url.password = token;
   return url.toString();
 }
@@ -136,7 +136,7 @@ test("a read token can clone but cannot push (403 on receive-pack)", async () =>
       /403|read-only|forbidden/i,
     );
 
-    const after = await f.deploy.listDeployments();
+    const after = await f.deploy.listApps();
     assert.equal(after[0]!.versions.length, 1);
   } finally {
     await f.close();
@@ -181,7 +181,7 @@ test("a write token can push, and the push registers a new immutable version", a
     const { stdout: pushedSha } = await execFileP("git", ["rev-parse", "HEAD"], { cwd: work, env: GIT_ENV });
     await execFileP("git", ["push", "origin", "HEAD:current"], { cwd: work, env: GIT_ENV });
 
-    const fresh = (await f.deploy.listDeployments())[0]!;
+    const fresh = (await f.deploy.listApps())[0]!;
     assert.equal(fresh.versions.length, 2);
     assert.equal(fresh.currentVersion, 2);
     const v2 = fresh.versions.find((v) => v.version === 2)!;
@@ -227,7 +227,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
     });
 
     const ask = async (actor: string) =>
-      fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`, {
+      fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`, {
         headers: { "x-agent-capability": await capFor(actor) },
       });
 
@@ -235,7 +235,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
     assert.equal(owner.status, 200);
     const ownerBody = (await owner.json()) as { url: string; permission: string };
     assert.equal(ownerBody.permission, "write");
-    assert.match(ownerBody.url, new RegExp(`/v1/deployments/${d.id}/git`));
+    assert.match(ownerBody.url, new RegExp(`/v1/apps/${d.id}/git`));
     assert.equal((await verifyDeployGitAccess(SECRET, new URL(ownerBody.url).password))?.principalId, "U1");
 
     await f.identity.deactivate("U1");
@@ -262,7 +262,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
     assert.equal(writer.status, 200);
     assert.equal(((await writer.json()) as { permission: string }).permission, "write");
 
-    const anon = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`);
+    const anon = await fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`);
     assert.equal(anon.status, 401);
   } finally {
     await f.close();
@@ -288,13 +288,13 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
   const f = fixture({ apiBaseUrl, publicUrl: "https://web.example" });
   coreBase = f.base;
   try {
-    const deployment = await f.app.deploy({
+    const publishedApp = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
       createdBy: "U1",
       entrypoint: "x",
       files: [{ path: "server.js", data: "1" }],
     });
-    const response = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(deployment.id)}/git-url`, {
+    const response = await fetch(`${f.base}/v1/apps/${encodeURIComponent(publishedApp.id)}/git-url`, {
       headers: { "x-agent-capability": await capFor("U1") },
     });
     assert.equal(response.status, 200);
@@ -308,7 +308,7 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
   }
 });
 
-test("git-url endpoint: an org-owned deployment is read for a plain member, write only with a write grant", async () => {
+test("git-url endpoint: an org-owned app is read for a plain member, write only with a write grant", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -318,7 +318,7 @@ test("git-url endpoint: an org-owned deployment is read for a plain member, writ
       files: [{ path: "server.js", data: "1" }],
     });
     const ask = async (actor: string) =>
-      fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`, {
+      fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`, {
         headers: { "x-agent-capability": await capFor(actor) },
       });
 
