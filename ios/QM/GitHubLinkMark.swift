@@ -17,30 +17,35 @@ enum GitHubLinkMark {
     guard markdown.range(of: "github.com", options: .caseInsensitive) != nil else {
       return markdown
     }
+    guard let marked = marked(markdown) else {
+      Log.markdown.error("Marking GitHub links failed in cmark; showing the message unmarked")
+      return markdown
+    }
+    return marked
+  }
+
+  private static func marked(_ markdown: String) -> String? {
     cmark_gfm_core_extensions_ensure_registered()
-    guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return markdown }
+    guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return nil }
     defer { cmark_parser_free(parser) }
     for name in ["autolink", "strikethrough", "tagfilter", "tasklist", "table"] {
-      if let syntax = cmark_find_syntax_extension(name) {
-        cmark_parser_attach_syntax_extension(parser, syntax)
-      }
+      guard let syntax = cmark_find_syntax_extension(name) else { return nil }
+      cmark_parser_attach_syntax_extension(parser, syntax)
     }
     cmark_parser_feed(parser, markdown, markdown.utf8.count)
-    guard let document = cmark_parser_finish(parser) else { return markdown }
+    guard let document = cmark_parser_finish(parser) else { return nil }
     defer { cmark_node_free(document) }
     let links = githubLinks(in: document)
     guard !links.isEmpty else { return markdown }
     for link in links {
       guard let mark = cmark_node_new(CMARK_NODE_IMAGE), let gap = cmark_node_new(CMARK_NODE_TEXT)
-      else { return markdown }
+      else { return nil }
       cmark_node_set_url(mark, "\(scheme):")
       cmark_node_set_literal(gap, "\u{00A0}")
       cmark_node_insert_before(link, mark)
       cmark_node_insert_before(link, gap)
     }
-    guard let rendered = cmark_render_commonmark(document, CMARK_OPT_DEFAULT, 0) else {
-      return markdown
-    }
+    guard let rendered = cmark_render_commonmark(document, CMARK_OPT_DEFAULT, 0) else { return nil }
     defer { free(rendered) }
     return String(cString: rendered)
   }

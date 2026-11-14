@@ -5,6 +5,7 @@ enum Log {
   static let background = Logger(subsystem: "org.qm", category: "background")
   static let drafts = Logger(subsystem: "org.qm", category: "drafts")
   static let decoding = Logger(subsystem: "org.qm", category: "decoding")
+  static let markdown = Logger(subsystem: "org.qm", category: "markdown")
 }
 
 extension Logger {
