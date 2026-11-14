@@ -630,9 +630,9 @@ struct ChatView: View {
     .padding(.horizontal, 16).padding(.vertical, 12)
     .frame(maxWidth: QMTheme.conversationWidth)
     .frame(maxWidth: .infinity)
-    // As on web, the transcript runs 16pt behind the composer's top edge before the bar
-    // turns opaque.
-    .background(QMTheme.paper.padding(.top, 28).ignoresSafeArea(.container, edges: .bottom))
+    // Leave the bar's 12pt top padding plus a 16pt overlap clear so, as on web, the
+    // transcript runs 16pt behind the composer's top edge before the bar turns opaque.
+    .background(QMTheme.paper.padding(.top, 12 + 16).ignoresSafeArea(.container, edges: .bottom))
   }
 
   private func bottomControls(_ proxy: ScrollViewProxy) -> some View {
