@@ -134,6 +134,7 @@ enum ConversationFilter: String, CaseIterable {
     if self == .archived { return conversation.archived == true }
     guard conversation.archived != true else { return false }
     if self == .waiting { return conversation.awaitingInput == true }
+    // Pinned conversations always show in Active, waiting or not.
     return conversation.pinned == true || conversation.awaitingInput != true
   }
 }
