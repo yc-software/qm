@@ -51,7 +51,9 @@ before proxying, and the keychain stores credentials under the canonical owner.
     is a bot joined to anyone by a link, or when the speaker's sign-in or its
     canonical sign-in counts as a bot by the link check's rule. A user whose main
     sign-in is a Slack bot is not split automatically, so their turns stay
-    refused.
+    refused. So does an app user the sync leaves for review, even when one of its
+    sign-ins is listed as a person; once an admin deletes the link, each sign-in
+    works on its own again.
 - **Bot work stays out of a person's projects.** Work that carries the bot marker
   gets 403 from the project tools, even when the bot is a project member through a
   channel roster.

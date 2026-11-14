@@ -185,6 +185,12 @@ END $tenants_for_email$`,
     id: "directory/store/0012-member-is-bot",
     statements: ["ALTER TABLE directory_members ADD COLUMN is_bot BOOLEAN"],
   },
+  {
+    id: "directory/store/0013-member-slack-id-index",
+    statements: [
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS directory_members_slack_id ON directory_members (org_id, slack_id)",
+    ],
+  },
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;

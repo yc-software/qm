@@ -4,6 +4,7 @@ import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import { orgId } from "../config.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
@@ -373,10 +374,10 @@ async function findBotSignIns(q: Query, aliases: readonly string[]): Promise<str
     `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
       WHERE coalesce(
         (SELECT bool_or(m.is_bot) FROM directory_members m
-          WHERE lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias),
+          WHERE m.org_id = $2 AND (lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias)),
         EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
                  WHERE l.alias_id = s.alias AND u.kind = 'app'))`,
-    [aliases.map(foldPrincipalId)],
+    [aliases.map(foldPrincipalId), orgId()],
   );
   return rows.map((r) => r.alias as string);
 }
