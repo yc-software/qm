@@ -1,110 +1,71 @@
 import SwiftUI
 import UIKit
+import cmark_gfm
+import cmark_gfm_extensions
 
 enum GitHubLinkMark {
   static let scheme = "qm-github-mark"
-  private static let mark = "![](\(scheme):)\u{00A0}"
-  private static let prefixes: [[Character]] = [
-    Array("https://github.com/"), Array("https://www.github.com/"),
-  ]
+
+  static func isGitHub(_ href: String) -> Bool {
+    guard let url = URL(string: href), url.scheme?.lowercased() == "https",
+      let host = url.host()?.lowercased()
+    else { return false }
+    return host == "github.com" || host == "www.github.com"
+  }
 
   static func decorate(_ markdown: String) -> String {
-    guard markdown.contains("github.com") else { return markdown }
-    var fence: String?
-    return markdown.split(separator: "\n", omittingEmptySubsequences: false).map { line in
-      let trimmed = line.drop(while: { $0 == " " })
-      if let open = fence {
-        if trimmed.hasPrefix(open) { fence = nil }
-        return String(line)
+    guard markdown.localizedCaseInsensitiveContains("github.com") else { return markdown }
+    cmark_gfm_core_extensions_ensure_registered()
+    guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return markdown }
+    defer { cmark_parser_free(parser) }
+    for name in ["autolink", "strikethrough", "tagfilter", "tasklist", "table"] {
+      if let syntax = cmark_find_syntax_extension(name) {
+        cmark_parser_attach_syntax_extension(parser, syntax)
       }
-      if let open = ["```", "~~~"].first(where: { trimmed.hasPrefix($0) }) {
-        fence = open
-        return String(line)
-      }
-      if line.hasPrefix("    ") || line.hasPrefix("\t") { return String(line) }
-      return decorate(line: Array(line))
-    }.joined(separator: "\n")
+    }
+    cmark_parser_feed(parser, markdown, markdown.utf8.count)
+    guard let document = cmark_parser_finish(parser) else { return markdown }
+    defer { cmark_node_free(document) }
+    let links = githubLinks(in: document)
+    guard !links.isEmpty else { return markdown }
+    for link in links {
+      guard let mark = cmark_node_new(CMARK_NODE_IMAGE), let gap = cmark_node_new(CMARK_NODE_TEXT)
+      else { return markdown }
+      cmark_node_set_url(mark, "\(scheme):")
+      cmark_node_set_literal(gap, "\u{00A0}")
+      cmark_node_insert_before(link, mark)
+      cmark_node_insert_before(link, gap)
+    }
+    guard let rendered = cmark_render_commonmark(document, CMARK_OPT_DEFAULT, 0) else {
+      return markdown
+    }
+    defer { free(rendered) }
+    return String(cString: rendered)
   }
 
-  private static func decorate(line chars: [Character]) -> String {
-    var marks = Set<Int>()
-    var opens: [Int] = []
-    var i = 0
-    while i < chars.count {
-      switch chars[i] {
-      case "\\":
-        i += 2
-      case "`":
-        i = endOfCodeSpan(chars, from: i)
-      case "[":
-        opens.append(i)
-        i += 1
-      case "]":
-        let open = opens.popLast()
-        guard i + 1 < chars.count, chars[i + 1] == "(" else {
-          i += 1
-          continue
-        }
-        if let open, !(open > 0 && chars[open - 1] == "!"), isGitHub(chars, at: i + 2) {
-          marks.insert(open)
-        }
-        var depth = 1
-        i += 2
-        while i < chars.count, depth > 0 {
-          if chars[i] == "(" { depth += 1 } else if chars[i] == ")" { depth -= 1 }
-          i += 1
-        }
-      case "<" where isGitHub(chars, at: i + 1):
-        marks.insert(i)
-        while i < chars.count, chars[i] != ">" { i += 1 }
-      default:
-        let boundary = i == 0 || !(chars[i - 1].isLetter || chars[i - 1].isNumber)
-        if opens.isEmpty, boundary, isGitHub(chars, at: i) {
-          marks.insert(i)
-          while i < chars.count, !chars[i].isWhitespace { i += 1 }
-        } else {
-          i += 1
-        }
+  private static func githubLinks(in document: UnsafeMutablePointer<cmark_node>)
+    -> [UnsafeMutablePointer<cmark_node>]
+  {
+    guard let iterator = cmark_iter_new(document) else { return [] }
+    defer { cmark_iter_free(iterator) }
+    var links: [UnsafeMutablePointer<cmark_node>] = []
+    var event = cmark_iter_next(iterator)
+    while event != CMARK_EVENT_DONE {
+      if event == CMARK_EVENT_ENTER, let node = cmark_iter_get_node(iterator),
+        String(cString: cmark_node_get_type_string(node)) == "link",
+        let url = cmark_node_get_url(node), isGitHub(String(cString: url))
+      {
+        links.append(node)
       }
+      event = cmark_iter_next(iterator)
     }
-    var out = ""
-    for (index, char) in chars.enumerated() {
-      if marks.contains(index) { out += mark }
-      out.append(char)
-    }
-    return out
-  }
-
-  private static func endOfCodeSpan(_ chars: [Character], from start: Int) -> Int {
-    var run = 0
-    while start + run < chars.count, chars[start + run] == "`" { run += 1 }
-    var j = start + run
-    while j < chars.count {
-      guard chars[j] == "`" else {
-        j += 1
-        continue
-      }
-      var closing = 0
-      while j + closing < chars.count, chars[j + closing] == "`" { closing += 1 }
-      if closing == run { return j + closing }
-      j += closing
-    }
-    return start + run
-  }
-
-  private static func isGitHub(_ chars: [Character], at index: Int) -> Bool {
-    prefixes.contains { prefix in
-      index + prefix.count <= chars.count
-        && zip(chars[index...], prefix).allSatisfy { $0.lowercased() == $1.lowercased() }
-    }
+    return links
   }
 
   static func image(dark: Bool, pointSize: CGFloat) -> Image {
     guard let logo = UIImage(named: "Service-github") else { return Image(systemName: "link") }
-    let color =
-      dark
-      ? UIColor(red: 0x4c / 255, green: 0x8e / 255, blue: 0xf8 / 255, alpha: 1)
-      : UIColor(red: 0x2c / 255, green: 0x65 / 255, blue: 0xcf / 255, alpha: 1)
+    let style = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+    let color = QMTheme.markdownLinkColor.resolvedColor(with: style)
     let size = CGSize(width: pointSize, height: pointSize)
     let drawn = UIGraphicsImageRenderer(size: size).image { _ in
       logo.withTintColor(color, renderingMode: .alwaysOriginal)

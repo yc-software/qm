@@ -14,6 +14,11 @@ enum QMTheme {
   @MainActor static var sidebar: Color {
     NativeThemeStore.shared.active?.sidebar.color ?? defaultSidebar
   }
+  static let markdownLinkColor = UIColor { traits in
+    traits.userInterfaceStyle == .dark
+      ? UIColor(red: 0x4c / 255, green: 0x8e / 255, blue: 0xf8 / 255, alpha: 1)
+      : UIColor(red: 0x2c / 255, green: 0x65 / 255, blue: 0xcf / 255, alpha: 1)
+  }
   @MainActor static var surface: Color {
     NativeThemeStore.shared.active?.surface.color ?? defaultSurface
   }

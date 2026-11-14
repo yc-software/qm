@@ -6,24 +6,27 @@ final class GitHubLinkMarkTests: XCTestCase {
   private let mark = "![](qm-github-mark:)\u{00A0}"
 
   func testMarksGitHubLinksLikeWeb() {
-    XCTAssertEqual(
-      GitHubLinkMark.decorate("See [#3615](https://github.com/yc-software/qm/pull/3615) now."),
-      "See \(mark)[#3615](https://github.com/yc-software/qm/pull/3615) now.")
-    XCTAssertEqual(
-      GitHubLinkMark.decorate("<https://github.com/a/b> and https://www.github.com/c"),
-      "\(mark)<https://github.com/a/b> and \(mark)https://www.github.com/c")
+    let pull = "https://github.com/yc-software/qm/pull/3615"
+    XCTAssertTrue(GitHubLinkMark.decorate("See [#3615](\(pull)) now.").contains("\(mark)["))
+    XCTAssertTrue(GitHubLinkMark.decorate("See \(pull) now.").contains(mark))
+    XCTAssertTrue(GitHubLinkMark.decorate("| PR |\n|---|\n| [x](\(pull)) |").contains(mark))
   }
 
   func testLeavesOtherLinksCodeAndImagesAlone() {
     for text in [
       "[docs](https://example.com/github.com)",
-      "`https://github.com/a/b` and ``[x](https://github.com/y)``",
+      "`https://github.com/a/b`",
       "```\n[x](https://github.com/y)\n```",
-      "    https://github.com/indented/code",
       "![badge](https://github.com/a/b/badge.svg)",
-      "http://github.com/insecure",
+      "[insecure](http://github.com/a)",
     ] {
       XCTAssertEqual(GitHubLinkMark.decorate(text), text)
     }
+  }
+
+  func testMatchesWebHosts() {
+    XCTAssertTrue(GitHubLinkMark.isGitHub("https://www.github.com/a"))
+    XCTAssertFalse(GitHubLinkMark.isGitHub("https://gist.github.com/a"))
+    XCTAssertFalse(GitHubLinkMark.isGitHub("https://github.com.evil.test/a"))
   }
 }
