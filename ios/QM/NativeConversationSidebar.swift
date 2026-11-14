@@ -68,6 +68,7 @@ struct NativeConversationRow: View {
     HStack(spacing: 8) {
       if conversation.working == true {
         NativeWave()
+          .frame(width: 19, height: 12)
           .foregroundStyle(.blue)
           .accessibilityHidden(true)
       }
