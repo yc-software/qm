@@ -2,7 +2,14 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
 import type { Tenant } from "../tenants/context.ts";
-import { APPROVAL_LIFETIME_MS, type PendingApprovalRecord, type ScopeId, type TurnResult } from "../types.ts";
+import {
+  APPROVAL_LIFETIME_MS,
+  type PendingApprovalRecord,
+  type ScopeId,
+  type TurnRequest,
+  type TurnResult,
+} from "../types.ts";
+import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 
 export const BOT_REQUESTER_APPROVAL_NOTE =
   "This request came from a bot or app, not a person. Only the person who asked can approve a step that needs approval, so no approval was requested and the step did not run. Continue without it, and tell the thread that a person has to ask for this step themselves.";
@@ -10,19 +17,39 @@ export const BOT_REQUESTER_APPROVAL_NOTE =
 export const BOT_REQUESTER_REFUSAL =
   "This request came from a bot or app, and the next step needs a person's approval. A person has to ask for it directly.";
 
-export function botApprovalRefusal(
+const NO_APPROVER_APPROVAL_NOTE =
+  "No person can approve steps in this run, so no approval was requested and the step did not run. Continue without it, and say in your reply which step needs a person's approval.";
+
+export function approvalUnavailableNote(input: Pick<TurnRequest, "botActor" | "noApprover">): string | undefined {
+  if (input.botActor) return BOT_REQUESTER_APPROVAL_NOTE;
+  if (input.noApprover) return NO_APPROVER_APPROVAL_NOTE;
+  return undefined;
+}
+
+export const webApprovableThread = (threadRef: string): boolean =>
+  threadRef.startsWith("web:") || threadRef.startsWith("swarm:") || isSubagentThreadRef(threadRef);
+
+export function unavailableApprovalRefusal(
   audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => void,
   sessionId: string,
   command: string,
   reason: string,
+  botRequester: boolean,
 ): TurnResult {
   audit({
     action: "command_approval.unavailable",
     resource: command,
     status: "refused",
-    detail: JSON.stringify({ approvalOutcome: "requester_is_bot", reason }),
+    detail: JSON.stringify({ approvalOutcome: botRequester ? "requester_is_bot" : "no_approver", reason }),
   });
-  return { status: "refused", sessionId, reason: BOT_REQUESTER_REFUSAL, refusalKind: "approval_denied" };
+  return {
+    status: "refused",
+    sessionId,
+    reason: botRequester
+      ? BOT_REQUESTER_REFUSAL
+      : `No person can approve steps in this run, so this step did not run: ${command} (${reason}).`,
+    refusalKind: "approval_denied",
+  };
 }
 
 export const undeliverableApprovalNote = (failure: string): string =>

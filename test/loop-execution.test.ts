@@ -2,6 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
+import { withCommandRules } from "./support/command-rules.ts";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -10,9 +11,11 @@ import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
-for (const checkResult of ["passed", "failed", "missing"] as const) {
+const GATED = "rm -rf ./ship-target && printf shipped";
+
+for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
-    const built = buildApp(testConfig());
+    const built = await withCommandRules(buildApp(testConfig()));
     const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
     await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
     const org = scopeId("org", "default-org");
@@ -34,6 +37,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
     const { store: loops, items, outputs, grants } = built.loops;
     const check = checkResult === "failed" ? "test ! -s loop-proposal.txt" : "test -s loop-proposal.txt";
     const stages: string[] = [];
+    let shipThread = "";
     const fire = createLoopFireService({
       loops,
       items,
@@ -50,6 +54,10 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
           stages.push(stage);
           assert.notEqual(req.surfaceTools, true);
           assert.notEqual(req.addressed, true);
+          if (stage === "ship" && checkResult === "gated") {
+            shipThread = req.conversation.threadRef;
+            return built.app.turn({ ...req, text: `!run ${GATED}` });
+          }
           let command: string;
           if (stage === "intake")
             command = 'test "$ERROR_SOURCE_TOKEN" = synthetic-error-source-token && printf source-readable';
@@ -104,7 +112,11 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
     const result = await fire.fire(loop.id, "execution-test");
     assert.deepEqual(stages, ["intake", "work", "judge"]);
     const held = await outputs.awaitingReview(loop.id);
-    if (checkResult === "passed") {
+    if (checkResult === "gated") {
+      await assert.rejects(fire.shipOutput(loop.id, held[0]!.id, "U1"), (e: Error) => e.message.includes(GATED));
+      assert.equal((await outputs.get(held[0]!.id))?.state, "ready");
+      assert.equal(await built.app.pendingApprovalForThread(shipThread), null);
+    } else if (checkResult === "passed") {
       assert.equal(result.summary?.ready.length, 1);
       assert.equal(held.length, 1);
       assert.equal(held[0]?.state, "ready");
