@@ -743,7 +743,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       }
       const note = `scanned ${summary.checked}, new ${summary.discovered}, verdicts ${summary.verdicts}${
         summary.failures.length ? `; failures: ${summary.failures.map(excerpt).join("; ")}` : ""
-      }`;
+      }${summary.rateLimited ? `; ${summary.rateLimited}` : ""}`;
       if (summary.failures.length && summary.checked === summary.failures.length) {
         const failed = await recordFailedFire(loopId, summary.firstError);
         return { ...failed, note: `${failed.note}; ${note}` };
