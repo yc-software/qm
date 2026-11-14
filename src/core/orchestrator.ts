@@ -19,7 +19,7 @@ import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
   requiresDelegation,
-  delegatedAuthorizationOrigin,
+  delegatedAuthorization,
   doesBotWork,
   isOwnerFire,
   forkOfBotWork,
@@ -522,12 +522,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
-      const delegatedOrigin =
+      const delegated =
         !external && deps.runs
-          ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
+          ? await delegatedAuthorization(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
+      const delegatedOrigin = delegated?.origin;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation";
+      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation" || delegated?.attended === false;
       const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
       const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
@@ -1622,7 +1623,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
-          liveTurn: liveTurn && !automatedTurn,
+          liveTurn: liveTurn && !triggeredTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
