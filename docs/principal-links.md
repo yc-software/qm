@@ -29,8 +29,11 @@ before proxying, and the keychain stores credentials under the canonical owner.
 - **Only people are linked.** A QM system actor (`system:…`) is QM itself, and a
   Slack bot or app is software, so the admin API refuses a link with either one on
   either side (400). It knows a bot or app by its QM user, which is marked as an
-  app once the bot has spoken to QM. A bot's turn that still arrives through an
-  older link is refused until an admin deletes that link.
+  app once the bot has spoken to QM or a directory sync lists it as a bot.
+  Older versions could also mark a linked person's own user as an app, and the
+  API refuses links that name such a person until their user is a person again.
+  A turn spoken by a bot that reaches a person through an older link is refused
+  until an admin deletes that link.
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
 - **Linking merges the users row.** If the linked sign-in already has its own

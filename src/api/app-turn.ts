@@ -160,7 +160,7 @@ export function createTurnMethods(
         return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
       };
       const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
-      if (req.botActor && foldPrincipalId(actor.id) !== foldPrincipalId(req.actor.externalId))
+      if (req.actor.isBot && foldPrincipalId(actor.id) !== foldPrincipalId(req.actor.externalId))
         return {
           status: "refused",
           reason:
