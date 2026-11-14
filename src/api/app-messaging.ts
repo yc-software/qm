@@ -433,7 +433,7 @@ export function createMessagingMethods(
       if (!(await deps.directory.replace(members, syncedAt))) return false;
       const internal = members.filter((m) => m.type === "internal");
       const splits = deps.admin
-        ? await deps.admin.users.applyDirectoryBots(internal).catch(reportFailureAs("users: directory bots", []))
+        ? await deps.admin.users.applyDirectoryBots(members).catch(reportFailureAs("users: directory bots", []))
         : [];
       for (const { userId, movedSignIns } of splits)
         h.recordAudit({
