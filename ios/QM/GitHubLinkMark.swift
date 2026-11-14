@@ -14,7 +14,9 @@ enum GitHubLinkMark {
   }
 
   static func decorate(_ markdown: String) -> String {
-    guard markdown.localizedCaseInsensitiveContains("github.com") else { return markdown }
+    guard markdown.range(of: "github.com", options: .caseInsensitive) != nil else {
+      return markdown
+    }
     cmark_gfm_core_extensions_ensure_registered()
     guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return markdown }
     defer { cmark_parser_free(parser) }
