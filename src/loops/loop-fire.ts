@@ -193,6 +193,7 @@ function itemActionPrompt(
     promptText(JSON.stringify({ action: kind, args })),
     "```",
     "If the action is already done, say so and stop. Report in one line what you did.",
+    DONE_REPORT,
     "[End loop item action]",
     "",
     "Playbook:",
@@ -212,19 +213,25 @@ function parsedBlock(blocks: FencedCodeBlock[]): { block: FencedCodeBlock; value
   return undefined;
 }
 
-function splitProposalReply(reply: string): { text: string; proposal?: Record<string, unknown> } {
+function liftBlock(reply: string, field: string): { text: string; record?: Record<string, unknown> } {
   const hit = parsedBlock(fencedCodeBlocks(reply));
   const parsed = hit ? hit.value : bareJson(reply);
-  const proposal =
-    parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>).proposal
+  const record =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed) && field in parsed
+      ? (parsed as Record<string, unknown>)
       : undefined;
   const text =
-    hit && proposal
+    hit && record
       ? `${reply.slice(0, hit.block.start).trimEnd()}\n\n${reply.slice(hit.block.end).trimStart()}`.trim()
       : reply.trim();
+  return { text: text || reply.trim(), ...(record ? { record } : {}) };
+}
+
+function splitProposalReply(reply: string): { text: string; proposal?: Record<string, unknown> } {
+  const { text, record } = liftBlock(reply, "proposal");
+  const proposal = record?.proposal;
   return {
-    text: text || reply.trim(),
+    text,
     ...(proposal && typeof proposal === "object" && !Array.isArray(proposal)
       ? { proposal: proposal as Record<string, unknown> }
       : {}),
@@ -247,17 +254,17 @@ function bareJson(reply: string): unknown {
   return undefined;
 }
 
-function listField(parsed: unknown, field: string): unknown[] {
+function listField(parsed: unknown, field: string): unknown[] | undefined {
   if (Array.isArray(parsed)) return parsed;
   if (parsed && typeof parsed === "object") {
     const value = (parsed as Record<string, unknown>)[field];
     if (Array.isArray(value)) return value;
   }
-  return [];
+  return undefined;
 }
 
 function parseIntake(reply: string): IntakeCandidate[] {
-  const list = listField(fencedJson(reply), "items");
+  const list = listField(fencedJson(reply), "items") ?? [];
   const out: IntakeCandidate[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
@@ -272,8 +279,9 @@ function parseIntake(reply: string): IntakeCandidate[] {
   return out;
 }
 
-function parseOutputs(reply: string): CapturedArtifact[] {
+function parseOutputs(reply: string): CapturedArtifact[] | undefined {
   const list = listField(fencedJson(reply), "outputs");
+  if (!list) return undefined;
   const out: CapturedArtifact[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
@@ -291,7 +299,7 @@ function parseOutputs(reply: string): CapturedArtifact[] {
       ...(typeof record.summary === "string" && record.summary.trim() ? { summary: record.summary.trim() } : {}),
     });
   }
-  return out;
+  return list.length > 0 && out.length === 0 ? undefined : out;
 }
 
 async function parseVerdict(
@@ -334,6 +342,20 @@ async function parseVerdict(
     checks: [],
     judged: false,
   };
+}
+
+const DONE_REPORT =
+  'End your reply with a fenced json block: {"done": true} once the action is done, or {"done": false, "reason": "<one line>"} when it is not.';
+
+function notDone(stage: string, outcome: TriggerOutcome): { error: Error; userMessage: string } | null {
+  const { text, record } = liftBlock(outcome.reply ?? "", "done");
+  if (!outcome.heldForApproval && record?.done === true) return null;
+  const reported = typeof record?.reason === "string" ? excerpt(record.reason.trim()) : "";
+  const unreported = text
+    ? `the agent did not report the action done: ${excerpt(text)}`
+    : "the agent did not report the action done";
+  const reason = outcome.heldForApproval ? "a step needed an approval and did not run" : reported || unreported;
+  return { error: new Error(`${stage}: not done — ${reason}`), userMessage: reason };
 }
 
 const REPLY_EXCERPT_MAX = 400;
@@ -537,6 +559,7 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): StageInput {
     "```",
     ...(note ? ["```untrusted-data", promptText(JSON.stringify({ reviewerNote: note })), "```"] : []),
     "If the action is already done (e.g. the PR was already opened as ready), say so and stop.",
+    DONE_REPORT,
     "[End loop ship]",
   ].join("\n");
   return { input, securityScreenData: data };
@@ -587,7 +610,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     if (failure) throw failure.error;
     const parsed = fencedJson(outcome.reply ?? "");
     if (parsed === undefined) throw new Error("triage: reply was not parseable");
-    return planTriage(loop, work.open, prompt.pending, parseTriageDecisions(listField(parsed, "items")));
+    return planTriage(loop, work.open, prompt.pending, parseTriageDecisions(listField(parsed, "items") ?? []));
   }
 
   async function previewTriage(loop: Loop, triage: Loop["triage"]): Promise<TriagePreview[]> {
@@ -755,7 +778,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
-    const workReplies = new Map<string, string>();
+    const workOutputs = new Map<string, CapturedArtifact[]>();
     let members: Promise<LoopItem[]> | undefined;
     let held: Set<string> | undefined;
 
@@ -798,10 +821,19 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
                 { data: proposal, by: "agent" },
                 { expectedClaimToken: item.claimToken! },
               );
-            workReplies.set(item.id, outcome.reply ?? "");
+            const outputs = parseOutputs(outcome.reply ?? "");
+            if (!proposal && !outputs) {
+              const shown = outcome.reply ? `: ${excerpt(outcome.reply)}` : "";
+              if (parsed && typeof parsed === "object" && "proposal" in parsed)
+                throw new Error(`work: the proposal was not valid${shown}`);
+              if (listField(parsed, "outputs"))
+                throw new Error(`work: no outputs entry had a shipAction and a title${shown}`);
+              throw new Error(`work: the reply had no readable outputs block${shown}`);
+            }
+            workOutputs.set(item.id, outputs ?? []);
             return { runId: outcome.sessionId ?? `${itemThreadRef}:work` };
           },
-          captureOutputs: async ({ item }) => parseOutputs(workReplies.get(item.id) ?? ""),
+          captureOutputs: async ({ item }) => workOutputs.get(item.id) ?? [],
           evaluate: async ({ item, attempt }) => {
             const outcome = await stageTurn(
               loop,
@@ -886,6 +918,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const claimed = await deps.outputs.claimShipping(outputId);
       if (!claimed) return null;
       const claimToken = claimed.claimToken!;
+      if (output.state === "shipping") return deps.outputs.markUnconfirmed(outputId, claimToken);
       const fireKey = `loop:${loopId}:ship:${outputId}`;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
       const outcome = await stageTurn(
@@ -898,10 +931,12 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       if (!outcome.ran && !outcome.authzFailed && (await deps.outputs.get(outputId))?.shipFireKey === fireKey) {
         return deps.outputs.markUnconfirmed(outputId, claimToken);
       }
-      const failure = stageFailure("ship", outcome);
-      if (failure) {
-        await deps.outputs.failShipping(outputId, claimToken);
-        throw failure.error;
+      const undelivered = stageFailure("ship", outcome) ?? notDone("ship", outcome);
+      if (undelivered) {
+        await (outcome.ran
+          ? deps.outputs.markUnconfirmed(outputId, claimToken)
+          : deps.outputs.failShipping(outputId, claimToken));
+        throw undelivered.error;
       }
       const shipped = await deps.outputs.completeShipping(
         outputId,
@@ -960,24 +995,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     });
   }
 
-  async function itemTurn(
-    loop: Loop,
-    item: LoopItem,
-    input: StageInput,
-    fireKey: string,
-    actorId: string,
-    options?: ItemTurnOptions,
-  ): Promise<ItemTurnResult> {
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId, options);
-    const failure = stageFailure("item turn", outcome);
-    if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
-    return {
-      ok: true,
-      ...(outcome.reply !== undefined ? { reply: outcome.reply } : {}),
-      ...(outcome.sessionId !== undefined ? { sessionId: outcome.sessionId } : {}),
-    };
-  }
-
   async function followUp(
     loop: Loop,
     item: LoopItem,
@@ -989,14 +1006,15 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
     const prompt = followUpPrompt(loop, asked, message, await loadInboxVoiceProfile(deps.files, loop));
-    const turn = await itemTurn(loop, asked, prompt, fireKey, actorId, options);
-    if (!turn.ok) {
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), prompt, actorId, options);
+    const failure = stageFailure("item turn", outcome);
+    if (failure) {
       await deps.items.appendThread(item.id, [
-        { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
+        { role: "system", text: `The agent could not answer: ${failure.userMessage}` },
       ]);
-      throw new Error(turn.userNote ?? "The agent could not answer");
+      throw new Error(failure.userMessage);
     }
-    const { text, proposal } = splitProposalReply(turn.reply ?? "");
+    const { text, proposal } = splitProposalReply(outcome.reply ?? "");
     if (text) {
       await deps.items.appendThread(item.id, [{ role: "agent", text: excerptReply(text) }]);
     }
@@ -1007,7 +1025,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         await deps.items.setProposal(item.id, {
           data,
           by: "agent",
-          ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
+          ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
         });
       }
     }
@@ -1024,7 +1042,15 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   ): Promise<ItemTurnResult> {
     const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
     const prompt = itemActionPrompt(loop, item, kind, args, await loadInboxVoiceProfile(deps.files, loop));
-    return itemTurn(loop, item, prompt, fireKey, actorId, options);
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), prompt, actorId, options);
+    const failure = stageFailure("item action", outcome) ?? notDone("item action", outcome);
+    if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
+    const { text } = liftBlock(outcome.reply ?? "", "done");
+    return {
+      ok: true,
+      ...(text ? { reply: text } : {}),
+      ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
+    };
   }
 
   return {

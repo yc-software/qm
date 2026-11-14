@@ -137,6 +137,8 @@ const HAPPY: Responder = (req) => {
       return 'Prepared a draft PR.\n```json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix TypeError", "externalRef": "https://github.com/x/pull/1", "label": "checkout"}]}\n```';
     case "judge":
       return '```json\n{"outcome": "met", "reason": "draft PR linked"}\n```';
+    case "ship":
+      return '{"done": true}';
     default:
       return "done";
   }
@@ -236,22 +238,96 @@ test("returning a held output re-queues the item carrying the note, and the next
   assert.match(workPrompts[1]!, /wrong module/);
 });
 
-test("a replayed ship operation becomes unconfirmed and a person can resolve it either way", async () => {
-  for (const decision of ["shipped", "returned"] as const) {
-    const s = service(HAPPY);
-    const loop = await makeLoop(s.loops);
-    await s.fire.fire(loop.id, `fire-${decision}`);
-    const output = (await s.outputs.awaitingReview(loop.id))[0]!;
-    await s.idempotency.once(`loop:${loop.id}:ship:${output.id}`, async () => {});
-    const uncertain = await s.fire.shipOutput(loop.id, output.id, "josh");
-    assert.equal(uncertain?.state, "unconfirmed");
-    assert.equal((await s.items.get(output.itemId))?.status, "ready");
-    const resolved =
-      decision === "shipped"
-        ? await s.fire.shipOutput(loop.id, output.id, "josh", "confirmed externally")
-        : await s.fire.returnOutput(loop.id, output.id, "josh", "retry safely");
-    assert.equal(resolved?.state, decision);
+test("a replayed or interrupted ship operation becomes unconfirmed and a person can resolve it either way", async () => {
+  for (const decision of ["shipped", "returned"] as const)
+    for (const interrupted of [false, true]) {
+      const s = service(HAPPY);
+      const loop = await makeLoop(s.loops);
+      await s.fire.fire(loop.id, `fire-${decision}`);
+      const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+      if (interrupted) await s.outputs.claimShipping(output.id, 0);
+      else await s.idempotency.once(`loop:${loop.id}:ship:${output.id}`, async () => {});
+      const uncertain = await s.fire.shipOutput(loop.id, output.id, "josh");
+      assert.equal(uncertain?.state, "unconfirmed");
+      assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 0);
+      assert.equal((await s.items.get(output.itemId))?.status, "ready");
+      const resolved =
+        decision === "shipped"
+          ? await s.fire.shipOutput(loop.id, output.id, "josh", "confirmed externally")
+          : await s.fire.returnOutput(loop.id, output.id, "josh", "retry safely");
+      assert.equal(resolved?.state, decision);
+    }
+});
+
+test("a ship, an item action or a work turn counts only when the agent reports its result", async () => {
+  let next: TurnResult | undefined;
+  let respond = HAPPY;
+  const s = service((req) => respond(req), { dynamicResult: () => next });
+  const loop = await makeLoop(s.loops);
+  await s.fire.fire(loop.id, "f1");
+  const [held] = await s.outputs.awaitingReview(loop.id);
+  next = {
+    status: "ok",
+    reply: '{"done": true}',
+    pendingApprovals: [{ approvalKey: "security-screen-release:x" }],
+  } as never;
+  assert.equal((await s.fire.shipOutput(loop.id, held!.id, "josh"))?.state, "shipped");
+  next = undefined;
+  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 1);
+
+  const other = await makeLoop(s.loops, { name: "Second" });
+  await s.fire.fire(other.id, "f2");
+  const [waiting] = await s.outputs.awaitingReview(other.id);
+  next = { status: "ok", reply: '{"done": true}', pendingApprovals: [{}] } as never;
+  const item = (await s.items.get(waiting!.itemId))!;
+  assert.equal((await s.fire.itemAction(other, item, "archive", {}, "josh")).ok, false);
+  next = { status: "ok", reply: "I could not archive it." };
+  assert.equal((await s.fire.itemAction(other, item, "archive", {}, "josh")).ok, false);
+  next = { status: "ok", reply: 'Archived.\n```json\n{"done": true}\n```' };
+  assert.deepEqual(await s.fire.itemAction(other, item, "archive", {}, "josh"), { ok: true, reply: "Archived." });
+
+  next = undefined;
+  respond = (req) => (stage(req) === "work" ? "I could not prepare the fix." : HAPPY(req));
+  const third = await makeLoop(s.loops, { name: "Third" });
+  const fired = await s.fire.fire(third.id, "f3");
+  assert.deepEqual(fired.summary?.shipped, []);
+  assert.match(fired.summary?.failures[0] ?? "", /no readable outputs block: I could not prepare the fix\./);
+  respond = (req) => (stage(req) === "work" ? '{"outputs": [{"title": "Fix"}]}' : HAPPY(req));
+  const fourth = await makeLoop(s.loops, { name: "Fourth" });
+  const invalid = await s.fire.fire(fourth.id, "f4");
+  assert.match(invalid.summary?.failures[0] ?? "", /no outputs entry had a shipAction and a title: \{"outputs"/);
+});
+
+test("a ship that ran without reporting done goes to a person, and no manual or auto ship runs it twice", async () => {
+  let next: TurnResult | undefined;
+  const s = service(HAPPY, { dynamicResult: () => (stage(s.turns.at(-1)!) === "ship" ? next : undefined) });
+  const outcomes = [
+    [{ status: "refused", reply: "Sent the email, then a command was denied." }, /turn refused/],
+    [{ status: "ok", reply: "Sent the email.", pendingApprovals: [{}] }, /a step needed an approval and did not run/],
+    [{ status: "failed", reply: "Sent the email, then the API timed out." }, /turn failed/],
+    [
+      { status: "ok", reply: "Sent the email." },
+      /not done — the agent did not report the action done: Sent the email\./,
+    ],
+    [{ status: "silent" }, /not done — the agent did not report the action done$/],
+    [{ status: "ok", reply: '{"done": false, "reason": "no destination"}' }, /not done — no destination/],
+  ] as Array<[TurnResult, RegExp]>;
+  for (const [i, [result, reason]] of outcomes.entries()) {
+    next = result;
+    const loop = await makeLoop(s.loops, { name: `Loop ${i}` });
+    await s.fire.fire(loop.id, `f${i}`);
+    const [output] = await s.outputs.awaitingReview(loop.id);
+    await assert.rejects(s.fire.shipOutput(loop.id, output!.id, "josh"), reason);
+    assert.equal((await s.outputs.get(output!.id))?.state, "unconfirmed");
+    assert.equal((await s.fire.shipOutput(loop.id, output!.id, "josh"))?.state, "shipped");
+    const auto = await makeLoop(s.loops, { name: `Auto ${i}`, shipActions: [{ action: "open_pr", gate: "auto" }] });
+    await s.fire.fire(auto.id, `a${i}`);
+    await s.fire.fire(auto.id, `b${i}`);
+    const [item] = await s.items.byLoop(auto.id);
+    assert.match(item!.parkedReason ?? "", /^auto-ship stopped with 0 of 1 actions shipped: ship: /);
+    assert.equal((await s.outputs.byItem(item!.id)).map((o) => o.state).join(), "unconfirmed");
   }
+  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, outcomes.length * 2);
 });
 
 test("returning one output supersedes active siblings before requeueing the item", async () => {
@@ -430,7 +506,7 @@ test("prompt fences cannot be escaped by loop, item, output, or reviewer text", 
       case "judge":
         return `\`\`\`json\n${JSON.stringify({ outcome: "met", reason: "done", checks: [{ command: poison, passed: true, detail: "ok" }] })}\n\`\`\``;
       default:
-        return "done";
+        return '{"done": true}';
     }
   };
   const s = service(malicious);
