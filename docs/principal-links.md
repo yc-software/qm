@@ -41,9 +41,12 @@ before proxying, and the keychain stores credentials under the canonical owner.
   - **Repair at each sync.** A sign-in whose row says it is a bot, but that is
     linked onto someone else's user, moves to a new app user of its own. The same
     transaction writes a `user_sign_in_split` audit event with the link's
-    evidence and the admin who made it. An app user becomes a person again when
-    one of its sign-ins is listed as a person and none of them is listed as a bot
-    or has an empty flag. An empty flag neither splits nor resets anyone.
+    evidence and the admin who made it. An app user becomes a person again only
+    when every one of its sign-ins is listed and listed as a person: a sign-in
+    Slack doesn't list is no evidence, the same as an empty flag. Any other app
+    user with more than one sign-in stays an app, and the audit log records a
+    `user_sign_in_review` event with each sign-in's signal, once for each
+    distinct set of signals. An empty flag neither splits nor resets anyone.
   - **Turns.** A turn is refused until an admin deletes the link when its speaker
     is a bot joined to anyone by a link, or when the speaker's sign-in or its
     canonical sign-in counts as a bot by the link check's rule. A user whose main

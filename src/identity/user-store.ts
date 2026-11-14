@@ -522,11 +522,30 @@ export function createPostgresUserStore(connectionString: string): UserStore {
         );
         await client.query(MARK_APPS, [bots]);
         await client.query(
-          `UPDATE users u SET kind = 'person'
-            WHERE u.kind = 'app'
-              AND EXISTS (SELECT 1 FROM user_links l WHERE l.user_id = u.id AND l.alias_id = ANY($1::text[]))
-              AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.user_id = u.id AND l.alias_id = ANY($2::text[]))`,
-          [signIns(false), [...bots, ...signIns(undefined)]],
+          `WITH app_sign_ins AS (
+             SELECT l.user_id, l.alias_id, l.evidence, l.alias_id = u.primary_alias AS is_primary,
+                    CASE WHEN l.alias_id = ANY($1::text[]) THEN 'bot'
+                         WHEN l.alias_id = ANY($2::text[]) THEN 'none'
+                         WHEN l.alias_id = ANY($3::text[]) THEN 'person' ELSE 'none' END AS signal
+               FROM user_links l JOIN users u ON u.id = l.user_id
+              WHERE u.kind = 'app'
+           ), people AS (
+             UPDATE users u SET kind = 'person'
+               FROM (SELECT user_id FROM app_sign_ins GROUP BY user_id HAVING bool_and(signal = 'person')) p
+              WHERE u.id = p.user_id
+           )
+           INSERT INTO audit_log(at, principal_id, action, resource, scope_label, detail, idempotency_key)
+           SELECT $4::bigint, 'system:directory-sync', 'user_sign_in_review', user_id::text, 'users', detail,
+                  'user_sign_in_review:' || user_id || ':' || md5(detail)
+             FROM (SELECT user_id, jsonb_build_object(
+                            'reason', CASE WHEN bool_or(signal = 'none') THEN 'some sign-ins have no certain signal'
+                                           ELSE 'the primary sign-in is not a person' END,
+                            'signIns', jsonb_agg(jsonb_build_object('alias', alias_id, 'evidence', evidence, 'signal', signal)
+                                                 ORDER BY is_primary DESC, alias_id))::text AS detail
+                     FROM app_sign_ins GROUP BY user_id
+                    HAVING count(*) > 1 AND NOT bool_and(signal = 'bot') AND NOT bool_and(signal = 'person')) r
+           ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+          [bots, signIns(undefined), signIns(false), Date.now()],
         );
         return split.rowCount ?? 0;
       });

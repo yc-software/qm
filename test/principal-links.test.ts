@@ -610,9 +610,13 @@ describe("directory sync and bot sign-ins", () => {
     await app.users.markApps(["U0OLDAPP", "U0RESET", "sso:stale"]);
     const person = (await app.users.get(pat))!;
     const flags = { [pat]: false, U0BOT: true, U0OLDAPP: undefined, U0RESET: false, U0STALE: false };
-    await app.app.upsertDirectory(
-      Object.entries(flags).map(([principalId, isBot]) => ({ principalId, displayName: "", type: "internal", isBot })),
-    );
+    const members = Object.entries(flags).map(([principalId, isBot]) => ({
+      principalId,
+      displayName: "",
+      type: "internal" as const,
+      isBot,
+    }));
+    await app.app.upsertDirectory(members);
     const bot = (await app.users.get("U0BOT"))!;
     assert.deepEqual([bot.kind, bot.aliases, (await app.users.get(pat))?.aliases], ["app", ["U0BOT"], [pat]]);
     assert.equal(app.identity.classify("U0BOT").id, "U0BOT", "the bot no longer counts as the person");
@@ -629,7 +633,13 @@ describe("directory sync and bot sign-ins", () => {
     );
     assert.deepEqual(
       await Promise.all(["U0RESET", "U0OLDAPP", "sso:stale"].map(async (id) => (await app.users.get(id))?.kind)),
-      ["person", "app", "person"],
+      ["person", "app", "app"],
+    );
+    await app.app.upsertDirectory(members);
+    const reviews = await app.auditLog.tail(tenant, { limit: 5, action: "user_sign_in_review" });
+    assert.deepEqual(
+      reviews.map((e) => e.resource),
+      [(await app.users.get("sso:stale"))?.id],
     );
     await assert.rejects(link("U0OLDAPP"), PrincipalLinkError);
   });
