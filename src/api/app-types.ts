@@ -346,7 +346,7 @@ export interface App {
   withdrawRun(runId: string, viewer?: string): Promise<{ withdrawn: boolean; reason?: string }>;
   signalRun(
     runId: string,
-    signal: RunSignal & { tree?: boolean },
+    signal: RunSignal & { tree?: boolean; remark?: boolean },
     viewer?: string,
   ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;

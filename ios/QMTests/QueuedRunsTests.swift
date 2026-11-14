@@ -47,6 +47,7 @@ final class QueuedSteerProtocol: URLProtocol, @unchecked Sendable {
     let rejected = request.url!.host!.hasPrefix("rejected-")
     let replayed = request.url!.host!.hasPrefix("replayed-")
     let lost = request.url!.host!.hasPrefix("lost-")
+    let started = request.url!.host!.hasPrefix("started-")
     var status = 200
     var body = "{}"
     if request.url!.path == "/api/runs/active/signal" {
@@ -63,13 +64,15 @@ final class QueuedSteerProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
         return
       }
-      status = rejected || replayed ? 409 : 200
+      status = rejected || replayed || started ? 409 : 200
       body =
         rejected
         ? #"{"accepted":false,"reason":"queued_changed"}"#
         : replayed
           ? #"{"accepted":false,"reason":"terminal","replayed":true}"#
-          : #"{"accepted":true}"#
+          : started
+            ? #"{"accepted":false,"reason":"queued_started"}"#
+            : #"{"accepted":true}"#
     } else if request.url!.path == "/api/runs/active" {
       let host = request.url!.host!
       let count = Self.activeRequests.withLock { requests in
@@ -216,6 +219,14 @@ final class QueuedSteerTests: XCTestCase {
     XCTAssertTrue(model.inputs.isEmpty)
     XCTAssertNil(model.error)
     XCTAssertTrue(model.steering.isEmpty)
+  }
+
+  func testStartedQueuedMessageIsConfirmedAndQueueReconciles() async throws {
+    let model = try model(outcome: "started")
+    model.steer(model.inputs[0])
+    try await settle(model)
+    XCTAssertTrue(model.inputs.isEmpty)
+    XCTAssertNil(model.error)
   }
 
   func testLostAcknowledgmentPreservesQueueForReconciliation() async throws {
