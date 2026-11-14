@@ -262,7 +262,7 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
     `DO $$
     BEGIN
       IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('runs') IS NULL
-         OR to_regclass('audit_log') IS NULL THEN
+         OR to_regclass('audit_log') IS NULL OR to_regclass('directory_members') IS NULL THEN
         RETURN;
       END IF;
       CREATE TEMP TABLE app_sign_ins ON COMMIT DROP AS
@@ -280,11 +280,14 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                        min(t.created_at) AS first_spoke, coalesce(bool_or(t.bot), false) AS bot,
                        coalesce(bool_or(NOT t.bot), false) AS person
                   FROM app_sign_ins s
-                  LEFT JOIN (SELECT tenant_id, created_at, ${fold("j #>> '{surfaceOrigin,author,id}'")} AS speaker,
-                                    j @> '{"botActor": true}' AS bot
-                               FROM (SELECT tenant_id, created_at,
-                                            CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb END AS j
-                                       FROM runs) r
+                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker, j @> '{"botActor": true}' AS bot
+                               FROM runs r
+                              CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb')
+                                                              THEN r.request::jsonb END AS j OFFSET 0) p
+                               LEFT JOIN directory_members d
+                                 ON d.tenant_id = r.tenant_id AND d.slack_id = j #>> '{surfaceOrigin,author,id}'
+                              CROSS JOIN LATERAL (VALUES (${fold("j #>> '{surfaceOrigin,author,id}'")}),
+                                                         (${fold("d.principal_id")})) v(speaker)
                               WHERE j @> '{"surfaceOrigin": {"author": {"surface": "slack"}}}'
                                 AND NOT j @> '{"surfaceOrigin": {"audience": "external"}}'
                                 AND (j #>> '{origin,kind}' IN ('human', 'direct')
@@ -584,7 +587,11 @@ export function createPostgresUserStore(connectionString: string): UserStore {
           await client.query(`${LINK_SELECT} WHERE l.alias_id = $1 AND l.alias_id <> u.primary_alias`, [aliasId])
         ).rows;
         if (!rows[0]) return null;
-        await client.query(`DELETE FROM user_links WHERE alias_id = $1`, [aliasId]);
+        await client.query(
+          `WITH gone AS (DELETE FROM user_links WHERE alias_id = $1 RETURNING user_id)
+           UPDATE users u SET kind = 'person' FROM gone WHERE u.id = gone.user_id`,
+          [aliasId],
+        );
         return toLink(rows[0]);
       });
     },

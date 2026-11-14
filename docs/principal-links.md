@@ -38,7 +38,9 @@ before proxying, and the keychain stores credentials under the canonical owner.
   Records written while the link existed stay under the canonical id,
   including the merged user: the sign-in gets a new user of its own only
   when it next writes to QM. A wrong link is an incident to reconcile, not
-  just a row to delete.
+  just a row to delete. Because only people are linked, deleting a link also
+  makes the remaining user a person; a real app that held two sign-ins is
+  marked an app again when it next speaks or a directory sync lists it as a bot.
 - **Deactivation follows the person.** Deactivating either id deactivates both.
 
 ## Admin API

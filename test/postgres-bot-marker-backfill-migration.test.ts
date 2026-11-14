@@ -97,7 +97,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   const built = buildApp(testConfig({ databaseUrl: url }));
   await migrateRegisteredPgSchemas(url);
   const users = createPostgresUserStore(url);
-  const [pat, bot, sam, quiet, app, app2] = ["U0PAT", "B0BOT", "U0SAM", "B0QUIET", "B0APP", "B0APP2"];
+  const [pat, bot, sam, quiet, app, app2] = ["pat@acme.test", "B0BOT", "U0SAM", "B0QUIET", "B0APP", "B0APP2"];
   const [lee, dir] = ["U0LEE", "B0DIR"];
   const schedule = { cron: "0 9 * * *", timezone: "UTC" };
   const crons = await Promise.all(
@@ -110,6 +110,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
     await users.markApps([person]);
   }
   for (const who of [lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
+  await built.directory.replace([{ principalId: pat, displayName: "Pat", type: "internal", slackId: "U0PAT" }]);
   await users.markApps([lee, dir]);
   const said = (speaker: string, actor: string, botActor = false) => {
     const surfaceOrigin = { author: { surface: "slack", account: "default", id: speaker }, audience: "internal" };
@@ -117,7 +118,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
     return built.runs.enqueue({ sessionId: `slack:C1:${speaker}`, request });
   };
   await Promise.all([
-    said(pat, pat),
+    said("U0PAT", pat),
     said(bot, pat, true),
     said(sam, sam),
     said(app, app, true),
@@ -163,4 +164,6 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   const marks = await Promise.all(crons.map(async (c) => (await built.app.getCron(c.id))?.botActor));
   await pg.close();
   assert.deepEqual(marks, [undefined, true]);
+  await users.unlink(quiet);
+  assert.equal((await users.get(sam))?.kind, "person");
 });
