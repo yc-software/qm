@@ -9,11 +9,15 @@ struct MessageMarkdown: View {
   var textColor: Color? = nil
   @State private var copiedCode: String?
   @State private var previewFile: DeliveredFile?
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
-    Markdown(text, baseURL: client.baseURL)
+    Markdown(GitHubLinkMark.decorate(text), baseURL: client.baseURL)
       .markdownImageProvider(WorkspaceMarkdownImages(client: client, files: files))
-      .markdownInlineImageProvider(WorkspaceInlineImages(client: client, files: files))
+      .markdownInlineImageProvider(
+        WorkspaceInlineImages(
+          client: client, files: files, dark: colorScheme == .dark,
+          pointSize: 16 * textScale))
       .id(files.map { "\($0.name ?? ""):\($0.artifactId ?? "")" }.sorted())
       .markdownTextStyle(\.text) {
         ForegroundColor(textColor ?? QMTheme.ink)
