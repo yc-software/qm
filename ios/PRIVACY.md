@@ -25,11 +25,11 @@ Publishing the app is not the same as operating a workspace. The publisher has n
 
 ## What the app sends to your workspace
 
-What you do in the app, plus your device's time zone:
+What you do in the app, plus your device's time zone and what iOS adds to any web request, such as your language preference:
 
 - **Sign-in.** You sign in on your workspace's own sign-in page, shown in a system browser sheet. The app receives a session token from the workspace. It never sees the password you sign in with.
 - **Conversations.** The messages you send, and the actions you take on conversations, approvals, and other items in the workspace.
-- **Attachments.** Files, photos, videos, and pasted images you choose to attach, including photos you take with the camera from inside the app. The photo picker gives the app only the items you select, not your library. Photos and videos are sent as stored, including any metadata embedded in them, such as where they were taken.
+- **Attachments.** Files, photos, videos, and pasted images you choose to attach, including photos you take with the camera from inside the app. The photo picker gives the app only the items you select, not your library. Photos and videos from your library may be converted to a widely supported format and can include metadata embedded in them, such as where they were taken.
 - **Credentials you enter.** API keys, authorization codes, and other secrets you type into the app's keychain and settings screens are sent to your workspace.
 - **Time zone.** Sent with each message, each voice task, and each request for suggested activities.
 
@@ -47,7 +47,7 @@ Ending the call or leaving the app ends the connection.
 
 Dictation is different from live voice. The composer microphone transcribes speech on your device with Apple's Speech framework, and dictation audio is never uploaded.
 
-The temporary recording is deleted once it has been transcribed, or when you cancel, open another conversation or page, or leave the app. If transcription fails, the recording is kept so you can retry, until you cancel. If the app is closed unexpectedly mid-recording, the protected temporary file remains until iOS clears temporary storage.
+The temporary recording is deleted once it has been transcribed, or when you cancel, open another conversation or page, or leave the app. If transcription fails, the recording is kept so you can retry, until you cancel. If the app is closed unexpectedly while a recording exists, the protected temporary file remains until iOS clears temporary storage.
 
 ## Other connections the app makes
 
@@ -65,7 +65,7 @@ The temporary recording is deleted once it has been transcribed, or when you can
 
 Conversation history is loaded from your workspace when you open it and is not saved by the app. iOS itself keeps a snapshot of the app's last screen for the app switcher, and text you copy goes to the system clipboard.
 
-Signing out, or changing workspace, deletes the session token and the drafts for that account from the device. One exception: if your session had already expired, the drafts stay until you sign in and sign out again, or delete the app. Signing out removes the token from the device; it does not end the session on the workspace. iOS can retain the keychain entry of a deleted app, so sign out before deleting the app.
+Signing out, or changing workspace, deletes the session token and the drafts for that account from the device. Two exceptions: if your session had already expired, or if you change workspace while the app cannot reach the old one, the drafts stay until you sign in to that workspace and sign out again, or delete the app. Signing out removes the token from the device; it does not end the session on the workspace. iOS can retain the keychain entry of a deleted app, so sign out before deleting the app.
 
 ## Permissions
 
@@ -85,7 +85,7 @@ Apple provides app developers with crash reports and usage statistics from peopl
 
 ## Third parties
 
-The app does not sell your data or share it for advertising, and it contains no third-party advertising or analytics code. It sends data only to your workspace, to OpenAI during a live voice call, and to the image hosts listed above.
+The app does not sell your data or share it for advertising, and it contains no third-party advertising or analytics code. It sends data only to your workspace, to OpenAI during a live voice call, and to the image hosts listed above; pages you open are loaded by the browser.
 
 The app is built with the open-source libraries declared in [`project.yml`](./project.yml). They run only on your device or as part of a call you start.
 
