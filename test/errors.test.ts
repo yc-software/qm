@@ -13,6 +13,7 @@ import {
   withRequestId,
 } from "../src/util/errors.ts";
 import { WorkAdmissionClosed } from "../src/util/admitted-work.ts";
+import { TransientTurnFailure, TurnHandedOff } from "../src/core/turn-error.ts";
 import { errDetail, errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
 import { runInNewContext } from "node:vm";
 
@@ -113,6 +114,12 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
   const closed = new WorkAdmissionClosed();
   reportFailure("scheduler: tick", closed);
   assert.equal(errorAlreadyReported(closed), false, "admission closed during handoff is logged, never reported");
+  const handedOff = new TurnHandedOff("r9");
+  reportFailure("scheduler: fire re-drive", handedOff);
+  assert.equal(errorAlreadyReported(handedOff), false, "a turn handed to a queue worker at shutdown is never reported");
+  const transient = new TransientTurnFailure("loop: turn failed");
+  reportFailure("loop: fire", transient);
+  assert.equal(errorAlreadyReported(transient), true);
   const boom = new Error("boom");
   reportFailure("scheduler: fire", boom);
   assert.equal(errorAlreadyReported(boom), true);
@@ -122,11 +129,13 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
     [
       "[failed] scheduler: fire: stopped",
       "[failed] scheduler: tick: This deployment is not accepting synchronous work",
+      "[failed] scheduler: fire re-drive: turn r9 was handed to a queue worker at shutdown; its fire will be re-driven [name=TurnHandedOff]",
+      "[failed] loop: fire: loop: turn failed [name=TransientTurnFailure]",
       "[failed] scheduler: fire: boom",
       "[failed] worker: retry (run=r1): a string throw",
     ],
   );
-  assert.match(logged[2]!, /\{stack: at .*errors\.test\.ts/);
+  assert.match(logged[4]!, /\{stack: at .*errors\.test\.ts/);
 });
 
 test("swallow logs the cause chain, structured error fields and stack instead of only the message", (t) => {

@@ -2,6 +2,7 @@ import type { TurnOrigin } from "../src/types.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
+import { TurnHandedOff } from "../src/core/turn-error.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -333,21 +334,22 @@ describe("runTrigger: a turn abandoned while still queued leaves the fire retrya
         owner: "U1",
         ownerScopeId: scopeId("channel", "C1"),
         input: "report back",
-        fireKey: "cron:c7:2000",
-        surface: "cron",
-        threadRef: "cron:c7:2000",
+        fireKey: "loop:l7:2000",
+        surface: "loop",
+        threadRef: "loop:l7:2000",
         destination: toChannel,
         errorNotice: (s: string) => `⚠️ could not run: ${s}`,
       }),
-      /still waiting to finish when this process shut down/,
+      (e: unknown) =>
+        !(e instanceof TurnHandedOff) && /still waiting to finish when this process shut down/.test(String(e)),
     );
-    assert.equal(await d.idempotency.committed("cron:c7:2000"), false);
+    assert.equal(await d.idempotency.committed("loop:l7:2000"), false);
     const pending = await d.deliveries.pending("slack");
     assert.equal(pending.length, 1);
     assert.match(pending[0]!.text, /^⚠️ could not run:/);
   });
 
-  it("a trigger that re-drives its unspent fire throws without a notice", async () => {
+  it("a trigger that re-drives its unspent fire throws a hand-off carrying the run, without a notice", async () => {
     const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
     await assert.rejects(
       runTrigger(d, {
@@ -361,7 +363,7 @@ describe("runTrigger: a turn abandoned while still queued leaves the fire retrya
         redrivesHandOff: true,
         errorNotice: (s: string) => `⚠️ could not run: ${s}`,
       }),
-      /still waiting to finish when this process shut down/,
+      (e: unknown) => e instanceof TurnHandedOff && /turn r1 was handed to a queue worker/.test(e.message),
     );
     assert.equal(await d.idempotency.committed("cron:c8:manual:1"), false);
     assert.deepEqual(await d.deliveries.pending("slack"), []);

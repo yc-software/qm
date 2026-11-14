@@ -6,7 +6,7 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { TransientTurnFailure } from "../core/turn-error.ts";
+import { TransientTurnFailure, TurnHandedOff } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
@@ -326,7 +326,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       idempotencyKey: spec.fireKey,
     });
     if (res.status === "queued") {
-      if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
+      if (spec.redrivesHandOff) throw new TurnHandedOff(res.runId);
+      await sendErrorNotice(userFacingFailureClause(res));
       throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
     }
     status = res.status;
