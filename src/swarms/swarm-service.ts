@@ -95,7 +95,10 @@ export interface SwarmService {
   ): Promise<boolean>;
   authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
-  binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
+  binding(
+    tenant: Tenant,
+    input: OrchestratorInput,
+  ): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   botStartedWorker(session: { id: string; threadRef: string }): Promise<boolean>;
   queuedMessages(
     input: OrchestratorInput,
@@ -1076,7 +1079,7 @@ export function createSwarmService(deps: {
       return !swarm || swarm.template.botActor === true;
     },
 
-    async binding(input) {
+    async binding(tenant, input) {
       const session = await sessions.getByThread(input.conversation.threadRef);
       if (!session) {
         if (input.swarm || input.conversation.threadRef.startsWith("swarm:"))
@@ -1147,6 +1150,16 @@ export function createSwarmService(deps: {
         }))
       )
         throw new NonRetryableTurnError("swarm authorization changed");
+      if (
+        member.id === swarm.id &&
+        swarm.template.botActor &&
+        (await hiddenFromBotWork(tenant, swarm.template, session, { sessions, swarms: service }))
+      )
+        await store.update(swarm.id, (current) => {
+          const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
+          if (notifications[member.id]?.state === "queued")
+            notifications[member.id] = { state: "pending", runId: input.runId };
+        });
       return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
     },
   };
