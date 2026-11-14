@@ -280,20 +280,21 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                        min(t.created_at) AS first_spoke, coalesce(bool_or(t.bot), false) AS bot,
                        coalesce(bool_or(NOT t.bot), false) AS person
                   FROM app_sign_ins s
-                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker, j @> '{"botActor": true}' AS bot
+                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker, p.bot
                                FROM runs r
-                              CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb')
-                                                              THEN r.request::jsonb END AS j OFFSET 0) p
-                               LEFT JOIN directory_members d
-                                 ON d.tenant_id = r.tenant_id AND d.slack_id = j #>> '{surfaceOrigin,author,id}'
-                              CROSS JOIN LATERAL (VALUES (${fold("j #>> '{surfaceOrigin,author,id}'")}),
-                                                         (${fold("d.principal_id")})) v(speaker)
-                              WHERE j @> '{"surfaceOrigin": {"author": {"surface": "slack"}}}'
-                                AND NOT j @> '{"surfaceOrigin": {"audience": "external"}}'
-                                AND (j #>> '{origin,kind}' IN ('human', 'direct')
-                                     OR j @> '{"origin": {"kind": "ambient", "live": true}}')
-                                AND coalesce(j ->> 'sessionSenderId', '') = ''
-                                AND coalesce(j ->> 'delegatingRunId', '') = '') t
+                              CROSS JOIN LATERAL (
+                                    SELECT j #>> '{surfaceOrigin,author,id}' AS author, j @> '{"botActor": true}' AS bot
+                                      FROM (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb')
+                                                        THEN r.request::jsonb END AS j OFFSET 0) parsed
+                                     WHERE j @> '{"surfaceOrigin": {"author": {"surface": "slack"}}}'
+                                       AND NOT j @> '{"surfaceOrigin": {"audience": "external"}}'
+                                       AND (j #>> '{origin,kind}' IN ('human', 'direct')
+                                            OR j @> '{"origin": {"kind": "ambient", "live": true}}')
+                                       AND coalesce(j ->> 'sessionSenderId', '') = ''
+                                       AND coalesce(j ->> 'delegatingRunId', '') = ''
+                                    OFFSET 0) p
+                               LEFT JOIN directory_members d ON d.tenant_id = r.tenant_id AND d.slack_id = p.author
+                              CROSS JOIN LATERAL (VALUES (${fold("p.author")}), (${fold("d.principal_id")})) v(speaker)) t
                     ON t.tenant_id = s.tenant_id AND t.speaker = s.alias_id
                  GROUP BY 1, 2, 3, 4, 5, 6) g;
       CREATE TEMP TABLE person_users ON COMMIT DROP AS
