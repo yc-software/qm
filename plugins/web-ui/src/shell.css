@@ -6939,6 +6939,122 @@ a.file-card:hover {
   font-size: var(--font-13);
   font-weight: 500;
 }
+.app-list-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.app-layout-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--secondary);
+}
+.app-layout-toggle .icon-btn {
+  width: 28px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+}
+.app-layout-toggle .icon-btn:hover {
+  background: transparent;
+  color: var(--foreground);
+}
+.app-layout-toggle .icon-btn.active {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+}
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+  padding: 10px 0 4px;
+}
+.app-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--background);
+}
+.app-card:has(a.app-card-thumb:hover) {
+  border-color: var(--muted-foreground);
+}
+.app-card-archived .app-card-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  background:
+    radial-gradient(120% 100% at 0% 0%, hsl(var(--app-hue) 80% 60% / 0.34), transparent 62%),
+    radial-gradient(110% 100% at 100% 100%, hsl(calc(var(--app-hue) + 50) 75% 55% / 0.26), transparent 66%),
+    var(--muted);
+  color: inherit;
+  text-decoration: none;
+  overflow: hidden;
+}
+.app-card-thumb:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--foreground) 34%, transparent);
+  outline-offset: -2px;
+}
+.app-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, hsl(var(--app-hue) 58% 50%), hsl(calc(var(--app-hue) + 24) 60% 38%));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    0 8px 22px hsl(var(--app-hue) 60% 30% / 0.3);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transition: transform 160ms ease;
+}
+a.app-card-thumb:hover .app-card-icon {
+  transform: translateY(-2px) scale(1.04);
+}
+.app-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 10px 10px 12px;
+  min-width: 0;
+}
+.app-card-body .list-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.app-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.app-card-time {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.app-card-foot .app-manage {
+  margin-left: auto;
+}
 .app-status {
   display: inline-flex;
   align-items: center;

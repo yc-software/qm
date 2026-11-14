@@ -1,7 +1,7 @@
 import { openAppPermissions } from "./app-permissions";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
+import { Archive, Check, Copy, ExternalLink, LayoutGrid, List, Plus, RotateCcw, Trash2, X } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
@@ -65,6 +65,28 @@ let archiveCandidate: AppView | null = null;
 let restoreArchiveFocus = false;
 let appToast: { app: AppView; text: string; undo?: boolean } | null = null;
 let appRefreshSeq = 0;
+const APP_LAYOUT_KEY = "qm.apps.layout";
+type AppLayout = "list" | "grid";
+let appLayout: AppLayout = readAppLayout();
+
+function readAppLayout(): AppLayout {
+  try {
+    return localStorage.getItem(APP_LAYOUT_KEY) === "grid" ? "grid" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function setAppLayout(layout: AppLayout): void {
+  if (appLayout === layout) return;
+  appLayout = layout;
+  try {
+    localStorage.setItem(APP_LAYOUT_KEY, layout);
+  } catch {
+    void 0;
+  }
+  drawAppsPage();
+}
 
 function statusLabel(d: AppView): string {
   if (
@@ -118,24 +140,99 @@ function appTabs(): TemplateResult {
   ) as Record<AppTab, number>;
   const tabs = APP_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || selectedAppTab === tab.value);
   return html`
-    <div class="cron-list-controls" role="tablist" aria-label="App view">
-      ${tabs.map(
-        (tab) => html`
-          <button
-            type="button"
-            role="tab"
-            aria-selected=${selectedAppTab === tab.value}
-            class="cron-filter-chip ${selectedAppTab === tab.value ? "active" : ""}"
-            @click=${() => {
-              selectedAppTab = tab.value;
-              drawAppsPage();
-            }}
-          >
-            <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
-          </button>
-        `,
-      )}
+    <div class="app-list-bar">
+      <div class="cron-list-controls" role="tablist" aria-label="App view">
+        ${tabs.map(
+          (tab) => html`
+            <button
+              type="button"
+              role="tab"
+              aria-selected=${selectedAppTab === tab.value}
+              class="cron-filter-chip ${selectedAppTab === tab.value ? "active" : ""}"
+              @click=${() => {
+                selectedAppTab = tab.value;
+                drawAppsPage();
+              }}
+            >
+              <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
+            </button>
+          `,
+        )}
+      </div>
+      ${appLayoutToggle()}
     </div>
+  `;
+}
+
+function appLayoutToggle(): TemplateResult {
+  const option = (layout: AppLayout, label: string, glyph: typeof List) =>
+    html`<button
+      type="button"
+      class="icon-btn ${appLayout === layout ? "active" : ""}"
+      aria-label=${`${label} view`}
+      aria-pressed=${appLayout === layout}
+      ${tip(`${label} view`)}
+      @click=${() => setAppLayout(layout)}
+    >
+      ${icon(glyph, 15)}
+    </button>`;
+  return html`<div class="app-layout-toggle" role="group" aria-label="Layout">
+    ${option("list", "List", List)}${option("grid", "Grid", LayoutGrid)}
+  </div>`;
+}
+
+function appMonogram(d: AppView): string {
+  const words = appTitle(d)
+    .split(/[\s\-_.]+/)
+    .filter(Boolean);
+  const letters = (
+    words.length > 1 ? words.slice(0, 2).map((w) => [...w][0]) : [...(words[0] ?? "?")].slice(0, 2)
+  ).join("");
+  return letters.toLocaleUpperCase();
+}
+
+const APP_HUES = [215, 245, 270, 295, 325, 350, 10, 25, 165, 190];
+
+function appHue(d: AppView): number {
+  let hash = 0;
+  for (const ch of appSlug(d)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return APP_HUES[hash % APP_HUES.length]!;
+}
+
+function appCard(d: AppView): TemplateResult {
+  const running = d.status === "running";
+  const updated = appLatestAt(d) || d.updatedAt || d.createdAt || 0;
+  const thumb = html`<span class="app-card-icon" aria-hidden="true">${appMonogram(d)}</span>`;
+  return html`
+    <article class="app-card ${d.status === "archived" ? "app-card-archived" : ""}" style=${`--app-hue: ${appHue(d)}`}>
+      ${
+        running && d.webUrl
+          ? html`<a
+              class="app-card-thumb"
+              href=${d.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label=${`Open ${appTitle(d)}`}
+              >${thumb}</a
+            >`
+          : html`<span class="app-card-thumb">${thumb}</span>`
+      }
+      <div class="app-card-body">
+        <span class="list-row-title" dir="auto" title=${appTitle(d)}>${appTitle(d)}</span>
+        <div class="app-card-foot">
+          <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+          ${updated ? html`<span class="app-card-time" ${tip(new Date(updated).toLocaleString())}>${relTime(updated)}</span>` : nothing}
+          <button
+            class="btn compact app-manage"
+            type="button"
+            aria-label=${`Manage ${appTitle(d)}`}
+            @click=${() => void openApp(d)}
+          >
+            Manage
+          </button>
+        </div>
+      </div>
+    </article>
   `;
 }
 
@@ -203,7 +300,11 @@ function drawAppsPage(): void {
         ...(appNotices.list
           ? [html`<div class="status app-list-notice" role="status" aria-live="polite">${appNotices.list}</div>`]
           : []),
-        ...(rows.length ? rows.map(appRow) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
+        ...(rows.length
+          ? appLayout === "grid"
+            ? [html`<div class="app-grid">${rows.map(appCard)}</div>`]
+            : rows.map(appRow)
+          : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
   const scoped = Boolean(scopedSession.active);
