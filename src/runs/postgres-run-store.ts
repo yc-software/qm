@@ -181,6 +181,13 @@ END $base_schema$`,
       ],
     },
     SERVING_RUN_CLAIMS,
+    {
+      id: "runs/store/0016-bot-limited",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS bot_limited BOOLEAN NOT NULL DEFAULT false`,
+      ],
+    },
   ]);
   const { query: q, close: closePool } = pg;
 
@@ -367,6 +374,15 @@ END $base_schema$`,
         seq,
       ]);
       return rowCount > 0;
+    },
+
+    async markBotLimited(tenant, runId): Promise<void> {
+      await pg
+        .forTenant(tenant)
+        .q("UPDATE runs SET bot_limited = true WHERE tenant_id = $1 AND id = $2 AND NOT bot_limited", [
+          tenant.id,
+          runId,
+        ]);
     },
 
     onTerminal(listener): void {
