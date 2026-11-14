@@ -15,9 +15,7 @@ final class DemoWorkspace: URLProtocol, @unchecked Sendable {
 
   static func reset() { state.withLock { $0 = DemoState() } }
 
-  override class func canInit(with request: URLRequest) -> Bool {
-    request.url?.host == origin.host
-  }
+  override class func canInit(with request: URLRequest) -> Bool { true }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
@@ -93,20 +91,21 @@ struct DemoState: Sendable {
   private struct Contexts: Encodable { let contexts: [String] = [] }
 
   static let scriptedReply =
-    "This is the QM demo, so this reply is scripted and nothing you typed left your phone. "
+    "This is the QM demo, so this reply is scripted and nothing you typed left this device. "
     + "Connect your own QM workspace to get real answers, with QM working across your tools."
 
   private var conversations: [Conversation] = []
   private var entries: [String: [Entry]] = [:]
-  private var runs: [String: String] = [:]
+  private var turns = 0
 
-  init(now: Date = .now) {
+  init() {
+    let now = Date()
     let samples = [
       Sample(
         id: "demo-welcome", title: "What can I do in this demo?", pinned: false, hoursAgo: 0.2,
         ask: "What can I do in this demo?",
         answer: """
-          This is a sample workspace that lives entirely on your phone. You can:
+          This is a sample workspace that lives entirely on this device. You can:
 
           - Open the sample conversations and read through them
           - Start a new conversation and send a message; replies here are scripted
@@ -171,8 +170,9 @@ struct DemoState: Sendable {
       (URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map {
         ($0.name, $0.value ?? "")
       }, uniquingKeysWith: { $1 })
-    let body =
+    var body: [String: Any] {
       (try? JSONSerialization.jsonObject(with: request.bodyData) as? [String: Any]) ?? [:]
+    }
     switch (method, path.count) {
     case ("GET", 1) where path == ["me"]: return Reply(Me())
     case ("GET", 2) where path == ["api", "contexts"]: return Reply(Contexts())
@@ -225,9 +225,8 @@ struct DemoState: Sendable {
 
   private mutating func turn(_ body: [String: Any]) -> Reply {
     guard let thread = body["threadRef"] as? String, let text = body["text"] as? String,
-      let key = body["idempotencyKey"] as? String, let id = thread.split(separator: ":").last
+      let id = thread.split(separator: ":").last
     else { return unavailable }
-    if let run = runs[key] { return Reply(Turn(runId: run, reply: Self.scriptedReply)) }
     let now = Date().timeIntervalSince1970 * 1000
     let index: Int
     if let existing = conversations.firstIndex(where: { $0.threadRef == thread }) {
@@ -240,7 +239,8 @@ struct DemoState: Sendable {
       index = conversations.endIndex - 1
     }
     let session = conversations[index].id
-    let run = "demo-run-\(runs.count + 1)"
+    turns += 1
+    let run = "demo-run-\(turns)"
     let next = (entries[session]?.last?.seq ?? 0) + 1
     entries[session, default: []] += [
       Entry(type: "user", seq: next, createdAt: now, payload: .init(text: text, runId: run)),
@@ -249,7 +249,6 @@ struct DemoState: Sendable {
         payload: .init(text: Self.scriptedReply)),
     ]
     conversations[index].lastActivityAt = now
-    runs[key] = run
     return Reply(Turn(runId: run, reply: Self.scriptedReply))
   }
 }
