@@ -111,7 +111,9 @@ struct WorkspacePicker: View {
           .accessibilityLabel("Cancel")
         }
       }
-      .onAppear { address = model.client?.baseURL.absoluteString ?? "" }
+      .onAppear {
+        address = model.exploringDemo ? "" : model.client?.baseURL.absoluteString ?? ""
+      }
       .onChange(of: address) { error = nil }
     }
     .presentationDetents([.medium, .large])
