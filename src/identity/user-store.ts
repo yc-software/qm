@@ -277,16 +277,18 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                CASE WHEN bot AND person THEN 'bot and person' WHEN bot THEN 'bot' WHEN person THEN 'person' ELSE 'none'
                END AS signal
           FROM (SELECT s.tenant_id, s.user_id, s.alias_id, s.evidence, s.linked_by, s.is_primary,
-                       min(t.created_at) AS first_spoke, coalesce(bool_or(t.bot), false) AS bot,
-                       coalesce(bool_or(NOT t.bot), false) AS person
+                       min(t.created_at) AS first_spoke, count(t.speaker) > 0 AS bot,
+                       EXISTS (SELECT 1 FROM directory_members m
+                                WHERE m.tenant_id = s.tenant_id AND m.slack_id IS NOT NULL
+                                  AND ${fold("m.principal_id")} = s.alias_id) AS person
                   FROM app_sign_ins s
-                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker, p.bot
+                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker
                                FROM runs r
                               CROSS JOIN LATERAL (
-                                    SELECT j #>> '{surfaceOrigin,author,id}' AS author, j @> '{"botActor": true}' AS bot
+                                    SELECT j #>> '{surfaceOrigin,author,id}' AS author
                                       FROM (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb')
                                                         THEN r.request::jsonb END AS j OFFSET 0) parsed
-                                     WHERE j @> '{"surfaceOrigin": {"author": {"surface": "slack"}}}'
+                                     WHERE j @> '{"botActor": true, "surfaceOrigin": {"author": {"surface": "slack"}}}'
                                        AND NOT j @> '{"surfaceOrigin": {"audience": "external"}}'
                                        AND (j #>> '{origin,kind}' IN ('human', 'direct')
                                             OR j @> '{"origin": {"kind": "ambient", "live": true}}')
@@ -302,7 +304,8 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
         HAVING bool_and(signal IN ('bot', 'person')) AND bool_or(is_primary AND signal = 'person');
       CREATE TEMP TABLE mixed_splits ON COMMIT DROP AS
         SELECT tenant_id, user_id, alias_id, evidence, linked_by, first_spoke FROM app_signals
-         WHERE signal = 'bot' AND (tenant_id, user_id) IN (SELECT tenant_id, user_id FROM person_users);
+         WHERE signal = 'bot' AND NOT is_primary
+           AND (tenant_id, user_id) IN (SELECT tenant_id, user_id FROM app_signals WHERE signal <> 'bot');
       INSERT INTO users(tenant_id, primary_alias, kind, first_seen_at, source)
         SELECT tenant_id, alias_id, 'app', ${ts("first_spoke")}, 'turn' FROM mixed_splits;
       UPDATE user_links l SET user_id = n.id, evidence = 'primary', linked_by = NULL
@@ -315,7 +318,7 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                      jsonb_build_object('movedSignIns', coalesce(jsonb_agg(
                        jsonb_build_object('alias', s.alias_id, 'userId', n.id, 'evidence', s.evidence, 'linkedBy', s.linked_by)
                        ORDER BY s.alias_id) FILTER (WHERE s.alias_id IS NOT NULL), '[]')) AS detail
-                FROM person_users p
+                FROM (SELECT tenant_id, user_id FROM person_users UNION SELECT tenant_id, user_id FROM mixed_splits) p
                 LEFT JOIN mixed_splits s ON s.tenant_id = p.tenant_id AND s.user_id = p.user_id
                 LEFT JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
                GROUP BY 1, 2
@@ -330,8 +333,9 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                WHERE (tenant_id, user_id) NOT IN (SELECT tenant_id, user_id FROM person_users)
                GROUP BY 1, 2
               HAVING count(*) > 1 AND NOT bool_and(signal = 'bot')) entries
-       WHERE NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.tenant_id = entries.tenant_id AND a.action = entries.action
-                                                    AND a.resource = entries.user_id::text);
+       WHERE NOT EXISTS (SELECT 1 FROM audit_log a
+                          WHERE a.action IN ('user_sign_in_split', 'user_sign_in_review') AND a.action = entries.action
+                            AND a.tenant_id = entries.tenant_id AND a.resource = entries.user_id::text);
     END $$`,
   ],
 };
@@ -588,11 +592,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
           await client.query(`${LINK_SELECT} WHERE l.alias_id = $1 AND l.alias_id <> u.primary_alias`, [aliasId])
         ).rows;
         if (!rows[0]) return null;
-        await client.query(
-          `WITH gone AS (DELETE FROM user_links WHERE alias_id = $1 RETURNING user_id)
-           UPDATE users u SET kind = 'person' FROM gone WHERE u.id = gone.user_id`,
-          [aliasId],
-        );
+        await client.query(`DELETE FROM user_links WHERE alias_id = $1`, [aliasId]);
         return toLink(rows[0]);
       });
     },

@@ -97,30 +97,34 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   const built = buildApp(testConfig({ databaseUrl: url }));
   await migrateRegisteredPgSchemas(url);
   const users = createPostgresUserStore(url);
-  const [pat, bot, sam, quiet, app, app2] = ["pat@acme.test", "B0BOT", "U0SAM", "B0QUIET", "B0APP", "B0APP2"];
-  const [lee, dir] = ["U0LEE", "B0DIR"];
+  const [pat, bot, sam, bot2, app, app2] = ["pat@acme.test", "B0BOT", "U0SAM", "B0BOT2", "B0APP", "B0APP2"];
+  const [kim, lee, dir] = ["kim@acme.test", "U0LEE", "B0DIR"];
   const schedule = { cron: "0 9 * * *", timezone: "UTC" };
   const crons = await Promise.all(
     [pat, bot].map((who) =>
       built.app.createCron({ ownerScopeId: "channel:C1", owner: who, createdBy: who, schedule, action: who }),
     ),
   );
-  for (const [alias, person] of Object.entries({ [bot]: pat, [quiet]: sam, [app2]: app })) {
+  for (const [alias, person] of Object.entries({ [bot]: pat, [bot2]: sam, [app2]: app })) {
     await users.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "U0ADM", createdAt: 1 });
     await users.markApps([person]);
   }
-  for (const who of [lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
-  await built.directory.replace([{ principalId: pat, displayName: "Pat", type: "internal", slackId: "U0PAT" }]);
-  await users.markApps([lee, dir]);
+  for (const who of [kim, lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
+  await built.directory.replace([
+    { principalId: pat, displayName: "Pat", type: "internal", slackId: "U0PAT" },
+    { principalId: kim, displayName: "Kim", type: "internal", slackId: "U0KIM" },
+    { principalId: dir, displayName: "Dir", type: "internal" },
+  ]);
+  await users.markApps([kim, lee, dir]);
   const said = (speaker: string, actor: string, botActor = false) => {
     const surfaceOrigin = { author: { surface: "slack", account: "default", id: speaker }, audience: "internal" };
     const request = { actor: { id: actor }, origin: { kind: "human" }, surfaceOrigin, botActor } as never;
     return built.runs.enqueue({ sessionId: `slack:C1:${speaker}`, request });
   };
   await Promise.all([
-    said("U0PAT", pat),
     said(bot, pat, true),
     said(sam, sam),
+    said(bot2, sam, true),
     said(app, app, true),
     said(app2, app, true),
     said(lee, lee),
@@ -143,27 +147,30 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   await rerun("users/v2/0009-split-linked-bots");
   assert.deepEqual(await state(), after);
   const person = { kind: "person" };
-  const moved = { [bot]: { primary_alias: bot, evidence: "primary", linked_by: null }, [pat]: person, [lee]: person };
+  const own = (alias: string) => ({ primary_alias: alias, evidence: "primary", linked_by: null });
+  const moved = { [bot]: own(bot), [bot2]: own(bot2), [pat]: person, [kim]: person };
   assert.deepEqual(
     after.links,
     before.links.map((link) => ({ ...link, ...moved[String(link.alias_id)] })),
   );
   const signIns = [
-    { alias: sam, evidence: "primary", signal: "person" },
-    { alias: quiet, evidence: "admin", signal: "none" },
+    { alias: sam, evidence: "primary", signal: "none" },
+    { alias: bot2, evidence: "admin", signal: "bot" },
   ];
   const review = { reason: "some sign-ins have no certain signal", signIns };
   const id = async (alias: string) => (await users.get(alias))!.id;
-  const split = { alias: bot, userId: await id(bot), evidence: "admin", linkedBy: await id("U0ADM") };
+  const admin = await id("U0ADM");
+  const split = async (alias: string) => ({ alias, userId: await id(alias), evidence: "admin", linkedBy: admin });
   assert.deepEqual(after.audit.map(Object.values), [
     ["user_sign_in_review", await id(sam), "users", review],
-    ["user_sign_in_split", await id(lee), "users", { movedSignIns: [] }],
-    ["user_sign_in_split", await id(pat), "users", { movedSignIns: [split] }],
+    ["user_sign_in_split", await id(kim), "users", { movedSignIns: [] }],
+    ["user_sign_in_split", await id(pat), "users", { movedSignIns: [await split(bot)] }],
+    ["user_sign_in_split", await id(sam), "users", { movedSignIns: [await split(bot2)] }],
   ]);
   await rerun("users/v2/0008-bot-marker-backfill");
   const marks = await Promise.all(crons.map(async (c) => (await built.app.getCron(c.id))?.botActor));
   await pg.close();
   assert.deepEqual(marks, [undefined, true]);
-  await users.unlink(quiet);
-  assert.equal((await users.get(sam))?.kind, "person");
+  await users.unlink(app2);
+  assert.equal((await users.get(app))?.kind, "app");
 });
