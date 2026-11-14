@@ -31,7 +31,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
   };
 }
 
-const claimDeliveries = (gate: (column: string) => string) =>
+const claimDeliveries = (gate: (column: string) => string, tiebreak: "id" | "seq") =>
   claimFunction(
     "claim_deliveries",
     "text, bigint",
@@ -45,7 +45,7 @@ const claimDeliveries = (gate: (column: string) => string) =>
                     WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
                       AND o.destination->>'target' = d.destination->>'target'
                       AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
-                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))
+                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.${tiebreak}) < (d.created_at, d.${tiebreak})))
                ORDER BY created_at
                FOR UPDATE SKIP LOCKED)
             RETURNING tenant_id, id::text`,
@@ -134,7 +134,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
             WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM deliveries WHERE ${OVERAGED} FOR UPDATE SKIP LOCKED)
             RETURNING tenant_id, id::text`,
         ),
-        claimDeliveries(() => ""),
+        claimDeliveries(() => "", "id"),
       ],
     },
     {
@@ -167,7 +167,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     {
       id: "delivery/store/0013-serving-claims",
-      statements: [claimDeliveries(servingTenant), undeliveredTenants(servingTenant)],
+      statements: [claimDeliveries(servingTenant, "id"), undeliveredTenants(servingTenant)],
+    },
+    {
+      id: "delivery/store/0014-creation-order",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `SET LOCAL statement_timeout = 0`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS seq BIGSERIAL`,
+        claimDeliveries(servingTenant, "seq"),
+      ],
     },
   ]);
   const { q, query } = pg;
@@ -234,7 +243,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `SELECT * FROM deliveries
           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
             AND ($2::text IS NULL OR provenance->>'sourceThreadRef' = $2)
-          ORDER BY created_at`,
+          ORDER BY created_at, seq`,
         [type, sourceThreadRef ?? null],
       );
       return rows.map(rowToDelivery);
@@ -242,14 +251,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async claimPending(type, ttlMs) {
       await expireOveraged();
       const rows = await q(
-        `UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
-          WHERE id IN (
-            SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
-             ORDER BY created_at FOR UPDATE SKIP LOCKED)
-          RETURNING *`,
+        `WITH claimed AS (
+           UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
+            WHERE id IN (
+              SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
+               ORDER BY created_at, seq FOR UPDATE SKIP LOCKED)
+            RETURNING *)
+         SELECT * FROM claimed ORDER BY created_at, seq`,
         [type, ttlMs],
       );
-      return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
+      return rows.map(rowToDelivery);
     },
     async claimDue(type, ttlMs) {
       const load = async (ids: string[]) =>
@@ -263,7 +274,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(
-        "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC LIMIT $1",
+        "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC, seq DESC LIMIT $1",
         [limit],
       );
       return rows.map(rowToDelivery);
@@ -332,7 +343,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE recipient_thread_ref = $1 AND destination->>'type' = 'principal'
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, seq DESC
           LIMIT $2`,
         [recipientThreadRef, limit],
       );
@@ -343,7 +354,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE provenance->>'sourceSessionId' = $1 OR provenance->>'sourceThreadRef' = $2
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, seq DESC
           LIMIT $3`,
         [sourceSessionId, sourceThreadRef, limit],
       );
