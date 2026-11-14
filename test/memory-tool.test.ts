@@ -436,9 +436,13 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     },
   };
   const op = { client, timeoutMs: 1000 };
+  let notebookDown = false;
   const memory = createRoutedMemoryService({
     providers: {
-      default: notebook,
+      default: {
+        ...notebook,
+        delete: (...args) => (notebookDown ? Promise.reject(new Error("store down")) : notebook.delete!(...args)),
+      },
       acme: createMcpMemoryProvider({
         read: { ...op, tool: "memory_recall" },
         write: { ...op, tool: "memory_write" },
@@ -484,5 +488,14 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     await run({ action: "add", facts: [{ text: "Alice drinks rooibos." }] }),
     /^Remembered 1 fact\.\n\[memory_provider_failed\] Memory provider acme failed \(invalid_params\), so it stored nothing\./,
   );
-  assert.deepEqual(forgets(), [13, 14, 7]);
+  assert.match(
+    await run({ action: "delete", ids: Array.from({ length: 21 }, (_, i) => `acme:${i + 20}`) }),
+    /^\[error\] A delete forgets at most 20 brain refs; /,
+  );
+  notebookDown = true;
+  assert.match(
+    await run({ action: "delete", ids: ["#2", ...Array<string>(21).fill("acme:8")] }),
+    /^Forgot acme:8\.\n\[memory_provider_failed\] QM's notebook failed to forget this delete's notebook ids, so they're still there\./,
+  );
+  assert.deepEqual(forgets(), [13, 14, 7, 8]);
 });

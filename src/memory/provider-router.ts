@@ -10,7 +10,15 @@ import {
   resolveIds,
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
-import { changeFailure, failedOutcome, forgetKnown, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import {
+  changeFailure,
+  failedOutcome,
+  forgetKnown,
+  MAX_FACTS_PER_WRITE,
+  strictFailure,
+  withEnvelope,
+} from "./provider-outcome.ts";
+import { reportFailure } from "../util/errors.ts";
 import { OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
@@ -220,6 +228,10 @@ export function createRoutedMemoryService(opts: {
         throw new MemoryForgetRefused(
           "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact, and only while that turn is running; admin, maintenance, self-service, bot, automation and ambient changes, and a job or script that outlives its turn, reach the notebook only. Nothing was changed.",
         );
+      if (refs.length > MAX_FACTS_PER_WRITE)
+        throw new MemoryForgetRefused(
+          `A delete forgets at most ${MAX_FACTS_PER_WRITE} brain refs; send the rest in another delete. Nothing was changed.`,
+        );
       const notebookIds = ids.filter((id) => !id.includes(":"));
       const manager = notebookIds.length ? managerFor(scopeId) : undefined;
       if (notebookIds.length && !manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
@@ -241,7 +253,15 @@ export function createRoutedMemoryService(opts: {
         }),
       ).then((outcomes) => outcomes.flat());
       for (const outcome of settled) context?.report?.(outcome);
-      if (manager?.delete && forgetKnown(settled)) await manager.delete(scopeId, notebookIds, by, context);
+      if (!manager?.delete || !forgetKnown(settled)) return;
+      const started = Date.now();
+      try {
+        await manager.delete(scopeId, notebookIds, by, context);
+      } catch (error) {
+        if (!refs.length) throw error;
+        reportFailure("memory: notebook forget after brain forgets", error);
+        context?.report?.({ provider: "default", scope: scopeId, outcome: "failed", ms: Date.now() - started });
+      }
     },
 
     async metadata() {

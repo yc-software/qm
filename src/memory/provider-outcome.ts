@@ -248,6 +248,13 @@ export function forgetKnown(outcomes: readonly Pick<MemoryProviderOutcome, "outc
   return outcomes.every(({ outcome }) => outcome !== "unknown");
 }
 
+const NOTEBOOK_FORGET_FAILED: MemoryProviderProblem = {
+  code: "memory_provider_failed",
+  provider: "default",
+  detail: "QM's notebook failed to forget this delete's notebook ids, so they're still there.",
+  fix: "Send the delete again with only those ids; QM's log has the notebook's error.",
+};
+
 export async function forgetFacts(
   memory: MemoryService,
   scope: ScopeId,
@@ -256,12 +263,16 @@ export async function forgetFacts(
   context: Pick<MemoryForgetContext, "audienceScopeId">,
   call: string | undefined,
 ): Promise<MemoryForget> {
+  const unique = [...new Set(ids)];
   const idempotencyKey = requestKey("forget", call ?? randomUUID(), scope);
-  const { outcomes, problems } = await withProviders("forget", (report) =>
-    memory.delete!(scope, ids, by, { ...context, idempotencyKey, startedAt: Date.now(), report }),
+  const reported = await withProviders("forget", (report) =>
+    memory.delete!(scope, unique, by, { ...context, idempotencyKey, startedAt: Date.now(), report }),
   );
-  const notebook = ids.length - outcomes.length;
+  const outcomes = reported.outcomes.filter(({ provider }) => provider !== "default");
+  const notebookFailed = outcomes.length < reported.outcomes.length;
+  const notebook = notebookFailed ? 0 : unique.length - outcomes.length;
   const kept = !forgetKnown(outcomes);
   const forgotten = (kept ? 0 : notebook) + outcomes.filter(({ outcome }) => outcome === "committed").length;
+  const problems = notebookFailed ? [...reported.problems, NOTEBOOK_FORGET_FAILED] : reported.problems;
   return { forgotten, notebook, kept, outcomes, problems };
 }
