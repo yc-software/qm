@@ -43,7 +43,15 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
   const cronBy = async (botActor: boolean) => {
     await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
     const conversation = { kind: "dm" as const, threadRef: `dm:U1:${botActor}` };
-    await built.app.turn({ surface: "test", actor: { externalId: "U1" }, conversation, text: "mint", botActor });
+    const origin = botActor ? { origin: { kind: "automation" as const } } : {};
+    await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation,
+      text: "mint",
+      botActor,
+      ...origin,
+    });
     const headers = { "x-agent-capability": token, "content-type": "application/json" };
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/crons`;
     const api = (method: string, path: string, body = {}) =>

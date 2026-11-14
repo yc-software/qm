@@ -8,11 +8,11 @@ import { personLabel, UNKNOWN_PERSON } from "../src/identity/person-names.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
-const url = testDatabaseUrl();
+const url = testMigratedDatabaseUrl();
 const store = (): UserStore => createPostgresUserStore(url);
 const unique = (name: string) => `${name}-${randomUUID().slice(0, 8)}@example.com`;
 
@@ -39,6 +39,58 @@ test("a user is a person until marked as an app; marking never creates a row", a
   assert.equal((await roster.get(bot))?.kind, "app");
   assert.equal(await roster.markApps([bot]), 0, "marking again changes nothing");
   assert.equal(await roster.get(absent), null);
+});
+
+test("becoming an app marks what its aliases made, holds those loops' auto ships and revokes its grants", async () => {
+  const [roster, pg] = [store(), createPgPool(url)];
+  const named = (name: string) => `U-${name}-${randomUUID().slice(0, 8)}`;
+  const [bot, pat] = [named("bot"), named("pat")];
+  for (const id of [bot, pat]) await roster.record({ id, source: "turn", at: 1 });
+  const creators = { crons: "createdBy", keychain_asks: "requesterId", loops: "createdBy", monitors: "createdBy" };
+  const tables = [...Object.keys(creators), "loop_ship_grants"];
+  const shipActions = ["send_email", "post_slack"].map((action, i) => ({ action, gate: i ? "hold" : "auto" }));
+  const scope = { ownerScopeId: "channel:C1", requesterScopeId: "channel:C1", shipActions };
+  const insert = (table: string, id: string, json: object) =>
+    pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [id, { id, ...json }]);
+  for (const [table, creator] of Object.entries(creators))
+    for (const who of [bot, pat]) await insert(table, `${table}:${who}`, { [creator]: who, ...scope });
+  for (const who of [bot, pat])
+    await insert("loop_ship_grants", `grant:${who}`, { loopId: `loops:${pat}`, actorId: who });
+  const versions = async () =>
+    new Map((await pg.q("SELECT tbl, v FROM durable_map_versions")).map((r) => [r.tbl, Number(r.v)]));
+  const before = await versions();
+
+  assert.equal(await roster.markApps([bot]), 1);
+
+  const after = await versions();
+  const rows =
+    await pg.q(`SELECT concat_ws(' ', id, json ->> 'botActor', json #>> '{shipActions,0,gate}', json ->> 'revokedBy')
+    FROM (${tables.map((t) => `SELECT id, json FROM ${t}`).join(" UNION ALL ")}) r`);
+  const audit = await pg.q("SELECT action, resource, detail::jsonb FROM audit_log WHERE principal_id = 'system'");
+  await pg.close();
+  const made = (table: string, who: string) =>
+    who === pat ? `${table}:${who} auto` : `${table}:${who} true ${table === "loops" ? "hold" : "auto"}`;
+  assert.deepEqual(
+    rows.map((r) => Object.values(r)[0]).sort(),
+    [
+      ...Object.keys(creators).flatMap((t) => [bot, pat].map((who) => made(t, who))),
+      `grant:${bot} system`,
+      `grant:${pat}`,
+    ].sort(),
+  );
+  const held = (table: string) => (table === "loops" ? { heldShipActions: ["send_email"] } : {});
+  const action = (table: string) => `${table === "keychain_asks" ? "keychain_ask" : table.slice(0, -1)}_update`;
+  assert.deepEqual(
+    audit.map(Object.values).sort((a, b) => (String(a[1]) < String(b[1]) ? -1 : 1)),
+    [
+      ...Object.keys(creators).map((t) => [action(t), `${t}:${bot}`, { botActor: true, ...held(t) }]),
+      ["ship_grant_revoke", `grant:${bot}`, { loopId: `loops:${pat}` }],
+    ].sort((a, b) => (String(a[1]) < String(b[1]) ? -1 : 1)),
+  );
+  assert.deepEqual(
+    tables.map((t) => (after.get(t) ?? 0) - (before.get(t) ?? 0)),
+    [1, 1, 1, 1, 1],
+  );
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {

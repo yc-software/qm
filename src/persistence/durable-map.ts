@@ -45,6 +45,9 @@ export interface DurableMap<T> {
 
 const VERSIONS_TABLE = "durable_map_versions";
 
+export const bumpMapVersions = (rows: string): string =>
+  `INSERT INTO ${VERSIONS_TABLE} (tbl, v) ${rows} ON CONFLICT (tenant_id, tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
+
 const VERSIONS_TENANCY = tenantTables(`durable-map/${VERSIONS_TABLE}/0010-tenants`, [
   { table: VERSIONS_TABLE, primaryKey: "tbl" },
 ]);
@@ -212,8 +215,7 @@ export function createPostgresMap<T>(
   }
   const tenanted = tenancy.length > 0;
   const key = tenanted ? "tenant_id, id" : "id";
-  const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
-     ON CONFLICT (tenant_id, tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
+  const bumpSql = bumpMapVersions(`VALUES ('${table}', 1)`);
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {

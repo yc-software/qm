@@ -1,5 +1,17 @@
 import type { ShipGrant } from "./types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import { msOf } from "../sessions/items.ts";
+import { madeByAliases } from "../triggers/trigger-store.ts";
+
+export const revokeGrantsByAliases = (by: string): string => `granted AS (
+  SELECT g.id, l.json ->> 'ownerScopeId' AS scope, l.id AS loop_id
+    FROM loop_ship_grants g JOIN loops l ON l.id = g.json ->> 'loopId'
+   WHERE NOT g.json ? 'revokedAt' AND ${madeByAliases("g.json ->> 'actorId'")}
+), grants_revoked AS (
+  UPDATE loop_ship_grants g SET json = g.json || jsonb_build_object('revokedAt', ${msOf("now()")}, 'revokedBy', ${by})
+    FROM granted x WHERE g.id = x.id
+  RETURNING 'loop_ship_grants' AS tbl, 'ship_grant_revoke' AS action, g.id, x.scope, jsonb_build_object('loopId', x.loop_id) AS detail
+)`;
 
 export interface ShipGrantStore {
   put(grant: ShipGrant): Promise<ShipGrant>;

@@ -13,9 +13,9 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("the bot marker backfill marks what a Slack app user made and nothing a person made", async () => {
   const url = testDatabaseUrl();
-  const users = createPostgresUserStore(url);
+  const [users, pg] = [createPostgresUserStore(url), createPgPool(url)];
   for (const id of ["release-bot", "U1"]) await users.record({ id, source: "turn", at: Date.now() });
-  await users.markApps(["release-bot"]);
+  await pg.q("UPDATE users SET kind = 'app' WHERE primary_alias = 'release-bot'");
   const maps = createPostgresMapFactory(url);
   const creators = { crons: "createdBy", loops: "createdBy", monitors: "createdBy", keychain_asks: "requesterId" };
   for (const [table, creator] of Object.entries(creators)) {
@@ -23,7 +23,6 @@ test("the bot marker backfill marks what a Slack app user made and nothing a per
     await map.put("by-bot", { id: "by-bot", [creator]: "release-bot" });
     await map.put("by-person", { id: "by-person", [creator]: "U1" });
   }
-  const pg = createPgPool(url);
   try {
     await pg.migrate(BACKFILL_BOT_MARKER_MIGRATION);
     for (const table of Object.keys(creators)) {

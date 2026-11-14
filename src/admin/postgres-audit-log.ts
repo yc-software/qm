@@ -17,7 +17,7 @@ function rowToEvent(r: Record<string, unknown>): AuditEvent {
   };
 }
 
-const COLS = "at, principal_id, action, resource, scope_label, status, detail";
+export const AUDIT_COLUMNS = "at, principal_id, action, resource, scope_label, status, detail";
 const MAX = 50000;
 
 export function createPostgresAuditLog(connectionString: string): AuditLog {
@@ -75,7 +75,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     record(tenant, e) {
       const write = pg
         .forTenant(tenant)
-        .q(`INSERT INTO audit_log(${COLS}, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [
+        .q(`INSERT INTO audit_log(${AUDIT_COLUMNS}, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [
           e.at,
           e.principalId,
           e.action,
@@ -92,7 +92,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     },
     async recordOnce(tenant, key, e) {
       await pg.forTenant(tenant).q(
-        `INSERT INTO audit_log(${COLS}, idempotency_key, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `INSERT INTO audit_log(${AUDIT_COLUMNS}, idempotency_key, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
         [e.at, e.principalId, e.action, e.resource, e.scopeLabel, e.status ?? null, e.detail ?? null, key, tenant.id],
       );
@@ -101,7 +101,10 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       await Promise.allSettled(pendingWrites);
       const rows = await pg
         .forTenant(tenant)
-        .q(`SELECT ${COLS} FROM audit_log WHERE tenant_id = $1 ORDER BY at DESC, id DESC LIMIT $2`, [tenant.id, MAX]);
+        .q(`SELECT ${AUDIT_COLUMNS} FROM audit_log WHERE tenant_id = $1 ORDER BY at DESC, id DESC LIMIT $2`, [
+          tenant.id,
+          MAX,
+        ]);
       return rows.map(rowToEvent).reverse();
     },
     async tail(tenant, { limit, scopeLabel, action, since, resourceContains }) {
@@ -137,7 +140,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       const rows = await pg
         .forTenant(tenant)
         .q(
-          `SELECT ${COLS} FROM audit_log WHERE ${conds.join(" AND ")} ORDER BY at DESC, id DESC LIMIT $${params.length}`,
+          `SELECT ${AUDIT_COLUMNS} FROM audit_log WHERE ${conds.join(" AND ")} ORDER BY at DESC, id DESC LIMIT $${params.length}`,
           params,
         );
       return rows.map(rowToEvent);

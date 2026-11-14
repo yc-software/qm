@@ -14,10 +14,28 @@ import {
   assertNoEscalation,
   buildTriggerBase,
   contentPart,
+  madeByAliases,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
+
+export const HOLD_LOOPS_MADE_BY_ALIASES = `locked AS (
+  SELECT t.id, t.json FROM loops t
+   WHERE NOT t.json ? 'botActor' AND ${madeByAliases("t.json ->> 'createdBy'")} FOR UPDATE
+), gated AS (
+  SELECT t.id, jsonb_agg(p ->> 'action' ORDER BY n) FILTER (WHERE p ->> 'gate' = 'auto') AS held,
+         jsonb_agg(CASE WHEN p ->> 'gate' = 'auto' THEN p || '{"gate": "hold"}'::jsonb ELSE p END ORDER BY n) AS ship_actions
+    FROM locked t CROSS JOIN LATERAL jsonb_array_elements(t.json -> 'shipActions') WITH ORDINALITY AS a(p, n)
+   WHERE t.json -> 'shipActions' @> '[{"gate": "auto"}]'
+   GROUP BY t.id
+), loops_marked AS (
+  UPDATE loops t SET json = t.json || '{"botActor": true}'::jsonb
+         || CASE WHEN g.id IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('shipActions', g.ship_actions) END
+    FROM locked l LEFT JOIN gated g ON g.id = l.id WHERE t.id = l.id
+  RETURNING 'loops' AS tbl, 'loop_update' AS action, t.id, t.json ->> 'ownerScopeId' AS scope,
+            jsonb_strip_nulls(jsonb_build_object('botActor', true, 'heldShipActions', g.held)) AS detail
+)`;
 
 export interface CreateLoopInput extends CreateTriggerInput {
   name: string;

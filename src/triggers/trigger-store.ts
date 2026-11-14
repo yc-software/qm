@@ -145,3 +145,22 @@ export const MARK_BOT_EDITED_CRONS_MIGRATION = {
     END $$`,
   ],
 };
+
+const BOT_MARKER = `'{"botActor": true}'::jsonb`;
+
+export const madeByAliases = (creator: string): string =>
+  `EXISTS (SELECT 1 FROM aliases) AND ${fold(creator)} IN (SELECT alias FROM aliases)`;
+
+export const BOT_MARKED_TRIGGERS = [
+  ["crons", "cron", "createdBy", "ownerScopeId"],
+  ["monitors", "monitor", "createdBy", "ownerScopeId"],
+  ["keychain_asks", "keychain_ask", "requesterId", "requesterScopeId"],
+] as const;
+
+export const MARK_TRIGGERS_MADE_BY_ALIASES = BOT_MARKED_TRIGGERS.map(
+  ([table, record, creator, scope]) => `${table}_marked AS (
+  UPDATE ${table} t SET json = t.json || ${BOT_MARKER}
+   WHERE NOT t.json ? 'botActor' AND ${madeByAliases(`t.json ->> '${creator}'`)}
+  RETURNING '${table}' AS tbl, '${record}_update' AS action, t.id, t.json ->> '${scope}' AS scope, ${BOT_MARKER} AS detail
+)`,
+).join(",\n");
