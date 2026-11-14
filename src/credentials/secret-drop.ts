@@ -11,6 +11,7 @@ export interface SecretDropField {
 }
 
 export interface SecretDropRecord {
+  kind?: "login";
   ownerId: string;
   orgId?: string;
   service: string;
@@ -29,7 +30,7 @@ export interface SecretDropRecord {
   createdAt: number;
 }
 
-type SecretDropResult = { ok: true; rec: SecretDropRecord } | { ok: false; reason: "not_found" | "expired" };
+export type SecretDropResult = { ok: true; rec: SecretDropRecord } | { ok: false; reason: "not_found" | "expired" };
 
 export interface SecretDropStore {
   mint(rec: Omit<SecretDropRecord, "createdAt">, now?: number): Promise<{ dropId: string }>;

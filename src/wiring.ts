@@ -1305,6 +1305,13 @@ export function buildApp(
       `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
     ],
   });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/keychain_credentials/0003-delete-kernel-writer-markers",
+    statements: [
+      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active')`,
+      `DELETE FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active'`,
+    ],
+  });
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
     grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),

@@ -146,32 +146,29 @@ launching without it.
 With the person's profile and proxy. Only ONE browser may write to a profile at a
 time: Kernel allows concurrent browsers on a profile, and each save replaces the whole
 profile, so a second writer silently clobbers the first. Since browsers can't be listed,
-record your own writer in the person's keychain (`KERNEL_ACTIVE`, service
-`kernel-active`, value `<session_id>:<epoch>`) and launch read-only while a record younger
-than the browser timeout exists. Name its handle in `credentials` when it exists (absent =
-no writer):
+claim the writer lease on the person's `KERNEL_PROFILE` credential first, and launch
+read-only when another run holds it. The lease ends when the browser's own timeout does:
 
 ```bash
-SAVE=true
-case "${KERNEL_ACTIVE:-}" in *:*) [ $(( $(date +%s) - ${KERNEL_ACTIVE#*:} )) -lt 1800 ] && SAVE=false;; esac
-CREATE=$(kapi POST /browsers "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"proxy_id\":\"$KERNEL_PROXY_ID\",\"profile\":{\"name\":\"$KERNEL_PROFILE\",\"save_changes\":$SAVE}}")
+TIMEOUT=1800
+HOLDER=$(python3 -c 'import secrets;print(secrets.token_hex(16))')
+PROFILE_ID=$(curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
+  | python3 -c "import sys,json;print(next((c['id'] for c in json.load(sys.stdin)['credentials'] if c.get('envKey')=='KERNEL_PROFILE'),''))")
+SAVE=false
+curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials/$PROFILE_ID/writer" -H "x-agent-capability: $AGENT_API_TOKEN" \
+  -H 'content-type: application/json' -d "{\"holder\":\"$HOLDER\",\"until\":$(( $(date +%s) + TIMEOUT ))}" > /dev/null && SAVE=true
+CREATE=$(kapi POST /browsers "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":$TIMEOUT,\"proxy_id\":\"$KERNEL_PROXY_ID\",\"profile\":{\"name\":\"$KERNEL_PROFILE\",\"save_changes\":$SAVE}}")
 CDP_URL=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('cdp_ws_url',''))")
 KERNEL_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id',''))")
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('browser_live_view_url',''))")
+[ -n "$KERNEL_SID" ] || [ "$SAVE" != true ] || { curl -fsS -X DELETE \
+  "$AGENT_API_URL/v1/keychain/credentials/$PROFILE_ID/writer?holder=$HOLDER" -H "x-agent-capability: $AGENT_API_TOKEN" > /dev/null; SAVE=false; }
 ```
 
-When `SAVE=true`, claim the profile right away:
-
-```bash
-[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
-  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
-  -d "{\"service\":\"kernel-active\",\"envKey\":\"KERNEL_ACTIVE\",\"secret\":\"$KERNEL_SID:$(date +%s)\"}" > /dev/null
-```
-
+When the create fails, that last line hands the lease back and sets `SAVE` to `false`, so retry
+the whole block to take the lease again.
 `CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
-when you report: anything this run signs in to won't be kept. The record is not a lock —
-two runs starting in the same moment can both see none — so keep one browse run at a
-time on a person's profile.
+when you report: anything this run signs in to won't be kept.
 
 ## Giving the browser a file
 
@@ -202,8 +199,8 @@ The person signs in once on the live browser; the profile keeps it.
 2. They sign in, finish any 2FA, and say done. If the browser was launched with
    `SAVE=false` (another browser holds the profile), stop that one first and relaunch, or
    the sign-in is lost.
-3. DELETE the browser (that is what writes the profile), wait ~10s, create a fresh one
-   (it launches signed in) and re-run the task.
+3. DELETE the browser (that is what writes the profile) and release the lease, both as in
+   Clean up, wait ~10s, create a fresh one (it launches signed in) and re-run the task.
 
 Expectation-setting: the profile keeps session cookies; it can't re-answer challenges. A
 site that re-verifies on every visit (SMS/email OTP) will need the person again, and when
@@ -216,9 +213,8 @@ password never leaves them.
 ```bash
 kapi DELETE "/browsers/$KERNEL_SID"
 # release the profile if this run held it
-[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
-  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
-  -d '{"service":"kernel-active","envKey":"KERNEL_ACTIVE","secret":"none:0"}' > /dev/null
+[ "$SAVE" = true ] && curl -fsS -X DELETE "$AGENT_API_URL/v1/keychain/credentials/$PROFILE_ID/writer?holder=$HOLDER" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" > /dev/null
 ```
 
 ## API reference
