@@ -40,6 +40,7 @@ import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
 import { audit, isObj, orgScope, runIsActive } from "./shared.ts";
+import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -869,7 +870,13 @@ const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
     memory,
     write,
     ids,
-    turnAuthority(capability.actorId, capability.memory, personAtKeyboard(capability) && (await runIsActive(ctx))),
+    turnAuthority(
+      capability.actorId,
+      capability.memory,
+      personAtKeyboard(capability) &&
+        (await runIsActive(ctx)) &&
+        !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
+    ),
     capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
   );

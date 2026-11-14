@@ -558,6 +558,13 @@ export function createMockAgent(): Agent {
         const written = await turn.tools.memoryAdd([fact]);
         usedTool = true;
         reply = written === null ? "(memory unavailable)" : `remembered ${written.added}`;
+      } else if (command0.startsWith("!memoryforget ")) {
+        const ids = command0.slice("!memoryforget ".length).trim().split(" ");
+        usedTool = true;
+        reply = await turn.tools.memoryDelete(ids, "forget").then(
+          (forgot) => (forgot === null ? "(memory unavailable)" : `forgot ${forgot.forgotten}`),
+          (error: Error) => error.message,
+        );
       } else if (command0.startsWith("!skill-run ")) {
         const rest = command0.slice(11).trim();
         const sp = rest.indexOf(" ");
