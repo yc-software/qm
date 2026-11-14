@@ -19,6 +19,9 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
+  swift-cmark:
+    url: https://github.com/swiftlang/swift-cmark
+    exactVersion: 0.9.0
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -37,6 +40,10 @@ targets:
     dependencies:
       - package: WebRTC
       - package: MarkdownUI
+      - package: swift-cmark
+        product: cmark-gfm
+      - package: swift-cmark
+        product: cmark-gfm-extensions
       - package: SVGView
     settings:
       base:

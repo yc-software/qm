@@ -148,8 +148,13 @@ struct NativeMarkdownImageLoading: View {
 struct WorkspaceInlineImages: InlineImageProvider {
   let client: APIClient
   let files: [DeliveredFile]
+  var dark = false
+  var pointSize: CGFloat = 16
 
   func image(with url: URL, label: String) async throws -> Image {
+    if url.scheme == GitHubLinkMark.scheme {
+      return GitHubLinkMark.image(dark: dark, pointSize: pointSize)
+    }
     guard let path = MarkdownImageResource.path(url, baseURL: client.baseURL, files: files) else {
       return Image(systemName: "photo")
     }
