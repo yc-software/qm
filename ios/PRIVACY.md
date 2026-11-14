@@ -6,51 +6,70 @@ This policy describes what the QM app for iPhone and iPad does with your data. I
 
 ## Publisher
 
-The build on the App Store is published by Y Combinator, and this is its privacy policy. Questions about it can be raised as an issue at <https://github.com/yc-software/qm/issues>.
+The build on the App Store is published by Y Combinator, and this is its privacy policy. Questions about it can be raised as an issue at <https://github.com/yc-software/qm/issues>; do not put personal information in a public issue.
 
-QM is open source, so anyone can build and distribute the app. If you got your copy from someone else, they are its publisher: this section does not apply to them, and they are responsible for their own policy.
+QM is open source, so anyone can build and distribute the app. If you got your copy from someone else, they are its publisher, and their policy replaces this section with their own details.
 
 ## The short version
 
-- The app has no analytics, advertising, or tracking, and the publisher receives none of your content.
-- What you write and attach goes to the QM workspace whose address you enter. Live voice goes to the voice service that workspace uses. The few other connections the app makes are listed below.
-- Whoever operates that workspace decides how your data is stored and used on it. Ask them about retention, access, and deletion.
+- The app has no analytics, advertising, or tracking, and its publisher receives none of your content.
+- What you write and attach goes to your QM workspace: the one you choose, or the one your copy was set up with.
+- A live voice call also connects your device directly to OpenAI, which provides the voice.
+- Whoever operates your workspace decides how your data is stored and used on it. Ask them about retention, access, and deletion.
 
 ## The app and your workspace are separate
 
-QM is software an organization runs for itself. The app is a client for it. When you choose a workspace and sign in, the app works against that workspace's address.
+QM is software an organization runs for itself. The app is a client for it. When you sign in, the app works against that workspace's address.
 
 Publishing the app is not the same as operating a workspace. The publisher has no access to your workspace unless it is also the organization that runs it, and this policy does not describe what any workspace does with data once it arrives. The workspace's operator is responsible for that.
 
 ## What the app sends to your workspace
 
-Only what you do in the app:
+What you do in the app, plus your device's time zone:
 
-- **Sign-in.** You sign in on your workspace's own sign-in page, shown in a system browser sheet. The app receives a session token from the workspace. It never sees your password.
+- **Sign-in.** You sign in on your workspace's own sign-in page, shown in a system browser sheet. The app receives a session token from the workspace. It never sees the password you sign in with.
 - **Conversations.** The messages you send, and the actions you take on conversations, approvals, and other items in the workspace.
-- **Attachments.** Files, photos, and pasted images you choose to attach, including photos you take with the camera from inside the app. The photo picker gives the app only the items you select, not your library.
-- **Live voice.** While a Talk to QM call is active, your microphone audio is sent over an encrypted connection to the voice service your workspace is configured to use. Muting stops the audio. Ending the call or leaving the app stops the call.
+- **Attachments.** Files, photos, videos, and pasted images you choose to attach, including photos you take with the camera from inside the app. The photo picker gives the app only the items you select, not your library. Photos and videos are sent as stored, including any metadata embedded in them, such as where they were taken.
+- **Credentials you enter.** API keys, authorization codes, and other secrets you type into the app's keychain and settings screens are sent to your workspace.
+- **Time zone.** Sent with each message, each voice task, and each request for suggested activities.
 
-Dictation is different from live voice. The composer microphone transcribes speech on your device with Apple's Speech framework. Dictation audio is never uploaded, and the temporary recording is deleted once it has been transcribed, or when you cancel, leave the conversation, or leave the app.
+## Live voice
+
+While a Talk to QM call is active, the app connects directly to OpenAI, the voice service QM uses, over an encrypted connection:
+
+- Your microphone audio is sent to OpenAI. Muting stops your audio.
+- The app sends OpenAI the text of QM's progress and results so they can be read aloud. This continues while you are muted.
+- OpenAI returns a transcript of what you said, which the app submits to your workspace as a task.
+
+Ending the call or leaving the app ends the connection.
+
+## Dictation
+
+Dictation is different from live voice. The composer microphone transcribes speech on your device with Apple's Speech framework, and dictation audio is never uploaded.
+
+The temporary recording is deleted once it has been transcribed, or when you cancel, open another conversation or page, or leave the app. If transcription fails, the recording is kept so you can retry, until you cancel. If the app is closed unexpectedly mid-recording, the protected temporary file remains until iOS clears temporary storage.
 
 ## Other connections the app makes
 
-- **Images your workspace points to.** Profile pictures of people in shared conversations are downloaded from the addresses your workspace supplies, and logos in the app catalog are downloaded from `logos.composio.dev`. These requests carry none of your content or account details; like any download, the host sees your IP address.
-- **Pages you open.** Signing in, connecting an app, and tapping a link open a web page in a system browser sheet or in your browser. Those sites have their own privacy policies.
+- **Images your workspace points to.** Profile pictures of people in shared conversations are downloaded from the addresses your workspace supplies, and logos in the app catalog are downloaded from `logos.composio.dev`. These requests do not carry your session or your content. The host sees your IP address, the app and iOS version, and which image was requested, and iOS may keep a cookie the host sets.
+- **Pages you open.** Signing in, connecting an app, and tapping a link open a web page in a system browser sheet or in your browser. Those sites have their own privacy policies. The sign-in sheet shares cookies with Safari, and signing out of the app does not clear them.
 
 ## What the app keeps on your device
 
-- **Settings.** The workspace address, your appearance and theme, and list preferences.
+- **Settings.** The workspace address, your appearance and theme, and list preferences. These stay until you delete the app.
 - **Your session.** The session token, in the device keychain, marked as available on this device only.
-- **Unsent work.** Drafts and attachments you have not sent yet, in the app's own storage and excluded from device backups.
+- **Unsent work.** Drafts and attachments you have not sent yet, in the app's own storage, protected while the device is locked and excluded from device backups.
+- **Temporary files.** Copies of attachments being prepared, files you are previewing, and dictation recordings, in temporary storage.
+- **Downloaded images.** iOS may cache the profile pictures and logos described above.
+- **Diagnostics.** Error messages are written to the device's system log. They are not sent anywhere by the app.
 
-Conversation history is loaded from your workspace when you open it. Files you preview are held in temporary storage while you view them.
+Conversation history is loaded from your workspace when you open it and is not saved by the app. iOS itself keeps a snapshot of the app's last screen for the app switcher, and text you copy goes to the system clipboard.
 
-Signing out, or changing workspace, deletes the session token and the drafts for that account from the device.
+Signing out, or changing workspace, deletes the session token and the drafts for that account from the device. One exception: if your session had already expired, the drafts stay until you sign in and sign out again, or delete the app. Signing out removes the token from the device; it does not end the session on the workspace. iOS can retain the keychain entry of a deleted app, so sign out before deleting the app.
 
 ## Permissions
 
-The app asks for a permission only when you use the feature that needs it:
+The app asks for a permission only when you first use the feature that needs it:
 
 - **Microphone:** dictation and live voice.
 - **Speech Recognition:** dictation.
@@ -62,11 +81,13 @@ You can withdraw any of these in the iOS Settings app. The app does not ask for 
 
 Nothing from the app itself. The app contains no analytics or crash-reporting service and sends nothing to its publisher.
 
-Apple provides app developers with crash reports and usage statistics from people who have chosen to share them with developers in their device settings. That sharing is controlled by you and governed by Apple's privacy policy.
+Apple provides app developers with crash reports and usage statistics from people who have chosen to share them with developers in their device settings, and with crash reports and feedback from TestFlight builds. That is handled by Apple and governed by Apple's privacy policy.
 
 ## Third parties
 
-The app does not sell or share your data. It contains no third-party advertising or analytics code. The open-source libraries it includes are listed in [`QM/Resources/ThirdPartyNotices.txt`](./QM/Resources/ThirdPartyNotices.txt) and run only on your device or as part of a call you start.
+The app does not sell your data or share it for advertising, and it contains no third-party advertising or analytics code. It sends data only to your workspace, to OpenAI during a live voice call, and to the image hosts listed above.
+
+The app is built with the open-source libraries declared in [`project.yml`](./project.yml). They run only on your device or as part of a call you start.
 
 ## Children
 
