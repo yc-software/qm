@@ -268,7 +268,10 @@ describe("linked sign-ins across the HTTP surface", () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-")), signingSecret: SECRET }));
-    await built.app.upsertDirectory([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
+    await built.app.upsertDirectory([
+      { principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK },
+      { principalId: "U0LISTED", displayName: "Listed bot", type: "internal", isBot: true },
+    ]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -323,7 +326,11 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
     assert.equal(adminStatusFromGrants(await built.admin.listGrants(tenant), "casey@acme.test").isAdmin, false);
     await built.users.record({ id: "B0BOT", source: "turn", at: 1 }).then(() => built.users.markApps(["B0BOT"]));
-    for (const [principalId, canonicalId] of Object.entries({ B0BOT: "casey@acme.test", [OIDC]: "B0BOT" })) {
+    for (const [principalId, canonicalId] of Object.entries({
+      B0BOT: "casey@acme.test",
+      [OIDC]: "B0BOT",
+      "sso:x": "U0LISTED",
+    })) {
       const linked = JSON.stringify({ principalId, canonicalId, evidence: EVIDENCE });
       assert.equal((await signed("POST", "/v1/admin/principal-links", linked, admin)).status, 400);
     }

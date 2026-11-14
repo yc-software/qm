@@ -4,6 +4,7 @@ import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
@@ -365,6 +366,16 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
+  const bots = await q(
+    `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
+      WHERE coalesce(
+        (SELECT bool_or(m.is_bot) FROM directory_members m
+          WHERE lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias),
+        EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
+                 WHERE l.alias_id = s.alias AND u.kind = 'app'))`,
+    [[link.principalId, link.canonicalId]],
+  );
+  if (bots.length) throw new PrincipalLinkError(400, APP_IS_NOT_A_PERSON);
   const target = await ensureUserIn(client, link.canonicalId);
   const current = (
     await q(
@@ -381,7 +392,6 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     const source = current.user_id as string;
     await q(
       `UPDATE users c SET
-         kind = CASE WHEN a.kind = 'app' THEN 'app' ELSE c.kind END,
          first_seen_at = least(c.first_seen_at, a.first_seen_at),
          source = CASE WHEN a.first_seen_at < c.first_seen_at OR c.first_seen_at IS NULL THEN a.source ELSE c.source END,
          offboarded_at = least(c.offboarded_at, a.offboarded_at),
