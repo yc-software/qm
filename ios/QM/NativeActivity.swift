@@ -632,10 +632,25 @@ struct NativeTimelineActivityGroup: View {
   }
   var title: String { presentation.title }
 
-  var body: some View {
+  private var soleItem: NativeChatTimelineItem? {
+    guard section.items.count == 1, section.status == nil, !presentation.animating,
+      section.workState != .approval
+    else { return nil }
+    return section.items.first
+  }
+
+  @ViewBuilder var body: some View {
+    if let item = soleItem {
+      row(item, presentation: presentation)
+    } else {
+      group
+    }
+  }
+
+  private var group: some View {
     let open = expanded.wrappedValue
     let presentation = presentation
-    VStack(alignment: .leading, spacing: 0) {
+    return VStack(alignment: .leading, spacing: 0) {
       if section.items.isEmpty {
         label(presentation, expandable: false, open: false)
       } else {
@@ -648,22 +663,7 @@ struct NativeTimelineActivityGroup: View {
         if open {
           VStack(alignment: .leading, spacing: 0) {
             ForEach(section.items) { item in
-              switch item.content {
-              case .work(let work):
-                if work.isThinking, let text = work.entry.text {
-                  reasoning(text, id: item.id, live: presentation.liveItemID == item.id)
-                } else {
-                  NativeTimelineWorkRow(
-                    item: work, client: client, user: user, disclosure: disclosure,
-                    active: item.active, turnFailed: item.turnFailed,
-                    onShowAgents: onShowAgents, onInspect: onInspect)
-                }
-              case .reasoning(let block):
-                reasoning(
-                  reasoningText(block), id: item.id, live: presentation.liveItemID == item.id)
-              case .message:
-                EmptyView()
-              }
+              row(item, presentation: presentation)
             }
           }
           .padding(.top, 4)
@@ -674,6 +674,27 @@ struct NativeTimelineActivityGroup: View {
     .clipped()
     .tint(QMTheme.ink.opacity(0.6))
     .accessibilityIdentifier(section.status == nil ? section.id : "conversationWorkStatus")
+  }
+
+  @ViewBuilder
+  private func row(_ item: NativeChatTimelineItem, presentation: NativeActivitySummary)
+    -> some View
+  {
+    switch item.content {
+    case .work(let work):
+      if work.isThinking, let text = work.entry.text {
+        reasoning(text, id: item.id, live: presentation.liveItemID == item.id)
+      } else {
+        NativeTimelineWorkRow(
+          item: work, client: client, user: user, disclosure: disclosure,
+          active: item.active, turnFailed: item.turnFailed,
+          onShowAgents: onShowAgents, onInspect: onInspect)
+      }
+    case .reasoning(let block):
+      reasoning(reasoningText(block), id: item.id, live: presentation.liveItemID == item.id)
+    case .message:
+      EmptyView()
+    }
   }
 
   private func label(_ presentation: NativeActivitySummary, expandable: Bool, open: Bool)
