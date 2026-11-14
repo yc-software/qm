@@ -391,6 +391,15 @@ test("pg directory: a swap stamped older than the stored snapshot is refused", {
   assert.equal((await store.listChannels()).length, 0);
 });
 
+test("pg directory: a sync that only learns Slack's bot flag still rewrites the member", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  const app = { principalId: "U-app", displayName: "App", type: "internal" } as const;
+  await store.replace([app]);
+  assert.equal((await store.get("U-app"))?.isBot, undefined, "an unsynced flag stays empty");
+  await store.replace([{ ...app, isBot: true }]);
+  assert.equal((await store.get("U-app"))?.isBot, true);
+});
+
 test("pg directory: a partial roster swap preserves channels whose roster is unknown", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   const channels = [
