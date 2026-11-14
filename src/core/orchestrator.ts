@@ -507,7 +507,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (input.swarm || input.surface === "swarm" || input.conversation.threadRef.startsWith("swarm:"))
       )
         throw new NonRetryableTurnError("swarm service unavailable");
-      const swarmBinding = await deps.swarms?.binding(input);
+      const swarmBinding = await deps.swarms?.binding(tenant, input);
       const swarmEntryProvenance = input.swarm ? { origin: "automation", swarm: input.swarm } : {};
       await deps.refreshModels?.();
       input = await scopeTeamsToTurn(tenant, input, deps, external);

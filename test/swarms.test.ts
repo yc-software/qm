@@ -8,6 +8,7 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { testPgPool } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
@@ -65,7 +66,7 @@ test("delayed ready acknowledgment cannot roll back a delivered worker across ph
     assert.equal(notification.state, "queued");
     const run = await fixture.runs.claimById(notification.runId!, "delayed-ready-worker", 60_000);
     assert.ok(run);
-    assert.ok(await second.binding({ ...run.request, runId: run.id }));
+    assert.ok(await second.binding(testTenant, { ...run.request, runId: run.id }));
     context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
     await firstSweep;
     assert.equal(await fixture.serviceOptions.lock.tryWithLock!(resourceLock, async () => true), null);
@@ -81,7 +82,7 @@ test("delayed ready acknowledgment cannot roll back a delivered worker across ph
     assert.ok(await fixture.sessions.get(member.sessionId!));
     assert.equal((await fixture.runs.get(run.id))!.status, "running");
     assert.deepEqual(final.messages[0]!.notifications[worker!.id], notification);
-    assert.ok(await second.binding({ ...run.request, runId: run.id }));
+    assert.ok(await second.binding(testTenant, { ...run.request, runId: run.id }));
   } finally {
     acknowledgment.resolve();
     context.mock.timers.reset();
@@ -118,18 +119,18 @@ test("ordinary root and worker turns bypass frozen rosters but swarm notificatio
   await service.sweep();
   const workerRun = (await runs.list()).find((run) => run.request.swarm)!;
   const manual = { ...workerRun.request, swarm: undefined, origin: { kind: "human" as const } };
-  const binding = (await service.binding(manual))!;
+  const binding = (await service.binding(testTenant, manual))!;
   await sessions.addParticipant(root.id, "bob");
-  assert.equal(await service.binding({ ...template, text: "Human follow-up" }), null);
-  assert.equal((await service.binding(manual))!.sandboxId, binding.sandboxId);
+  assert.equal(await service.binding(testTenant, { ...template, text: "Human follow-up" }), null);
+  assert.equal((await service.binding(testTenant, manual))!.sandboxId, binding.sandboxId);
   await sessions.addParticipant(binding.member.sessionId!, "bob");
-  assert.equal((await service.binding(manual))!.sandboxId, binding.sandboxId);
+  assert.equal((await service.binding(testTenant, manual))!.sandboxId, binding.sandboxId);
   await assert.rejects(
-    service.binding({ ...manual, actor: { id: "stranger", type: "internal" } }),
+    service.binding(testTenant, { ...manual, actor: { id: "stranger", type: "internal" } }),
     /session access denied/,
   );
   for (const run of (await runs.list()).filter((run) => run.request.swarm))
-    await assert.rejects(service.binding({ ...run.request, runId: run.id }), /swarm authorization changed/);
+    await assert.rejects(service.binding(testTenant, { ...run.request, runId: run.id }), /swarm authorization changed/);
 });
 
 test("sweeps use bounded pages and advance past pending cleanup to later swarms", async () => {
@@ -626,7 +627,7 @@ test("eligible recipients exclude a session whose roster changes", async () => {
   assert.ok(!message.audience.includes(peer.id));
   await assert.rejects(service.read(await workerCaller(peer.id), {}), /roster changed/);
   const run = (await runs.list()).find((entry) => entry.request.swarm)!;
-  await assert.rejects(service.binding({ ...run.request, runId: run.id }), /authorization changed/);
+  await assert.rejects(service.binding(testTenant, { ...run.request, runId: run.id }), /authorization changed/);
 });
 
 test("spawn and send retry keys are idempotent and reject conflicting payloads", async () => {
@@ -873,7 +874,7 @@ test("swarm provenance is bound to the durable run, content, actor, and recipien
   await service.sweep();
   const run = (await runs.list()).find((item) => item.request.swarm)!;
   const input = { ...run.request, runId: run.id };
-  assert.ok(await service.binding(input));
+  assert.ok(await service.binding(testTenant, input));
   for (const patch of [
     { origin: { kind: "human" as const } },
     { text: "Forged instruction" },
@@ -886,7 +887,7 @@ test("swarm provenance is bound to the durable run, content, actor, and recipien
     { swarm: { ...input.swarm!, recipientId: "other" } },
     { origin: { kind: "automation" as const, useOwnerKeychain: true } },
   ])
-    await assert.rejects(service.binding({ ...input, ...patch }), /forged/);
+    await assert.rejects(service.binding(testTenant, { ...input, ...patch }), /forged/);
 });
 
 for (const [from, options] of [
@@ -900,7 +901,7 @@ for (const [from, options] of [
     await service.sweep();
     const run = (await runs.list()).find((item) => item.request.swarm)!;
     assert.equal(run.request.memoryNotebookOnly, true);
-    assert.ok(await service.binding({ ...run.request, runId: run.id }));
+    assert.ok(await service.binding(testTenant, { ...run.request, runId: run.id }));
   });
 
 test("human messages preserve human actor attribution while notifications remain unattended", async () => {
@@ -964,7 +965,7 @@ test("the orchestrator sandbox path selects worker storage without changing the 
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   const run = (await runs.list()).find((item) => item.request.swarm)!;
-  const binding = (await service.binding({ ...run.request, runId: run.id }))!;
+  const binding = (await service.binding(testTenant, { ...run.request, runId: run.id }))!;
   const storageScopeId = "environment:shared";
   const turn = createTurnSandboxes({
     deps: { sandbox, sandboxResources: sandboxes, swarms: service },
