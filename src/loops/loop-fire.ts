@@ -822,7 +822,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
                 { expectedClaimToken: item.claimToken! },
               );
             const outputs = parseOutputs(outcome.reply ?? "");
-            if (!proposal && !outputs) throw new Error("work: the reply had no readable outputs block");
+            if (!proposal && !outputs) {
+              const shown = outcome.reply ? `: ${excerpt(outcome.reply)}` : "";
+              if (parsed && typeof parsed === "object" && "proposal" in parsed)
+                throw new Error(`work: the proposal was not valid${shown}`);
+              if (listField(parsed, "outputs"))
+                throw new Error(`work: no outputs entry had a shipAction and a title${shown}`);
+              throw new Error(`work: the reply had no readable outputs block${shown}`);
+            }
             workOutputs.set(item.id, outputs ?? []);
             return { runId: outcome.sessionId ?? `${itemThreadRef}:work` };
           },
@@ -911,6 +918,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const claimed = await deps.outputs.claimShipping(outputId);
       if (!claimed) return null;
       const claimToken = claimed.claimToken!;
+      if (output.state === "shipping") return deps.outputs.markUnconfirmed(outputId, claimToken);
       const fireKey = `loop:${loopId}:ship:${outputId}`;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
       const outcome = await stageTurn(
@@ -925,7 +933,9 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       }
       const undelivered = stageFailure("ship", outcome) ?? notDone("ship", outcome);
       if (undelivered) {
-        await deps.outputs.failShipping(outputId, claimToken);
+        await (outcome.ran
+          ? deps.outputs.markUnconfirmed(outputId, claimToken)
+          : deps.outputs.failShipping(outputId, claimToken));
         throw undelivered.error;
       }
       const shipped = await deps.outputs.completeShipping(
