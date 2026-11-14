@@ -815,20 +815,42 @@ export function servedReleaseChanged(): boolean {
   return Boolean(booted && servedRelease && servedRelease !== booted);
 }
 
-export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAYS_MS = [500, 1500];
+
+async function fetchOnce(input: RequestInfo | URL, init: RequestInit | undefined, url: string, method: string) {
   const startMs = Date.now();
-  const request = input instanceof Request ? input : null;
-  const url = request?.url ?? String(input);
-  const method = init?.method ?? request?.method ?? "GET";
-  let response: Response;
   try {
-    response = await fetch(input, init);
+    const response = await fetch(input, init);
+    reportRequestTiming(url, method, startMs, response.status);
+    servedRelease = response.headers.get("x-qm-release") ?? servedRelease;
+    return response;
   } catch (error) {
     reportRequestTiming(url, method, startMs, null);
     throw error;
   }
-  reportRequestTiming(url, method, startMs, response.status);
-  servedRelease = response.headers.get("x-qm-release") ?? servedRelease;
+}
+
+export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const request = input instanceof Request ? input : null;
+  const url = request?.url ?? String(input);
+  const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+  const signal = init?.signal ?? request?.signal;
+  const idempotent = method === "GET" || method === "HEAD";
+  let response: Response;
+  for (let attempt = 0; ; attempt++) {
+    const canRetry = idempotent && attempt < RETRY_DELAYS_MS.length;
+    try {
+      response = await fetchOnce(input, init, url, method);
+    } catch (error) {
+      if (!canRetry || signal?.aborted || !(error instanceof TypeError)) throw error;
+      await sleep(RETRY_DELAYS_MS[attempt]!);
+      continue;
+    }
+    if (!canRetry || signal?.aborted || !TRANSIENT_STATUSES.has(response.status)) break;
+    void response.body?.cancel();
+    await sleep(RETRY_DELAYS_MS[attempt]!);
+  }
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();
