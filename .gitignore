@@ -54,6 +54,8 @@ docs/master.html
 !ios/QM/Resources/Assets.xcassets/Activity-wrench.imageset/wrench.svg
 !ios/QM/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 !ios/QM/Resources/Assets.xcassets/QMWordmark.imageset/wordmark.png
+!ios/QM/Resources/Assets.xcassets/GitHubLinkMark.imageset/light.svg
+!ios/QM/Resources/Assets.xcassets/GitHubLinkMark.imageset/dark.svg
 !ios/QM/Resources/Assets.xcassets/Service-claude.imageset/logo.svg
 !ios/QM/Resources/Assets.xcassets/Service-dropbox.imageset/logo.svg
 !ios/QM/Resources/Assets.xcassets/Service-github.imageset/logo.svg
