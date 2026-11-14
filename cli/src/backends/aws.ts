@@ -29,6 +29,7 @@ import {
   awsWorkloadArchitecture,
   FARGATE_MAX_STOP_TIMEOUT_S,
   requiresAwsMicrovmImage,
+  effectiveSandboxBackend,
   isDigestPinned,
   sandboxCoreEnv,
   securityScreenEnv,
@@ -390,7 +391,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     ...(service === "core" ? securityScreenEnv(config) : {}),
   };
   if (service === "core") {
-    const sandboxBackend = config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
+    const sandboxBackend = effectiveSandboxBackend(config);
     const stores = {
       DEPLOY_PROVIDER: config.env.core?.DEPLOY_PROVIDER?.trim() || "aws",
       AWS_DEPLOY_REGION: aws.region,
