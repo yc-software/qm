@@ -343,7 +343,7 @@ import { expireStaleApprovals } from "./core/approval-requester.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
-import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
+import { isTerminal, leaseLapsed, type Run, type RunStore } from "./runs/run-store.ts";
 import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
@@ -1266,6 +1266,10 @@ export function buildApp(
       return { egressToken };
     },
     canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
+    isRunLive: async (runId) => {
+      const run = await runs.get(runId);
+      return run?.status === "running" && !leaseLapsed(run, Date.now());
+    },
   });
   const sandbox: Sandbox = createSandboxRouter({
     resources: sandboxResources,

@@ -100,9 +100,11 @@ export interface SandboxResources {
   notePersonUse(id: string): Promise<SandboxResource>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
+  release(id: string, runId: string | undefined): Promise<boolean>;
+  inUse(id: string): Promise<boolean>;
+  heldIn(backend: SandboxBackendName): (backingScopeId: string) => Promise<boolean>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
   load(id: string): Promise<LoadSample | null>;
-  release(id: string, runId: string | undefined, isLive: (runId: string) => Promise<boolean>): Promise<boolean>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
@@ -191,7 +193,19 @@ export function createSandboxResources(opts: {
   beforeRetire?: (record: SandboxResource) => Promise<void>;
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
+  isRunLive?: (runId: string) => Promise<boolean>;
 }): SandboxResources {
+  const liveHolders = async (record: SandboxResource): Promise<boolean> => {
+    const holders = record.holders ?? [];
+    const live = await Promise.all(holders.map((runId) => (opts.isRunLive ? opts.isRunLive(runId) : true)));
+    const ended = holders.filter((_, index) => !live[index]);
+    if (ended.length)
+      await opts.records.update(record.id, (current) => ({
+        ...current,
+        holders: (current.holders ?? []).filter((holder) => !ended.includes(holder)),
+      }));
+    return live.includes(true);
+  };
   const upgraded = perTenant<{ done?: Promise<void> }>(() => ({}));
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
@@ -286,22 +300,25 @@ export function createSandboxResources(opts: {
         current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },
       );
     },
-    async release(id, runId, isLive) {
+    async release(id, runId) {
       const record = runId
         ? await opts.records.update(id, (current) => ({
             ...current,
             holders: (current.holders ?? []).filter((holder) => holder !== runId),
           }))
         : await opts.records.get(id);
-      const others = record?.holders ?? [];
-      const live = await Promise.all(others.map(isLive));
-      const ended = others.filter((_, index) => !live[index]);
-      if (ended.length)
-        await opts.records.update(id, (current) => ({
-          ...current,
-          holders: (current.holders ?? []).filter((holder) => !ended.includes(holder)),
-        }));
-      return live.includes(true);
+      return record ? liveHolders(record) : false;
+    },
+    async inUse(id) {
+      const record = await opts.records.get(id);
+      return !!record && liveHolders(record);
+    },
+    heldIn(backend) {
+      const records = opts.records.all();
+      return async (backingScopeId) => {
+        const held = (await records).filter((r) => r.backend === backend && r.backingScopeId === backingScopeId);
+        return (await Promise.all(held.map(liveHolders))).includes(true);
+      };
     },
     async retire(actorId, id) {
       await initialize();
