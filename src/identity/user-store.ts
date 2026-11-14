@@ -368,18 +368,24 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
 
 const MARK_APPS = `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`;
 
-const BOT_SIGN_INS = `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
-  WHERE coalesce(
-    (SELECT bool_or(m.is_bot) FROM directory_members m
-      WHERE lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias),
-    EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
-             WHERE l.alias_id = s.alias AND u.kind = 'app'))`;
+async function findBotSignIns(q: Query, aliases: readonly string[]): Promise<string[]> {
+  const rows = await q(
+    `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
+      WHERE coalesce(
+        (SELECT bool_or(m.is_bot) FROM directory_members m
+          WHERE lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias),
+        EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
+                 WHERE l.alias_id = s.alias AND u.kind = 'app'))`,
+    [aliases.map(foldPrincipalId)],
+  );
+  return rows.map((r) => r.alias as string);
+}
 
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
-  const bots = await q(BOT_SIGN_INS, [[link.principalId, link.canonicalId]]);
-  if (bots.length) throw new PrincipalLinkError(400, APP_IS_NOT_A_PERSON);
+  if ((await findBotSignIns(q, [link.principalId, link.canonicalId])).length)
+    throw new PrincipalLinkError(400, APP_IS_NOT_A_PERSON);
   const target = await ensureUserIn(client, link.canonicalId);
   const current = (
     await q(
@@ -525,9 +531,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
         return split.rowCount ?? 0;
       });
     },
-    async botSignIns(aliases) {
-      return (await q(BOT_SIGN_INS, [aliases.map(foldPrincipalId)])).map((r) => r.alias as string);
-    },
+    botSignIns: (aliases) => findBotSignIns(q, aliases),
     async setDisplayName(alias, raw) {
       const name = cleanDisplayName(raw);
       if (!name) return false;
