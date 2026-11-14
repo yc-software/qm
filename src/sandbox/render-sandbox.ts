@@ -39,6 +39,7 @@ import type { RenderBase } from "./render-base.ts";
 import {
   RENDER_COMPUTER_LIFETIME_SEC,
   RENDER_IDLE_STOP_MS,
+  RENDER_BASE_TOOLS,
   RENDER_SANDBOX_TTL_SEC,
   renderEgressAllowlist,
 } from "./render-limits.ts";
@@ -116,6 +117,12 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   const egressCurrent = (info: RenderLiveSandbox): boolean =>
     JSON.stringify(info.egressAllowlist?.toSorted()) === JSON.stringify(egressAllowlist);
   const scratch = new Map<string, RenderSandboxInfo>();
+  let baseTools: readonly string[] | undefined;
+  const readyGolden = async (onStatus?: (text: string) => void) => {
+    const golden = await goldens.ready(onStatus);
+    baseTools = golden.tools;
+    return golden;
+  };
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
   let sandboxName: Promise<string> | undefined;
   const nameSandbox = (): Promise<string> =>
@@ -404,7 +411,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         );
       }
     }
-    const source = stored ? { ref: stored.baseImage, snapshotId: snapshotId! } : await goldens.ready(onStatus);
+    const source = stored ? { ref: stored.baseImage, snapshotId: snapshotId! } : await readyGolden(onStatus);
     onStatus?.(stored ? "Restoring your computer…" : "Starting your computer…");
     await start(scope, stored, source).catch(async (error: unknown) => {
       if (stored?.stopping)
@@ -579,7 +586,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     async recreateScratch(name) {
       const temporary = await client.create({
         name: await nameSandbox(),
-        snapshotId: (await goldens.ready()).snapshotId,
+        snapshotId: (await readyGolden()).snapshotId,
         lifetimeSec: RENDER_SANDBOX_TTL_SEC,
         ...egress,
       });
@@ -633,27 +640,18 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         homeDir,
         workdir: base.workspaceDir,
         get tools() {
-          return visibleTools([
-            "git",
-            "curl",
-            "wget",
-            "jq",
-            "unzip",
-            "gnupg",
-            "python3",
-            "gh",
-            "aws (CLI v2)",
-            ...(opts.extraTools ?? []),
-          ]);
+          return visibleTools([...(baseTools ?? []), ...(opts.extraTools ?? [])]);
         },
         get notInstalled() {
-          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+          const probed = baseTools;
+          const missing = probed ? RENDER_BASE_TOOLS.map(([label]) => label).filter((l) => !probed.includes(l)) : [];
+          return visibleNotInstalled(missing, opts.extraTools ?? []);
         },
       },
     },
     async provision(scope, options) {
       const name = options?.scratch ? sandboxScopeName(`${prefix}-scratch`, options.scratch.key) : nameFor(scope);
-      await goldens.ready(options?.onStatus);
+      await readyGolden(options?.onStatus);
       return withLifecycle(name, async () => {
         if (options?.scratch) {
           const temporary = await scratchStore.get(name);

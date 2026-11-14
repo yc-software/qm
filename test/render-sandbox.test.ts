@@ -42,7 +42,11 @@ function setup(
   const namespaceStore = testMap<StoredRenderNamespace>();
   const advisoryLock = options.advisoryLock ?? testAdvisoryLock();
   const errors: Array<{ code: string; message: string }> = [];
-  let golden = { ref: BASE_REF, snapshotId: fake.seedGolden(BASE_REF) };
+  let golden: { ref: string; snapshotId: string; tools?: string[] } = {
+    ref: BASE_REF,
+    snapshotId: fake.seedGolden(BASE_REF),
+    tools: ["git", "curl", "gh", "aws (CLI v2)"],
+  };
   const base: RenderBase = {
     ready: async () => golden,
     prepare: async () => {},
@@ -176,12 +180,24 @@ test("Render resumes from its native checkpoint through transient API errors and
   );
 });
 
-test("Render declares the tools and resources of the base image", (t) => {
-  const { make } = setup(t);
-  const { spec } = make().profile;
-  for (const tool of ["git", "curl", "wget", "jq", "python3", "gh", "aws (CLI v2)"])
-    assert.ok(spec?.tools?.includes(tool), tool);
-  for (const tool of ["gcloud", "kubectl", "flyctl", "glab"]) assert.ok(spec?.notInstalled?.includes(tool), tool);
+test("Render declares the tools its golden image provides and the resources of its plan", async (t) => {
+  const { make, scope } = setup(t);
+  const sandbox = make();
+  const { spec } = sandbox.profile;
+  assert.deepEqual([spec?.tools, spec?.notInstalled], [[], []]);
+  await sandbox.teardown(await sandbox.provision(scope));
+  assert.deepEqual(spec?.tools, ["git", "curl", "gh", "aws (CLI v2)"]);
+  assert.deepEqual(spec?.notInstalled, [
+    "wget",
+    "jq",
+    "unzip",
+    "gnupg",
+    "python3",
+    "gcloud",
+    "kubectl",
+    "flyctl",
+    "glab",
+  ]);
   assert.deepEqual([spec?.cpus, spec?.memoryMb, spec?.diskGb], [2, 4096, 10]);
 });
 
