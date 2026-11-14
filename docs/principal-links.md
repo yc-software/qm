@@ -28,7 +28,9 @@ before proxying, and the keychain stores credentials under the canonical owner.
   a linked sign-in cannot become canonical for others.
 - **Only people are linked.** A QM system actor (`system:…`) is QM itself, and a
   Slack bot or app is software, so a link with either one on either side is
-  refused (400), whether an admin or the Slack connect flow asks for it.
+  refused. The admin API answers 400, and the Slack connect flow answers 409
+  with "These accounts need an administrator's help to connect. Your existing
+  data has not been moved."
 - **The directory says who is a bot.** Each directory sync copies Slack's
   `is_bot` for every member into `directory_members.is_bot`, as true or false.
   It stays empty (NULL) until a sync has written it, and a sign-in Slack doesn't
