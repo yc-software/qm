@@ -553,9 +553,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async markApps(ids) {
       if (!ids.length) return 0;
       const rows = await q(
-        `UPDATE users SET kind = 'app'
-          WHERE kind <> 'app' AND id IN (SELECT user_id FROM user_links WHERE alias_id = ANY($1::text[]))
-          RETURNING id`,
+        `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`,
         [ids.map((id) => foldPrincipalId(id))],
       );
       return rows.length;

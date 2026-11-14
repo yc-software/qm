@@ -95,6 +95,7 @@ export interface SwarmService {
   authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
+  botStartedWorker(session: { id: string; threadRef: string }): Promise<boolean>;
   queuedMessages(
     input: OrchestratorInput,
     options?: { skipRuns?: ReadonlySet<string>; mailboxOnly?: boolean },
@@ -389,7 +390,7 @@ export function createSwarmService(deps: {
       text: "",
       ...(source.scopeVersion ? { scopeVersion: source.scopeVersion } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
-      ...(source.botActor ? { botActor: true } : {}),
+      ...(source.botActor || (caller.kind === "agent" && caller.claims.botActor) ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
       ...(source.memoryNotebookOnly ||
       session.spawnMeta?.memoryNotebookOnly ||
@@ -1061,6 +1062,11 @@ export function createSwarmService(deps: {
       }
       return handed;
     },
+    async botStartedWorker(session) {
+      const { rootId } = threadIdentity(session.threadRef, session.id);
+      return rootId !== session.id && (await store.get(rootId))?.template.botActor === true;
+    },
+
     async binding(input) {
       const session = await sessions.getByThread(input.conversation.threadRef);
       if (!session) {

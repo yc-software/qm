@@ -264,7 +264,7 @@ operations. A Slack bot's turn cannot direct a person's swarm: `inspect`, `spawn
 the swarm. Once anyone other than that bot has posted a swarm message, or a person's turn has worked on one of the swarm's computers, the bot's root
 turn and every worker it started lose that access too. Only the bot's own turns
 can add workers to a swarm a bot started: a person's turn that tries is refused, so
-every worker in a bot-started swarm is the bot's work and runs as the bot. The same rule covers the board and worker computers a
+every worker in a bot-started swarm is the bot's work and runs as the bot. A swarm counts as bot-started when the turn that starts it does a bot's work, and forks of its workers are bot work too. The same rule covers the board and worker computers a
 swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
 `sandbox_id`, make one the conversation's default, use one a person made the default, or
 run on its own worker computer. The check runs each time the turn uses a computer, so a

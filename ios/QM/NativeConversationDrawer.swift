@@ -63,5 +63,8 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: isOpen)
     }
     .background(QMTheme.paper.ignoresSafeArea())
+    .sensoryFeedback(trigger: isOpen) { _, _ in
+      hasSelection && !showsSidebarPage ? .impact(flexibility: .soft, intensity: 0.7) : nil
+    }
   }
 }

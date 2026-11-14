@@ -9,8 +9,6 @@ struct NativeChatHistoryPlaceholder: View {
         .modifier(NativeLoadingPulse(phaseOffset: 0.45))
       NativeChatMessagePlaceholder(isUser: true)
         .modifier(NativeLoadingPulse(phaseOffset: 0.9))
-      Text("Loading conversation…")
-        .font(.footnote).foregroundStyle(.secondary)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.top, 12)
