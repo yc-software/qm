@@ -2,6 +2,7 @@ import { parseScopeId, type Principal } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 function conversationPrincipals(ctx: ApiCtx): Principal[] | null {
   const capability = ctx.capability!;
   const { kind } = parseScopeId(capability.scopeId);
@@ -28,6 +29,7 @@ async function search(ctx: ApiCtx): Promise<void> {
     principals,
     limit: typeof body.limit === "number" ? body.limit : undefined,
     botActor: ctx.capability.botActor,
+    ownScopeBotWork: isOwnScopeBotWork(ctx.capability),
   });
   ctx.deps.auditLog?.record(tenantOf(ctx), {
     at: Date.now(),
