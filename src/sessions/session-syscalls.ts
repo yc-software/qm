@@ -991,7 +991,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               );
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
               assertAudienceCompatible(caller, request);
-              const title = visibleTitle(target);
+              const shown = sessionVisibleTo(binding.request, target);
+              const title = shown ? visibleTitle(target) : target.id;
               if (input.interrupt) {
                 if (privateMessage)
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
@@ -1046,7 +1047,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   createdAt: Date.now(),
                 });
                 const reason = notWoken ? { notWoken } : {};
-                return { ok: true, sessionId: target.id, title, delivered: "queued_message", busy, ...reason };
+                return {
+                  ok: true,
+                  sessionId: target.id,
+                  title,
+                  delivered: "queued_message",
+                  ...(shown ? { busy } : {}),
+                  ...reason,
+                };
               };
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
@@ -1081,7 +1089,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     "a message can start a turn in a top-level conversation only when it is the sender's own parent",
                   );
                 const delivered = woken === "woken" ? "queued_turn" : "queued_message";
-                return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
+                return {
+                  ok: true,
+                  sessionId: target.id,
+                  title,
+                  delivered,
+                  ...(shown ? { busy: woken === "busy" } : {}),
+                };
               }
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);

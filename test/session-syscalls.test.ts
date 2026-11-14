@@ -685,7 +685,10 @@ test("a subagent bot work opened still writes to its parent once bot work can't 
   const [lane] = await delegatedLanes(r, ["work"], true);
   const wrote = await lane!.api.write({ target: "parent", wake: true, text: "which region?" });
   const read = await lane!.api.read({ target: "parent" });
-  assert.deepEqual([wrote.ok, !read.ok && read.message.includes("hidden from bot work")], [true, true]);
+  assert.deepEqual(
+    [wrote.ok && { title: wrote.title, busy: wrote.busy }, !read.ok && read.message.includes("hidden from bot work")],
+    [{ title: r.room.id, busy: undefined }, true],
+  );
 });
 
 test("a return deferred while the parent was busy wakes the parent once a Stop of that conversation alone ends the turn", async () => {
