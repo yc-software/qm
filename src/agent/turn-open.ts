@@ -34,18 +34,12 @@ export async function replayApprovedCalls(
   dispatched: AgentTurnInput,
   ref: TurnSession["ref"],
   tools: ToolDefinition[],
+  cancel = dispatched.cancel,
 ): Promise<AgentTurnInput> {
   const approvedItems: Item[] = [];
   for (const call of dispatched.approvedToolCalls ?? [])
     approvedItems.push(
-      ...(
-        await runApprovedToolCall(
-          call,
-          ref,
-          tools as unknown as BridgedTool[],
-          dispatched.cancel ? { cancel: dispatched.cancel } : {},
-        )
-      ).items,
+      ...(await runApprovedToolCall(call, ref, tools as unknown as BridgedTool[], cancel ? { cancel } : {})).items,
     );
   const approvedTurn = approvedItems.length
     ? { ...dispatched, history: [...dispatched.history, ...approvedItems] }

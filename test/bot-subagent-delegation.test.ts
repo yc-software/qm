@@ -11,7 +11,8 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
-import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
+import { createSessionSyscalls, stopSessionRuns } from "../src/sessions/session-syscalls.ts";
+import { liveTurnOf } from "../src/wake/route-incoming.ts";
 import type { Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
@@ -142,8 +143,22 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   await execute((await runs.enqueue({ sessionId: threadRef, request: fromAlice, maxAttempts: 1 })).run);
   await execute((await runs.list({ threadRef: child.threadRef, limit: 1 }))[0]!);
   const web = { ...fromAlice, surface: "web", conversation: { ...request.conversation, threadRef: child.threadRef } };
-  await execute((await runs.enqueue({ sessionId: child.threadRef, request: web, maxAttempts: 1 })).run);
-  assert.deepEqual(actAsActor, [false, false, false, false, true, false, false], "every turn in the bot's subagent");
+  const { run: personRun } = await runs.enqueue({ sessionId: child.threadRef, request: web, maxAttempts: 1 });
+  await execute(personRun);
+  await execute((await runs.get(personRun.id))!);
+  const retried = (await runs.get(personRun.id))!;
+  assert.deepEqual(
+    [retried.request.botActor, retried.botLimited, "bot" in liveTurnOf(retried)],
+    [undefined, true, false],
+  );
+  const stops = async (botRunsOnly: boolean) =>
+    (await stopSessionRuns({ runs, signals }, child, { botRunsOnly })).some(({ id }) => id === personRun.id);
+  assert.deepEqual(
+    [await stops(true), await stops(false)],
+    [false, true],
+    "a bot's stop can't reach the person's turn",
+  );
+  assert.deepEqual(actAsActor, [false, false, false, false, true, false, false, false], "every turn doing bot work");
   assert.deepEqual(apps, ["B1", "B1"], "a person's turn in the bot's subagent never marks the person as an app");
   for (const ref of [threadRef, child.threadRef])
     assert.deepEqual(await runtimes.get(ref)!(active, { action: "set", model: "Astra", lifetime: "task" }), {

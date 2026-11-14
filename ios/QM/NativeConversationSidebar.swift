@@ -64,6 +64,8 @@ struct NativeConversationRow: View {
     return title == conversation.label ? nil : title
   }
 
+  private var showsUnread: Bool { conversation.unread == true && !selected }
+
   var body: some View {
     HStack(spacing: 8) {
       if conversation.working == true {
@@ -96,6 +98,9 @@ struct NativeConversationRow: View {
       if let emoji = conversation.status?.emoji, !emoji.isEmpty {
         Text(emoji)
       }
+      if showsUnread {
+        Circle().fill(QMTheme.unread).frame(width: 8, height: 8)
+      }
     }
     .font(.subheadline)
     .padding(.horizontal, 8).padding(.vertical, 4)
@@ -106,6 +111,7 @@ struct NativeConversationRow: View {
     .accessibilityLabel(
       [
         conversation.label, conversation.surface == "slack" ? "Slack" : nil, context,
+        showsUnread ? "Unread" : nil,
         conversation.awaitingInput == true ? "Needs attention" : nil,
         conversation.working == true ? "Working" : nil,
         conversation.status?.text, updating ? "Updating" : nil,
