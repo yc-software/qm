@@ -114,8 +114,9 @@ test("POST /v1/blobs from a signed surface (web attachment proxy) outlives the d
   }
 });
 
-test("other routes still enforce the default body deadline", async () => {
+test("other routes still enforce the default body deadline", async (t) => {
   const s = startWithDeadline(100);
+  const logged = t.mock.method(console, "error");
   try {
     const chunks = Array.from({ length: 6 }, () => Buffer.from('{"x":1}'.padEnd(64, " ")));
     const res = await fetch(`${s.base}/v1/sessions/search`, {
@@ -124,10 +125,8 @@ test("other routes still enforce the default body deadline", async () => {
       body: slowBody(chunks, 60),
       duplex: "half",
     } as RequestInit & { duplex: "half" }).catch((e: unknown) => e);
-    assert.ok(
-      res instanceof Error || (res as Response).status >= 400,
-      "a body still trickling in past the default deadline is refused",
-    );
+    assert.ok(res instanceof Error || (res as Response).status >= 400);
+    assert.ok(!logged.mock.calls.some((call) => String(call.arguments[0]).startsWith("[server] 500")));
   } finally {
     await s.close();
   }

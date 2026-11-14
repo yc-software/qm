@@ -374,6 +374,7 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  if (err === req.errored) return void res.destroy();
   if (err instanceof MemoryDisclosureDenied || err instanceof MemoryFactsMissing) {
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)

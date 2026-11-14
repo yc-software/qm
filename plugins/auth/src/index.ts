@@ -55,6 +55,7 @@ export async function startServer(options: {
   });
   const server = createServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {
+      if (err === req.errored) return void res.destroy();
       reportBackendError(err);
       console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
       if (!res.headersSent) json(res, 500, { error: "internal_error" });
