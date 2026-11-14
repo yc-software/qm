@@ -450,7 +450,9 @@ final class NativeWorkDisclosureState {
       get: { self.expanded[key] ?? initiallyExpanded },
       set: { value in
         onInspect()
-        self.expanded[key] = value
+        withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .smooth(duration: 0.25)) {
+          self.expanded[key] = value
+        }
       })
   }
 }
@@ -603,8 +605,10 @@ struct NativeTimelineWorkRow: View {
           item: item, client: client, user: user, onShowAgents: onShowAgents, onInspect: onInspect
         )
         .padding(.leading, 21).padding(.bottom, 8)
+        .transition(.opacity.combined(with: .offset(y: -4)))
       }
     }
+    .clipped()
     .tint(QMTheme.ink.opacity(0.6))
     .accessibilityIdentifier("activity-\(item.id)")
   }
@@ -618,7 +622,6 @@ struct NativeTimelineActivityGroup: View {
   var reasoningText: (RunReasoning) -> String = { $0.text }
   var onShowAgents: (() -> Void)? = nil
   var onInspect: () -> Void = {}
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var expanded: Binding<Bool> {
     disclosure.binding(
       for: section.id, initiallyExpanded: section.workState == .approval, onInspect: onInspect)
@@ -664,9 +667,11 @@ struct NativeTimelineActivityGroup: View {
             }
           }
           .padding(.top, 4)
+          .transition(.opacity.combined(with: .offset(y: -4)))
         }
       }
     }
+    .clipped()
     .tint(QMTheme.ink.opacity(0.6))
     .accessibilityIdentifier(section.status == nil ? section.id : "conversationWorkStatus")
   }
@@ -699,9 +704,7 @@ struct NativeTimelineActivityGroup: View {
     let binding = disclosure.binding(for: "reasoning:\(id)", onInspect: onInspect)
     return VStack(alignment: .leading, spacing: 0) {
       Button {
-        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
-          binding.wrappedValue.toggle()
-        }
+        binding.wrappedValue.toggle()
       } label: {
         HStack(spacing: 6) {
           Image("Activity-brain").resizable().renderingMode(.template).scaledToFit()
