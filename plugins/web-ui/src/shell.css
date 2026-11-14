@@ -4036,17 +4036,14 @@ qm-draft .draft-card-label {
   color: var(--muted-foreground);
   font-size: 0.9em;
 }
-:is(code-block, qm-draft) copy-button {
+qm-draft copy-button {
   --accent: var(--secondary);
   --accent-foreground: var(--foreground);
 }
-:is(code-block, qm-draft) copy-button button {
+qm-draft copy-button button {
   border-color: transparent;
   box-shadow: none;
   color: var(--muted-foreground);
-}
-code-block copy-button button > span {
-  display: none;
 }
 qm-draft copy-button svg {
   transform: scale(0.8125);
@@ -4055,82 +4052,137 @@ qm-draft .draft-card-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.assistant-body code-block[language="text"] pre,
-.user-bubble code-block[language="text"] pre {
-  margin: 0;
-  padding: 4px 8px 8px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 10px;
-  line-height: 1.4;
+
+/* Code blocks: one tinted card for every fence. A labelled fence gets a slim header with its
+   language and a copy button; a plain-text fence has no header and shows copy in its top-right
+   corner on hover, so no empty strip is reserved below the code. */
+:is(.assistant-body, .user-bubble) code-block {
+  --code-pad-x: 14px;
+  margin: 12px 0;
 }
-.assistant-body code-block[language="text"] pre code,
-.user-bubble code-block[language="text"] pre code {
-  font-size: 10px;
-  line-height: 1.4;
+:is(.assistant-body, .user-bubble) code-block > div {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--secondary) 60%, var(--background));
+  overflow: hidden;
 }
-.assistant-body code-block[language="text"] > div,
-.user-bubble code-block[language="text"] > div {
+:is(.assistant-body, .user-bubble) code-block > div > div:first-child {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 4px 0 var(--code-pad-x);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
-.assistant-body code-block[language="text"] .text-code-body,
-.user-bubble code-block[language="text"] .text-code-body {
-  order: 1;
+:is(.assistant-body, .user-bubble) code-block > div > div:first-child > span {
+  color: var(--muted-foreground);
+  font-family: var(--app-font);
+  font-size: 12px;
+  line-height: 1;
 }
-.assistant-body code-block[language="text"] .text-code-footer,
-.user-bubble code-block[language="text"] .text-code-footer {
-  order: 2;
-  height: var(--meta-lane);
-  justify-content: flex-end;
-  gap: 2px;
-  padding: 0 2px;
-  font-size: 10px;
+:is(.assistant-body, .user-bubble) code-block > div > div:last-child {
+  max-height: 384px;
+  overflow: auto;
+}
+:is(.assistant-body, .user-bubble) code-block pre {
+  margin: 0;
+  padding: 10px var(--code-pad-x) 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.55;
+}
+:is(.assistant-body, .user-bubble) code-block pre code {
+  font-size: 0.875em;
+  line-height: 1.55;
+}
+code-block copy-button {
+  --accent: var(--secondary);
+  --accent-foreground: var(--foreground);
+}
+code-block copy-button button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 6px;
+  box-shadow: none;
+  color: var(--muted-foreground);
+}
+code-block copy-button button:hover {
+  color: var(--foreground);
+}
+code-block copy-button button > span {
+  display: none;
+}
+:is(.assistant-body, .user-bubble) code-block[language="text"] .text-code-footer {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 1;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--secondary) 60%, var(--background));
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease;
 }
-.assistant-body code-block[language="text"] .text-code-footer > span,
-.user-bubble code-block[language="text"] .text-code-footer > span {
+:is(.assistant-body, .user-bubble) code-block[language="text"] .text-code-footer > span {
   display: none;
 }
-.assistant-body code-block[language="text"]:hover .text-code-footer,
-.user-bubble code-block[language="text"]:hover .text-code-footer,
-.assistant-body code-block[language="text"] .text-code-footer:focus-within,
-.user-bubble code-block[language="text"] .text-code-footer:focus-within {
+:is(.assistant-body, .user-bubble) code-block[language="text"]:hover .text-code-footer,
+:is(.assistant-body, .user-bubble) code-block[language="text"] .text-code-footer:focus-within {
   opacity: 1;
   pointer-events: auto;
 }
-.assistant-body code-block[language="text"] copy-button button,
-.user-bubble code-block[language="text"] copy-button button {
-  min-width: var(--meta-lane);
-  height: var(--meta-lane);
-  padding: 0;
+:is(.assistant-body, .user-bubble) code-block[language="text"] pre {
+  padding: 10px 40px 10px var(--code-pad-x);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.assistant-body code-block.text-code-collapsible[data-expanded="false"] .text-code-body,
-.user-bubble code-block.text-code-collapsible[data-expanded="false"] .text-code-body {
-  max-height: 76px;
+:is(.assistant-body, .user-bubble) code-block.text-code-collapsible[data-expanded="false"] .text-code-body {
+  max-height: var(--text-code-collapsed, 180px);
   overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 50%, transparent 92%);
 }
 .text-code-toggle {
-  margin-left: auto;
-  min-height: var(--meta-lane);
-  padding: 0 6px;
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 var(--code-pad-x, 14px);
   border: 0;
-  border-radius: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: transparent;
   color: var(--muted-foreground);
   font: inherit;
-  font-size: 10px;
+  font-size: 12px;
+  text-align: left;
   cursor: pointer;
 }
+.text-code-toggle::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 0 2px 7px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  vertical-align: middle;
+}
+.text-code-toggle[aria-expanded="true"]::after {
+  margin-bottom: -1px;
+  transform: rotate(-135deg);
+}
 .text-code-toggle:hover {
-  background: var(--secondary);
   color: var(--foreground);
 }
 @media (hover: none) {
-  .assistant-body code-block[language="text"] .text-code-footer,
-  .user-bubble code-block[language="text"] .text-code-footer {
+  :is(.assistant-body, .user-bubble) code-block[language="text"] .text-code-footer {
     opacity: 1;
     pointer-events: auto;
   }

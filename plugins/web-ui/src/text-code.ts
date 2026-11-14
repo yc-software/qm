@@ -29,6 +29,10 @@ export function normalizePlainTextFences(text: string): string {
   return normalized.join(newline);
 }
 
+// A plain-text block taller than this collapses to 180px (shell.css) behind "Show more"; the gap
+// between the two keeps the toggle from hiding only a line or two.
+const TEXT_CODE_COLLAPSE_AT_PX = 240;
+
 export function decorateTextCodeBlocks(root: ParentNode | null): void {
   if (!root) return;
   for (const block of root.querySelectorAll<HTMLElement>('code-block[language="text"]')) {
@@ -38,7 +42,7 @@ export function decorateTextCodeBlocks(root: ParentNode | null): void {
     if (!body || !footer || !pre) continue;
     body.classList.add("text-code-body");
     footer.classList.add("text-code-footer");
-    if (footer.querySelector(".text-code-toggle") || pre.scrollHeight <= 76) continue;
+    if (block.querySelector(".text-code-toggle") || pre.scrollHeight <= TEXT_CODE_COLLAPSE_AT_PX) continue;
     const button = block.ownerDocument.createElement("button");
     button.type = "button";
     button.className = "text-code-toggle";
@@ -48,7 +52,7 @@ export function decorateTextCodeBlocks(root: ParentNode | null): void {
       button.setAttribute("aria-expanded", String(expanded));
     };
     button.addEventListener("click", () => update(block.dataset.expanded !== "true"));
-    footer.insertBefore(button, footer.lastElementChild);
+    body.after(button);
     block.classList.add("text-code-collapsible");
     update(block.dataset.expanded === "true");
   }
