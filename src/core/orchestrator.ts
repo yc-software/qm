@@ -222,7 +222,7 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
-import { BOT_REQUESTER_APPROVAL_NOTE, cannotApprove, unavailableApprovalRefusal } from "./approval-requester.ts";
+import { BOT_REQUESTER_APPROVAL_NOTE, unavailableApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -606,7 +606,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { spendLimit, refusal: spendRefusal } = await checkSpendLimit(tenant, spendLimits, deps, scopeId, audit);
       if (spendRefusal) return spendRefusal;
       const botRequester = input.botActor === true;
-      const noApprover = cannotApprove(input);
+      const noApprover = botRequester || input.noApprover === true;
       const issueApproval = async (
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,

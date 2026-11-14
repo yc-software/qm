@@ -2,13 +2,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
 import type { Tenant } from "../tenants/context.ts";
-import {
-  APPROVAL_LIFETIME_MS,
-  type PendingApprovalRecord,
-  type ScopeId,
-  type TurnRequest,
-  type TurnResult,
-} from "../types.ts";
+import { APPROVAL_LIFETIME_MS, type PendingApprovalRecord, type ScopeId, type TurnResult } from "../types.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 
 export const BOT_REQUESTER_APPROVAL_NOTE =
@@ -16,9 +10,6 @@ export const BOT_REQUESTER_APPROVAL_NOTE =
 
 export const BOT_REQUESTER_REFUSAL =
   "This request came from a bot or app, and the next step needs a person's approval. A person has to ask for it directly.";
-
-export const cannotApprove = (input: Pick<TurnRequest, "botActor" | "noApprover">): boolean =>
-  input.botActor === true || input.noApprover === true;
 
 export const webApprovableThread = (threadRef: string): boolean =>
   threadRef.startsWith("web:") || threadRef.startsWith("swarm:") || isSubagentThreadRef(threadRef);
@@ -41,7 +32,7 @@ export function unavailableApprovalRefusal(
     sessionId,
     reason: botRequester
       ? BOT_REQUESTER_REFUSAL
-      : `No person can approve steps in this run, so this step did not run: ${command} (${reason}).`,
+      : `This step needs approval (${reason}) and can't be approved in this run, so it did not run: ${command}.`,
     refusalKind: "approval_denied",
   };
 }

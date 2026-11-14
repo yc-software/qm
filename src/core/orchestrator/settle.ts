@@ -149,6 +149,7 @@ export async function selectTurnResult(turn: {
     withManagedRosterVersion,
   } = turn;
   let finalResult: TurnResult;
+  const blockedStep = result.pendingApprovals?.[0] ?? quarantineReleaseApprovals[0];
   const stopScope = result.stopScope ? { stopScope: result.stopScope } : {};
   const sourceUserSeq = turnUserSeq;
   const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
@@ -164,8 +165,8 @@ export async function selectTurnResult(turn: {
     finalResult = heldReply(true, false)!;
   } else if (replyOptional && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
     finalResult = { status: "silent", sessionId: session.id };
-  } else if (refuseApproval && result.pendingApprovals?.[0]) {
-    finalResult = refuseApproval(result.pendingApprovals[0].command, result.pendingApprovals[0].reason);
+  } else if (refuseApproval && blockedStep) {
+    finalResult = refuseApproval(blockedStep.command, blockedStep.reason);
   } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
     const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
     const turnApprovals: Array<
