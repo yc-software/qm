@@ -1424,7 +1424,7 @@ export function buildApp(
     await modelRegistry.refresh();
   };
   const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
-    const model = resolveEmbeddingModel(id);
+    const model = resolveEmbeddingModel(id) ?? (await refreshModels().then(() => resolveEmbeddingModel(id)));
     if (!model) throw new Error(`Embedding model unavailable: ${id}`);
     const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
     return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);

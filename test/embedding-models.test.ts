@@ -185,3 +185,29 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   assert.equal((await put({ modelId: null })).status, 200);
   assert.equal(await built.config.getEmbeddingModelDurable(), null);
 });
+
+test("a gateway embedding model resolves on the first recall before anything has loaded the gateway catalog", async () => {
+  const embeddingRequests: string[] = [];
+  const config = testConfig({
+    modelGateway: {
+      url: "https://gateway.example/v1",
+      apiKey: "gateway-key",
+      apiKeyHeader: "x-gateway-key",
+      models: {},
+    },
+  });
+  const built = buildApp(config, {
+    modelCredentialFetch: async (url) => {
+      if (String(url).endsWith("/models")) return Response.json({ data: [{ id: "embed" }] });
+      if (String(url).endsWith("/model_group/info"))
+        return Response.json({ data: [{ model_group: "embed", mode: "embedding" }] });
+      embeddingRequests.push(String(url));
+      return Response.json({ data: [{ index: 0, embedding: [1, 0] }] });
+    },
+  });
+  await built.config.setEmbeddingModel("gateway/embed");
+  assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
+  await built.memory.capture("personal:test", ["first fact"], Date.now());
+  assert.match(recallText(await built.memory.recall("personal:test", { query: "first" })), /first fact/);
+  assert.deepEqual(embeddingRequests, ["https://gateway.example/v1/embeddings"]);
+});
