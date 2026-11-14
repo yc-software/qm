@@ -27,19 +27,44 @@ before proxying, and the keychain stores credentials under the canonical owner.
 - **Links are flat.** A canonical principal is never itself linked onward, and
   a linked sign-in cannot become canonical for others.
 - **Only people are linked.** A QM system actor (`system:…`) is QM itself, and a
-  Slack bot or app is software, so the admin API refuses a link with either one on
-  either side (400). It knows a bot or app by its QM user, which is marked as an
-  app once the bot has spoken to QM or a directory sync lists it as a bot.
-  Older versions could also mark a linked person's own user as an app, and the
-  API refuses links that name such a person until their user is a person again.
-  A turn spoken by a bot that is joined to anyone by a link, on either side, is
-  refused until an admin deletes that link.
+  Slack bot or app is software, so a link with either one on either side is
+  refused. The admin API answers 400, and the Slack connect flow answers 409
+  with "These accounts need an administrator's help to connect. Your existing
+  data has not been moved."
+- **The directory says who is a bot.** Each directory sync copies Slack's
+  `is_bot` for every member into `directory_members.is_bot`, as true or false.
+  It stays empty (NULL) until a sync has written it, and a sign-in Slack doesn't
+  list, such as an OIDC sign-in, has no row at all. QM never reads an empty flag
+  as "a person":
+  - **Linking.** A sign-in whose row says it is a bot counts as a bot on either
+    side of a link. When the flag is empty, the link check falls back to the
+    sign-in's QM user, which is marked as an app once the bot has spoken to QM or
+    a sync has listed it as a bot.
+  - **Repair at each sync.** A sign-in whose row says it is a bot, but that is
+    linked onto someone else's user, moves to a new app user of its own. The same
+    transaction writes a `user_sign_in_split` audit event with the link's
+    evidence and the admin who made it. An app user becomes a person again only
+    when every one of its sign-ins is listed and listed as a person: a sign-in
+    Slack doesn't list is no evidence, the same as an empty flag. Any other app
+    user with more than one sign-in stays an app, and the audit log records a
+    `user_sign_in_review` event with each sign-in's signal, once for each
+    distinct set of signals. An empty flag neither splits nor resets anyone.
+  - **Turns.** A turn is refused until an admin deletes the link when its speaker
+    is a bot joined to anyone by a link, or when the speaker's sign-in or its
+    canonical sign-in counts as a bot by the link check's rule. A user whose main
+    sign-in is a Slack bot is not split automatically, so their turns stay
+    refused. So does an app user the sync leaves for review, even when one of its
+    sign-ins is listed as a person; once an admin deletes the link, each sign-in
+    works on its own again.
+- **Bot work stays out of a person's projects.** Work that carries the bot marker
+  gets 403 from the project tools, even when the bot is a project member through a
+  channel roster.
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
 - **Linking merges the users row.** If the linked sign-in already has its own
   user (it is that user's only sign-in), linking folds it into the canonical
   person's user in the same transaction (earliest first-seen time, earliest
-  offboarding) and deletes it.
+  offboarding, and the person's kind) and deletes it.
 - **Links are reversible.** Deleting a link restores two separate principals.
   Records written while the link existed stay under the canonical id,
   including the merged user: the sign-in gets a new user of its own only

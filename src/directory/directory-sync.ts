@@ -97,15 +97,17 @@ export function createDirectorySync(deps: {
       const internal = [...byId.values()];
 
       const hash = hashRoster(
-        internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}`),
+        internal.map(
+          (m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}|${m.isBot ?? ""}`,
+        ),
       );
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
         if (internal.length) {
           await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
+            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url, is_bot)
+             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::boolean[])`,
             [
               orgId,
               internal.map((m) => m.principalId),
@@ -114,6 +116,7 @@ export function createDirectorySync(deps: {
               internal.map((m) => m.type),
               internal.map((m) => m.slackId ?? null),
               internal.map((m) => m.avatarUrl ?? null),
+              internal.map((m) => m.isBot ?? null),
             ],
           );
         }

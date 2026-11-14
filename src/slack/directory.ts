@@ -440,7 +440,7 @@ export function createDirectory(deps: {
           type: "internal" as const,
           ...(slackId && slackId !== a.externalId ? { slackId } : {}),
           ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
-          ...(a.isBot ? { isBot: true } : {}),
+          isBot: a.isBot === true,
         };
       });
     const fetched = await fetchChannels(client, invalidations, targetChannelIds);

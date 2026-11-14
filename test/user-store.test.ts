@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { foldPrincipalId, installPrincipalLinks } from "../src/directory/person.ts";
-import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
+import { createPrincipalLinkService, PrincipalLinkError } from "../src/identity/principal-links.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresUserStore, fold, type UserStore } from "../src/identity/user-store.ts";
 import { personLabel, UNKNOWN_PERSON } from "../src/identity/person-names.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -42,6 +43,21 @@ test("a user is a person until marked as an app; marking never creates a row or 
   const pat = unique("pat");
   await roster.link({ principalId: absent, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() });
   assert.deepEqual([await roster.markApps([absent]), (await roster.get(pat))?.kind], [0, "person"]);
+});
+
+test("a link refuses an app user unless its directory row says it is a person, and the merge keeps a person", async () => {
+  const app = `U-${randomUUID().slice(0, 8)}`;
+  const pat = unique("pat");
+  const roster = store();
+  await roster.record({ id: app, source: "turn", at: Date.now() });
+  await roster.markApps([app]);
+  const link = { principalId: app, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() };
+  await assert.rejects(roster.link(link), PrincipalLinkError);
+  await createPostgresDirectoryStore(url).replace([
+    { principalId: app, displayName: "Sam", type: "internal", isBot: false },
+  ]);
+  await roster.link(link);
+  assert.deepEqual([(await roster.get(app))?.principalId, (await roster.get(pat))?.kind], [pat, "person"]);
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {
