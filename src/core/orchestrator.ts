@@ -26,6 +26,7 @@ import {
   ownsSessionContext,
   isSubagentThreadRef,
   sessionContextOf,
+  hiddenFromBotWork,
 } from "../sessions/session-syscalls.ts";
 import {
   type DocumentInput,
@@ -555,6 +556,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const botRequest = input.botActor;
       if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(tenant, storedSession, deps)))
         input = { ...input, botActor: true };
+      if (
+        storedSession &&
+        !(swarmBinding && swarmBinding.rootSessionId !== storedSession.id) &&
+        !(ownsSessionContext(conversation.threadRef, input) && input.origin.kind !== "automation") &&
+        (await hiddenFromBotWork(tenant, input, storedSession, deps))
+      ) {
+        console.error(
+          `[orchestrator] turn.silent (bot-flagged turn in a conversation hidden from bot work) thread=${conversation.threadRef}`,
+        );
+        return { status: "silent", sessionId: storedSession.id };
+      }
       const botLimitsRaised = input.botActor === true && botRequest !== true;
       if (botLimitsRaised && input.runId) await deps.runs?.markBotLimited(tenant, input.runId);
       const personConversationTurn =

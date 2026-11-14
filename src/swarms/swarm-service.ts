@@ -8,6 +8,7 @@ import { botLimited, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import { SandboxAccessError, type SandboxResource, type SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
+import { hiddenFromBotWork } from "../sessions/session-syscalls.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
@@ -30,7 +31,7 @@ import {
   type SwarmStore,
   type PendingSwarm,
 } from "./swarm-store.ts";
-import { withTenant } from "../tenants/context.ts";
+import { type Tenant, withTenant } from "../tenants/context.ts";
 
 export type SwarmCaller =
   { kind: "agent"; claims: CapabilityClaims } | { kind: "human"; actorId: string; sessionId: string; runId?: string };
@@ -445,7 +446,13 @@ export function createSwarmService(deps: {
     };
   }
 
-  async function deliver(swarm: Swarm, step: <Result>(start: () => Promise<Result>) => Promise<Result>): Promise<void> {
+  async function deliver(
+    swarm: Swarm,
+    step: <Result>(start: () => Promise<Result>) => Promise<Result>,
+    tenant: Tenant,
+  ): Promise<void> {
+    const root = swarm.template.botActor ? await sessions.get(swarm.id) : null;
+    const rootHidden = !!root && (await hiddenFromBotWork(tenant, swarm.template, root, { sessions, swarms: service }));
     for (const message of swarm.messages) {
       for (const [recipientId, notification] of Object.entries(message.notifications)) {
         if (notification.state !== "pending") continue;
@@ -454,7 +461,7 @@ export function createSwarmService(deps: {
         const control = controlState(swarm, recipient.id);
         const failed = recipient.state === "failed" || control === "stopped" || swarmExpired(swarm);
         if (!failed && control === "paused") continue;
-        if (failed || botLostSwarm(swarm)) {
+        if (failed || botLostSwarm(swarm) || (rootHidden && recipientId === swarm.id)) {
           await step(() =>
             store.update(swarm.id, (current) => {
               const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
@@ -491,7 +498,7 @@ export function createSwarmService(deps: {
     }
   }
 
-  async function reconcile(rootId: string, phase: "resources" | "delivery"): Promise<void> {
+  async function reconcile(rootId: string, phase: "resources" | "delivery", tenant: Tenant): Promise<void> {
     const deadline = Date.now() + SWARM_LIMITS.reconcileMs;
     const key = phase === "resources" ? `swarm-reconcile:${rootId}` : `swarm-delivery:${rootId}`;
     await deps.lock.tryWithLock(key, async () => {
@@ -514,7 +521,7 @@ export function createSwarmService(deps: {
         let swarm = await step(() => store.get(rootId));
         if (!swarm) return;
         if (phase === "delivery") {
-          await deliver(swarm, step);
+          await deliver(swarm, step, tenant);
           return;
         }
         for (const member of swarm.members.filter((peer) => peer.state === "reserved")) {
@@ -635,7 +642,7 @@ export function createSwarmService(deps: {
           )
             continue;
           if (active.size >= SWARM_LIMITS.sweepConcurrency) return;
-          const operation = withTenant(swarm.tenantId, () => reconcile(swarm.id, phase))
+          const operation = withTenant(swarm.tenantId, (tenant) => reconcile(swarm.id, phase, tenant))
             .catch((error) => swallow("swarm outbox reconciliation", error))
             .finally(() => active.delete(swarm.id));
           active.set(swarm.id, operation);
@@ -662,7 +669,7 @@ export function createSwarmService(deps: {
   };
   const sweeper = createSweeper(sweep, 2_000, { label: "swarm-outbox", immediate: true });
 
-  return {
+  const service: SwarmService = {
     ...sweeper,
     sweep,
     async inspect(caller) {
@@ -1143,4 +1150,5 @@ export function createSwarmService(deps: {
       return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
     },
   };
+  return service;
 }

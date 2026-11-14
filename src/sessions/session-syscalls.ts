@@ -169,6 +169,15 @@ export async function forkOfBotWork(
   return !deps.swarms || (await deps.swarms.botStartedWorker(origin));
 }
 
+export async function hiddenFromBotWork(
+  tenant: Tenant,
+  viewer: { botActor?: boolean },
+  session: Pick<Session, "id" | "forkedFrom" | "spawnMeta">,
+  deps: Parameters<typeof forkOfBotWork>[2],
+): Promise<boolean> {
+  return !sessionVisibleTo(viewer, session) && !(await forkOfBotWork(tenant, session, deps));
+}
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
