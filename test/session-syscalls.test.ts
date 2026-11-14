@@ -21,11 +21,8 @@ import {
   USER_STOP_ALL,
   runStopped,
   ANCESTOR_STOP,
-  hiddenFromBotWork,
-  ownsSessionContext,
   type SessionSyscallDeps,
 } from "../src/sessions/session-syscalls.ts";
-import { ambientTenant } from "../src/tenants/context.ts";
 import {
   deliverSubagentMail,
   renderSubagentMail,
@@ -683,22 +680,19 @@ async function delegatedLanes(r: Rig, tasks: string[], botActor = false) {
   return lanes;
 }
 
-test("a subagent bot work opened still writes to its parent once bot work can't see it, as mail whose wake starts no turn there, and is told why it can't read it", async () => {
+test("a subagent bot work opened still writes to its parent once bot work can't see it, as mail for the person's next turn, and is told why it can't read it", async () => {
   const r = await rig();
   const [lane] = await delegatedLanes(r, ["work"], true);
   const wrote = await lane!.api.write({ target: "parent", wake: true, text: "which region?" });
   const read = await lane!.api.read({ target: "parent" });
-  const [wake] = await r.runs.inFlightForThread(r.room.threadRef);
   const [mail] = await r.mailbox.pending(r.room.id);
   assert.deepEqual(
     [
       wrote.ok && wrote.title,
       !read.ok && read.message.includes("hidden from bot work"),
       mail?.text.includes("which region?"),
-      !ownsSessionContext(r.room.threadRef, wake!.request) &&
-        (await hiddenFromBotWork(ambientTenant(), wake!.request, (await r.sessions.get(r.room.id))!, r)),
     ],
-    [r.room.id, true, true, true],
+    [r.room.id, true, true],
   );
 });
 
