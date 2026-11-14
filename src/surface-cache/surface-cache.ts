@@ -185,6 +185,17 @@ export function createPostgresSurfaceCache(
         `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS ambient_claimed BOOLEAN NOT NULL DEFAULT TRUE`,
       ],
     },
+    {
+      id: "surface-cache/store/0013-surface-primary-keys",
+      statements: [
+        `SET LOCAL lock_timeout = '5s'`,
+        ...["channel_messages", "channel_state", "channel_files"].map(
+          (table) =>
+            `ALTER TABLE ${table} DROP CONSTRAINT ${table}_pkey,
+               ADD CONSTRAINT ${table}_pkey PRIMARY KEY USING INDEX ${table}_surface_key`,
+        ),
+      ],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
