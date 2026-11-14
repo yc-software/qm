@@ -280,7 +280,9 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                        min(t.created_at) AS first_spoke, count(t.speaker) > 0 AS bot,
                        EXISTS (SELECT 1 FROM directory_members m
                                 WHERE m.tenant_id = s.tenant_id AND m.slack_id IS NOT NULL
-                                  AND (${fold("m.principal_id")} = s.alias_id OR m.slack_id = s.alias_id)) AS person
+                                  AND ${fold("m.principal_id")} = s.alias_id)
+                       OR EXISTS (SELECT 1 FROM directory_members m
+                                   WHERE m.tenant_id = s.tenant_id AND m.slack_id = s.alias_id) AS person
                   FROM app_sign_ins s
                   LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker
                                FROM runs r
