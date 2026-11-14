@@ -738,15 +738,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return null;
       }
 
+      const visibleTitle = (target: Session) =>
+        (sessionVisibleTo(binding.request, target) && target.title?.trim()) || target.id;
+
       function peerRefusal(target: Session): string | null {
         const refusal = sidebarRefusal();
         if (refusal) return refusal;
         if (!isSidebarSession(target))
-          return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
+          return `"${visibleTitle(target)}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
       }
 
-      const visibleTitle = (target: Session) => target.title?.trim() || target.id;
       async function visibleHistory(target: Session): Promise<Item[]> {
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
@@ -991,8 +993,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               );
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
               assertAudienceCompatible(caller, request);
-              const shown = sessionVisibleTo(binding.request, target);
-              const title = shown ? visibleTitle(target) : target.id;
+              const title = visibleTitle(target);
               if (input.interrupt) {
                 if (privateMessage)
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
@@ -1047,14 +1048,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   createdAt: Date.now(),
                 });
                 const reason = notWoken ? { notWoken } : {};
-                return {
-                  ok: true,
-                  sessionId: target.id,
-                  title,
-                  delivered: "queued_message",
-                  ...(shown ? { busy } : {}),
-                  ...reason,
-                };
+                return { ok: true, sessionId: target.id, title, delivered: "queued_message", busy, ...reason };
               };
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
@@ -1089,13 +1083,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     "a message can start a turn in a top-level conversation only when it is the sender's own parent",
                   );
                 const delivered = woken === "woken" ? "queued_turn" : "queued_message";
-                return {
-                  ok: true,
-                  sessionId: target.id,
-                  title,
-                  delivered,
-                  ...(shown ? { busy: woken === "busy" } : {}),
-                };
+                return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
               }
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);

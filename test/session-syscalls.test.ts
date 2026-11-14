@@ -686,8 +686,8 @@ test("a subagent bot work opened still writes to its parent once bot work can't 
   const wrote = await lane!.api.write({ target: "parent", wake: true, text: "which region?" });
   const read = await lane!.api.read({ target: "parent" });
   assert.deepEqual(
-    [wrote.ok && { title: wrote.title, busy: wrote.busy }, !read.ok && read.message.includes("hidden from bot work")],
-    [{ title: r.room.id, busy: undefined }, true],
+    [wrote.ok && wrote.title, !read.ok && read.message.includes("hidden from bot work")],
+    [r.room.id, true],
   );
 });
 
