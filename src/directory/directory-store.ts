@@ -86,8 +86,8 @@ export interface DirectoryStore {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
-  resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
+  upsertGroup(groupId: string, principalIds: readonly string[], surface: string): Promise<void>;
+  resolveGroupByParticipants(participants: readonly string[], surface: string): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
   groupMemberships(groupIds: readonly string[], principalId: string): Promise<Map<string, ScopeMembershipFacts>>;

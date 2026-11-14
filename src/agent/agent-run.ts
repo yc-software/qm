@@ -487,8 +487,25 @@ export function createAgent(opts?: AgentOptions): Agent {
       const ref = turnToolRef(dispatched);
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
-      const approvedTurn = await replayApprovedCalls(dispatched, ref, tools);
-      const resumed = await resumeInterruptedToolCall(approvedTurn, ref, tools as unknown as BridgedTool[]);
+      const opening = new AbortController();
+      const stopOpening =
+        signals && dispatched.runId && (dispatched.resumeToolCall || dispatched.approvedToolCalls?.length)
+          ? startSignalPoll(
+              signals,
+              dispatched.runId,
+              { onSteer: async () => false, onAbort: async () => opening.abort() },
+              { onError: (e) => swallow("pi: opening signal poll", e) },
+            )
+          : null;
+      const openingCancel = AbortSignal.any([opening.signal, ...(dispatched.cancel ? [dispatched.cancel] : [])]);
+      let approvedTurn: AgentTurnInput;
+      let resumed: Awaited<ReturnType<typeof resumeInterruptedToolCall>>;
+      try {
+        approvedTurn = await replayApprovedCalls(dispatched, ref, tools, openingCancel);
+        resumed = await resumeInterruptedToolCall(approvedTurn, ref, tools as unknown as BridgedTool[], openingCancel);
+      } finally {
+        await stopOpening?.();
+      }
       const turn = resumed ? { ...approvedTurn, history: resumed.history } : approvedTurn;
       const { entry } = await createTurnSession(
         withRequestHeaders(route.model, route.billing !== "model_gateway", wantFast),

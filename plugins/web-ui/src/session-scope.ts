@@ -42,10 +42,10 @@ const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<numb
     return count;
   },
   apps: async (scope) => {
-    const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
-      "/api/deployments",
+    const r = await api<{ apps?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
+      "/api/apps",
     );
-    return (r.deployments ?? []).filter(
+    return (r.apps ?? []).filter(
       (d) => d.status !== "archived" && (d.createdInScope === scope || d.ownerScopeId === scope),
     ).length;
   },
@@ -235,7 +235,7 @@ export function scopedViewTopbar(current: SessionTool, redraw: () => void): Temp
     },
     onTool: (t) => {
       if (t === current) return;
-      void import("./shell").then(({ switchView }) => switchView(t === "apps" ? "deploys" : t));
+      void import("./shell").then(({ switchView }) => switchView(t));
     },
   });
 }

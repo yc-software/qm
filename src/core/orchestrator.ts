@@ -20,7 +20,9 @@ import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
+  doesBotWork,
   isOwnerFire,
+  forkOfBotWork,
   ownsSessionContext,
   isSubagentThreadRef,
   sessionContextOf,
@@ -61,6 +63,7 @@ import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
+import { isOwnScopeBotWork } from "../resolution/context-filter.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { deliverAddressedReply, interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
@@ -218,7 +221,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
-import { surfaceToolPrompt } from "../surfaces/registry.ts";
+import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, botApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -337,7 +340,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   const orchestrator: Orchestrator = {
     async screenSecuritySteer({ tenant, payload, actor, conversation, sessionId, verifiedSwarm }) {
-      const resolution = await deps.resolution.resolve(tenant, conversation, actor);
+      const resolution = await deps.resolution.resolve(tenant, conversation, actor, false, false);
       const { screening } = resolution.securityPolicy;
       if (screening === "off") return "allow";
       const scopeLabel = deps.resolution.scopeFor(conversation, actor);
@@ -513,12 +516,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const humanTurn = input.origin.kind === "human";
       const sessionTurn = isSessionTurn(input);
       const humanInput = humanTurn && !sessionTurn;
-      const personConversationTurn =
-        isPersonAuthored(input.origin.kind) &&
-        !sessionTurn &&
-        !isSubagentThreadRef(conversation.threadRef) &&
-        !input.botActor &&
-        !input.proactiveOpener;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -554,6 +551,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const { delegatedSession, refusal: subagentRefusal } = await admitSubagentSession(deps, conversation, actor);
       if (subagentRefusal) return subagentRefusal;
+      const storedSession = delegatedSession ?? (await deps.sessions.getByThread(conversation.threadRef));
+      const botRequest = input.botActor;
+      if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(tenant, storedSession, deps)))
+        input = { ...input, botActor: true };
+      const botLimitsRaised = input.botActor === true && botRequest !== true;
+      if (botLimitsRaised && input.runId) await deps.runs?.markBotLimited(tenant, input.runId);
+      const personConversationTurn =
+        isPersonAuthored(input.origin.kind) &&
+        !sessionTurn &&
+        !isSubagentThreadRef(conversation.threadRef) &&
+        !input.botActor &&
+        !input.proactiveOpener;
       const { managedRosterIsCurrent, withManagedRosterVersion } = createManagedRoster(
         deps,
         input,
@@ -579,11 +588,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       if (!(await managedRosterIsCurrent())) return rosterChanged();
       const surface = input.surface ? deps.surfaces.get(input.surface) : undefined;
+      const capabilities = turnCapabilities(surface, input);
+      const liveReplies = capabilities?.liveReplies === true;
       const admissionRefusal = await admitAudienceAndBudget(tenant, deps, conversation, actor, surface, external);
       if (admissionRefusal) return admissionRefusal;
 
-      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      const ownScopeBotWork = isOwnScopeBotWork({ actorId: actor.id, scopeId, botActor: input.botActor });
+      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external, ownScopeBotWork);
       const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
       const audienceScopeId =
         !automationDestination ||
@@ -644,7 +656,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
-      const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
+      const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
@@ -756,20 +768,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const editingApp = modeName === "mode-conversation" ? appEditSlug(conversation.threadRef, actor.id) : null;
       const appEdit = appEditTurnPolicy(editingApp !== null);
       const mcpToolsReady =
-        !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
+        !external && !appEdit && deps.mcp
+          ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, { actAsActor, botActor: input.botActor })
+          : undefined;
       const livePersonTurn = liveAuthorTurn && input.botActor !== true;
-      const useMemory =
-        !external && input.skipMemory !== true && !(input.botActor && scopeId === personalScope(actor.id));
+      const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
       const personaTurn =
         external || !deps.personas
           ? null
-          : await deps.personas.forTurn(
-              (await deps.sessions.getByThread(conversation.threadRef))?.personaId ?? input.personaId,
-              actor.id,
-              scopeId,
-            );
+          : await deps.personas.forTurn(storedSession?.personaId ?? input.personaId, actor.id, scopeId);
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
@@ -805,6 +814,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
+        botActor: input.botActor === true,
+        ownScopeBotWork,
         notebookOnly,
         memory: deps.memory,
         files: deps.files,
@@ -846,7 +857,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       } else if (modeName === "mode-conversation") frameVars.userName = "the people here";
-      const sideChat = (await deps.sessions.getByThread(conversation.threadRef))?.sideChat;
+      const sideChat = storedSession?.sideChat;
       const focusedSideChat = Boolean(sideChat && !sideChat.expanded);
       const sessionSyscalls = !external ? deps.sessionSyscalls : undefined;
       const delegateWork = !focusedSideChat && requiresDelegation(input);
@@ -992,7 +1003,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
         {
           ...(input.surfaceOrigin ? { surfaceBinding: input.surfaceOrigin } : {}),
-          ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
+          ...(ownsSessionContext(conversation.threadRef, input)
+            ? { context: sessionContextOf({ ...input, botActor: botRequest }) }
+            : {}),
         },
       );
       screenSession.id = session.id;
@@ -1011,7 +1024,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
-      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
+      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, botRequest);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const wakingChild =
@@ -1491,7 +1504,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
-          if ((surface?.capabilities.liveReplies || input.surface === "monitor") && input.runLeaseToken) {
+          if ((liveReplies || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
@@ -1536,12 +1549,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resolution,
         });
         const earlyTaskAck =
-          surface?.capabilities.liveReplies === true &&
-          humanInput &&
-          conversation.kind === "dm" &&
-          !input.approval &&
-          !input.botActor &&
-          !input.swarm;
+          liveReplies && humanInput && conversation.kind === "dm" && !input.approval && !input.botActor && !input.swarm;
         const publishFirstAck = (deliberatePost: boolean) => {
           if (
             !input.runId ||
@@ -1577,6 +1585,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resolution,
           provision,
           provisionResource,
+          ownScopeBotWork,
         });
         const surfaceToolDeps = createSurfaceToolDeps({
           tenant,
@@ -1602,7 +1611,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           openStored: openStoredOutbound,
           blobTransfer,
           fileRegistration,
-          ...(surface?.capabilities.textOnly ? { textOnly: true } : {}),
+          ...(capabilities?.textOnly ? { textOnly: true } : {}),
         });
         if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
           console.error(
@@ -2144,9 +2153,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             rosterMembers,
             rawEntries,
             session,
-            external,
             deps,
-            scopeId,
+            soulScopeId: resolution.soulScopeId,
             conversation,
             turnEnvironmentContents,
             mailbox,
@@ -2343,7 +2351,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.botActor ? { botActor: true } : {}),
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
-            ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),
+            ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface, input) } : {}),
             delegateWork,
             ...((session.clientTools ?? input.clientTools)?.length
               ? { clientTools: session.clientTools ?? input.clientTools }
@@ -2521,7 +2529,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
-          if (!surface?.capabilities.liveReplies || input.surfaceTools || !input.runId) return undefined;
+          if (!liveReplies || sessionTurn || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;

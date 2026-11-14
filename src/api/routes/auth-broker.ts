@@ -91,8 +91,8 @@ async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Ad
   if (allowed) return { allowed: true, expiresAt: member?.expiresAt };
   const grants =
     (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [`personal:${email}`], kind: "deploy" })) ?? [];
-  const deployments = await app.listDeployments();
-  const granted = deployments.filter(
+  const publishedApps = await app.listApps();
+  const granted = publishedApps.filter(
     (d) =>
       d.status !== "archived" &&
       grants.some(

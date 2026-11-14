@@ -5,7 +5,7 @@ import type { TeamStore } from "../teams/teams.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
-import type { DeploymentInvitation } from "../deploy/email-access.ts";
+import type { AppInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus, SubscribeOptions } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
@@ -88,7 +88,7 @@ import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { Deployment, DeploymentDraft } from "../deploy/deploy-store.ts";
+import type { PublishedApp, AppDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
 import type {
@@ -97,8 +97,8 @@ import type {
   RedeployInput,
   Reach,
   ReachOptions,
-  DeploymentGrantee,
-  DeploymentActor,
+  AppGrantee,
+  AppActor,
 } from "../deploy/deploy-service.ts";
 import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -110,14 +110,14 @@ import { type Project, type ProjectIcon, type ProjectStore } from "../projects/p
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 
-interface DeploymentVersionView {
+interface AppVersionView {
   version: number;
   createdAt: number;
   commit?: string;
   parentCommit?: string;
 }
 
-export interface DeploymentView {
+export interface AppView {
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -126,7 +126,7 @@ export interface DeploymentView {
   displayName?: string;
   currentVersion: number;
   appliedVersion?: number;
-  status: Deployment["status"];
+  status: PublishedApp["status"];
   alwaysOn?: boolean;
   embedAncestors?: string[];
   connectors?: string[];
@@ -134,14 +134,15 @@ export interface DeploymentView {
   lastAccessAt?: number;
   createdAt?: number;
   updatedAt?: number;
-  versions: DeploymentVersionView[];
+  versions: AppVersionView[];
 }
 
-export interface ViewerDeployment extends DeploymentView {
+export interface ViewerApp extends AppView {
   permission: Permission;
+  webUrl?: string;
 }
 
-export function deploymentView(d: Deployment): DeploymentView {
+export function appView(d: PublishedApp): AppView {
   const versions = d.versions.map(({ version, createdAt, commit, parentCommit }) => ({
     version,
     createdAt,
@@ -182,6 +183,7 @@ interface ReachNowInput {
   delete?: { messageTs: string };
   edit?: { messageTs: string };
   currentDestination?: Destination;
+  turn?: { surface?: string; liveReplies?: boolean };
 }
 export type ReachNowResult =
   | {
@@ -221,7 +223,7 @@ type ProjectViewMutation =
         | "channel_in_use";
     };
 
-interface DeploymentGitUrl {
+interface AppGitUrl {
   url: string;
   permission: "read" | "write";
 }
@@ -448,6 +450,7 @@ export interface App {
     principalId: string,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
+    ownScopeBotWork?: boolean,
   ): Promise<FileListPage>;
   uploadFileForViewer(
     tenant: Tenant,
@@ -467,7 +470,12 @@ export interface App {
   authorizesCapabilityScope(
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
-  openFileForViewer(tenant: Tenant, id: string, principalId: string): Promise<OpenedFile | null>;
+  openFileForViewer(
+    tenant: Tenant,
+    id: string,
+    principalId: string,
+    ownScopeBotWork: boolean,
+  ): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(
     tenant: Tenant,
@@ -482,7 +490,10 @@ export interface App {
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
   moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
-  getSoul(scopeId: ScopeId): {
+  getSoul(
+    scopeId: ScopeId,
+    reader: { actorId: string; ownScopeBotWork: boolean },
+  ): {
     scopeId: ScopeId;
     soul: string | null;
     soulVersion: number;
@@ -495,7 +506,7 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string },
+    opts?: { allowSharedScope?: boolean; botActor?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
@@ -530,6 +541,7 @@ export interface App {
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
   surfaceMirrored(kind: string): boolean;
+  chatSurfaces(): { kind: string; label: string; mark?: string }[];
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,
@@ -590,39 +602,36 @@ export interface App {
   recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
   reachNow(input: ReachNowInput): Promise<ReachNowResult>;
   resolveReachTarget(target: ReachTarget, authorityId: string, opts?: ReachOpts): Promise<ReachResolution>;
-  deploy(input: DeployInput): Promise<Deployment>;
-  redeploy(id: string, input: RedeployInput): Promise<Deployment>;
-  listDeployments(): Promise<Deployment[]>;
-  getDeployment(idOrName: string): Promise<Deployment | null>;
-  listDeploymentsForViewer(
-    tenant: Tenant,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<ViewerDeployment[]>;
-  effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
-  deploymentGitPermissionFor(
+  deploy(input: DeployInput): Promise<PublishedApp>;
+  redeploy(id: string, input: RedeployInput): Promise<PublishedApp>;
+  listApps(): Promise<PublishedApp[]>;
+  getApp(idOrName: string): Promise<PublishedApp | null>;
+  listAppsForViewer(tenant: Tenant, viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<ViewerApp[]>;
+  effectiveAppPermission(d: PublishedApp, principalId: string): Promise<Permission | null>;
+  appGitPermissionFor(
     idOrName: string,
     viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<"read" | "write" | null>;
-  deploymentGitPermissionsFor(
+  appGitPermissionsFor(
     tenant: Tenant,
-    deployments: readonly Deployment[],
+    publishedApps: readonly PublishedApp[],
     viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<Array<"read" | "write" | null>>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string): Promise<SkillResolution[]>;
-  canManageSkill(skill: Skill, principalId: string): Promise<boolean>;
+  listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
+  canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   updateOwnedSkill(
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
@@ -644,68 +653,74 @@ export interface App {
     principalId: string;
     id: string;
     liveActor?: boolean;
+    botActor?: boolean;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
-  rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
-  archiveDeployment(id: string): Promise<void>;
-  restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
-  canManageDeployment(
+  rollbackApp(id: string, version: number, actor?: string): Promise<void>;
+  archiveApp(id: string): Promise<void>;
+  restoreApp(id: string, actorId?: string): Promise<PublishedApp>;
+  canManageApp(
     idOrName: string,
     caller: Pick<CapabilityClaims, "actorId" | "botActor">,
     actingScopeId?: ScopeId,
   ): Promise<boolean>;
-  renameDeployment(id: string, name: string): Promise<Deployment>;
-  setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
-  setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
-  setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
-  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: DeploymentActor): Promise<Deployment>;
-  setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
-  maintainDeployments(): Promise<number>;
+  renameApp(id: string, name: string): Promise<PublishedApp>;
+  setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
+  setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
+  setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
+  setAppPublic(idOrName: string, isPublic: boolean, actor: AppActor): Promise<PublishedApp>;
+  setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
+  maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
-  deploymentLiveEdit(id: string): Promise<{ draft: DeploymentDraft | null } | null>;
-  reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
-  deploymentLogsFor(
+  appLiveEdit(id: string): Promise<{ draft: AppDraft | null } | null>;
+  reachApp(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
+  appLogsFor(
     id: string,
     principalId: string,
     opts: { tailLines: number },
   ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }>;
-  shareDeployment(
+  shareApp(
     idOrName: string,
     grantee: ScopeId,
     permission: Permission | null,
-    actor: DeploymentActor,
+    actor: AppActor,
     opts?: { notify?: boolean },
-  ): Promise<DeploymentGrantee[]>;
-  inviteToDeployment(
+  ): Promise<AppGrantee[]>;
+  inviteToApp(
     idOrName: string,
     email: string,
-    actor: DeploymentActor,
+    actor: AppActor,
     opts?: { notify?: boolean },
   ): Promise<{
-    grantees: DeploymentGrantee[];
-    invitation: DeploymentInvitation;
+    grantees: AppGrantee[];
+    invitation: AppInvitation;
   }>;
-  deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
-  deploymentGitRepoPath(id: string): Promise<string | null>;
-  runDeploymentGitPush<T>(
+  appGrantees(idOrName: string): Promise<AppGrantee[]>;
+  appUrl(publishedApp: PublishedApp): string | undefined;
+  appGitRepoPath(id: string): Promise<string | null>;
+  runAppGitPush<T>(
     id: string,
     actor: string | undefined,
     runReceivePack: () => Promise<{ result: T; ok: boolean }>,
   ): Promise<T>;
-  deploymentGitUrlFor(
+  appGitUrlFor(
     idOrName: string,
     caller: Pick<CapabilityClaims, "actorId" | "botActor">,
     opts: { secret: string; baseUrl: string; ttlMs?: number },
-  ): Promise<DeploymentGitUrl | null>;
-  authorizesDeploymentGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
-  reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
+  ): Promise<AppGitUrl | null>;
+  authorizesAppGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
+  reapIdleApps(ttlMs: number, now?: number): Promise<number>;
   listEnvironments(): Promise<{ environment: Environment; attachments: EnvironmentAttachment[] }[]>;
   createEnvironment(input: { scopeId: ScopeId; name: string; actorId: string }): Promise<Environment>;
   resolveEnvironmentByName(name: string): Promise<Environment | null>;
   attachScope(input: { scopeId: ScopeId; environmentId: string; actorId: string }): Promise<void>;
 }
 
-interface DeploymentGitPrincipals {
-  authorizes(deployment: Deployment, principalId: string, permission: "read" | "write"): Promise<boolean | undefined>;
+interface AppGitPrincipals {
+  authorizes(
+    publishedApp: PublishedApp,
+    principalId: string,
+    permission: "read" | "write",
+  ): Promise<boolean | undefined>;
 }
 
 export interface AppDeps {
@@ -757,7 +772,7 @@ export interface AppDeps {
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;
-  deploymentGitPrincipals?: DeploymentGitPrincipals;
+  appGitPrincipals?: AppGitPrincipals;
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
@@ -820,10 +835,10 @@ interface OpenedFile {
   stream: Readable;
 }
 
-export interface ScopeDeployment {
+export interface ScopeApp {
   id: string;
   name: string;
-  status: Deployment["status"];
+  status: PublishedApp["status"];
   permission: Permission;
   currentVersion: number;
 }
@@ -839,7 +854,7 @@ interface ScopeResources {
   files: FileListItem[];
   webhooks: Webhook[];
   crons: Cron[];
-  deployments: ScopeDeployment[];
+  apps: ScopeApp[];
   skills: ScopeSkill[];
   manageable: boolean;
 }

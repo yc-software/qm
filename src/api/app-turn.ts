@@ -28,7 +28,7 @@ import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
-import { samePerson } from "../directory/person.ts";
+import { personIds, samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
@@ -160,6 +160,12 @@ export function createTurnMethods(
         return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
       };
       const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
+      if (req.actor.isBot && personIds(req.actor.externalId).length > 1)
+        return {
+          status: "refused",
+          reason:
+            "a bot can't act as a person; an org admin must delete the principal link that joins this bot to someone (docs/principal-links.md)",
+        };
       if (!deps.identity.isInternal(actor)) {
         return {
           status: "refused",
@@ -335,6 +341,7 @@ export function createTurnMethods(
         desktopClientId: desktopClientForTurn({ ...req, origin }),
         ...(req.clientSurface ? { clientSurface: req.clientSurface } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
+        ...(req.liveReplies ? { liveReplies: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),

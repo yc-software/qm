@@ -6,6 +6,8 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem, type Item } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId } from "../src/types.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
@@ -37,6 +39,26 @@ function textReplyEvents(text: string): Array<Record<string, unknown>> {
 const scope = "personal:tester" as ScopeId;
 const NOTE = "(system note: your previous attempt at the request above was paused mid-turn and has resumed.)";
 
+function retriedTurn(history: ToolContext["history"], entries: Item[] = [], prior: Item[] = []): AgentTurnInput {
+  let seq = prior.length + 1;
+  return {
+    session: { id: "s1" } as AgentTurnInput["session"],
+    input: NOTE,
+    systemPrompt: "BASE",
+    history: prior,
+    tools: { history } as unknown as ToolContext,
+    scopeLabel: scope,
+    orgScopeId: "org:test" as ScopeId,
+    resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId: "s1", seq: seq++, createdAt: Date.now() });
+      entries.push(stored);
+      return stored;
+    },
+    recordModelCall: () => {},
+  };
+}
+
 test("the agent re-runs a retry-safe interrupted call before the model sees the resumed turn", async () => {
   const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const entries: Item[] = [];
@@ -60,28 +82,14 @@ test("the agent re-runs a retry-safe interrupted call before the model sees the 
       { sessionId: "s1", seq: 2, createdAt: 2 },
     ),
   ];
-  let seq = 3;
-  const turn: AgentTurnInput = {
-    session: { id: "s1" } as AgentTurnInput["session"],
-    input: NOTE,
-    systemPrompt: "BASE",
-    history,
-    tools: {
-      async history(q: string) {
-        queries.push(q);
-        return ["UserMessage#1: the budget doc is in shared/q2.md"];
-      },
-    } as unknown as ToolContext,
-    scopeLabel: scope,
-    orgScopeId: "org:test" as ScopeId,
-    resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
-    emit: async (item) => {
-      const stored = storedItem(item, { sessionId: "s1", seq: seq++, createdAt: Date.now() });
-      entries.push(stored);
-      return stored;
+  const turn = retriedTurn(
+    async (q) => {
+      queries.push(q);
+      return ["UserMessage#1: the budget doc is in shared/q2.md"];
     },
-    recordModelCall: () => {},
-  };
+    entries,
+    history,
+  );
   try {
     const result = await agent.runTurn(turn);
     assert.equal(result.reply, "we kept the Q2 budget flat");
@@ -108,4 +116,19 @@ test("the agent re-runs a retry-safe interrupted call before the model sees the 
     Array.isArray(m.content) ? m.content.filter((block) => block.type === "tool_result") : [],
   );
   assert.equal(toolResults.length, 1, "exactly one tool_result reaches the provider for the retried call");
+});
+
+test("a stop reaches the call a retried turn re-runs, as it would on the first attempt", async (t) => {
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
+  t.mock.method(globalThis, "fetch", async () => sse(textReplyEvents("done")));
+  let finished = false;
+  const slow = async () => {
+    await signals.send("retried-stop", { kind: "abort", reason: "by user" });
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    finished = true;
+    return [];
+  };
+  const result = await agent.runTurn({ ...retriedTurn(slow), runId: "retried-stop" });
+  assert.deepEqual([result.stopped, finished], [true, false]);
 });

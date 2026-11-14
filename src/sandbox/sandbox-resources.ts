@@ -201,7 +201,7 @@ export async function accessConversationSandbox(
 }
 
 export async function assertBotMayUseComputer(
-  resources: SandboxResources | undefined,
+  resources: Pick<SandboxResources, "get" | "resolve"> | undefined,
   scopeId: ScopeId,
   sandboxId: string | undefined,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
@@ -216,7 +216,7 @@ export async function assertBotMayUseComputer(
 }
 
 export async function defaultComputer(
-  resources: SandboxResources | undefined,
+  resources: Pick<SandboxResources, "resolve"> | undefined,
   scopeId: ScopeId,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
 ): Promise<SandboxResource | undefined> {

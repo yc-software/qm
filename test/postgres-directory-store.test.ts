@@ -241,12 +241,12 @@ test(
       { groupId: "G-2", principalId: "U-carol" },
     ]);
 
-    const r = await store.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"]);
+    const r = await store.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"], "slack");
     assert.equal(r.kind, "one");
     if (r.kind === "one") assert.equal(r.groupId, "G-1");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol"])).kind, "one");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-extra"])).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants([])).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol"], "slack")).kind, "one");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-extra"], "slack")).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants([], "slack")).kind, "none");
 
     assert.equal(await store.groupMember("G-1", "U-sam"), true);
     assert.equal(await store.groupMember("G-2", "U-sam"), false);
@@ -272,8 +272,8 @@ test(
 
     await store.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);
     assert.equal(await store.groupMember("G-1", "U-sam"), false);
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"])).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice"])).kind, "one");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"], "slack")).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice"], "slack")).kind, "one");
   },
 );
 

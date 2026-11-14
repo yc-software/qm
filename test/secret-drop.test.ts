@@ -257,6 +257,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       keychain: built.keychain,
       secretDrops: built.secretDrops,
       deliveries: built.deliveries,
+      admin: built.admin,
       auditLog: built.auditLog,
       runs: built.runs,
       signals: built.signals,
@@ -704,6 +705,13 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.ok((await offered(true)).includes(personal));
     assert.ok(!(await offered(false)).includes(personal));
     assert.ok((await offered(false)).includes(asked));
+  });
+
+  it("bot work in a person's name can't mint a secret drop", async () => {
+    await built.users.record({ id: "U_A", source: "turn", at: Date.now() });
+    const cap = await capFor("U_A", scopeId("personal", "U_A"), { botActor: true, liveActor: true });
+    const minted = await post("/v1/keychain/drops", { service: "deploy", purpose: "deploy" }, cap);
+    assert.equal(minted.status, 403);
   });
 });
 

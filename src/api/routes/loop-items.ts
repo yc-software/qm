@@ -150,9 +150,13 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   sendJson(ctx.res, 200, await deps.items.ingest(entries));
 }
 
-async function loadItem(
-  ctx: ApiCtx,
-): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string; unattended?: true } | null> {
+async function loadItem(ctx: ApiCtx): Promise<{
+  deps: LoopServiceDeps;
+  loop: Loop;
+  item: LoopItem;
+  actorId: string;
+  liveHuman: () => Promise<boolean>;
+} | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.loop)) return null;
@@ -166,7 +170,7 @@ async function loadItem(
     loop: loaded.loop,
     item,
     actorId: loaded.acting.actorId,
-    ...(loaded.acting.liveHuman ? {} : { unattended: true as const }),
+    liveHuman: loaded.acting.liveHuman,
   };
 }
 
@@ -353,6 +357,11 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   const adapter = adapterForItem(item);
   if (adapter?.actions.includes(kind)) {
+    if (ctx.capability?.botActor)
+      return sendJson(ctx.res, 403, {
+        error: "forbidden",
+        message: `a Slack bot's turn cannot ${kind} as the loop's owner`,
+      });
     const tokens = ctx.deps.loopSourceTokens;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
@@ -393,7 +402,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     kind,
     args,
     loaded.actorId,
-    loaded.unattended ? { unattended: true } : undefined,
+    (await loaded.liveHuman()) ? undefined : { unattended: true },
   );
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
@@ -454,7 +463,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   try {
     const next = await deps.fire.followUp(loop, item, message || "Please review the attached files.", loaded.actorId, {
       ...options,
-      ...(loaded.unattended ? { unattended: true as const } : {}),
+      ...((await loaded.liveHuman()) ? {} : { unattended: true as const }),
     });
     sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
   } catch (e) {
@@ -630,12 +639,14 @@ export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
       {
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/action",
+        browser: "self",
         auth: "either",
         handle: serializeItemAction(actOnItem),
       },
       {
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/followup",
+        browser: "self",
         auth: "either",
         handle: serializeItemAction(followUpOnItem),
       },
