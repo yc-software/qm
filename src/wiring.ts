@@ -1410,7 +1410,7 @@ export function buildApp(
   const stopTenantLoad = onTenantLoad(() =>
     Promise.all([
       configStore.hydrate?.().catch(reported("tenant load: hydrate configuration")),
-      refreshCustomProviders().catch(reported("tenant load: hydrate custom providers")),
+      refreshModels().catch(reported("tenant load: hydrate models")),
       identity.refresh().catch(reported("tenant load: hydrate identity")),
     ]),
   );
