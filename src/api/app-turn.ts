@@ -28,7 +28,7 @@ import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
-import { personIds, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personIds, samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
@@ -160,9 +160,17 @@ export function createTurnMethods(
         return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
       };
       const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
-      if (req.actor.isBot && personIds(req.actor.externalId).length > 1)
+      const foldsOntoApp = async (signIn: string): Promise<boolean> => {
+        const [users, canonical] = await Promise.all([
+          deps.users?.resolve([signIn]),
+          deps.directory.get(canonicalPerson(signIn)),
+        ]);
+        return users?.get(signIn)?.kind === "app" || canonical?.isBot === true;
+      };
+      if (personIds(req.actor.externalId).length > 1 && (req.actor.isBot || (await foldsOntoApp(req.actor.externalId))))
         return {
           status: "refused",
+          refusalKind: "internal_only",
           reason:
             "a bot can't act as a person; an org admin must delete the principal link that joins this bot to someone (docs/principal-links.md)",
         };
