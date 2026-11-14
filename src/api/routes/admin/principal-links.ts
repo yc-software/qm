@@ -9,6 +9,7 @@ const DIRECTORY_MEMBER_IS_CANONICAL =
   "that principal is a directory member; directory members stay canonical, so link the other identity to it instead";
 const ADMIN_SIGN_IN_NEEDS_ADMIN_CANONICAL =
   "that sign-in holds an org admin grant; a link may not make another principal an admin, so grant the canonical principal first or revoke it";
+const APP_IS_NOT_A_PERSON = "that principal is a Slack bot or app, not a person, so it cannot be linked to one";
 
 async function directoryMember(deps: ApiCtx["deps"], id: string): Promise<boolean> {
   if (!deps.directory) return false;
@@ -32,6 +33,10 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   if (typeof b.principalId === "string" && (await directoryMember(deps, b.principalId)))
     return sendJson(res, 400, { error: "link_failed", message: DIRECTORY_MEMBER_IS_CANONICAL });
+  const named = [b.principalId, b.canonicalId].filter((id) => typeof id === "string");
+  const users = await deps.admin?.users.resolve(named);
+  if ([...(users?.values() ?? [])].some((user) => user.kind === "app"))
+    return sendJson(res, 400, { error: "link_failed", message: APP_IS_NOT_A_PERSON });
   if (typeof b.principalId === "string" && typeof b.canonicalId === "string" && deps.admin) {
     const grants = await deps.admin.listGrants(tenantOf(ctx));
     if (adminStatusFromGrants(grants, b.principalId).isAdmin && !adminStatusFromGrants(grants, b.canonicalId).isAdmin)
