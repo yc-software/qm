@@ -348,19 +348,14 @@ const DONE_REPORT =
   'End your reply with a fenced json block: {"done": true} once the action is done, or {"done": false, "reason": "<one line>"} when it is not.';
 
 function notDone(stage: string, outcome: TriggerOutcome): { error: Error; userMessage: string } | null {
-  const record = liftBlock(outcome.reply ?? "", "done").record;
+  const { text, record } = liftBlock(outcome.reply ?? "", "done");
   if (!outcome.heldForApproval && record?.done === true) return null;
   const reported = typeof record?.reason === "string" ? excerpt(record.reason.trim()) : "";
-  const reason = outcome.heldForApproval
-    ? "a step needed an approval and did not run"
-    : reported || "the agent did not report the action done";
+  const unreported = text
+    ? `the agent did not report the action done: ${excerpt(text)}`
+    : "the agent did not report the action done";
+  const reason = outcome.heldForApproval ? "a step needed an approval and did not run" : reported || unreported;
   return { error: new Error(`${stage}: not done — ${reason}`), userMessage: reason };
-}
-
-function clearlyNotDone(outcome: TriggerOutcome): boolean {
-  if (!outcome.ran || outcome.heldForApproval) return true;
-  if (outcome.status === "refused" || outcome.status === "pending_approval") return true;
-  return liftBlock(outcome.reply ?? "", "done").record?.done === false;
 }
 
 const REPLY_EXCERPT_MAX = 400;
@@ -916,10 +911,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const claimed = await deps.outputs.claimShipping(outputId);
       if (!claimed) return null;
       const claimToken = claimed.claimToken!;
-      const fireKey =
-        output.state === "shipping" && output.shipFireKey
-          ? output.shipFireKey
-          : `loop:${loopId}:ship:${outputId}:${claimToken}`;
+      const fireKey = `loop:${loopId}:ship:${outputId}`;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
       const outcome = await stageTurn(
         loop,
@@ -932,7 +924,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         return deps.outputs.markUnconfirmed(outputId, claimToken);
       }
       const undelivered = stageFailure("ship", outcome) ?? notDone("ship", outcome);
-      if (undelivered && !clearlyNotDone(outcome)) return deps.outputs.markUnconfirmed(outputId, claimToken);
       if (undelivered) {
         await deps.outputs.failShipping(outputId, claimToken);
         throw undelivered.error;

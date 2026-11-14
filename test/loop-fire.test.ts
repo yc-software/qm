@@ -244,8 +244,6 @@ test("a replayed ship operation becomes unconfirmed and a person can resolve it 
     const loop = await makeLoop(s.loops);
     await s.fire.fire(loop.id, `fire-${decision}`);
     const output = (await s.outputs.awaitingReview(loop.id))[0]!;
-    const stale = await s.outputs.claimShipping(output.id, 0);
-    await s.outputs.beginShipAttempt(output.id, stale!.claimToken!, `loop:${loop.id}:ship:${output.id}`);
     await s.idempotency.once(`loop:${loop.id}:ship:${output.id}`, async () => {});
     const uncertain = await s.fire.shipOutput(loop.id, output.id, "josh");
     assert.equal(uncertain?.state, "unconfirmed");
@@ -265,15 +263,6 @@ test("a ship, an item action or a work turn counts only when the agent reports i
   const loop = await makeLoop(s.loops);
   await s.fire.fire(loop.id, "f1");
   const [held] = await s.outputs.awaitingReview(loop.id);
-  const declines = [
-    { status: "ok", reply: '{"done": false, "reason": "no destination"}' },
-    { status: "ok", reply: '{"done": true}', pendingApprovals: [{}] },
-  ] as TurnResult[];
-  for (const decline of declines) {
-    next = decline;
-    await assert.rejects(s.fire.shipOutput(loop.id, held!.id, "josh"), /ship: not done/);
-    assert.equal((await s.outputs.get(held!.id))?.state, "ready");
-  }
   next = {
     status: "ok",
     reply: '{"done": true}',
@@ -281,7 +270,7 @@ test("a ship, an item action or a work turn counts only when the agent reports i
   } as never;
   assert.equal((await s.fire.shipOutput(loop.id, held!.id, "josh"))?.state, "shipped");
   next = undefined;
-  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 3);
+  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 1);
 
   const other = await makeLoop(s.loops, { name: "Second" });
   await s.fire.fire(other.id, "f2");
@@ -302,24 +291,31 @@ test("a ship, an item action or a work turn counts only when the agent reports i
   assert.match(fired.summary?.failures[0] ?? "", /no readable outputs block/);
 });
 
-test("a ship turn that may have acted without reporting done is left unconfirmed, so no second turn runs", async () => {
+test("a ship that ran without reporting done goes back to ready once, and shipping again runs no second turn", async () => {
   let next: TurnResult | undefined;
   const s = service(HAPPY, { dynamicResult: () => next });
-  const uncertain = [
-    { status: "failed", reply: "Sent the email, then the API timed out." },
-    { status: "ok", reply: "I could not send it." },
-    { status: "silent" },
-  ] as TurnResult[];
-  for (const [i, result] of uncertain.entries()) {
+  const outcomes = [
+    [{ status: "refused", reply: "Sent the email, then a command was denied." }, /turn refused/],
+    [{ status: "ok", reply: "Sent the email.", pendingApprovals: [{}] }, /a step needed an approval and did not run/],
+    [{ status: "failed", reply: "Sent the email, then the API timed out." }, /turn failed/],
+    [
+      { status: "ok", reply: "Sent the email." },
+      /not done — the agent did not report the action done: Sent the email\./,
+    ],
+    [{ status: "silent" }, /not done — the agent did not report the action done$/],
+    [{ status: "ok", reply: '{"done": false, "reason": "no destination"}' }, /not done — no destination/],
+  ] as Array<[TurnResult, RegExp]>;
+  for (const [i, [result, reason]] of outcomes.entries()) {
     const loop = await makeLoop(s.loops, { name: `Loop ${i}` });
     next = undefined;
     await s.fire.fire(loop.id, `f${i}`);
     const [output] = await s.outputs.awaitingReview(loop.id);
     next = result;
+    await assert.rejects(s.fire.shipOutput(loop.id, output!.id, "josh"), reason);
+    assert.equal((await s.outputs.get(output!.id))?.state, "ready");
     assert.equal((await s.fire.shipOutput(loop.id, output!.id, "josh"))?.state, "unconfirmed");
-    assert.equal((await s.fire.shipOutput(loop.id, output!.id, "josh"))?.state, "shipped");
   }
-  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, uncertain.length);
+  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, outcomes.length);
 });
 
 test("returning one output supersedes active siblings before requeueing the item", async () => {
