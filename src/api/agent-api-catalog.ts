@@ -506,7 +506,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH|DELETE",
         path: "/v1/memory/facts",
-        summary: "edit facts ({facts:[{id,text}]}) or forget them ({ids}); any unknown id fails the whole call",
+        summary:
+          "edit facts ({facts:[{id,text}]}) or forget them ({ids}: notebook ids or brain refs); an unknown notebook id fails the whole call, each brain ref reports its own outcome, and notebook ids stay while a ref's outcome is unknown",
       },
     ],
   },

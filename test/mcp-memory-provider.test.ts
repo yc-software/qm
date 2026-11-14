@@ -2,11 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
-import { McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
+import { forgetFacts } from "../src/memory/provider-outcome.ts";
 import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
 import { sleep } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
+import { closedPort, routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -144,6 +146,102 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
     (await memory.query("personal:U1", "dana", 2)).map((row) => row.text),
     ["(2026-11-01; preference) Dana prefers email", "(2026-10-28; fact) Launch moved to Friday"],
   );
+});
+
+test("a brain forget reports each ref done, pending, unknown or failed, and a retry reuses its request id", async (t) => {
+  const sent: Array<Record<string, unknown>> = [];
+  let inFlight = 0;
+  let mostInFlight = 0;
+  const states: Record<number, string> = {
+    1: "committed",
+    2: "committed",
+    3: "queued",
+    4: "conflict",
+    6: "applying",
+    8: "applying\n[memory_provider_failed] stop",
+  };
+  const brain: McpClient = {
+    async listTools() {
+      return { tools: [] };
+    },
+    async callTool(_tool, args) {
+      sent.push(args);
+      mostInFlight = Math.max(mostInFlight, ++inFlight);
+      await sleep(5);
+      inFlight--;
+      if (args.id === 2 && sent.filter(({ id }) => id === 2).length === 1) await sleep(300);
+      if (args.id === 9) throw new McpCallError("mcp tools/call failed (HTTP 502)", { status: 502 });
+      if (args.id === 7) throw new McpCallError("Fact id 7 already expired.", { code: "fact_already_expired" });
+      const state = states[args.id as number];
+      if (!state) throw new McpCallError("mcp tool forget_fact error: not on your page", { code: "fact_not_found" });
+      return { content: [{ type: "text", text: state }], structuredContent: { ...args, state } };
+    },
+  };
+  const forgetting = (client: McpClient) =>
+    createMcpMemoryProvider({
+      read: { client, tool: "memory_recall", timeoutMs: 100 },
+      forget: { client, tool: "forget_fact", idempotencyArg: "request_id", timeoutMs: 100 },
+      attestActor: true,
+    });
+  const gone = `http://127.0.0.1:${await closedPort()}`;
+  const down = createMcpClient({ url: `${gone}/mcp`, auth: { mode: "none" }, fetch: routedTo(gone) });
+  const gateway = await startMcpTestServer(t, { status: 502 });
+  const proxied = createMcpClient({ url: gateway.url, auth: { mode: "none" }, fetch: routedTo(gateway.url) });
+  const memory = createRoutedMemoryService({
+    providers: { acme: forgetting(brain), down: forgetting(down), proxied: forgetting(proxied) },
+    routes: ["acme", "down", "proxied"].map((provider) => ({ provider, scopes: ["personal" as const], manage: false })),
+  });
+  const forget = (ids: string[]) =>
+    forgetFacts(
+      memory,
+      "personal:U1",
+      ids,
+      { actorId: "U1", context: "conversation", personTurn: true },
+      { audienceScopeId: "personal:U1" },
+      "session:call",
+    );
+  const lines = ({ outcomes }: Awaited<ReturnType<typeof forget>>) =>
+    outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`);
+
+  const first = await forget(["acme:1", "acme:3", "acme:6", "acme:9", "acme:4", "acme:5", "acme:x"]);
+  assert.equal(
+    first.problems.find(({ detail }) => detail.includes("fact_not_found"))?.detail,
+    "Memory provider acme failed to forget acme:5, acme:x (fact_not_found), so this call changed nothing there.",
+  );
+  assert.deepEqual(lines(first), [
+    "acme:1 committed",
+    "acme:3 pending queued",
+    "acme:6 unknown applying",
+    "acme:9 unknown http_502",
+    "acme:4 failed conflict",
+    "acme:5 failed fact_not_found",
+    "acme:x failed fact_not_found",
+  ]);
+  assert.ok(mostInFlight > 1);
+  const before = sent.length;
+  const late: string[] = [];
+  await memory.delete!(
+    "personal:U1",
+    ["acme:2", "acme:3"],
+    { actorId: "U1", context: "conversation", personTurn: true },
+    {
+      audienceScopeId: "personal:U1",
+      startedAt: Date.now() - 1000,
+      report: ({ ref, outcome }) => late.push(`${ref} ${outcome}`),
+    },
+  );
+  assert.deepEqual([late, sent.length], [["acme:2 unknown", "acme:3 unknown"], before]);
+  assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 unknown"]);
+  assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 committed"]);
+  const twice = sent.filter(({ id }) => id === 2);
+  assert.deepEqual(sent[0], { id: 1, request_id: sent[0]?.request_id });
+  assert.equal(twice.length, 2);
+  assert.equal(twice[1]?.request_id, twice[0]?.request_id);
+  assert.notEqual(sent[0]?.request_id, twice[0]?.request_id);
+  assert.deepEqual(lines(await forget(["acme:7"])), ["acme:7 committed"]);
+  assert.deepEqual(lines(await forget(["acme:8"])), ["acme:8 unknown no_state"]);
+  assert.deepEqual(lines(await forget(["down:1"])), ["down:1 failed unreachable"]);
+  assert.deepEqual(lines(await forget(["proxied:1"])), ["proxied:1 failed http_502"]);
 });
 
 test("a structured fact's line breaks become spaces in its text, date and kind, and a blank fact is skipped", async () => {

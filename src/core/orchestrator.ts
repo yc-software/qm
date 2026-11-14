@@ -146,7 +146,8 @@ import {
   turnFailureMessage,
   turnFailureItem,
 } from "./turn-error.ts";
-import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { ownPrivateConversation, personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { personAtKeyboard } from "../api/artifact-share.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -600,7 +601,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const audienceScopeId =
         !automationDestination ||
         automationDestination.audienceScopeId === scopeId ||
-        (attestableAudience(actor.id, scopeId) && attestableAudience(actor.id, automationDestination.audienceScopeId))
+        ownPrivateConversation(actor.id, scopeId, automationDestination.audienceScopeId)
           ? scopeId
           : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
@@ -1628,6 +1629,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
+        const runtimeClaims: CapabilityClaims = controlClaims ?? {
+          ...scopeAttestation,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(livePersonTurn ? { liveAuthor: true } : {}),
+          ...(triggeredTurn ? { triggered: true } : {}),
+        };
         const baseTools = createToolContext({
           tenant,
           desktopClientId: desktopClientForTurn(input),
@@ -1702,6 +1709,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
+          ...(personAtKeyboard(runtimeClaims) && !sessionTurn ? { personTurn: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
@@ -2069,12 +2077,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
         };
         const runtimeDefaults = requestedRuntime;
-        const runtimeClaims: CapabilityClaims = controlClaims ?? {
-          ...scopeAttestation,
-          exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(livePersonTurn ? { liveAuthor: true } : {}),
-          ...(triggeredTurn ? { triggered: true } : {}),
-        };
         const restoredRuntime =
           input.runId && isRetry
             ? recoveredRuntime(filterHistory(await deps.sessions.getItems(session.id)), input.runId, actor.id)

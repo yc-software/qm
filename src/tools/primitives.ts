@@ -68,8 +68,10 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
 import {
+  forgetFacts,
   withProviders,
   writeFacts,
+  type MemoryForget,
   type MemoryProviderProblem,
   type MemoryWrite,
   type OutcomeReport,
@@ -252,7 +254,7 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryRead(scope?: ScopeId): Promise<string | null>;
   memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
   memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
-  memoryDelete(ids: string[]): Promise<true | null>;
+  memoryDelete(ids: string[], callId: string): Promise<MemoryForget | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
@@ -542,6 +544,7 @@ export interface ToolContextDeps {
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
+  personTurn?: boolean;
   toolOutput?: ToolOutputStore;
   sessionId?: string;
 }
@@ -1200,11 +1203,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return true;
     },
 
-    async memoryDelete(ids: string[]): Promise<true | null> {
+    async memoryDelete(ids: string[], callId: string) {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      await memory.delete(write, ids, turnAuthority(deps.createdBy, deps.memoryAccess));
-      return true;
+      return forgetFacts(
+        memory,
+        write,
+        ids,
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
+        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+        deps.sessionId && `${deps.sessionId}:${callId}`,
+      );
     },
 
     ...(deps.humanTurn ? { humanTurn: true } : {}),

@@ -37,6 +37,7 @@ interface McpMemoryProviderConfig {
   url: string;
   read: McpMemoryOperationConfig;
   write?: McpMemoryOperationConfig;
+  forget?: McpMemoryOperationConfig;
   timeoutMs: number;
   attestActor: boolean;
 }

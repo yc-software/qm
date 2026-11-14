@@ -3,7 +3,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { boundedResponse } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
@@ -23,10 +23,17 @@ const OAUTH_DENIALS: ReadonlySet<string> = new Set([
 export class McpCallError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
-  constructor(message: string, detail: { status?: number; code?: string; cause?: unknown }) {
+  readonly unsent: boolean;
+  readonly answered: boolean;
+  constructor(
+    message: string,
+    detail: { status?: number; code?: string; unsent?: boolean; answered?: boolean; cause?: unknown },
+  ) {
     super(message, { cause: detail.cause });
     this.status = detail.status;
     this.code = detail.code;
+    this.unsent = detail.unsent ?? false;
+    this.answered = detail.answered ?? false;
   }
 }
 
@@ -42,13 +49,16 @@ export interface McpEnvelope {
   status?: string;
 }
 
+export const providerCode = (value: unknown): string | undefined =>
+  typeof value === "string" && /^[\w.:-]{1,64}$/.test(value) ? value : undefined;
+
 function envelopeOf(value: unknown): McpEnvelope {
   if (!value || typeof value !== "object") return {};
   const { code, status, error } = value as { code?: unknown; status?: unknown; error?: { code?: unknown } };
   const nested = error && typeof error === "object" ? error.code : undefined;
-  const found = typeof code === "string" ? code : nested;
+  const found = providerCode(typeof code === "string" ? code : nested);
   return {
-    ...(typeof found === "string" && /^[\w.:-]{1,64}$/.test(found) ? { code: found } : {}),
+    ...(found ? { code: found } : {}),
     ...(typeof status === "string" ? { status } : {}),
   };
 }
@@ -158,14 +168,24 @@ export function createMcpClient(opts: {
       },
     });
     const client = new Client({ name: "qm", version: "1.0.0" });
+    let opened = false;
     try {
       await client.connect(transport, { signal: stop });
+      opened = true;
       return await work(client, stop);
     } catch (e) {
       const status = httpStatus(e);
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
         ...(status ? { status } : {}),
         ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
+        ...(opened
+          ? {
+              answered:
+                e instanceof McpError
+                  ? e.code !== ErrorCode.RequestTimeout && e.code !== ErrorCode.ConnectionClosed
+                  : (status ?? 500) < 500,
+            }
+          : { unsent: true }),
         cause: e,
       });
     } finally {
@@ -218,7 +238,7 @@ export function createMcpClient(opts: {
         const detail =
           mcpResultText(result) ||
           (result.structuredContent ? JSON.stringify(result.structuredContent) : "(no detail)");
-        throw new McpCallError(`mcp tool ${name} error: ${detail}`, code ? { code } : {});
+        throw new McpCallError(`mcp tool ${name} error: ${detail}`, { ...(code ? { code } : {}), answered: true });
       }
       return result;
     },

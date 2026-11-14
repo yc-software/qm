@@ -8,6 +8,7 @@ import {
   type MemoryService,
 } from "../../memory/memory-service.ts";
 import {
+  forgetFacts,
   MAX_FACTS_PER_WRITE,
   problemLine,
   withProviders,
@@ -38,7 +39,8 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, runIsActive } from "./shared.ts";
+import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -860,10 +862,24 @@ const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capabi
   return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
-const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
+const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
+  const { res, deps, tenant, body } = ctx;
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-  await memory.delete?.(write, ids, turnAuthority(capability.actorId, capability.memory));
+  const { forgotten, outcomes, problems } = await forgetFacts(
+    memory,
+    write,
+    ids,
+    turnAuthority(
+      capability.actorId,
+      capability.memory,
+      personAtKeyboard(capability) &&
+        (await runIsActive(ctx)) &&
+        !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
+    ),
+    capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
+    capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
+  );
   audit(
     { deps, tenant },
     {
@@ -873,7 +889,9 @@ const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capa
       scopeLabel: write,
     },
   );
-  return sendJson(res, 200, { ok: true, scopeId: write });
+  const result = { forgotten, scopeId: write, ...(outcomes.length ? { outcomes } : {}) };
+  if (problems.length) return sendProviderProblem(res, problems, result);
+  return sendJson(res, 200, { ok: true, ...result });
 });
 
 async function listSkills(ctx: ApiCtx): Promise<void> {

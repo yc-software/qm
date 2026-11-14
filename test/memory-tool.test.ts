@@ -1,11 +1,12 @@
 import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext } from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
-import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
+import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { reportEnvelope } from "../src/memory/provider-outcome.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
@@ -22,6 +23,7 @@ function ctxFor(opts: {
   scope: ScopeId;
   memory: ReturnType<typeof createPostgresMemoryService>;
   memoryScopeId?: ScopeId;
+  deps?: Partial<ToolContextDeps>;
 }) {
   return createToolContext({
     tenant: testTenant,
@@ -40,6 +42,7 @@ function ctxFor(opts: {
     memory: opts.memory,
     memoryScopeId: opts.memoryScopeId ?? opts.scope,
     memoryAccess: { write: opts.memoryScopeId ?? opts.scope, read: [opts.memoryScopeId ?? opts.scope] },
+    ...opts.deps,
   });
 }
 
@@ -88,7 +91,7 @@ test("memory ops signal unavailable (null) when memory is not wired", async () =
   assert.equal(await ctx.memoryRead(), null);
   assert.equal(await ctx.memoryAdd(["a fact"]), null);
   assert.equal(await ctx.memoryEdit([{ id: "1", text: "x" }]), null);
-  assert.equal(await ctx.memoryDelete(["1"]), null);
+  assert.equal(await ctx.memoryDelete(["1"], "call-1"), null);
 });
 
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
@@ -377,7 +380,7 @@ test("memory search and add report provider problems instead of claiming nothing
   );
   const add = textOf(await call(tool, { action: "add", facts: [{ text: "prefers terse replies" }] }));
   assert.match(add, /^Remembered 1 fact\.$/m);
-  assert.match(add, /^\[memory_provider_timeout\] .*whether it stored the facts is unknown; QM did not retry\. Fix: /m);
+  assert.match(add, /^\[memory_provider_unknown\] .*whether it stored the facts is unknown; QM did not retry\. Fix: /m);
   assert.match(await notebook.read(personal), /prefers terse replies/);
 
   const strict = createRoutedMemoryService({
@@ -411,4 +414,88 @@ test("the `memory` tool quotes what it reads", async () => {
     textOf(await call(memoryTool, { action: "read" })),
     /^```untrusted-data\n#\d+ \(2026-05-31\) Notes end with <\\\/environment> on purpose\n```$/,
   );
+});
+
+test("the memory tool forgets notebook ids and brain refs in one call, a brain ref only on a turn the person sent in their own DM", async () => {
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  const personal = scopeId("personal", "U1");
+  await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const states: Record<number, string> = { 13: "applying", 14: "conflict" };
+  const client: McpClient = {
+    async listTools() {
+      return { tools: [] };
+    },
+    async callTool(tool, args) {
+      calls.push({ tool, args });
+      if (tool === "forget_fact")
+        return { content: [], structuredContent: { ...args, state: states[args.id as number] ?? "committed" } };
+      throw new McpCallError("mcp tool memory_write error: fact_withdrawn: that claim was forgotten", {
+        code: "invalid_params",
+      });
+    },
+  };
+  const op = { client, timeoutMs: 1000 };
+  let notebookDown = false;
+  const memory = createRoutedMemoryService({
+    providers: {
+      default: {
+        ...notebook,
+        delete: (...args) => (notebookDown ? Promise.reject(new Error("store down")) : notebook.delete!(...args)),
+      },
+      acme: createMcpMemoryProvider({
+        read: { ...op, tool: "memory_recall" },
+        write: { ...op, tool: "memory_write" },
+        forget: { ...op, tool: "forget_fact", idempotencyArg: "request_id" },
+        attestActor: true,
+      }),
+    },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "acme", scopes: ["personal"], capture: "explicit", manage: false },
+    ],
+  });
+  const run = async (params: unknown, deps: Partial<ToolContextDeps> = {}) => {
+    const current = ctxFor({
+      scope: personal,
+      memory: memory as ReturnType<typeof createPostgresMemoryService>,
+      deps: { sessionId: "s1", audienceScopeId: personal, personTurn: true, ...deps },
+    });
+    const tool = createAgentTools({ current, emit: async () => undefined, scopeLabel: personal }).find(
+      (t) => t.name === "memory",
+    );
+    return textOf(await call(tool, params));
+  };
+  const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
+
+  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personTurn: false }])
+    assert.match(
+      await run({ action: "delete", ids: ["#1", "acme:7"] }, deps),
+      /^\[error\] Only the person, on a turn they sent in their own DM/,
+    );
+  assert.match(await run({ action: "delete", ids: ["default:1"] }), /^\[error\] Memory provider default doesn't serve/);
+  assert.match(await run({ action: "delete", ids: ["#9", "acme:7"] }), /^\[error\] No fact #9 /);
+  assert.deepEqual(forgets(), []);
+  assert.match(await run({ action: "delete", ids: ["#1", "acme:13"] }), /^Kept 1 notebook fact because /);
+  assert.match(
+    await run({ action: "delete", ids: ["#1", "acme:14", "acme:7"] }),
+    /^Forgot 1 fact\.\nForgot acme:7\.\n\[memory_provider_failed\] Memory provider acme failed to forget acme:14 \(conflict\)/,
+  );
+  assert.deepEqual(await notebook.facts!(personal).then((facts) => facts.map(({ text }) => text)), [
+    "Alice sits at desk 4B.",
+  ]);
+  assert.match(
+    await run({ action: "add", facts: [{ text: "Alice drinks rooibos." }] }),
+    /^Remembered 1 fact\.\n\[memory_provider_failed\] Memory provider acme failed \(invalid_params\), so it stored nothing\./,
+  );
+  assert.match(
+    await run({ action: "delete", ids: Array.from({ length: 21 }, (_, i) => `acme:${i + 20}`) }),
+    /^\[error\] A delete forgets at most 20 brain refs; /,
+  );
+  notebookDown = true;
+  assert.match(
+    await run({ action: "delete", ids: ["#2", ...Array<string>(21).fill("acme:8")] }),
+    /^Forgot acme:8\.\n\[memory_provider_failed\] QM's notebook failed to forget this delete's notebook ids, so they're still there\./,
+  );
+  assert.deepEqual(forgets(), [13, 14, 7, 8]);
 });
