@@ -8,7 +8,7 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
+import { seedTestTenant, testTenant } from "./support/test-tenant.ts";
 
 const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;
@@ -85,7 +85,7 @@ test(
       assert.equal(notification.state, "queued");
       const run = await fixture.runs.claimById(notification.runId!, "delayed-ready-worker", 60_000);
       assert.ok(run);
-      assert.ok(await second.binding({ ...run.request, runId: run.id }));
+      assert.ok(await second.binding(testTenant, { ...run.request, runId: run.id }));
       context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
       await firstSweep;
       assert.equal(await fixture.serviceOptions.lock.tryWithLock!(resourceLock, async () => true), null);
@@ -102,7 +102,7 @@ test(
       assert.ok(await sessions.get(member.sessionId!));
       assert.equal((await runtime.runs.get(run.id))!.status, "running");
       assert.deepEqual(final.messages[0]!.notifications[worker!.id], notification);
-      assert.ok(await second.binding({ ...run.request, runId: run.id }));
+      assert.ok(await second.binding(testTenant, { ...run.request, runId: run.id }));
     } finally {
       acknowledgment.resolve();
       context.mock.timers.reset();
@@ -303,7 +303,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
     const recovered = (await store.get(initial.id))!;
     assert.equal(recovered.messages[0]!.notifications[member!.id]!.runId, notification.runId);
     const recoveredRun = (await restoredRuntime.runs.get(notification.runId!))!;
-    assert.ok(await sibling.binding({ ...recoveredRun.request, runId: recoveredRun.id, attempt: 1 }));
+    assert.ok(await sibling.binding(testTenant, { ...recoveredRun.request, runId: recoveredRun.id, attempt: 1 }));
     const session = await restoredSessions.get(recovered.members[1]!.sessionId!);
     assert.equal(session?.scopeId, initial.scopeId);
     assert.ok(await restoredSessions.getForParticipant(session!.id, "alice"));
