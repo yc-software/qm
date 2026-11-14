@@ -280,7 +280,7 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                        min(t.created_at) AS first_spoke, count(t.speaker) > 0 AS bot,
                        EXISTS (SELECT 1 FROM directory_members m
                                 WHERE m.tenant_id = s.tenant_id AND m.slack_id IS NOT NULL
-                                  AND ${fold("m.principal_id")} = s.alias_id) AS person
+                                  AND (${fold("m.principal_id")} = s.alias_id OR m.slack_id = s.alias_id)) AS person
                   FROM app_sign_ins s
                   LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker
                                FROM runs r
@@ -332,10 +332,7 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                 FROM app_signals
                WHERE (tenant_id, user_id) NOT IN (SELECT tenant_id, user_id FROM person_users)
                GROUP BY 1, 2
-              HAVING count(*) > 1 AND NOT bool_and(signal = 'bot')) entries
-       WHERE NOT EXISTS (SELECT 1 FROM audit_log a
-                          WHERE a.action IN ('user_sign_in_split', 'user_sign_in_review') AND a.action = entries.action
-                            AND a.tenant_id = entries.tenant_id AND a.resource = entries.user_id::text);
+              HAVING count(*) > 1 AND NOT bool_and(signal = 'bot')) entries;
     END $$`,
   ],
 };

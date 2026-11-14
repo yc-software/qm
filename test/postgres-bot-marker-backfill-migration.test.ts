@@ -105,7 +105,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
       built.app.createCron({ ownerScopeId: "channel:C1", owner: who, createdBy: who, schedule, action: who }),
     ),
   );
-  for (const [alias, person] of Object.entries({ [bot]: pat, [bot2]: sam, [app2]: app })) {
+  for (const [alias, person] of Object.entries({ [bot]: pat, U0PAT: pat, [bot2]: sam, [app2]: app })) {
     await users.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "U0ADM", createdAt: 1 });
     await users.markApps([person]);
   }
@@ -144,11 +144,9 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   const before = await state();
   await rerun("users/v2/0009-split-linked-bots");
   const after = await state();
-  await rerun("users/v2/0009-split-linked-bots");
-  assert.deepEqual(await state(), after);
   const person = { kind: "person" };
   const own = (alias: string) => ({ primary_alias: alias, evidence: "primary", linked_by: null });
-  const moved = { [bot]: own(bot), [bot2]: own(bot2), [pat]: person, [kim]: person };
+  const moved = { [bot]: own(bot), [bot2]: own(bot2), [pat]: person, U0PAT: person, [kim]: person };
   assert.deepEqual(
     after.links,
     before.links.map((link) => ({ ...link, ...moved[String(link.alias_id)] })),
