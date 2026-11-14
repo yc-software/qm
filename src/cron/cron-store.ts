@@ -17,6 +17,7 @@ import {
   ownedBy,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
+import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
@@ -88,10 +89,15 @@ export interface CronStore {
   due(now: number): Promise<Array<Cron & { scheduledAt: number; tenantId: string }>>;
 }
 
-export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
+export function cronIsActive(
+  cron: Pick<Cron, "enabled" | "archived" | "schedule" | "createdAt" | "lastFiredAt" | "nextFireAt">,
+): boolean {
   if (!cron.enabled || cron.archived) return false;
-  const oneShot = cron.schedule.cron === undefined && cron.schedule.everyMs === undefined;
-  return !(oneShot && cron.lastFiredAt !== undefined);
+  try {
+    return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== undefined;
+  } catch (error) {
+    return swallowAs("cron: liveness of a malformed schedule", true)(error);
+  }
 }
 
 export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threadRef: string): boolean {

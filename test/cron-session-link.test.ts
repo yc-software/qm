@@ -96,10 +96,12 @@ test("session:false and triggered turns leave a cron untied, and patch ties or u
   assert.ok(!(await built.app.listSessions(asU1)).find((s) => s.threadRef === THREAD)?.crons);
 });
 
-test("a one-shot cron stops counting as active once it has fired", () => {
-  const base = { enabled: true, archived: false, schedule: { firstFireAt: 5 } };
-  assert.equal(cronIsActive(base), true);
-  assert.equal(cronIsActive({ ...base, lastFiredAt: 6 }), false);
-  assert.equal(cronIsActive({ ...base, schedule: { everyMs: 60_000, firstFireAt: 5 }, lastFiredAt: 6 }), true);
-  assert.equal(cronIsActive({ ...base, archived: true }), false);
+test("cron liveness census: active exactly while a fire is ahead, and never throws on a malformed stored time", () => {
+  const base = { enabled: true, archived: false, createdAt: 1, schedule: { firstFireAt: 5 }, nextFireAt: 5 };
+  assert.equal(cronIsActive(base), true, "overdue unfired one-shot");
+  assert.equal(cronIsActive({ ...base, nextFireAt: undefined, lastFiredAt: 6 }), false, "fired one-shot");
+  assert.equal(cronIsActive({ ...base, schedule: { cron: "0 9 30 2 *" }, nextFireAt: undefined }), false, "no run");
+  assert.equal(cronIsActive({ ...base, schedule: { everyMs: 60_000 }, nextFireAt: 60_006, lastFiredAt: 6 }), true);
+  assert.equal(cronIsActive({ ...base, enabled: false }) || cronIsActive({ ...base, archived: true }), false);
+  assert.equal(cronIsActive({ ...base, nextFireAt: "soon" as unknown as number }), true, "malformed");
 });

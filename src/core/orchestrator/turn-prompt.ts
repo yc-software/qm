@@ -16,6 +16,7 @@ import {
   renderSystemContext,
   type SystemContextBlocks,
 } from "./prompt-blocks.ts";
+import { cronIsActive } from "../../cron/cron-store.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 export const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
@@ -82,14 +83,7 @@ export async function appendTurnGuidance(turn: {
     ])
       .then(([crons, hooks, mons]) =>
         renderStandingObligations(
-          crons.filter(
-            (c) =>
-              c.enabled &&
-              !c.archived &&
-              (c.schedule.cron != null ||
-                c.schedule.everyMs != null ||
-                (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
-          ),
+          crons.filter(cronIsActive),
           hooks.filter((w) => w.enabled),
           mons.filter((m) => m.enabled && m.expiresAt > nowMs),
         ),
