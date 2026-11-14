@@ -246,6 +246,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
   const liveDelivery =
     spec.surface === "monitor" && spec.destination?.type !== "webhook" && Boolean(spec.destination) && deliverable;
+  const receiver = spec.destination?.type === "webhook" && deliverable && !spec.shadow ? spec.destination : undefined;
 
   let status: TurnResult["status"] | undefined;
   let errorCode: string | undefined;
@@ -306,7 +307,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
       ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.botActor ? { botActor: true } : {}),
-      ...(webApprovableThread(threadRef) ? {} : { noApprover: true }),
+      ...(webApprovableThread(threadRef) || receiver ? {} : { noApprover: true }),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
@@ -321,9 +322,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.readOnly ? { readOnly: true } : {}),
       ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-      ...(spec.destination?.type === "webhook" && deliverable && !spec.shadow
-        ? { deliveryTarget: spec.destination.target }
-        : {}),
+      ...(receiver ? { deliveryTarget: receiver.target } : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
@@ -335,7 +334,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
-    runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
+    runDelivers = Boolean(receiver && res.runId);
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
