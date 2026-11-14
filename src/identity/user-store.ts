@@ -265,22 +265,21 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
          OR to_regclass('audit_log') IS NULL THEN
         RETURN;
       END IF;
-      CREATE TEMP TABLE mixed_sign_ins ON COMMIT DROP AS
+      CREATE TEMP TABLE app_sign_ins ON COMMIT DROP AS
         SELECT l.tenant_id, l.user_id, l.alias_id, l.evidence, l.linked_by, l.alias_id = u.primary_alias AS is_primary
           FROM users u JOIN user_links l ON l.tenant_id = u.tenant_id AND l.user_id = u.id
-         WHERE u.kind = 'app' AND EXISTS (SELECT 1 FROM user_links o
-                                           WHERE o.tenant_id = u.tenant_id AND o.user_id = u.id AND o.alias_id <> l.alias_id);
-      IF NOT EXISTS (SELECT 1 FROM mixed_sign_ins) THEN
+         WHERE u.kind = 'app';
+      IF NOT EXISTS (SELECT 1 FROM app_sign_ins) THEN
         RETURN;
       END IF;
-      CREATE TEMP TABLE mixed_signals ON COMMIT DROP AS
+      CREATE TEMP TABLE app_signals ON COMMIT DROP AS
         SELECT tenant_id, user_id, alias_id, evidence, linked_by, is_primary, first_spoke,
                CASE WHEN bot AND person THEN 'bot and person' WHEN bot THEN 'bot' WHEN person THEN 'person' ELSE 'none'
                END AS signal
           FROM (SELECT s.tenant_id, s.user_id, s.alias_id, s.evidence, s.linked_by, s.is_primary,
                        min(t.created_at) AS first_spoke, coalesce(bool_or(t.bot), false) AS bot,
                        coalesce(bool_or(NOT t.bot), false) AS person
-                  FROM mixed_sign_ins s
+                  FROM app_sign_ins s
                   LEFT JOIN (SELECT tenant_id, created_at, ${fold("j #>> '{surfaceOrigin,author,id}'")} AS speaker,
                                     j @> '{"botActor": true}' AS bot
                                FROM (SELECT tenant_id, created_at,
@@ -294,37 +293,39 @@ export const SPLIT_LINKED_BOTS_MIGRATION = {
                                 AND coalesce(j ->> 'delegatingRunId', '') = '') t
                     ON t.tenant_id = s.tenant_id AND t.speaker = s.alias_id
                  GROUP BY 1, 2, 3, 4, 5, 6) g;
+      CREATE TEMP TABLE person_users ON COMMIT DROP AS
+        SELECT tenant_id, user_id FROM app_signals GROUP BY 1, 2
+        HAVING bool_and(signal IN ('bot', 'person')) AND bool_or(is_primary AND signal = 'person');
       CREATE TEMP TABLE mixed_splits ON COMMIT DROP AS
-        SELECT tenant_id, user_id, alias_id, evidence, linked_by, first_spoke FROM mixed_signals
-         WHERE signal = 'bot' AND (tenant_id, user_id) IN (
-               SELECT tenant_id, user_id FROM mixed_signals GROUP BY 1, 2
-               HAVING bool_and(signal IN ('bot', 'person')) AND bool_or(is_primary AND signal = 'person'));
+        SELECT tenant_id, user_id, alias_id, evidence, linked_by, first_spoke FROM app_signals
+         WHERE signal = 'bot' AND (tenant_id, user_id) IN (SELECT tenant_id, user_id FROM person_users);
       INSERT INTO users(tenant_id, primary_alias, kind, first_seen_at, source)
         SELECT tenant_id, alias_id, 'app', ${ts("first_spoke")}, 'turn' FROM mixed_splits;
       UPDATE user_links l SET user_id = n.id, evidence = 'primary', linked_by = NULL
         FROM mixed_splits s JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
        WHERE l.tenant_id = s.tenant_id AND l.alias_id = s.alias_id;
-      UPDATE users u SET kind = 'person' FROM mixed_splits s WHERE u.tenant_id = s.tenant_id AND u.id = s.user_id;
+      UPDATE users u SET kind = 'person' FROM person_users p WHERE u.tenant_id = p.tenant_id AND u.id = p.user_id;
       INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
       SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, user_id::text, 'users', detail::text
-        FROM (SELECT s.tenant_id, s.user_id, 'user_sign_in_split' AS action,
-                     jsonb_build_object('movedSignIns', jsonb_agg(
+        FROM (SELECT p.tenant_id, p.user_id, 'user_sign_in_split' AS action,
+                     jsonb_build_object('movedSignIns', coalesce(jsonb_agg(
                        jsonb_build_object('alias', s.alias_id, 'userId', n.id, 'evidence', s.evidence, 'linkedBy', s.linked_by)
-                       ORDER BY s.alias_id)) AS detail
-                FROM mixed_splits s JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
+                       ORDER BY s.alias_id) FILTER (WHERE s.alias_id IS NOT NULL), '[]')) AS detail
+                FROM person_users p
+                LEFT JOIN mixed_splits s ON s.tenant_id = p.tenant_id AND s.user_id = p.user_id
+                LEFT JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
                GROUP BY 1, 2
               UNION ALL
               SELECT tenant_id, user_id, 'user_sign_in_review',
                      jsonb_build_object(
                        'reason', CASE WHEN bool_or(signal NOT IN ('bot', 'person')) THEN 'some sign-ins have no certain signal'
-                                      WHEN bool_or(signal = 'bot') THEN 'the primary sign-in is not a person'
-                                      ELSE 'no sign-in shows the bot signal' END,
+                                      ELSE 'the primary sign-in is not a person' END,
                        'signIns', jsonb_agg(jsonb_build_object('alias', alias_id, 'evidence', evidence, 'signal', signal)
                                             ORDER BY is_primary DESC, alias_id))
-                FROM mixed_signals
-               WHERE (tenant_id, user_id) NOT IN (SELECT tenant_id, user_id FROM mixed_splits)
+                FROM app_signals
+               WHERE (tenant_id, user_id) NOT IN (SELECT tenant_id, user_id FROM person_users)
                GROUP BY 1, 2
-              HAVING NOT bool_and(signal = 'bot')) entries
+              HAVING count(*) > 1 AND NOT bool_and(signal = 'bot')) entries
        WHERE NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.tenant_id = entries.tenant_id AND a.action = entries.action
                                                     AND a.resource = entries.user_id::text);
     END $$`,

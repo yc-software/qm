@@ -98,6 +98,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   await migrateRegisteredPgSchemas(url);
   const users = createPostgresUserStore(url);
   const [pat, bot, sam, quiet, app, app2] = ["U0PAT", "B0BOT", "U0SAM", "B0QUIET", "B0APP", "B0APP2"];
+  const [lee, dir] = ["U0LEE", "B0DIR"];
   const schedule = { cron: "0 9 * * *", timezone: "UTC" };
   const crons = await Promise.all(
     [pat, bot].map((who) =>
@@ -108,6 +109,8 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
     await users.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "U0ADM", createdAt: 1 });
     await users.markApps([person]);
   }
+  for (const who of [lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
+  await users.markApps([lee, dir]);
   const said = (speaker: string, actor: string, botActor = false) => {
     const surfaceOrigin = { author: { surface: "slack", account: "default", id: speaker }, audience: "internal" };
     const request = { actor: { id: actor }, origin: { kind: "human" }, surfaceOrigin, botActor } as never;
@@ -119,6 +122,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
     said(sam, sam),
     said(app, app, true),
     said(app2, app, true),
+    said(lee, lee),
   ]);
   const pg = createPgPool(url);
   const rerun = async (id: string) => {
@@ -129,7 +133,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
     links: await pg.q(`SELECT l.alias_id, u.primary_alias, u.kind, l.evidence, l.linked_by, l.created_at
       FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id ORDER BY 1`),
     audit: await pg.q(
-      "SELECT action, resource, scope_label, detail::jsonb FROM audit_log WHERE principal_id = 'system:migration' ORDER BY action",
+      "SELECT action, resource, scope_label, detail::jsonb FROM audit_log WHERE principal_id = 'system:migration' ORDER BY action, detail COLLATE \"C\"",
     ),
   });
   const before = await state();
@@ -137,7 +141,8 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   const after = await state();
   await rerun("users/v2/0009-split-linked-bots");
   assert.deepEqual(await state(), after);
-  const moved = { [bot]: { primary_alias: bot, evidence: "primary", linked_by: null }, [pat]: { kind: "person" } };
+  const person = { kind: "person" };
+  const moved = { [bot]: { primary_alias: bot, evidence: "primary", linked_by: null }, [pat]: person, [lee]: person };
   assert.deepEqual(
     after.links,
     before.links.map((link) => ({ ...link, ...moved[String(link.alias_id)] })),
@@ -151,6 +156,7 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   const split = { alias: bot, userId: await id(bot), evidence: "admin", linkedBy: await id("U0ADM") };
   assert.deepEqual(after.audit.map(Object.values), [
     ["user_sign_in_review", await id(sam), "users", review],
+    ["user_sign_in_split", await id(lee), "users", { movedSignIns: [] }],
     ["user_sign_in_split", await id(pat), "users", { movedSignIns: [split] }],
   ]);
   await rerun("users/v2/0008-bot-marker-backfill");
