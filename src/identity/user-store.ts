@@ -4,6 +4,7 @@ import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
 import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
@@ -56,6 +57,11 @@ interface SeenPerson {
   at: number;
 }
 
+interface SignInSplit {
+  userId: string;
+  movedSignIns: Array<{ alias: string; userId: string; evidence: string; linkedBy: string | null }>;
+}
+
 export interface UserStore extends UserLinkStore {
   list(): Promise<UserRecord[]>;
   get(idOrAlias: string): Promise<UserRecord | null>;
@@ -65,6 +71,7 @@ export interface UserStore extends UserLinkStore {
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
   markApps(ids: readonly string[]): Promise<number>;
+  applyDirectoryBots(members: readonly DirectoryMember[]): Promise<SignInSplit[]>;
   setDisplayName(alias: string, name: string): Promise<boolean>;
 }
 
@@ -363,6 +370,8 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
   return winner;
 }
 
+const MARK_APPS = `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`;
+
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
@@ -481,11 +490,51 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     },
     async markApps(ids) {
       if (!ids.length) return 0;
-      const rows = await q(
-        `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`,
-        [ids.map((id) => foldPrincipalId(id))],
-      );
-      return rows.length;
+      return (await q(MARK_APPS, [ids.map((id) => foldPrincipalId(id))])).length;
+    },
+    async applyDirectoryBots(members) {
+      const bots = new Set<string>();
+      const people = new Set<string>();
+      for (const m of members)
+        for (const id of [m.principalId, m.slackId]) {
+          if (m.isBot === undefined || !foldPrincipalId(id)) continue;
+          (m.isBot ? bots : people).add(foldPrincipalId(id));
+        }
+      for (const id of bots) people.delete(id);
+      return transaction(async (client) => {
+        const moved = (
+          await client.query(
+            `WITH moving AS (
+               SELECT l.alias_id, l.user_id, l.evidence, l.linked_by FROM user_links l JOIN users u ON u.id = l.user_id
+                WHERE l.alias_id = ANY($1::text[]) AND u.primary_alias <> l.alias_id
+             ), created AS (
+               INSERT INTO users(primary_alias, kind) SELECT alias_id, 'app' FROM moving RETURNING id, primary_alias
+             )
+             UPDATE user_links l SET user_id = c.id, evidence = 'primary', linked_by = NULL
+               FROM moving m JOIN created c ON c.primary_alias = m.alias_id
+              WHERE l.alias_id = m.alias_id
+             RETURNING m.user_id AS from_user, c.id AS to_user, m.alias_id, m.evidence,
+                       (SELECT b.primary_alias FROM users b WHERE b.id = m.linked_by) AS linked_by`,
+            [[...bots]],
+          )
+        ).rows;
+        await client.query(MARK_APPS, [[...bots]]);
+        await client.query(`UPDATE users SET kind = 'person' WHERE kind = 'app' AND primary_alias = ANY($1::text[])`, [
+          [...people],
+        ]);
+        const splits = new Map<string, SignInSplit>();
+        for (const r of moved) {
+          const split: SignInSplit = splits.get(r.from_user) ?? { userId: r.from_user, movedSignIns: [] };
+          split.movedSignIns.push({
+            alias: r.alias_id,
+            userId: r.to_user,
+            evidence: r.evidence,
+            linkedBy: r.linked_by,
+          });
+          splits.set(r.from_user, split);
+        }
+        return [...splits.values()];
+      });
     },
     async setDisplayName(alias, raw) {
       const name = cleanDisplayName(raw);

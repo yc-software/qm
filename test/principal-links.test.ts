@@ -597,3 +597,46 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
     }
   });
 });
+
+describe("directory sync and bot sign-ins", () => {
+  it("splits a listed bot off the person it was linked to, and an unsynced row changes nobody", async () => {
+    const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "bot-split-")) }));
+    const pat = "pat@acme.test";
+    const linkToPat = (principalId: string) =>
+      app.principalLinks.link({ principalId, canonicalId: pat, evidence: EVIDENCE, linkedBy: "admin-alice" });
+    await linkToPat("U0BOT");
+    for (const id of ["U0OLDAPP", "U0RESET"]) await app.users.record({ id, source: "turn", at: 1 });
+    await app.users.markApps(["U0OLDAPP", "U0RESET"]);
+    const member = (principalId: string, isBot?: boolean) => ({
+      principalId,
+      displayName: "",
+      type: "internal" as const,
+      isBot,
+    });
+    const person = (await app.users.get(pat))!;
+    await app.app.upsertDirectory([
+      member(pat, false),
+      member("U0BOT", true),
+      member("U0OLDAPP"),
+      member("U0RESET", false),
+    ]);
+    const bot = (await app.users.get("U0BOT"))!;
+    assert.deepEqual([bot.kind, bot.aliases, (await app.users.get(pat))?.aliases], ["app", ["U0BOT"], [pat]]);
+    assert.equal(app.identity.classify("U0BOT").id, "U0BOT", "the bot no longer counts as the person");
+    const [split] = await app.auditLog.tail(tenant, { limit: 5, action: "user_sign_in_split" });
+    assert.deepEqual(
+      [split?.principalId, split?.resource, split?.scopeLabel, JSON.parse(split?.detail ?? "{}")],
+      [
+        "system:directory-sync",
+        person.id,
+        "users",
+        { movedSignIns: [{ alias: "U0BOT", userId: bot.id, evidence: EVIDENCE, linkedBy: "admin-alice" }] },
+      ],
+    );
+    assert.deepEqual(
+      [(await app.users.get("U0RESET"))?.kind, (await app.users.get("U0OLDAPP"))?.kind],
+      ["person", "app"],
+    );
+    await assert.rejects(linkToPat("U0OLDAPP"), PrincipalLinkError);
+  });
+});
