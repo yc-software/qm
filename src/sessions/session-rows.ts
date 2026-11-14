@@ -10,8 +10,8 @@ export const OWN_CHAT = (s: string): string =>
 export const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 export const BOT_VISIBLE = (botActor: boolean | undefined): string => (botActor === true ? " AND s.bot_work" : "");
 
-export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<Session, "spawnMeta">): boolean {
-  return viewer.botActor !== true || session.spawnMeta?.botActor === true;
+export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<Session, "botWork">): boolean {
+  return viewer.botActor !== true || session.botWork === true;
 }
 
 export function rowToSession(r: Record<string, unknown>): Session {
@@ -38,6 +38,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
     ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
+    ...(r.bot_work === true ? { botWork: true as const } : {}),
     ...((r.slack_binding as { author?: unknown } | null)?.author
       ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] }
       : {}),

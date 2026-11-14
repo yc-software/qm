@@ -193,7 +193,7 @@ const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 const HIDDEN_PARENT =
-  "your parent conversation is hidden from bot work; finish and return your result, which still reaches it.";
+  "your parent conversation is hidden from bot work, so you can't read it; you can still write to it.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
 const LAST_SAID_SCAN = 40;
@@ -691,15 +691,18 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
     forTurn(binding) {
       const callerTitle = binding.session.title?.trim() || "Untitled";
 
-      async function resolveTarget(ref: string): Promise<Session | string> {
+      async function resolveTarget(ref: string, writing = false): Promise<Session | string> {
         const missing = `no session matches "${ref}" — use a sessionId from open, read, or list.`;
         const trimmed = ref.trim();
         if (!trimmed) return missing;
         const visible = (session: Session | null) =>
           session && sessionVisibleTo(binding.request, session) ? session : null;
         const current = await deps.sessions.get(binding.session.id);
-        const found = (session: Session | null) =>
-          visible(session) ?? (session && session.id === current?.parentSessionId ? HIDDEN_PARENT : missing);
+        const found = (session: Session | null) => {
+          if (!session || visible(session)) return session ?? missing;
+          if (session.id !== current?.parentSessionId) return missing;
+          return writing ? session : HIDDEN_PARENT;
+        };
         if (trimmed.toLowerCase() === "parent")
           return found(current?.parentSessionId ? await deps.sessions.get(current.parentSessionId) : null);
         const byId = await deps.sessions.get(trimmed);
@@ -918,7 +921,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
-              const target = await resolveTarget(input.target);
+              const target = await resolveTarget(input.target, !input.interrupt);
               if (typeof target === "string") return { ok: false, message: target };
               const refusal = input.peer ? peerRefusal(target) : null;
               if (refusal) return { ok: false, message: refusal };

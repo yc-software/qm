@@ -1389,9 +1389,9 @@ export function createSessionMethods(
   };
 }
 
-function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "surfaceBinding">>(
+function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "botWork" | "surfaceBinding">>(
   session: T,
-): Omit<T, "spawnMeta" | "surfaceBinding"> {
-  const { spawnMeta: _spawnMeta, surfaceBinding: _surfaceBinding, ...shown } = session;
+): Omit<T, "spawnMeta" | "botWork" | "surfaceBinding"> {
+  const { spawnMeta: _spawnMeta, botWork: _botWork, surfaceBinding: _surfaceBinding, ...shown } = session;
   return shown;
 }
