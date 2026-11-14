@@ -15,20 +15,21 @@ export async function directoryObservationCases(store: DirectoryStore): Promise<
   assert.equal(await store.replaceChannels([other], [], 400), true);
   assert.equal(await store.channelPrivacy(room.channelId), undefined);
   assert.equal(await patch(350), false);
+  assert.equal(await store.channelPrivacy(room.channelId), undefined);
   assert.equal(await patch(500), true);
-  assert.equal(await patch(450), false);
+  assert.equal(await patch(450), true);
   assert.equal(await store.replaceChannels([room, other], [], 475, [], [member]), true);
   assert.equal(await store.channelMembership(room.channelId, member.principalId), true);
   assert.equal(await store.replaceChannels([room, other], [], 600, [], [member]), true);
   assert.equal(await store.channelMembership(room.channelId, member.principalId), false);
-  assert.equal(await patch(550), false);
-  assert.equal(await patch(600), false);
+  assert.equal(await patch(550), true);
+  assert.equal(await patch(600), true);
   assert.equal(await store.channelMembership(room.channelId, member.principalId), false);
   assert.equal(await patch(650), true);
-  assert.equal(await patch(650), false);
+  assert.equal(await patch(650), true);
   assert.equal(await store.replaceChannels([room, other], [], 650, [], [member]), true);
   assert.equal(await store.channelMember(room.channelId, member.principalId), false);
-  assert.equal(await patch(650), false);
+  assert.equal(await patch(650), true);
   assert.equal(await patch(675), true);
   assert.equal(await store.replaceChannels([other], [], 660), true);
   assert.equal(await store.channelMember(room.channelId, member.principalId), true);
@@ -45,4 +46,7 @@ export async function directoryObservationCases(store: DirectoryStore): Promise<
   assert.equal(await store.channelMembership(room.channelId, member.principalId), true);
   await store.replaceChannels([other], [{ ...member, principalId: "U_TWO" }], 1200, [room.channelId], [], true);
   assert.equal(await store.channelMembership(room.channelId, "U_TWO"), false);
+  await store.replaceChannels([room, other], [], 1300, [other.channelId]);
+  await store.replaceChannels([room], [{ ...member, principalId: "U_TWO" }], 1250, [room.channelId], [], true);
+  assert.equal(await store.channelMembership(room.channelId, "U_TWO"), true);
 }

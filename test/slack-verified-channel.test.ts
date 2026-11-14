@@ -128,11 +128,11 @@ test("newer removal rejects an older in-flight live observation", async () => {
   assert.equal(await store.channelPrivacy("C_ONE"), undefined);
 });
 
-test("equal observation stamps trigger recovery without changing the internal roster", async (t) => {
+test("equal observation stamps are admitted without changing the internal roster", async (t) => {
   t.mock.method(Date, "now", () => 100_000);
   const { store, observe } = fixture();
   assert.ok((await observe()).publishMembers);
-  await assert.rejects(observe(), /not persisted before admission/);
+  assert.ok((await observe()).publishMembers);
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
 });
 

@@ -181,7 +181,8 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.equal((await post(body)).status, 200);
     assert.equal(await built.directory.channelPrivacy("C_OTHER"), false);
     assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
-    assert.equal((await post({ ...body, channelsSyncedAt: 20 })).status, 409);
+    assert.equal((await post({ ...body, channelsSyncedAt: 20, channelMembers: [] })).status, 200);
+    assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
     for (const invalid of [
       { ...body, channelsSyncedAt: undefined },
       { ...body, channelMembers: undefined },
