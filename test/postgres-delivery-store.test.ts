@@ -90,6 +90,25 @@ test(
   },
 );
 
+test("pg delivery store: one target's same-millisecond rows are claimed in creation order", { skip }, async (t) => {
+  const store = createPostgresDeliveryStore(URL!);
+  const enqueue = (i: number, text: string) =>
+    store.enqueue({ destination: { type: "webhook", target: `tie-${i}` }, text, idempotencyKey: `tie-${i}-${text}` });
+  for (let i = 0; i < 20; i += 2) await enqueue(i, "second");
+  await createPostgresDeliveryStore(URL!, { maxAgeMs: 0 }).claimDue("webhook", 60_000);
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  for (let i = 0; i < 20; i++) for (const text of ["first", "second"]) await enqueue(i, text);
+  t.mock.restoreAll();
+  const sent = new Map<string, string[]>();
+  for (let rows; (rows = await store.claimDue("webhook", 60_000)).length;)
+    for (const d of rows) {
+      sent.set(d.destination.target, [...(sent.get(d.destination.target) ?? []), d.text]);
+      await store.ack(d.id, now);
+    }
+  assert.deepEqual(new Set([...sent.values()].map(String)), new Set(["first,second"]));
+});
+
 test("pg delivery store: undelivered rows expire after the TTL instead of clogging the queue", { skip }, async () => {
   await exerciseDeliveryExpiry((opts) => createPostgresDeliveryStore(URL!, opts));
 });
