@@ -1,9 +1,5 @@
-import {
-  isSidebarSession,
-  isSubagentThreadRef,
-  sessionTreeRoot,
-  sessionVisibleTo,
-} from "../../sessions/session-syscalls.ts";
+import { isSidebarSession, isSubagentThreadRef, sessionTreeRoot } from "../../sessions/session-syscalls.ts";
+import { sessionVisibleTo } from "../../sessions/session-rows.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";

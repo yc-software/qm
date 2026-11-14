@@ -194,6 +194,8 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
   const viewed = await ctx.app.getSessionForViewer(sessionId, ctx.capability ?? { actorId: principalId }, {
     tailTurns: 1,
   });
+  if (!viewed && ctx.capability && (await ctx.deps.sessions?.get(sessionId)))
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "this conversation is no longer accessible" });
   if (!viewed) return sendJson(ctx.res, 404, { error: "not_found" });
   const personaId = isObj(ctx.body) ? ctx.body.personaId : undefined;
   if (personaId !== null && (typeof personaId !== "string" || !personaId))

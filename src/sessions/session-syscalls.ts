@@ -21,6 +21,7 @@ import type {
   TurnOrigin,
 } from "../types.ts";
 import { childIsolation } from "./child-isolation.ts";
+import { sessionVisibleTo } from "./session-rows.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
@@ -146,10 +147,6 @@ export function ownsSessionContext(
 export const isSidebarSession = (session: Session): boolean =>
   !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
 
-export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<Session, "spawnMeta">): boolean {
-  return viewer.botActor !== true || session.spawnMeta?.botActor === true;
-}
-
 export function doesBotWork(session: Pick<Session, "spawnMeta"> | null, request: { botActor?: boolean }): boolean {
   return request.botActor === true || session?.spawnMeta?.botActor === true;
 }
@@ -195,6 +192,8 @@ const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
+const HIDDEN_PARENT =
+  "your parent conversation is hidden from bot work because a person's turn ran there last; your completion still reaches it.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
 const LAST_SAID_SCAN = 40;
@@ -692,24 +691,27 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
     forTurn(binding) {
       const callerTitle = binding.session.title?.trim() || "Untitled";
 
-      async function resolveTarget(ref: string): Promise<Session | null> {
+      async function resolveTarget(ref: string): Promise<Session | string> {
+        const missing = `no session matches "${ref}" — use a sessionId from open, read, or list.`;
         const trimmed = ref.trim();
-        if (!trimmed) return null;
+        if (!trimmed) return missing;
         const visible = (session: Session | null) =>
           session && sessionVisibleTo(binding.request, session) ? session : null;
         const current = await deps.sessions.get(binding.session.id);
+        const found = (session: Session | null) =>
+          visible(session) ?? (session && session.id === current?.parentSessionId ? HIDDEN_PARENT : missing);
         if (trimmed.toLowerCase() === "parent")
-          return current?.parentSessionId ? visible(await deps.sessions.get(current.parentSessionId)) : null;
+          return found(current?.parentSessionId ? await deps.sessions.get(current.parentSessionId) : null);
         const byId = await deps.sessions.get(trimmed);
-        if (byId) return visible(byId);
+        if (byId) return found(byId);
         const byThread = await deps.sessions.getByThread(trimmed);
-        if (byThread) return visible(byThread);
+        if (byThread) return found(byThread);
         const children = await deps.sessions.childrenOf(binding.session.id);
         const siblings = current?.parentSessionId ? await deps.sessions.childrenOf(current.parentSessionId) : [];
         const named = [...children, ...siblings].filter(
           (c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase() && visible(c),
         );
-        return named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? null;
+        return named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? missing;
       }
 
       function sidebarRefusal(): string | null {
@@ -917,11 +919,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
               const target = await resolveTarget(input.target);
-              if (!target)
-                return {
-                  ok: false,
-                  message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,
-                };
+              if (typeof target === "string") return { ok: false, message: target };
               const refusal = input.peer ? peerRefusal(target) : null;
               if (refusal) return { ok: false, message: refusal };
               if (target.threadRef.startsWith("swarm:"))
@@ -1154,11 +1152,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             return { ok: true, mode: "children", children: summaries };
           }
           const target = await resolveTarget(input.target);
-          if (!target)
-            return {
-              ok: false,
-              message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,
-            };
+          if (typeof target === "string") return { ok: false, message: target };
           const refusal = input.peer ? peerRefusal(target) : null;
           if (refusal) return { ok: false, message: refusal };
           if (target.scopeId !== binding.scopeId)

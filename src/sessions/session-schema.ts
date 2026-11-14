@@ -590,6 +590,15 @@ const HUMAN_PROMPT_INDEX: PgMigrationDefinition = {
   ],
 };
 
+const BOT_WORK_COLUMN: PgMigrationDefinition = {
+  id: "sessions/store/0064-bot-work",
+  statements: [
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS bot_work BOOLEAN NOT NULL
+       GENERATED ALWAYS AS (CASE WHEN spawn_meta IS JSON OBJECT
+         THEN COALESCE(spawn_meta::jsonb -> 'botActor' = 'true'::jsonb, false) ELSE false END) STORED`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -611,6 +620,7 @@ export const SESSION_MIGRATIONS = [
   DROP_ITEMS_TARGET_SEQ,
   DROP_PARTICIPANT_WINDOWS,
   HUMAN_PROMPT_INDEX,
+  BOT_WORK_COLUMN,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

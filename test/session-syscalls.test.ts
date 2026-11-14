@@ -680,6 +680,13 @@ async function delegatedLanes(r: Rig, tasks: string[], botActor = false) {
   return lanes;
 }
 
+test("a subagent bot work opened is told its parent is hidden from bot work, not that no session matches", async () => {
+  const r = await rig();
+  const [lane] = await delegatedLanes(r, ["work"], true);
+  const out = await lane!.api.write({ target: "parent", wake: true, text: "which region?" });
+  assert.ok(!out.ok && out.message.includes("parent conversation is hidden from bot work"));
+});
+
 test("a return deferred while the parent was busy wakes the parent once a Stop of that conversation alone ends the turn", async () => {
   const r = await rig();
   const deps = { ...r, maxAttempts: 3 };
