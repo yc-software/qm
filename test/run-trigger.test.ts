@@ -280,6 +280,7 @@ it("leaves a bound scheduled run's outcome to its own run delivery and keeps the
   for (const result of results) {
     const d = deps(async (request) => {
       assert.equal(request.deliveryTarget, "web:U1:bound");
+      assert.equal(request.noApprover, undefined);
       return { ...result, runId: "scheduled-run" };
     });
     const outcome = await runTrigger(d, {

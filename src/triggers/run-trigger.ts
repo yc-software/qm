@@ -6,6 +6,7 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
+import { webApprovableThread } from "../core/approval-requester.ts";
 import { TransientTurnFailure } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
@@ -245,6 +246,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
   const liveDelivery =
     spec.surface === "monitor" && spec.destination?.type !== "webhook" && Boolean(spec.destination) && deliverable;
+  const receiver = spec.destination?.type === "webhook" && deliverable && !spec.shadow ? spec.destination : undefined;
 
   let status: TurnResult["status"] | undefined;
   let errorCode: string | undefined;
@@ -305,6 +307,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
       ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.botActor ? { botActor: true } : {}),
+      ...(webApprovableThread(threadRef) || receiver ? {} : { noApprover: true }),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
@@ -319,9 +322,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.readOnly ? { readOnly: true } : {}),
       ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-      ...(spec.destination?.type === "webhook" && deliverable && !spec.shadow
-        ? { deliveryTarget: spec.destination.target }
-        : {}),
+      ...(receiver ? { deliveryTarget: receiver.target } : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
@@ -333,13 +334,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
-    runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
+    runDelivers = Boolean(receiver && res.runId);
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       if (runDelivers) return;
       const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
-      note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
+      note = `is waiting for an approval on its thread${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }
