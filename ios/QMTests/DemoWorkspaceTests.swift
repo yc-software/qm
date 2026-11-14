@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 @testable import QM
@@ -115,6 +116,42 @@ final class DemoWorkspaceTests: XCTestCase {
     XCTAssertNil(AppModel.workspaceURL("demo.qm.invalid"))
     XCTAssertNil(AppModel.workspaceURL("https://demo.qm.invalid"))
     XCTAssertNotNil(AppModel.workspaceURL("qm.example.com"))
+  }
+
+  func testTheDemoHomeOffersNewConversationsButNotSearchOrBrowse() async throws {
+    let model = model()
+    await model.exploreDemo()
+    for _ in 0..<100 where UIApplication.shared.connectedScenes.isEmpty {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    let scene = try XCTUnwrap(
+      UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = UIHostingController(rootView: RootView(model: model))
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    try await Task.sleep(for: .milliseconds(800))
+    window.layoutIfNeeded()
+
+    let shown = labels(window)
+
+    XCTAssertTrue(shown.contains("New chat"))
+    XCTAssertTrue(shown.contains("Plan the team offsite agenda"))
+    XCTAssertFalse(shown.contains("Search"))
+    XCTAssertFalse(shown.contains("More"))
+  }
+
+  private func labels(_ root: NSObject) -> Set<String> {
+    var found = Set([root.accessibilityLabel].compactMap { $0 })
+    let children =
+      (root.accessibilityElements as? [NSObject] ?? []) + ((root as? UIView)?.subviews ?? [])
+    for child in children { found.formUnion(labels(child)) }
+    return found
   }
 
   func testFeaturesTheDemoDoesNotCoverSayTheyNeedAWorkspace() async throws {
