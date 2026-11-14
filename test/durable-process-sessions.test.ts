@@ -145,7 +145,7 @@ async function memoryScope(): Promise<string> {
     testConfigStore(ORG),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
-  return (await resolution.resolve(tenant, conv, actor)).writableScopeId;
+  return (await resolution.resolve(tenant, conv, actor, false, false)).writableScopeId;
 }
 
 const turn = (text: string): OrchestratorInput => ({

@@ -259,7 +259,7 @@ test("historical participation grants neither context listing nor current scope 
   assert.ok(!(await app.listContexts("U2")).some((context) => context.scopeId === channelScope));
   assert.equal(await app.listScopeResources(tenant, "U2", channelScope), null);
   assert.equal(await app.belongsToScope("U2", channelScope), false);
-  assert.ok(!(await app.listVisibleSkills("U2")).some((result) => result.skill?.scopeId === channelScope));
+  assert.ok(!(await app.listVisibleSkills("U2", false)).some((result) => result.skill?.scopeId === channelScope));
 });
 
 test("a context view never leaks another scope's files or crons", async () => {

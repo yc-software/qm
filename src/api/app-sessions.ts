@@ -1,5 +1,6 @@
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyAppShared } from "../deploy/share-notice.ts";
 import { appShareScope } from "../deploy/email-access.ts";
@@ -516,8 +517,8 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(tenant, principalId, opts, inScope) {
-      return filesForViewer(tenant, principalId, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork) {
+      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope);
     },
 
     async uploadFileForViewer(tenant, principalId, input) {
@@ -559,10 +560,10 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
       const art = await deps.files.get(id);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId);
+      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
         const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
@@ -943,7 +944,7 @@ export function createSessionMethods(
     async listScopeResources(tenant, principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
       const [page, allCrons, allWebhooks, allApps, allSkills] = await Promise.all([
-        filesForViewer(tenant, principalId, undefined, scope),
+        filesForViewer(tenant, principalId, false, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
         deps.deploy.listApps(),
@@ -952,7 +953,7 @@ export function createSessionMethods(
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
       while (cursor) {
-        const next = await filesForViewer(tenant, principalId, { limit: 200, cursor }, scope);
+        const next = await filesForViewer(tenant, principalId, false, { limit: 200, cursor }, scope);
         files.push(...next.owned, ...next.shared);
         cursor = next.nextCursor;
       }
@@ -1326,14 +1327,15 @@ export function createSessionMethods(
       });
     },
 
-    getSoul(scopeIdValue) {
+    getSoul(scopeIdValue, reader) {
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
-      const soul = deps.config.getSoul(scopeIdValue);
+      const readable = loadsScopeContext(reader.actorId, scopeIdValue, reader.ownScopeBotWork);
+      const soul = readable ? deps.config.getSoul(scopeIdValue) : null;
       return {
         scopeId: scopeIdValue,
         soul,
-        soulVersion: deps.config.soulVersion(scopeIdValue),
+        soulVersion: readable ? deps.config.soulVersion(scopeIdValue) : 0,
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
@@ -1343,7 +1345,10 @@ export function createSessionMethods(
 
     async updateSoul(scopeIdValue, content, actorId, opts) {
       const { kind, ref } = parseScopeId(scopeIdValue);
-      const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
+      const allowedPersonal =
+        kind === "personal" &&
+        samePerson(ref, actorId) &&
+        loadsScopeContext(actorId, scopeIdValue, opts?.botActor === true);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();

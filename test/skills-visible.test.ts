@@ -41,7 +41,7 @@ test("listVisibleSkills returns a principal's personal + org skills with scope l
   await publish(skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
   await publish(skills, scopeId("org", "default-org"), "deploy-bot", "ship the bot to prod");
 
-  const visible = await app.listVisibleSkills("U1");
+  const visible = await app.listVisibleSkills("U1", false);
   const byName = new Map(visible.map((r) => [r.skill!.manifest.name, r]));
   assert.equal(byName.get("make-digest")!.skill!.scopeId, scopeId("personal", "U1"));
   assert.equal(byName.get("deploy-bot")!.skill!.scopeId, scopeId("org", "default-org"));
@@ -52,7 +52,7 @@ test("a personal skill shadows a same-named org skill (most-specific wins, shado
   await publish(skills, scopeId("org", "default-org"), "notes", "the org-wide notes skill");
   await publish(skills, scopeId("personal", "U1"), "notes", "U1's own notes skill");
 
-  const visible = await app.listVisibleSkills("U1");
+  const visible = await app.listVisibleSkills("U1", false);
   const notes = visible.filter((r) => r.skill!.manifest.name === "notes");
   assert.equal(notes.length, 1, "one winner per name");
   assert.equal(notes[0]!.skill!.scopeId, scopeId("personal", "U1"), "personal wins over org");
@@ -64,7 +64,7 @@ test("another principal does not see U1's personal skill (scope boundary)", asyn
   const { app, skills } = freshApp();
   await publish(skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
 
-  const visible = await app.listVisibleSkills("U2");
+  const visible = await app.listVisibleSkills("U2", false);
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "make-digest"));
 });
 
@@ -77,7 +77,7 @@ test("an unpublished (draft/reviewed) skill is not visible", async () => {
   });
   await skills.review(draft.id, "reviewer-1", []);
 
-  const visible = await app.listVisibleSkills("U1");
+  const visible = await app.listVisibleSkills("U1", false);
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "wip"));
 });
 
