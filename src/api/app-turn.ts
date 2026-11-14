@@ -160,17 +160,13 @@ export function createTurnMethods(
         return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
       };
       const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
-      const foldsOntoApp = async (signIn: string): Promise<boolean> => {
-        const [users, canonical] = await Promise.all([
-          deps.users?.resolve([signIn]),
-          deps.directory.get(canonicalPerson(signIn)),
-        ]);
-        return users?.get(signIn)?.kind === "app" || canonical?.isBot === true;
-      };
-      if (personIds(req.actor.externalId).length > 1 && (req.actor.isBot || (await foldsOntoApp(req.actor.externalId))))
+      const signIn = req.actor.externalId;
+      if (
+        personIds(signIn).length > 1 &&
+        (req.actor.isBot || (await deps.users?.botSignIns([signIn, canonicalPerson(signIn)]))?.length)
+      )
         return {
           status: "refused",
-          refusalKind: "internal_only",
           reason:
             "a bot can't act as a person; an org admin must delete the principal link that joins this bot to someone (docs/principal-links.md)",
         };

@@ -39,17 +39,16 @@ before proxying, and the keychain stores credentials under the canonical owner.
     sign-in's QM user, which is marked as an app once the bot has spoken to QM or
     a sync has listed it as a bot.
   - **Repair at each sync.** A sign-in whose row says it is a bot, but that is
-    linked onto someone else's user, moves to a new app user of its own, and the
-    audit log records a `user_sign_in_split` event with the link's evidence and
-    the admin who made it. An app user becomes a person again only when its main
-    sign-in's row says it isn't a bot and none of its sign-ins is one. An empty
-    flag neither splits nor resets anyone.
+    linked onto someone else's user, moves to a new app user of its own. The same
+    transaction writes a `user_sign_in_split` audit event with the link's
+    evidence and the admin who made it. An app user becomes a person again when
+    one of its sign-ins is listed as a person and none of them is listed as a bot
+    or has an empty flag. An empty flag neither splits nor resets anyone.
   - **Turns.** A turn is refused until an admin deletes the link when its speaker
-    is a bot joined to anyone by a link, or is a linked person whose user is an
-    app or whose canonical sign-in's row says it is a bot. A user whose main
+    is a bot joined to anyone by a link, or when the speaker's sign-in or its
+    canonical sign-in counts as a bot by the link check's rule. A user whose main
     sign-in is a Slack bot is not split automatically, so their turns stay
-    refused. The speaker sees the refusal itself, and an empty flag on the
-    canonical sign-in refuses nothing on its own.
+    refused.
 - **Bot work stays out of a person's projects.** Work that carries the bot marker
   gets 403 from the project tools, even when the bot is a project member through a
   channel roster.

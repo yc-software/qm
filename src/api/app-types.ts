@@ -732,7 +732,7 @@ export interface AppDeps {
   resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
-  users?: Pick<UserStore, "resolve">;
+  users?: Pick<UserStore, "resolve" | "botSignIns">;
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;

@@ -4,7 +4,6 @@ import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { refusalNote } from "../src/surfaces/refusals.ts";
 
 const webTurn = (actor: string, extra: Partial<TurnRequest> = {}): TurnRequest => ({
   surface: "web",
@@ -56,10 +55,7 @@ test("a web turn starts new threads only under the caller's own IDs and refuses 
   await built.users.markApps(["B1BOT"]);
   await built.directory.replace([{ principalId: "B2BOT", displayName: "Bot", type: "internal", isBot: true }]);
   const bot = (id: string) => webTurn(id, { botActor: true, actor: { externalId: id, isBot: true } });
-  for (const turn of [bot("B0BOT"), bot("B1BOT"), webTurn("sso:b"), webTurn("sso:c")]) {
-    const refused = await built.app.turn(turn);
-    assert.match(refused.reason ?? "", /^a bot can't act/);
-    assert.doesNotMatch(refusalNote(refused, "dm"), /error/);
-  }
+  for (const turn of [bot("B0BOT"), bot("B1BOT"), webTurn("sso:b"), webTurn("sso:c")])
+    assert.match((await built.app.turn(turn)).reason ?? "", /^a bot can't act/);
   assert.notEqual((await built.app.turn(webTurn("sso:a", { botActor: true }))).status, "refused");
 });

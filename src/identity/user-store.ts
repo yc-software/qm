@@ -57,11 +57,6 @@ interface SeenPerson {
   at: number;
 }
 
-interface SignInSplit {
-  userId: string;
-  movedSignIns: Array<{ alias: string; userId: string; evidence: string; linkedBy: string | null }>;
-}
-
 export interface UserStore extends UserLinkStore {
   list(): Promise<UserRecord[]>;
   get(idOrAlias: string): Promise<UserRecord | null>;
@@ -71,7 +66,8 @@ export interface UserStore extends UserLinkStore {
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
   markApps(ids: readonly string[]): Promise<number>;
-  applyDirectoryBots(members: readonly DirectoryMember[]): Promise<SignInSplit[]>;
+  applyDirectoryBots(members: readonly DirectoryMember[]): Promise<number>;
+  botSignIns(aliases: readonly string[]): Promise<string[]>;
   setDisplayName(alias: string, name: string): Promise<boolean>;
 }
 
@@ -372,18 +368,17 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
 
 const MARK_APPS = `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`;
 
+const BOT_SIGN_INS = `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
+  WHERE coalesce(
+    (SELECT bool_or(m.is_bot) FROM directory_members m
+      WHERE lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias),
+    EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
+             WHERE l.alias_id = s.alias AND u.kind = 'app'))`;
+
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
-  const bots = await q(
-    `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
-      WHERE coalesce(
-        (SELECT bool_or(m.is_bot) FROM directory_members m
-          WHERE lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias),
-        EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
-                 WHERE l.alias_id = s.alias AND u.kind = 'app'))`,
-    [[link.principalId, link.canonicalId]],
-  );
+  const bots = await q(BOT_SIGN_INS, [[link.principalId, link.canonicalId]]);
   if (bots.length) throw new PrincipalLinkError(400, APP_IS_NOT_A_PERSON);
   const target = await ensureUserIn(client, link.canonicalId);
   const current = (
@@ -493,47 +488,45 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       return (await q(MARK_APPS, [ids.map((id) => foldPrincipalId(id))])).length;
     },
     async applyDirectoryBots(members) {
-      const bots = new Set<string>();
-      const people = new Set<string>();
-      for (const m of members)
-        for (const id of [m.principalId, m.slackId]) {
-          if (m.isBot === undefined || !foldPrincipalId(id)) continue;
-          (m.isBot ? bots : people).add(foldPrincipalId(id));
-        }
-      for (const id of bots) people.delete(id);
+      const signIns = (isBot: boolean | undefined) =>
+        members
+          .filter((m) => m.isBot === isBot)
+          .flatMap((m) => [m.principalId, m.slackId].map(foldPrincipalId).filter(Boolean));
+      const bots = signIns(true);
       return transaction(async (client) => {
-        const moved = (
-          await client.query(
-            `WITH moving AS (
-               SELECT l.alias_id, l.user_id, l.evidence, l.linked_by FROM user_links l JOIN users u ON u.id = l.user_id
-                WHERE l.alias_id = ANY($1::text[]) AND u.primary_alias <> l.alias_id
-             ), created AS (
-               INSERT INTO users(primary_alias, kind) SELECT alias_id, 'app' FROM moving RETURNING id, primary_alias
-             )
+        const split = await client.query(
+          `WITH moving AS (
+             SELECT l.alias_id, l.user_id, l.evidence, l.linked_by FROM user_links l JOIN users u ON u.id = l.user_id
+              WHERE l.alias_id = ANY($1::text[]) AND u.primary_alias <> l.alias_id
+           ), created AS (
+             INSERT INTO users(primary_alias, kind) SELECT alias_id, 'app' FROM moving RETURNING id, primary_alias
+           ), moved AS (
              UPDATE user_links l SET user_id = c.id, evidence = 'primary', linked_by = NULL
                FROM moving m JOIN created c ON c.primary_alias = m.alias_id
               WHERE l.alias_id = m.alias_id
-             RETURNING m.user_id AS from_user, c.id AS to_user, m.alias_id, m.evidence, m.linked_by`,
-            [[...bots]],
-          )
-        ).rows;
-        await client.query(MARK_APPS, [[...bots]]);
-        await client.query(`UPDATE users SET kind = 'person' WHERE kind = 'app' AND primary_alias = ANY($1::text[])`, [
-          [...people],
-        ]);
-        const splits = new Map<string, SignInSplit>();
-        for (const r of moved) {
-          const split: SignInSplit = splits.get(r.from_user) ?? { userId: r.from_user, movedSignIns: [] };
-          split.movedSignIns.push({
-            alias: r.alias_id,
-            userId: r.to_user,
-            evidence: r.evidence,
-            linkedBy: r.linked_by,
-          });
-          splits.set(r.from_user, split);
-        }
-        return [...splits.values()];
+             RETURNING m.user_id AS from_user, c.id AS to_user, m.alias_id, m.evidence, m.linked_by
+           )
+           INSERT INTO audit_log(at, principal_id, action, resource, scope_label, detail)
+           SELECT $2::bigint, 'system:directory-sync', 'user_sign_in_split', from_user::text, 'users',
+                  jsonb_build_object('movedSignIns', jsonb_agg(jsonb_build_object(
+                    'alias', alias_id, 'userId', to_user, 'evidence', evidence, 'linkedBy', linked_by)
+                    ORDER BY alias_id))::text
+             FROM moved GROUP BY from_user`,
+          [bots, Date.now()],
+        );
+        await client.query(MARK_APPS, [bots]);
+        await client.query(
+          `UPDATE users u SET kind = 'person'
+            WHERE u.kind = 'app'
+              AND EXISTS (SELECT 1 FROM user_links l WHERE l.user_id = u.id AND l.alias_id = ANY($1::text[]))
+              AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.user_id = u.id AND l.alias_id = ANY($2::text[]))`,
+          [signIns(false), [...bots, ...signIns(undefined)]],
+        );
+        return split.rowCount ?? 0;
       });
+    },
+    async botSignIns(aliases) {
+      return (await q(BOT_SIGN_INS, [aliases.map(foldPrincipalId)])).map((r) => r.alias as string);
     },
     async setDisplayName(alias, raw) {
       const name = cleanDisplayName(raw);
