@@ -268,7 +268,10 @@ describe("linked sign-ins across the HTTP surface", () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-")), signingSecret: SECRET }));
-    await built.app.upsertDirectory([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
+    await built.app.upsertDirectory([
+      { principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK },
+      { principalId: "U0LISTED", displayName: "Listed bot", type: "internal", isBot: true },
+    ]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -323,7 +326,11 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
     assert.equal(adminStatusFromGrants(await built.admin.listGrants(tenant), "casey@acme.test").isAdmin, false);
     await built.users.record({ id: "B0BOT", source: "turn", at: 1 }).then(() => built.users.markApps(["B0BOT"]));
-    for (const [principalId, canonicalId] of Object.entries({ B0BOT: "casey@acme.test", [OIDC]: "B0BOT" })) {
+    for (const [principalId, canonicalId] of Object.entries({
+      B0BOT: "casey@acme.test",
+      [OIDC]: "B0BOT",
+      "sso:x": "U0LISTED",
+    })) {
       const linked = JSON.stringify({ principalId, canonicalId, evidence: EVIDENCE });
       assert.equal((await signed("POST", "/v1/admin/principal-links", linked, admin)).status, 400);
     }
@@ -588,5 +595,52 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       installPrincipalLinks(null);
     }
+  });
+});
+
+describe("directory sync and bot sign-ins", () => {
+  it("splits a listed bot off the person it was linked to, and an unsynced row changes nobody", async () => {
+    const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "bot-split-")) }));
+    const pat = "pat@acme.test";
+    const link = (principalId: string, canonicalId = pat) =>
+      app.principalLinks.link({ principalId, canonicalId, evidence: EVIDENCE, linkedBy: "admin-alice" });
+    await link("U0BOT");
+    await link("U0STALE", "sso:stale");
+    for (const id of ["U0OLDAPP", "U0RESET"]) await app.users.record({ id, source: "turn", at: 1 });
+    await app.users.markApps(["U0OLDAPP", "U0RESET", "sso:stale"]);
+    const person = (await app.users.get(pat))!;
+    const flags = { [pat]: false, U0BOT: true, U0OLDAPP: undefined, U0RESET: false, U0STALE: false };
+    const members = Object.entries(flags).map(([principalId, isBot]) => ({
+      principalId,
+      displayName: "",
+      type: "internal" as const,
+      isBot,
+    }));
+    await app.app.upsertDirectory(members);
+    const bot = (await app.users.get("U0BOT"))!;
+    assert.deepEqual([bot.kind, bot.aliases, (await app.users.get(pat))?.aliases], ["app", ["U0BOT"], [pat]]);
+    assert.equal(app.identity.classify("U0BOT").id, "U0BOT", "the bot no longer counts as the person");
+    const [split] = await app.auditLog.tail(tenant, { limit: 5, action: "user_sign_in_split" });
+    const moved = {
+      alias: "U0BOT",
+      userId: bot.id,
+      evidence: EVIDENCE,
+      linkedBy: (await app.users.get("admin-alice"))?.id,
+    };
+    assert.deepEqual(
+      [split?.principalId, split?.resource, split?.scopeLabel, JSON.parse(split?.detail ?? "{}")],
+      ["system:directory-sync", person.id, "users", { movedSignIns: [moved] }],
+    );
+    assert.deepEqual(
+      await Promise.all(["U0RESET", "U0OLDAPP", "sso:stale"].map(async (id) => (await app.users.get(id))?.kind)),
+      ["person", "app", "app"],
+    );
+    await app.app.upsertDirectory(members);
+    const reviews = await app.auditLog.tail(tenant, { limit: 5, action: "user_sign_in_review" });
+    assert.deepEqual(
+      reviews.map((e) => e.resource),
+      [(await app.users.get("sso:stale"))?.id],
+    );
+    await assert.rejects(link("U0OLDAPP"), PrincipalLinkError);
   });
 });

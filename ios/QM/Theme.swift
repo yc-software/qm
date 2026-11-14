@@ -9,6 +9,11 @@ enum QMTheme {
   @MainActor static var ink: Color {
     NativeThemeStore.shared.active?.readableForeground.color ?? defaultInk
   }
+  /// The conversation list's background — the web sidebar's tint: `--secondary` mixed 42% into
+  /// `--background`, which works out to a slightly lighter navy than the conversation pane.
+  @MainActor static var sidebar: Color {
+    NativeThemeStore.shared.active?.sidebar.color ?? defaultSidebar
+  }
   @MainActor static var surface: Color {
     NativeThemeStore.shared.active?.surface.color ?? defaultSurface
   }
@@ -28,6 +33,12 @@ enum QMTheme {
       traits.userInterfaceStyle == .dark
         ? UIColor(red: 7 / 255, green: 15 / 255, blue: 24 / 255, alpha: 1)
         : UIColor.white
+    })
+  private static let defaultSidebar = Color(
+    uiColor: UIColor { traits in
+      traits.userInterfaceStyle == .dark
+        ? UIColor(red: 14 / 255, green: 23 / 255, blue: 32 / 255, alpha: 1)
+        : UIColor(red: 251 / 255, green: 251 / 255, blue: 251 / 255, alpha: 1)
     })
   private static let defaultInk = Color(
     uiColor: UIColor { traits in
@@ -54,22 +65,25 @@ enum QMTheme {
   }
   @MainActor static var border: Color { ink.opacity(0.12) }
   static let navy = Color(red: 0.106, green: 0.188, blue: 0.263)
+  static let unread = Color(red: 47 / 255, green: 129 / 255, blue: 247 / 255)
 }
 
 struct QMList<Content: View>: View {
+  var background: Color?
   @ViewBuilder let content: () -> Content
   var body: some View {
+    let background = background ?? QMTheme.paper
     List {
       content()
-        .listRowBackground(QMTheme.paper)
+        .listRowBackground(background)
         .listRowSeparatorTint(QMTheme.border)
     }
     .listStyle(.plain)
     .listSectionSpacing(16)
     .scrollContentBackground(.hidden)
-    .background(QMTheme.paper)
+    .background(background)
     .foregroundStyle(QMTheme.ink)
-    .toolbarBackground(QMTheme.paper, for: .navigationBar)
+    .toolbarBackground(background, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
   }
 }

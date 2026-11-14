@@ -181,6 +181,7 @@ import {
   workingWave,
 } from "./ui";
 import { icon } from "./icons";
+import { animateDetailsToggle } from "./details-motion";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
@@ -3361,7 +3362,7 @@ export function createChatSurface(
           else openThinking.delete(key);
         }}
       >
-        <summary class="thinking-summary">
+        <summary class="thinking-summary" @click=${animateDetailsToggle}>
           <span class="tool-icon">${icon(Brain, 15)}</span><span class="thinking-title">${thought.title}</span>
           <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
         </summary>
@@ -3378,7 +3379,7 @@ export function createChatSurface(
 
   function retractedRow(reason: string, text: string): TemplateResult {
     return html`<details class="thinking-row retracted-reply">
-      <summary class="thinking-summary">
+      <summary class="thinking-summary" @click=${animateDetailsToggle}>
         <span class="tool-icon">${icon(RotateCcw, 15)}</span><span class="thinking-title">Retracted: ${reason}</span>
         <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
       </summary>

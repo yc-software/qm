@@ -64,6 +64,8 @@ struct NativeConversationRow: View {
     return title == conversation.label ? nil : title
   }
 
+  private var showsUnread: Bool { conversation.unread == true && !selected }
+
   var body: some View {
     HStack(spacing: 8) {
       if conversation.working == true {
@@ -96,6 +98,9 @@ struct NativeConversationRow: View {
       if let emoji = conversation.status?.emoji, !emoji.isEmpty {
         Text(emoji)
       }
+      if showsUnread {
+        Circle().fill(QMTheme.unread).frame(width: 8, height: 8)
+      }
     }
     .font(.subheadline)
     .padding(.horizontal, 8).padding(.vertical, 4)
@@ -106,6 +111,7 @@ struct NativeConversationRow: View {
     .accessibilityLabel(
       [
         conversation.label, conversation.surface == "slack" ? "Slack" : nil, context,
+        showsUnread ? "Unread" : nil,
         conversation.awaitingInput == true ? "Needs attention" : nil,
         conversation.working == true ? "Working" : nil,
         conversation.status?.text, updating ? "Updating" : nil,
@@ -135,13 +141,13 @@ struct NativeGroupAvatars: View {
         }
         .frame(width: 22, height: 22)
         .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.paper, lineWidth: 1.5) }
+        .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.sidebar, lineWidth: 1.5) }
       }
       if remaining > 0 {
         Text("+\(remaining)").font(.system(size: 9, weight: .medium))
           .frame(width: 22, height: 22)
           .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 5))
-          .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.paper, lineWidth: 1.5) }
+          .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.sidebar, lineWidth: 1.5) }
       }
     }
     .fixedSize()
@@ -227,7 +233,7 @@ struct NativeConversationSections<Actions: View>: View {
       .buttonStyle(.plain)
       .listRowInsets(EdgeInsets(top: 0, leading: 32, bottom: 0, trailing: 16))
       .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
+      .listRowBackground(QMTheme.sidebar)
       .contextMenu { actions(conversation) }
       .swipeActions(edge: .trailing, allowsFullSwipe: false) {
         actions(conversation)
@@ -250,7 +256,7 @@ struct NativeConversationSections<Actions: View>: View {
       )
       .listRowInsets(EdgeInsets(top: 0, leading: 40, bottom: 0, trailing: 16))
       .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
+      .listRowBackground(QMTheme.sidebar)
     }
   }
 

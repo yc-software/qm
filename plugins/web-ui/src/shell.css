@@ -3053,7 +3053,7 @@ qm-markdown .tok-in {
   color: color-mix(in srgb, var(--muted-foreground) 70%, var(--background));
 }
 .thinking-row {
-  display: block;
+  display: flow-root;
   min-width: 0;
 }
 .continuing-note {
@@ -3085,6 +3085,17 @@ qm-markdown .tok-in {
 .thinking-row[open] > .thinking-summary > .icon:last-child,
 .thinking-row[open] > .thinking-summary > .activity-chevron {
   transform: rotate(90deg);
+}
+.thinking-row > .thinking-summary > .activity-chevron {
+  transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.thinking-row[data-closing] > .thinking-summary > .activity-chevron {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-row > .thinking-summary > .activity-chevron {
+    transition: none;
+  }
 }
 .thinking-body {
   margin: 5px 0 8px 19px;

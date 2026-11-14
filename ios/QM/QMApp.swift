@@ -58,7 +58,7 @@ struct RootView: View {
     return NavigationStack(path: $homePath) {
       Group {
         if let identity = model.identity {
-          QMList {
+          QMList(background: QMTheme.sidebar) {
             if webOnly {
               HStack {
                 Text("Web conversations").foregroundStyle(.secondary)
@@ -83,7 +83,7 @@ struct RootView: View {
             .id(model.client?.baseURL)
             loadMoreRow
             emptyState(identity)
-              .listRowBackground(QMTheme.paper)
+              .listRowBackground(QMTheme.sidebar)
               .listRowSeparator(.hidden)
           }
           .listStyle(.plain)
@@ -93,7 +93,7 @@ struct RootView: View {
           .frame(maxWidth: QMTheme.conversationWidth)
           .frame(maxWidth: .infinity)
           .scrollContentBackground(.hidden)
-          .background(QMTheme.paper)
+          .background(QMTheme.sidebar)
           .refreshable { await model.refresh() }
           .toolbar { homeToolbar }
         } else if model.client?.hasSession == true {
@@ -386,7 +386,7 @@ struct RootView: View {
       .disabled(model.loadingMore)
       .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
       .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
+      .listRowBackground(QMTheme.sidebar)
     }
   }
 
