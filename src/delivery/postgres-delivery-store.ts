@@ -177,7 +177,9 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `CREATE SEQUENCE deliveries_seq_seq OWNED BY deliveries.seq`,
         `UPDATE deliveries d SET seq = live.seq
            FROM (SELECT tenant_id, id, nextval('deliveries_seq_seq') AS seq
-                   FROM (SELECT tenant_id, id FROM deliveries WHERE delivered_at IS NULL ORDER BY created_at, ctid) waiting) live
+                   FROM (SELECT tenant_id, id FROM deliveries
+                          WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
+                          ORDER BY created_at, ctid) waiting) live
           WHERE d.tenant_id = live.tenant_id AND d.id = live.id`,
         `ALTER TABLE deliveries ALTER COLUMN seq SET DEFAULT nextval('deliveries_seq_seq')`,
         claimDeliveries(servingTenant, "seq"),
