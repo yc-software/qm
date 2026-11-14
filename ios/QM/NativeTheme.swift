@@ -55,6 +55,11 @@ struct NativeThemePalette: Codable, Equatable {
     let mixed = background.mixed(with: foreground, fraction: 0.08)
     return mixed.contrast(with: foreground) >= 4.5 ? mixed : background
   }
+  /// Mirrors the web theme import: `--secondary` is the background stepped 9% (dark) or 4%
+  /// (light) toward the foreground, and the sidebar mixes 42% of that into the background.
+  var sidebar: RGB {
+    background.mixed(with: readableForeground, fraction: (dark ? 0.09 : 0.04) * 0.42)
+  }
   static func read(_ data: Data, filename: String) throws -> Self {
     guard data.count <= 2 * 1024 * 1024 else {
       throw QMError.message("Choose a theme file smaller than 2 MB.")
