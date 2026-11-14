@@ -254,17 +254,17 @@ function bareJson(reply: string): unknown {
   return undefined;
 }
 
-function listField(parsed: unknown, field: string): unknown[] {
+function listField(parsed: unknown, field: string): unknown[] | undefined {
   if (Array.isArray(parsed)) return parsed;
   if (parsed && typeof parsed === "object") {
     const value = (parsed as Record<string, unknown>)[field];
     if (Array.isArray(value)) return value;
   }
-  return [];
+  return undefined;
 }
 
 function parseIntake(reply: string): IntakeCandidate[] {
-  const list = listField(fencedJson(reply), "items");
+  const list = listField(fencedJson(reply), "items") ?? [];
   const out: IntakeCandidate[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
@@ -280,9 +280,8 @@ function parseIntake(reply: string): IntakeCandidate[] {
 }
 
 function parseOutputs(reply: string): CapturedArtifact[] | undefined {
-  const parsed = fencedJson(reply);
-  const list = Array.isArray(parsed) ? parsed : (parsed as { outputs?: unknown } | undefined)?.outputs;
-  if (!Array.isArray(list)) return undefined;
+  const list = listField(fencedJson(reply), "outputs");
+  if (!list) return undefined;
   const out: CapturedArtifact[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
@@ -350,9 +349,9 @@ const DONE_REPORT =
 
 function notDone(stage: string, outcome: TriggerOutcome): { error: Error; userMessage: string } | null {
   const record = liftBlock(outcome.reply ?? "", "done").record;
-  if (!outcome.awaitingApproval && record?.done === true) return null;
+  if (!outcome.heldForApproval && record?.done === true) return null;
   const reported = typeof record?.reason === "string" ? excerpt(record.reason.trim()) : "";
-  const reason = outcome.awaitingApproval
+  const reason = outcome.heldForApproval
     ? "a step needed an approval and did not run"
     : reported || "the agent did not report the action done";
   return { error: new Error(`${stage}: not done — ${reason}`), userMessage: reason };
@@ -610,7 +609,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     if (failure) throw failure.error;
     const parsed = fencedJson(outcome.reply ?? "");
     if (parsed === undefined) throw new Error("triage: reply was not parseable");
-    return planTriage(loop, work.open, prompt.pending, parseTriageDecisions(listField(parsed, "items")));
+    return planTriage(loop, work.open, prompt.pending, parseTriageDecisions(listField(parsed, "items") ?? []));
   }
 
   async function previewTriage(loop: Loop, triage: Loop["triage"]): Promise<TriagePreview[]> {

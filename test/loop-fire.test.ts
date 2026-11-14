@@ -277,8 +277,13 @@ test("a ship, an item action or a work turn counts only when the agent reports i
     await assert.rejects(s.fire.shipOutput(loop.id, held!.id, "josh"), /ship: not done/);
     assert.equal((await s.outputs.get(held!.id))?.state, "ready");
   }
-  next = undefined;
+  next = {
+    status: "ok",
+    reply: '{"done": true}',
+    pendingApprovals: [{ approvalKey: "security-screen-release:x" }],
+  } as never;
   assert.equal((await s.fire.shipOutput(loop.id, held!.id, "josh"))?.state, "shipped");
+  next = undefined;
   assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 6);
 
   const other = await makeLoop(s.loops, { name: "Second" });
