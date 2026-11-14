@@ -993,7 +993,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let type: SessionType = "channel";
       if (conversation.kind === "dm") type = "dm";
       else if (conversation.kind === "group") type = "group";
-      const session = await deps.sessions.getOrCreateByThread(
+      const threadSession = await deps.sessions.getOrCreateByThread(
         conversation.threadRef,
         type,
         scopeId,
@@ -1005,6 +1005,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
         },
       );
+      const session =
+        persona && deps.personas
+          ? await deps.personas.startOnDefaultModel(threadSession, persona.persona.id)
+          : threadSession;
       screenSession.id = session.id;
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });

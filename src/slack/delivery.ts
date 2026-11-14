@@ -20,6 +20,7 @@ export interface SlackReplyArgs {
 export interface BotIdentityOverride {
   username?: string;
   icon_emoji?: string;
+  icon_url?: string;
 }
 
 export function botIdentityFromEnv(env: Record<string, string | undefined>): BotIdentityOverride {
@@ -45,6 +46,7 @@ function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
 export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
   const id = defaultIdentity.identity;
   const username = persona?.name.trim() || id.username;
+  if (persona?.icon?.kind === "image") return { ...(username ? { username } : {}), icon_url: persona.icon.url };
   const personaEmoji = slackEmojiName(persona?.icon);
   const icon_emoji = personaEmoji ? `:${personaEmoji}:` : id.icon_emoji;
   return {

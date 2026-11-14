@@ -28,6 +28,8 @@ import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
+import { contextModelSection, loadContextModel } from "./context-model";
+import { rememberThreadPick } from "./composer";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, menuSelect } from "./ui";
 import { canvasToast } from "./split";
@@ -298,10 +300,11 @@ async function startPersonaChat(personaId: string): Promise<CoreSession> {
     method: "POST",
     body: JSON.stringify({ scopeId }),
   });
-  await api(`/api/sessions/${encodeURIComponent(session.id)}/persona`, {
-    method: "PUT",
-    body: JSON.stringify({ personaId }),
-  });
+  const { persona } = await api<{ persona: { sessionModelId?: string } | null }>(
+    `/api/sessions/${encodeURIComponent(session.id)}/persona`,
+    { method: "PUT", body: JSON.stringify({ personaId }) },
+  );
+  if (persona?.sessionModelId) rememberThreadPick(session.threadRef, persona.sessionModelId);
   return { ...session, personaId };
 }
 
@@ -1109,12 +1112,14 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
                 </div>
               `
         }
+        ${editable ? contextModelSection(`persona:${persona.id}`) : nothing}
         ${personaFactsTpl(persona, (message) => void openPersona(persona.id, message), draw)}
       </div>`,
       host,
     );
   redrawDetail = draw;
   draw();
+  if (editable) void loadContextModel(`persona:${persona.id}`, draw);
 }
 
 async function deletePersona(persona: PersonaView): Promise<void> {

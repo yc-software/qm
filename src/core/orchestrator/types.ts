@@ -181,7 +181,7 @@ export interface OrchestratorDeps {
   deliveries: DeliveryStore;
   directory: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
-  personas?: Pick<PersonaService, "forTurn">;
+  personas?: Pick<PersonaService, "forTurn" | "startOnDefaultModel">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;

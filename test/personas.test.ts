@@ -16,7 +16,7 @@ import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
+import { CAPABILITY_TTL_MS, mintCapabilityToken, verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
@@ -534,4 +534,60 @@ test("a persona pinned in a channel is worn by every conversation there until it
   ok(await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "group:G_PIN", role: "read", pinned: true }]));
   const group = { kind: "group" as const, channelRef: "G_PIN", threadRef: "grp:G_PIN:t1" };
   assert.match((await sysprompt(CAROL, group)).reply, /## Persona: Ada/);
+});
+
+test("a persona's default model starts its new conversations, unless the turn asks for another", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: "channel:C_MODEL", role: "read", pinned: true },
+    ]),
+  );
+  await built.config.setRuntimeSelection(scopeId("persona", ada.id), { modelId: "gpt-5.5" });
+  const turn = (n: number, model?: string) =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: ALICE },
+      conversation: { kind: "channel", channelRef: "C_MODEL", threadRef: `channel:C_MODEL:t${n}` },
+      text: "hi",
+      ...(model ? { model } : {}),
+    });
+  assert.equal((await turn(1)).runtime?.modelId, "gpt-5.5");
+  assert.notEqual((await turn(2, "claude-sonnet-4-6")).runtime?.modelId, "gpt-5.5");
+});
+
+test("an agent's runtime write lands on the scope it names, only where it may write, never silently on its own", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(await personas.setAccess(ALICE, ada.id, [{ scopeId: scopeId("personal", ALICE), role: "owner" }]));
+  const server = createInsecureTestServer(built.app, {
+    config: built.config,
+    capabilitySecret: TEST_CAPABILITY_SECRET,
+  });
+  server.listen(0);
+  try {
+    const put = async (actorId: string, scope = `persona:${ada.id}`) =>
+      fetch(`http://localhost:${(server.address() as AddressInfo).port}/v1/runtime-config`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-agent-capability": await mintCapabilityToken(
+            { actorId, scopeId: scopeId("personal", actorId), liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+            TEST_CAPABILITY_SECRET,
+          ),
+        },
+        body: JSON.stringify({ scopeId: scope, modelId: "gpt-6.1-sol" }),
+      });
+    assert.equal((await put(BOB)).status, 403);
+    assert.equal((await put(ALICE, "channel:C_ELSEWHERE")).status, 403);
+    assert.equal((await put(ALICE)).status, 200);
+    assert.equal((await built.config.getRuntimeSelectionDurable(scopeId("persona", ada.id)))?.modelId, "gpt-6.1-sol");
+    assert.equal(await built.config.getRuntimeSelectionDurable(scopeId("personal", ALICE)), null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
 });
