@@ -32,8 +32,8 @@ before proxying, and the keychain stores credentials under the canonical owner.
   app once the bot has spoken to QM or a directory sync lists it as a bot.
   Older versions could also mark a linked person's own user as an app, and the
   API refuses links that name such a person until their user is a person again.
-  A turn spoken by a bot that reaches a person through an older link is refused
-  until an admin deletes that link.
+  A turn spoken by a bot that is joined to anyone by a link, on either side, is
+  refused until an admin deletes that link.
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
 - **Linking merges the users row.** If the linked sign-in already has its own

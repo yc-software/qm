@@ -50,7 +50,8 @@ test("a web turn starts new threads only under the caller's own IDs and refuses 
   await built.principalLinks.link({ principalId: "sso:a", canonicalId: "alice", evidence: "x", linkedBy: "t" });
   assert.notEqual((await built.app.turn(webTurn("sso:a"))).status, "refused");
   await built.principalLinks.link({ principalId: "B0BOT", canonicalId: "alice", evidence: "x", linkedBy: "t" });
+  await built.principalLinks.link({ principalId: "sso:b", canonicalId: "B1BOT", evidence: "x", linkedBy: "t" });
   const bot = (id: string) => webTurn(id, { botActor: true, actor: { externalId: id, isBot: true } });
-  assert.match((await built.app.turn(bot("B0BOT"))).reason ?? "", /^a bot can't act/);
+  for (const id of ["B0BOT", "B1BOT"]) assert.match((await built.app.turn(bot(id))).reason ?? "", /^a bot can't act/);
   assert.notEqual((await built.app.turn(webTurn("sso:a", { botActor: true }))).status, "refused");
 });

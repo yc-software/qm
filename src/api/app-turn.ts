@@ -28,7 +28,7 @@ import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
-import { foldPrincipalId, samePerson } from "../directory/person.ts";
+import { personIds, samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
@@ -160,7 +160,7 @@ export function createTurnMethods(
         return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
       };
       const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
-      if (req.actor.isBot && foldPrincipalId(actor.id) !== foldPrincipalId(req.actor.externalId))
+      if (req.actor.isBot && personIds(req.actor.externalId).length > 1)
         return {
           status: "refused",
           reason:
