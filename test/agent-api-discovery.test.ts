@@ -183,12 +183,12 @@ test("discovery advertises the deployment share endpoint, with guidance", async 
   try {
     const { body } = await listApis(s.base, await capFor("U1"));
     const p = paths(body);
-    assert.ok(p.includes("/v1/deployments/:id/share"), "the share endpoint is discoverable");
-    assert.ok(p.includes("/v1/deployments/:id/git-url"), "git-url stays discoverable");
-    assert.ok(p.includes("/v1/deployments/:id"), "deployment detail is discoverable");
-    assert.ok(p.includes("/v1/deployments/:id/restore"), "restore is discoverable");
+    assert.ok(p.includes("/v1/apps/:id/share"), "the share endpoint is discoverable");
+    assert.ok(p.includes("/v1/apps/:id/git-url"), "git-url stays discoverable");
+    assert.ok(p.includes("/v1/apps/:id"), "deployment detail is discoverable");
+    assert.ok(p.includes("/v1/apps/:id/restore"), "restore is discoverable");
     assert.ok(
-      body.guidance.some((g: string) => g.includes("POST /v1/deployments/:id/share") && g.includes('scope:"org"')),
+      body.guidance.some((g: string) => g.includes("POST /v1/apps/:id/share") && g.includes('scope:"org"')),
       "share guidance is present",
     );
   } finally {

@@ -1,5 +1,5 @@
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
-import type { AppSourceReader, DeploymentSource } from "../../deploy/deploy-service.ts";
+import type { AppSourceReader, AppSource } from "../../deploy/deploy-service.ts";
 import type { Item } from "../../sessions/items.ts";
 import { inlineChars } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
@@ -54,7 +54,7 @@ function fileBlock(path: string, text: string): string {
   return `\n### ${flatText(path)}\n${fenced(text)}`;
 }
 
-function listed(dir: string, files: DeploymentSource["tree"]): string {
+function listed(dir: string, files: AppSource["tree"]): string {
   const bytes = files.reduce((sum, file) => sum + file.size, 0);
   return files.length === 1
     ? `${flatText(files[0]!.path)} (${bytes} bytes)`

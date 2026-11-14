@@ -61,6 +61,7 @@ test("/me describes the signed-in person, the company and the web app's settings
     browserErrors: { dsn: "https://public@sentry.example.com/1", release: "release-1" },
     mode: "portal",
     slackWorkspaceUrl: "https://acme.slack.com",
+    chatSurfaces: [{ kind: "slack", label: "Slack" }],
     individualModelAuth: false,
     modelAuthConnected: false,
     impersonatedBy: null,

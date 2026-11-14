@@ -85,7 +85,8 @@ link them to a conforming canonical id.
 An attested call reads as that person, so its answer can hold what only they may
 see. QM therefore attests a person only to that person, in their own personal
 scope: never where others read the answer, never in someone else's personal
-scope, and never for a QM system actor (`system:…`). A memory route to an
+scope, and never for a QM system actor (`system:…`) or for a Slack bot's work
+that runs in the person's name. A memory route to an
 `attestActor` provider may list only `personal` or `personal:<id>` selectors, and
 QM refuses any other at startup. Attested MCP connectors are offered and called
 only in the person's direct conversation with QM, not in channels, group

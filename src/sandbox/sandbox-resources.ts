@@ -153,7 +153,7 @@ export async function accessConversationSandbox(
 }
 
 export async function assertBotMayUseComputer(
-  resources: SandboxResources | undefined,
+  resources: Pick<SandboxResources, "get" | "resolve"> | undefined,
   scopeId: ScopeId,
   sandboxId: string | undefined,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
@@ -184,7 +184,7 @@ export const MARK_ADMIN_CREATED_COMPUTERS_MIGRATION = {
 };
 
 export async function defaultComputer(
-  resources: SandboxResources | undefined,
+  resources: Pick<SandboxResources, "resolve"> | undefined,
   scopeId: ScopeId,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
 ): Promise<SandboxResource | undefined> {

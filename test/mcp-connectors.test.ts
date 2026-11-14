@@ -372,6 +372,9 @@ test("an attested connector refuses a call outside its person's own conversation
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
     ["U1"],
   );
+  assert.deepEqual(await service.toolDefsFor("U1", "group:G1", { actAsActor: true }), []);
+  await otherInstance.put({ ...records, attestActor: true, attestAudience: "any", updatedAt: 2 });
+  assert.equal((await service.toolDefsFor("U1", "group:G1", { actAsActor: true })).length, 1);
   service.close();
 });
 
@@ -596,13 +599,12 @@ test("MCP refresh contains registry failures on change and on a stale read, then
   await tick();
   assert.equal(list.mock.callCount(), 0);
   await store.put(server({ url: mcp.url }));
-  await tick();
-  assert.equal(list.mock.callCount(), 1);
+  await settle(async () => list.mock.callCount() === 1);
   assert.deepEqual(await service.toolDefs(), []);
   assert.equal(list.mock.callCount(), 1);
   clock += 100;
   await service.toolDefs();
-  await tick();
+  await settle(async () => errors.mock.callCount() === 2);
   assert.equal(list.mock.callCount(), 2);
   assert.equal(errors.mock.callCount(), 2);
   await assert.rejects(service.refresh(), /registry unavailable/);
@@ -672,7 +674,7 @@ test("a connector set to attest in any audience acts as the signed-in person who
   await store.put(server({ id: "strict", name: "Strict", ...attested }));
   await service.refresh();
   const offered = async (principalId: string, scopeId: string, actAsActor?: boolean) =>
-    (await service.toolDefsFor(principalId, scopeId, actAsActor)).map((d) => d.serverId).sort();
+    (await service.toolDefsFor(principalId, scopeId, { actAsActor })).map((d) => d.serverId).sort();
   assert.deepEqual(await offered("U1", "personal:U1"), ["records", "strict"]);
   assert.deepEqual(await offered("U1", "channel:C1", true), ["records"]);
   assert.deepEqual(await offered("U1", "group:G1", true), ["records"]);
@@ -682,20 +684,21 @@ test("a connector set to attest in any audience acts as the signed-in person who
 
   const invoke = { operation: "invoke", tool: "find-record", arguments: {} };
   const privateOnly = /answers only to them in their own private conversation/;
-  assert.equal(await service.needsApproval("records", invoke, "U1", "channel:C1", true), false);
-  await service.call("records", invoke, "U1", undefined, "channel:C1", true);
-  await service.call("records", invoke, "U2", undefined, "personal:U1", true);
-  await assert.rejects(service.call("records", invoke, "G9", undefined, "channel:C1", false), privateOnly);
+  const [asActor, notActor] = [{ actAsActor: true }, { actAsActor: false }];
+  assert.equal(await service.needsApproval("records", invoke, "U1", "channel:C1", asActor), false);
+  await service.call("records", invoke, "U1", undefined, "channel:C1", asActor);
+  await service.call("records", invoke, "U2", undefined, "personal:U1", asActor);
+  await assert.rejects(service.call("records", invoke, "G9", undefined, "channel:C1", notActor), privateOnly);
   await assert.rejects(service.call("records", invoke, "U1", undefined, "channel:C1"), privateOnly);
   await assert.rejects(
-    service.call("records", invoke, "system:channel:C1", undefined, "channel:C1", true),
+    service.call("records", invoke, "system:channel:C1", undefined, "channel:C1", asActor),
     privateOnly,
   );
   await assert.rejects(
-    service.call("records", invoke, "jörg@example.com", undefined, "channel:C1", true),
+    service.call("records", invoke, "jörg@example.com", undefined, "channel:C1", asActor),
     (error: unknown) => error instanceof UnattestableActor,
   );
-  await assert.rejects(service.call("strict", invoke, "U1", undefined, "channel:C1", true), privateOnly);
+  await assert.rejects(service.call("strict", invoke, "U1", undefined, "channel:C1", asActor), privateOnly);
   assert.deepEqual(
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
     ["U1", "U2"],

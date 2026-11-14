@@ -343,7 +343,7 @@ export function workspaceTools(kit: ToolKit) {
           description: "Unique handle (lowercase letters/digits/hyphens) → /d/<name>/.",
         }),
       ),
-      renameFrom: Type.Optional(Type.String({ description: "Existing deployment name to rename to `name`." })),
+      renameFrom: Type.Optional(Type.String({ description: "Existing app name to rename to `name`." })),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description: "Env vars for the version; omit to keep the previous ones, {} clears.",

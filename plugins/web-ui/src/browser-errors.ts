@@ -8,6 +8,7 @@ import { errDetail, swallow } from "../../chassis/src/errors.ts";
 const MAX_TIMINGS_PER_PAGE = 200;
 const API_RESOURCES = new Set([
   "approvals",
+  "apps",
   "blobs",
   "channel-header-pin",
   "composio",
@@ -15,7 +16,6 @@ const API_RESOURCES = new Set([
   "contexts",
   "crons",
   "deliveries",
-  "deployments",
   "directory",
   "files",
   "inbox",

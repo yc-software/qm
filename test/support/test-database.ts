@@ -8,7 +8,7 @@ import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persist
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { APP_ROLE, boundUrl, ownerUrl } from "./test-tenant.ts";
-import { DEPLOYMENT_TABLES } from "../../src/deploy/page-views.ts";
+import { APP_TABLES } from "../../src/deploy/page-views.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -137,12 +137,12 @@ export function testDeployBackings(
   const maps = createPostgresMapFactory(databaseUrl);
   return {
     databaseUrl,
-    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>(
+    deployments: maps.map<import("../../src/deploy/deploy-store.ts").PublishedApp>(
       "deployments",
       undefined,
-      DEPLOYMENT_TABLES,
+      APP_TABLES,
     ),
-    drafts: maps.map<import("../../src/deploy/deploy-store.ts").DeploymentDraft>("deployment_drafts"),
+    drafts: maps.map<import("../../src/deploy/deploy-store.ts").AppDraft>("deployment_drafts"),
     pg: maps.pool,
     ...backings,
   };
