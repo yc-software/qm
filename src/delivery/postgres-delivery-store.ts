@@ -31,7 +31,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
   };
 }
 
-const claimDeliveries = (gate: (column: string) => string, tiebreak: "id" | "seq") =>
+const claimDeliveries = (gate: (column: string) => string, order: string[]) =>
   claimFunction(
     "claim_deliveries",
     "text, bigint",
@@ -45,7 +45,7 @@ const claimDeliveries = (gate: (column: string) => string, tiebreak: "id" | "seq
                     WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
                       AND o.destination->>'target' = d.destination->>'target'
                       AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
-                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.${tiebreak}) < (d.created_at, d.${tiebreak})))
+                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (${order.map((c) => `o.${c}`).join(", ")}) < (${order.map((c) => `d.${c}`).join(", ")})))
                ORDER BY created_at
                FOR UPDATE SKIP LOCKED)
             RETURNING tenant_id, id::text`,
@@ -134,7 +134,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
             WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM deliveries WHERE ${OVERAGED} FOR UPDATE SKIP LOCKED)
             RETURNING tenant_id, id::text`,
         ),
-        claimDeliveries(() => "", "id"),
+        claimDeliveries(() => "", ["created_at", "id"]),
       ],
     },
     {
@@ -167,7 +167,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     {
       id: "delivery/store/0013-serving-claims",
-      statements: [claimDeliveries(servingTenant, "id"), undeliveredTenants(servingTenant)],
+      statements: [claimDeliveries(servingTenant, ["created_at", "id"]), undeliveredTenants(servingTenant)],
     },
     {
       id: "delivery/store/0014-creation-order",
@@ -175,14 +175,8 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE deliveries ADD COLUMN seq BIGINT NOT NULL DEFAULT 0`,
         `CREATE SEQUENCE deliveries_seq_seq OWNED BY deliveries.seq`,
-        `UPDATE deliveries d SET seq = live.seq
-           FROM (SELECT tenant_id, id, nextval('deliveries_seq_seq') AS seq
-                   FROM (SELECT tenant_id, id FROM deliveries
-                          WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
-                          ORDER BY created_at, ctid) waiting) live
-          WHERE d.tenant_id = live.tenant_id AND d.id = live.id`,
         `ALTER TABLE deliveries ALTER COLUMN seq SET DEFAULT nextval('deliveries_seq_seq')`,
-        claimDeliveries(servingTenant, "seq"),
+        claimDeliveries(servingTenant, ["created_at", "seq", "id"]),
       ],
     },
   ]);
