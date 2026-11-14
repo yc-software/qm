@@ -173,6 +173,7 @@ test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unl
     proxied.smolmachinesSandbox,
     proxied.porterSandbox,
     proxied.agent37Sandbox,
+    proxied.renderSandbox,
   ])
     assert.equal(provider.egressProxyUrl, "https://egress.test");
   const exempted = loadConfig({
@@ -228,10 +229,19 @@ test("a default sandbox backend left outside the egress proxy warns that it runs
       EGRESS_PROXY_URL: "https://egress.test",
       EGRESS_PROXY_EXEMPT_BACKENDS: "e2b",
     });
+    const render = {
+      SANDBOX_BACKEND: "render",
+      RENDER_API_KEY: "render_test",
+      RENDER_WORKSPACE_ID: "tea-test",
+      RENDER_SANDBOX_IMAGE: `ghcr.io/acme/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`,
+    };
+    loadConfig(render);
+    loadConfig({ ...render, EGRESS_PROXY_URL: "https://egress.test" });
   } finally {
     console.warn = original;
   }
   assert.equal(warnings.filter((w) => w.includes("SANDBOX_BACKEND=e2b has no egress proxy")).length, 2);
+  assert.equal(warnings.filter((w) => w.includes("SANDBOX_BACKEND=render has no egress proxy")).length, 1);
 });
 
 test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {

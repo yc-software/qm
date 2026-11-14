@@ -38,6 +38,10 @@ export interface RenderSandboxInfo {
   expiresAtMs: number;
 }
 
+export interface RenderLiveSandbox extends RenderSandboxInfo {
+  egressAllowlist?: string[];
+}
+
 export interface RenderListedSandbox {
   id: string;
   createdAtMs: number;
@@ -48,6 +52,7 @@ interface RenderCreateOptions {
   snapshotId?: string;
   image?: string;
   lifetimeSec: number;
+  egressAllowlist?: string[];
   onCreated?: (sandboxId: string) => Promise<void>;
 }
 
@@ -70,7 +75,7 @@ export interface RenderImage {
 export interface RenderClient {
   create(options: RenderCreateOptions): Promise<RenderSandboxInfo>;
   importImage(source: string, name: string): Promise<RenderImage>;
-  get(sandboxId: string): Promise<RenderSandboxInfo | null>;
+  get(sandboxId: string): Promise<RenderLiveSandbox | null>;
   listLive(name: string): Promise<RenderListedSandbox[]>;
   terminate(sandboxId: string): Promise<void>;
   runScript(
@@ -107,11 +112,17 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     ...(value.error ? { error: value.error } : {}),
   });
   const isMissing = (error: unknown): boolean => error instanceof ClientError && error.statusCode === 404;
-  const get = async (sandboxId: string): Promise<RenderSandboxInfo | null> => {
+  const get = async (sandboxId: string): Promise<RenderLiveSandbox | null> => {
     try {
-      return normalizeInfo(
-        await retryOperation(() => api.get(sandboxId), "idempotent", { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS }),
-      );
+      const value = await retryOperation(() => api.get(sandboxId), "idempotent", {
+        ...sdkErrors,
+        timeoutMs: CONTROL_TIMEOUT_MS,
+      });
+      const { type, rules } = value.networkPolicy;
+      return {
+        ...normalizeInfo(value),
+        ...(type === "allow-all" ? {} : { egressAllowlist: (rules ?? []).map((rule) => rule.domain.toLowerCase()) }),
+      };
     } catch (error) {
       if (isMissing(error)) return null;
       throw error;
@@ -217,7 +228,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     }
   };
   return {
-    async create({ name, snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, egressAllowlist, onCreated }) {
       let source: { snapshotId: string } | { image: string } | Record<string, never> = {};
       if (snapshotId) source = { snapshotId };
       else if (image) source = { image };
@@ -228,6 +239,9 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
             plan: RENDER_SANDBOX_PLAN,
             timeoutSeconds: lifetimeSec,
             idleTimeoutSeconds: 0,
+            networkPolicy: egressAllowlist
+              ? { type: "allow-list", rules: egressAllowlist.map((domain) => ({ domain })) }
+              : { type: "allow-all" },
             ...label,
             ...source,
           }),
