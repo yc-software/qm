@@ -95,6 +95,28 @@ final class DemoWorkspaceTests: XCTestCase {
     XCTAssertNil(model.error)
   }
 
+  func testAnUnsentDemoDraftDoesNotCarryIntoTheNextVisitAfterARestart() async throws {
+    let first = model()
+    await first.exploreDemo()
+    let chat = try chat(try XCTUnwrap(first.newConversation()), in: first, known: false)
+    chat.draft = "Left unsent"
+    chat.saveDraft()
+    await first.load()
+    XCTAssertEqual(first.conversations.count, 4)
+
+    let relaunched = model()
+    await relaunched.exploreDemo()
+
+    XCTAssertEqual(relaunched.conversations.count, 3)
+    XCTAssertFalse(relaunched.conversations.contains { $0.localOnly == true })
+  }
+
+  func testTheDemoAddressCannotBeChosenAsAWorkspace() {
+    XCTAssertNil(AppModel.workspaceURL("demo.qm.invalid"))
+    XCTAssertNil(AppModel.workspaceURL("https://demo.qm.invalid"))
+    XCTAssertNotNil(AppModel.workspaceURL("qm.example.com"))
+  }
+
   func testFeaturesTheDemoDoesNotCoverSayTheyNeedAWorkspace() async throws {
     let model = model()
     await model.exploreDemo()

@@ -66,6 +66,7 @@ final class AppModel {
     guard !loading else { return }
     signIn.cancel()
     DemoWorkspace.reset()
+    DraftStore.removeAccount(DemoWorkspace.origin.absoluteString + DemoWorkspace.user)
     let demo = APIClient(
       baseURL: DemoWorkspace.origin, configuration: DemoWorkspace.configuration)
     do { try demo.saveSession(DemoWorkspace.user) } catch {
@@ -106,7 +107,8 @@ final class AppModel {
 
   static func allowedURL(_ url: URL) -> Bool {
     guard url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-      url.path.isEmpty || url.path == "/", let host = url.host, !host.isEmpty
+      url.path.isEmpty || url.path == "/", let host = url.host, !host.isEmpty,
+      host != DemoWorkspace.origin.host
     else { return false }
     if url.scheme == "https" { return true }
     #if DEBUG
