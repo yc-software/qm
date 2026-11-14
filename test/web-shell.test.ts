@@ -2,6 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, request } from "node:http";
+import { randomUUID } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
@@ -9,6 +10,8 @@ import { createServer } from "../src/api/server.ts";
 import { orgScope } from "../src/config.ts";
 import type { ScopeId } from "../src/types.ts";
 import { resolveBranding } from "../src/resolution/branding.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { noteTenantAppHandle } from "../src/tenants/settings.ts";
 import { createWebShell, type WebReleases } from "../src/web/shell.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
@@ -68,10 +71,10 @@ after(() => Promise.all([core, front].map((s) => new Promise<void>((resolve) => 
 const coreBase = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 const frontBase = `http://127.0.0.1:${(front.address() as AddressInfo).port}`;
 
-function raw(path: string, headers: Record<string, string> = {}) {
+function raw(path: string, headers: Record<string, string> = {}, base = frontBase) {
   return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>(
     (resolve, reject) => {
-      request(`${frontBase}${path}`, { headers }, (res) => {
+      request(`${base}${path}`, { headers }, (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () =>
@@ -120,6 +123,25 @@ test("the app-edit page may be framed by its own app's subdomain only", async ()
   const bogus = await raw("/app-edit?slug=evil.example.com%20x");
   assert.equal(bogus.headers["x-frame-options"], "SAMEORIGIN");
   assert.match(String(bogus.headers["content-security-policy"]), /frame-ancestors 'self';/);
+});
+
+test("a company with an app handle admits the handle-prefixed host its app links use", async () => {
+  const tenanted = createHttpServer(
+    (req, res) =>
+      void withTenant(randomUUID(), async () => {
+        noteTenantAppHandle("acme");
+        await shell.serve(req, res);
+      }),
+  );
+  await new Promise<void>((resolve) => tenanted.listen(0, "127.0.0.1", resolve));
+  after(() => new Promise<void>((resolve) => tenanted.close(() => resolve())));
+  const base = `http://127.0.0.1:${(tenanted.address() as AddressInfo).port}`;
+  const framed = await raw("/app-edit?slug=notes", {}, base);
+  assert.equal(framed.headers["x-frame-options"], undefined);
+  assert.match(
+    String(framed.headers["content-security-policy"]),
+    /frame-ancestors 'self' acme-notes\.apps\.example\.com;/,
+  );
 });
 
 test("assets stream from their precompressed sibling or the raw file, and paths stay inside the release", async () => {
