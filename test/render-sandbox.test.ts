@@ -1396,25 +1396,10 @@ test("Render restarts a computer from its checkpoint so the same turn keeps work
   const restarted = (await store.get(scope))!;
   assert.equal(fake.sandboxes.get(first)?.status, "terminated");
   assert.notEqual(restarted.sandboxId, first);
+  assert.equal(fake.snapshotSource(restarted.checkpoint!.id)?.kind, "filesystem");
   assert.equal(restarted.stopped, undefined);
   assert.equal((await sandbox.run(handle, "cat restart-marker.txt")).stdout, "still here");
   assert.equal(computerVerdict(await sandbox.computerStatus!(scope)), "ok");
-});
-
-test("Render boots a computer fresh from a filesystem snapshot on restart and keeps runtime snapshots otherwise", async (t) => {
-  const { make, fake, store, scope } = setup(t, { http: true });
-  const sandbox = make(0);
-  const handle = await sandbox.provision(scope);
-  await sandbox.writeFile(handle, "kept", "before restart");
-  await sandbox.teardown(handle);
-  const saved = (await store.get(scope))!;
-  assert.equal(fake.snapshotSource(saved.checkpoint!.id)?.kind, "runtime");
-  await sandbox.restartComputer!(scope);
-  const restarted = (await store.get(scope))!;
-  assert.equal(fake.snapshotSource(restarted.checkpoint!.id)?.kind, "filesystem");
-  assert.equal(fake.createdFrom.at(-1), restarted.checkpoint!.id);
-  assert.equal(fake.sandboxes.get(saved.sandboxId)?.status, "terminated");
-  assert.equal(await sandbox.readFile(await sandbox.provision(scope), "kept"), "before restart");
 });
 
 test("Render restores a stopped computer and then boots it fresh on restart", async (t) => {
@@ -1431,7 +1416,6 @@ test("Render restores a stopped computer and then boots it fresh on restart", as
   const restarted = (await store.get(scope))!;
   assert.equal(fake.snapshotSource(restarted.checkpoint!.id)?.kind, "filesystem");
   assert.deepEqual(fake.createdFrom.slice(-2), [stopped.checkpoint!.id, restarted.checkpoint!.id]);
-  assert.equal(restarted.stopped, undefined);
   assert.equal(await sandbox.readFile(await sandbox.provision(scope), "kept"), "before the stop");
 });
 

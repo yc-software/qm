@@ -58,10 +58,7 @@ export function createFakeRender() {
   const labels = new Map<string, { name?: string; createdAtMs: number }>();
   const allowlists = new Map<string, string[]>();
   const snapshots = new Map<string, RenderSnapshot>();
-  const snapshotSources = new Map<
-    string,
-    { sandboxId: string; name: string; kind: SandboxSnapshotKind; requestedAtMs: number }
-  >();
+  const snapshotSources = new Map<string, { sandboxId: string; name: string; kind: string; requestedAtMs: number }>();
   const images = new Map<string, RenderImage & { name: string; source: string }>();
   const goldens = new Map<string, RenderSnapshot>();
   const registry = new Map<string, string>();
