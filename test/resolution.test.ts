@@ -20,7 +20,7 @@ async function setup() {
 test("DM writes to personal and reads org", async () => {
   const res = await setup();
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
-  const r = await res.resolve(tenant, conv, actor);
+  const r = await res.resolve(tenant, conv, actor, false, false);
   assert.equal(r.writableScopeId, scopeId("personal", "U1"));
   assert.deepEqual(r.readOnlyScopeIds, [scopeId("org", "default-org")]);
   assert.match(r.systemPrompt, /PERSONAL_SOUL/);
@@ -34,7 +34,7 @@ test("channel sees ONLY org + that channel — never personal (spec §9)", async
     channelRef: "C1",
     audience: [actor],
   };
-  const r = await res.resolve(tenant, conv, actor);
+  const r = await res.resolve(tenant, conv, actor, false, false);
   assert.equal(r.writableScopeId, scopeId("channel", "C1"));
   assert.deepEqual(r.readOnlyScopeIds, [scopeId("org", "default-org")]);
   assert.match(r.systemPrompt, /CHANNEL_SOUL/);
@@ -46,7 +46,7 @@ test("resolution.systemPrompt is the org/scope policy layer only — protocol gu
   const dm: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const channel: Conversation = { kind: "channel", threadRef: "C1:thread9", channelRef: "C1", audience: [actor] };
   for (const conv of [dm, channel]) {
-    const r = await res.resolve(tenant, conv, actor);
+    const r = await res.resolve(tenant, conv, actor, false, false);
     assert.doesNotMatch(r.systemPrompt, /source code|GitHub/);
     assert.doesNotMatch(r.systemPrompt, /## Your computer/);
     assert.doesNotMatch(r.systemPrompt, /## Scheduling & self-configuration/);
@@ -66,7 +66,7 @@ test("egress floor includes the actor's team-scope denylist (resolved to the per
   );
   const teamActor: Principal = { id: "U1", type: "internal", teamIds: ["T1"] };
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [teamActor] };
-  const r = await res.resolve(tenant, conv, teamActor);
+  const r = await res.resolve(tenant, conv, teamActor, false, false);
   assert.deepEqual((r.egress.deniedHosts ?? []).sort(), ["me-bad.test", "org-bad.test", "team-bad.test"]);
 });
 
@@ -82,7 +82,7 @@ test("egress floor includes the conversation scope policy for shared rooms", asy
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
   const conv: Conversation = { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] };
-  const r = await res.resolve(tenant, conv, actor);
+  const r = await res.resolve(tenant, conv, actor, false, false);
   assert.deepEqual(r.egress.allowedHosts, ["channel-api.test"]);
   assert.deepEqual(r.egress.deniedHosts, ["channel-bad.test"]);
 });
@@ -97,7 +97,7 @@ test("resolution carries the durable effective security posture", async () => {
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
-  const resolved = await res.resolve(tenant, conv, actor);
+  const resolved = await res.resolve(tenant, conv, actor, false, false);
   assert.deepEqual(resolved.securityPolicy, {
     posture: "strict",
     screening: "enforce",
@@ -123,7 +123,7 @@ test("resolution refreshes security config written by another instance", async (
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
-  const resolved = await res.resolve(tenant, conv, actor);
+  const resolved = await res.resolve(tenant, conv, actor, false, false);
   assert.match(resolved.systemPrompt, /FLEET_LIVE/);
   assert.deepEqual(resolved.egress.deniedHosts, ["blocked.example"]);
 });
@@ -145,7 +145,7 @@ test("deployment screening mode is capped only by dangerous posture", async () =
     );
     for (const posture of ["dangerous", "auto", "strict"] as const) {
       await config.setSecurityPosture(scopeId("personal", "U1"), posture);
-      const policy = (await res.resolve(tenant, conv, actor)).securityPolicy;
+      const policy = (await res.resolve(tenant, conv, actor, false, false)).securityPolicy;
       assert.equal(policy.screening, expected[mode][posture], `${mode}/${posture}`);
       assert.equal(policy.toolApprovals, posture === "strict" ? "all" : "none");
     }
@@ -172,5 +172,5 @@ test("external audiences receive no organization or scope policy", async () => {
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
   const conversation: Conversation = { kind: "channel", channelRef: "C1", threadRef: "C1:t", audience: [actor] };
-  assert.equal((await resolution.resolve(tenant, conversation, actor, true)).systemPrompt, "");
+  assert.equal((await resolution.resolve(tenant, conversation, actor, true, false)).systemPrompt, "");
 });

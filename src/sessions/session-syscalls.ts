@@ -28,6 +28,8 @@ import type { Run, RunStore } from "../runs/run-store.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
 import {
@@ -152,6 +154,19 @@ export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<S
 
 export function doesBotWork(session: Pick<Session, "spawnMeta"> | null, request: { botActor?: boolean }): boolean {
   return request.botActor === true || session?.spawnMeta?.botActor === true;
+}
+
+export async function forkOfBotWork(
+  tenant: Tenant,
+  session: Pick<Session, "id" | "forkedFrom"> | null,
+  deps: { sessions: Pick<SessionStore, "forkOrigin">; swarms?: Pick<SwarmService, "botStartedWorker"> },
+): Promise<boolean> {
+  if (!session?.forkedFrom) return false;
+  const origin = await deps.sessions.forkOrigin(tenant, session.id);
+  if (!origin || origin.forkedFrom) return true;
+  if (isSubagentThreadRef(origin.threadRef)) return origin.spawnMeta?.botActor === true;
+  if (!origin.threadRef.startsWith("swarm:")) return false;
+  return !deps.swarms || (await deps.swarms.botStartedWorker(origin));
 }
 
 export function storedContext(session: Session): SpawnMeta | undefined {

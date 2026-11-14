@@ -6,7 +6,6 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
-import type { ProcessRecord, ProcessRegistry } from "../processes/process-registry.ts";
 import { SandboxAccessError, type SandboxResource, type SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -32,7 +31,6 @@ import {
   type PendingSwarm,
 } from "./swarm-store.ts";
 import { withTenant } from "../tenants/context.ts";
-import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 
 export type SwarmCaller =
   { kind: "agent"; claims: CapabilityClaims } | { kind: "human"; actorId: string; sessionId: string; runId?: string };
@@ -96,8 +94,8 @@ export interface SwarmService {
   ): Promise<boolean>;
   authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
-  claimOwedStops(): Promise<ClaimedRow[]>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
+  botStartedWorker(session: { id: string; threadRef: string }): Promise<boolean>;
   queuedMessages(
     input: OrchestratorInput,
     options?: { skipRuns?: ReadonlySet<string>; mailboxOnly?: boolean },
@@ -245,7 +243,6 @@ export function createSwarmService(deps: {
   authorize(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
-  processes?: Pick<ProcessRegistry, "listLive">;
   sweepProcesses?: () => Promise<unknown>;
 }): SwarmService {
   const { store, sessions, runs } = deps;
@@ -256,18 +253,6 @@ export function createSwarmService(deps: {
       if (error instanceof SandboxAccessError) return null;
       throw error;
     });
-  const readEach = async <T>(ids: Array<string | undefined>, read: (id: string) => Promise<T>) => {
-    const unique = [...new Set(ids)].filter((id): id is string => id !== undefined);
-    return new Map(await Promise.all(unique.map(async (id) => [id, await read(id)] as const)));
-  };
-  const lostJobs = async (jobs: ProcessRecord[], lostSwarmOn: Map<string, Swarm>): Promise<ProcessRecord[]> => {
-    const owing = jobs.filter((job) => job.sandboxId && job.runId && lostSwarmOn.has(job.sandboxId));
-    const ran = await readEach(
-      owing.map((job) => job.runId),
-      (id) => runs.get(id),
-    );
-    return owing.filter((job) => botsRun(lostSwarmOn.get(job.sandboxId!)!, ran.get(job.runId!) ?? null));
-  };
   const cutOffBot = async (before: Swarm, swarm: Swarm, reason: string): Promise<void> => {
     if (!botLostSwarm(swarm)) return;
     const computers = new Set(swarm.members.flatMap((member) => (member.sandboxId ? [member.sandboxId] : [])));
@@ -405,7 +390,7 @@ export function createSwarmService(deps: {
       text: "",
       ...(source.scopeVersion ? { scopeVersion: source.scopeVersion } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
-      ...(source.botActor ? { botActor: true } : {}),
+      ...(source.botActor || (caller.kind === "agent" && caller.claims.botActor) ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
       ...(source.memoryNotebookOnly ||
       session.spawnMeta?.memoryNotebookOnly ||
@@ -934,29 +919,6 @@ export function createSwarmService(deps: {
       return !!swarm && botMayDirect(swarm, turn.actorId);
     },
     notePersonUse,
-    async claimOwedStops() {
-      const { processes } = deps;
-      if (!processes) return [];
-      const owed = await claimThenBind(store.claimTenants, async (_id, tenant) => {
-        const jobs = (await processes.listLive()).filter((job) => job.runId);
-        const computers = await readEach(
-          jobs.map((job) => job.sandboxId),
-          findComputer,
-        );
-        const swarms = await readEach(
-          [...computers.values()].map((computer) => computer?.swarmId),
-          (id) => store.get(id),
-        );
-        const lostSwarmOn = new Map(
-          [...computers].flatMap(([id, computer]) => {
-            const swarm = computer?.swarmId ? swarms.get(computer.swarmId) : null;
-            return swarm && botLostSwarm(swarm) ? [[id, swarm] as const] : [];
-          }),
-        );
-        return (await lostJobs(jobs, lostSwarmOn)).map((job) => ({ tenantId: tenant.id, id: job.processId }));
-      });
-      return owed.flat();
-    },
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");
@@ -1100,6 +1062,11 @@ export function createSwarmService(deps: {
       }
       return handed;
     },
+    async botStartedWorker(session) {
+      const { rootId } = threadIdentity(session.threadRef, session.id);
+      return rootId !== session.id && (await store.get(rootId))?.template.botActor === true;
+    },
+
     async binding(input) {
       const session = await sessions.getByThread(input.conversation.threadRef);
       if (!session) {

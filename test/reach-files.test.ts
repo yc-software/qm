@@ -90,11 +90,11 @@ describe("POST /v1/reach with files", () => {
     await new Promise<void>((resolve) => noSandbox.close(() => resolve()));
   });
 
-  const storeFile = async (owner: string, name: string, data: string) => {
+  const storeFile = async (owner: string, name: string, data: string, ownerScopeId = scopeId("personal", owner)) => {
     const id = `file-${owner}-${name}-${Math.random().toString(36).slice(2)}`;
     await built.files.put({
       id,
-      ownerScopeId: scopeId("personal", owner),
+      ownerScopeId,
       createdBy: owner,
       name,
       path: `artifacts/${id}/${name}`,
@@ -308,8 +308,10 @@ describe("POST /v1/reach with files", () => {
       const botDefault = await send(true);
       assert.equal(botDefault.status, 403);
       assert.equal(((await botDefault.json()) as any).error, "forbidden");
+      const ownFile = await send(true, undefined, [{ file_id: await storeFile("U-carol", "own.txt", "hers\n") }]);
+      assert.match(((await ownFile.json()) as any).message, /\(not found\)/);
       const botStored = await send(true, undefined, [
-        { file_id: await storeFile("U-carol", "stored.txt", "from Files\n") },
+        { file_id: await storeFile("U-carol", "stored.txt", "from Files\n", scopeId("org", "default-org")) },
       ]);
       assert.equal(botStored.status, 200);
       assert.deepEqual(await readDelivered(((await botStored.json()) as any).deliveryId), ["stored.txt:from Files\n"]);

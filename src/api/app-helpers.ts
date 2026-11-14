@@ -39,6 +39,7 @@ import type { PublishedApp } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { sessionTurnOrigin } from "../core/turn-origin.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import {
   openGroupViaSurface,
   resolveReachTarget,
@@ -415,10 +416,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function filesForViewer(
     tenant: Tenant,
     principalId: string,
+    ownScopeBotWork: boolean,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
   ): Promise<FileListPage> {
-    const myScopes = await currentResourceScopesForViewer(principalId);
+    const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
     const handles = await deps.acl.handlesFor(tenant, myScopes);
     const page = await deps.files.listDocuments(
       myScopes,
@@ -435,7 +437,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     };
   }
 
-  async function currentResourceScopesForViewer(principalId: string): Promise<ScopeId[]> {
+  async function currentResourceScopesForViewer(principalId: string, ownScopeBotWork: boolean): Promise<ScopeId[]> {
     const actor = deps.identity?.classify(principalId);
     if (actor && !deps.identity?.isInternal(actor)) return [];
     const scopes = new Set<ScopeId>([
@@ -462,7 +464,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     } catch (error) {
       swallow("app: current resource scopes for viewer", error);
     }
-    return [...scopes];
+    return [...scopes].filter((scope) => loadsScopeContext(principalId, scope, ownScopeBotWork));
   }
 
   async function canUseContext(principalId: string, targetScope: ScopeId): Promise<boolean> {
@@ -630,8 +632,15 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     recordErrorInBinding(deps.errors, e, error);
   }
 
-  function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {
-    return principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId);
+  async function canManageSkill(
+    skill: Pick<Skill, "scopeId" | "createdBy">,
+    principalId: string,
+    botWork: boolean,
+  ): Promise<boolean> {
+    return (
+      loadsScopeContext(principalId, skill.scopeId, botWork) &&
+      principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)
+    );
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
