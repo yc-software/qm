@@ -15,6 +15,7 @@ import {
 import { resolveEnvironmentId } from "../../environments/environment-store.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { scopeId, type OutgoingAttachment } from "../../types.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 
 type ReachBody = {
   recipient?: unknown;
@@ -224,7 +225,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         : sandbox!.provision(envScope));
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
-        app.openFileForViewer(tenantOf(ctx), id, capability.actorId),
+        app.openFileForViewer(tenantOf(ctx), id, capability.actorId, isOwnScopeBotWork(capability)),
       );
       const bad = [
         ...r.missing.map((p) => `${p} (not found)`),

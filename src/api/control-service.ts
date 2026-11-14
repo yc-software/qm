@@ -32,6 +32,7 @@ import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../typ
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -762,7 +763,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     readSoul(capability) {
-      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId);
+      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId, {
+        actorId: capability.actorId,
+        ownScopeBotWork: isOwnScopeBotWork(capability),
+      });
       return { effectiveSoul, soul, soulVersion };
     },
 
@@ -770,6 +774,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,
+          botActor: capability.botActor === true,
           expectedVersion,
           sessionId: capability.sessionId,
         });
@@ -796,6 +801,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
               ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
         };
+      const sourceWithheld =
+        req.type === "skill" ? capability.botActor === true : req.type === "file" && isOwnScopeBotWork(capability);
+      if (!loadsScopeContext(capability.actorId, home.ownerScopeId, sourceWithheld))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move a person's own files or skills",
+        };
 
       const target = await resolveArtifactTarget(app, req);
       if (target.kind === "invalid") return { ok: false, code: "bad_request", message: target.message };
@@ -809,6 +822,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           candidates: target.candidates,
         };
       const toScope = target.scope;
+      if (!loadsScopeContext(capability.actorId, toScope, capability.botActor === true))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move anything into a person's own library",
+        };
       const toKind = parseScopeId(toScope).kind;
 
       const isOrg = toKind === "org";

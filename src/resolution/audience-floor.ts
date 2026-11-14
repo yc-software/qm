@@ -10,7 +10,7 @@ function principalHosts(
   list: "allowedHosts" | "deniedHosts",
 ): Set<string> {
   const hosts = new Set<string>();
-  for (const s of entitledScopes(p, contextScope ?? orgScope, orgScope))
+  for (const s of entitledScopes(false)(p, contextScope ?? orgScope, orgScope))
     for (const h of config.getEgress(s)?.[list] ?? []) hosts.add(h);
   return hosts;
 }

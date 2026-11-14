@@ -100,6 +100,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
       data: Buffer.from(data),
       direction: "out",
     });
+    return id;
   };
   const filePath = (ownerScopeId: string, name: string) =>
     `shared/open-${ownerScopeId.replace(":", "-")}/${fileIds.get(`${ownerScopeId}/${name}`)}/${name}`;
@@ -137,11 +138,66 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
   for (const extra of [{ origin: { kind: "automation" } }, { botActor: true }] as const)
     assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", extra), /no file/);
-  assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", { botActor: true }), /OWN_MEMORY_U1/);
+  await b.config.setSoul("personal:U1", "OWN_SOUL_U1");
+  await b.skill("personal:U1", "own-helper", "OWN_SKILL");
+  for (const [name, granteeScopeId] of [
+    ["granted.txt", "personal:U1"],
+    ["org.txt", "org:default-org"],
+  ] as const) {
+    const ref = await b.file("personal:U2", name, `GRANTED_${name}`);
+    await b.acl.grant(
+      tenant,
+      { ownerScopeId: "personal:U2", ref, granteeScopeId, permission: "read", grantedBy: "U2" },
+      "U2",
+    );
+  }
+  const ownFile = await b.file("personal:U1", "own.txt", "OWN_FILE_U1");
+  assert.equal(await b.turn(`!attach file_id:${ownFile}`, false, "U1"), "");
+  assert.match(
+    await b.turn("!sysprompt", false, "U1", { origin: { kind: "automation" } }),
+    /OWN_SOUL_U1[\s\S]*2 files are shared with you[\s\S]*own-helper/,
+  );
+  const personal = /OWN_MEMORY_U1|OWN_SOUL_U1|2 files are shared|own-helper/;
+  for (const origin of [{ kind: "human" }, { kind: "automation" }] as const) {
+    const bot = {
+      botActor: true,
+      origin,
+      conversation: { kind: "dm", threadRef: `dm:U1:bot-${origin.kind}` },
+    } as const;
+    assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", bot), personal);
+    assert.equal(await b.turn("!read shared/", false, "U1", bot), "shared/org.txt");
+    assert.equal(await b.turn("!read shared/org.txt", false, "U1", bot), "GRANTED_org.txt");
+    assert.match(await b.turn("!skill own-helper", false, "U1", bot), /no skill file/);
+    assert.match(await b.turn(`!attach file_id:${ownFile}`, false, "U1", bot), /not found/);
+    await b.config.setSoul("personal:U1", `OWN_SOUL_U1\nEDIT_${origin.kind}`);
+    assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", bot), /EDIT_/);
+  }
+  await b.directory.replace(
+    ["U1", "U2", "U3"].map((principalId) => ({ principalId, displayName: principalId, type: "internal" })),
+  );
+  await b.memory.capture("channel:C1", ["ROOM_FROM_U1"], Date.now(), undefined, {
+    mode: "automatic",
+    sensitivity: "ordinary",
+    inheritedFacts: [],
+    conversationScopeId: "personal:U1",
+  });
+  assert.match(await b.turn("!memorysearch ROOM_FROM_U1", true), /ROOM_FROM_U1/);
+  assert.doesNotMatch(await b.turn("!memorysearch ROOM_FROM_U1", true, "U1", { botActor: true }), /ROOM_FROM_U1/);
   const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
   assert.equal(await b.turn(own, true), "(exit 0)");
   await b.turn(own, true, "U1", { botActor: true });
   assert.ok((await b.errors.list(testTenant)).some((e) => /sandbox access is no longer authorized/.test(e.message)));
+  await b.remove("U3");
+  const roomFile = await b.file("personal:U1", "room.txt", "ROOM_FILE");
+  const roomGrant = {
+    ownerScopeId: "personal:U1",
+    ref: roomFile,
+    granteeScopeId: "personal:U2",
+    permission: "read",
+  } as const;
+  await b.acl.grant(tenant, { ...roomGrant, grantedBy: "U1" }, "U1");
+  assert.equal(await b.turn("!read shared/room.txt", true, "U1", { botActor: true }), "ROOM_FILE");
+  assert.equal(await b.turn(`!attach file_id:${roomFile}`, true, "U1", { botActor: true }), "");
 });
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {

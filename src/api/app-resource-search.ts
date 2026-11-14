@@ -29,7 +29,7 @@ export function createResourceSearchMethods(
       const canSee = async (kind: Exclude<ResourceKind, "apps">, row: ResourceCandidate): Promise<boolean> => {
         switch (kind) {
           case "skills":
-            if (await helpers.canManageSkill(row, principalId)) return true;
+            if (await helpers.canManageSkill(row, principalId, false)) return true;
             if (row.status !== "published") return false;
             return visibleSkills.has(row.id);
           case "crons":
@@ -48,7 +48,7 @@ export function createResourceSearchMethods(
         const rows = candidates.slice(0, 200);
         if (kind === "skills" && rows.length) {
           const { skills, homes } = await store.skillMetadata([...new Set(rows.map((r) => r.title))]);
-          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes);
+          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes, false);
           visibleSkills = new Set(visibleSkillRows(skills, ordered, granted).map((r) => r.skill.id));
         }
         const appPermissions = kind === "apps" ? await helpers.appPermissions(tenant, rows, principalId) : [];
