@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { botLimited, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import { SandboxAccessError, type SandboxResource, type SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -171,7 +171,7 @@ function botLostSwarm(swarm: Swarm): boolean {
 }
 
 function botsRun(swarm: Swarm, run: Run | null): boolean {
-  return run?.request.botActor === true && run.request.actor.id === swarm.template.actor.id;
+  return !!run && botLimited(run) && run.request.actor.id === swarm.template.actor.id;
 }
 
 function assertCallerMayDirect(caller: SwarmCaller, auth: Authority, swarm: Swarm): void {
@@ -390,7 +390,7 @@ export function createSwarmService(deps: {
       text: "",
       ...(source.scopeVersion ? { scopeVersion: source.scopeVersion } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
-      ...(source.botActor || (caller.kind === "agent" && caller.claims.botActor) ? { botActor: true } : {}),
+      ...(botLimited(run) ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
       ...(source.memoryNotebookOnly ||
       session.spawnMeta?.memoryNotebookOnly ||
@@ -1064,7 +1064,9 @@ export function createSwarmService(deps: {
     },
     async botStartedWorker(session) {
       const { rootId } = threadIdentity(session.threadRef, session.id);
-      return rootId !== session.id && (await store.get(rootId))?.template.botActor === true;
+      if (rootId === session.id) return false;
+      const swarm = await store.get(rootId);
+      return !swarm || swarm.template.botActor === true;
     },
 
     async binding(input) {

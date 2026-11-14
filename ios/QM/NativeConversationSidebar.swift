@@ -64,8 +64,16 @@ struct NativeConversationRow: View {
     return title == conversation.label ? nil : title
   }
 
+  private var showsUnread: Bool { conversation.unread == true && !selected }
+
   var body: some View {
     HStack(spacing: 8) {
+      if conversation.working == true {
+        NativeWave()
+          .frame(width: 19, height: 12)
+          .foregroundStyle(.blue)
+          .accessibilityHidden(true)
+      }
       if conversation.surface == "slack" {
         Image("Service-slack")
           .resizable().renderingMode(.template).scaledToFit()
@@ -86,11 +94,12 @@ struct NativeConversationRow: View {
         ProgressView().controlSize(.mini)
       } else if conversation.awaitingInput == true {
         Image(systemName: "clock").foregroundStyle(.secondary)
-      } else if conversation.working == true {
-        Circle().fill(.blue).frame(width: 7, height: 7)
       }
       if let emoji = conversation.status?.emoji, !emoji.isEmpty {
         Text(emoji)
+      }
+      if showsUnread {
+        Circle().fill(QMTheme.unread).frame(width: 8, height: 8)
       }
     }
     .font(.subheadline)
@@ -102,6 +111,7 @@ struct NativeConversationRow: View {
     .accessibilityLabel(
       [
         conversation.label, conversation.surface == "slack" ? "Slack" : nil, context,
+        showsUnread ? "Unread" : nil,
         conversation.awaitingInput == true ? "Needs attention" : nil,
         conversation.working == true ? "Working" : nil,
         conversation.status?.text, updating ? "Updating" : nil,
@@ -221,10 +231,7 @@ struct NativeConversationSections<Actions: View>: View {
           selected: selectedID == conversation.id)
       }
       .buttonStyle(.plain)
-      .listRowInsets(
-        EdgeInsets(
-          top: 0, leading: section.id == "pinned" ? 16 : 32, bottom: 0, trailing: 16)
-      )
+      .listRowInsets(EdgeInsets(top: 0, leading: 32, bottom: 0, trailing: 16))
       .listRowSeparator(.hidden)
       .listRowBackground(QMTheme.paper)
       .contextMenu { actions(conversation) }
