@@ -256,6 +256,89 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
   },
 ].sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id));
 
+export const SPLIT_LINKED_BOTS_MIGRATION = {
+  id: "users/v2/0009-split-linked-bots",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('runs') IS NULL
+         OR to_regclass('audit_log') IS NULL OR to_regclass('directory_members') IS NULL THEN
+        RETURN;
+      END IF;
+      CREATE TEMP TABLE app_sign_ins ON COMMIT DROP AS
+        SELECT l.tenant_id, l.user_id, l.alias_id, l.evidence, l.linked_by, l.alias_id = u.primary_alias AS is_primary
+          FROM users u JOIN user_links l ON l.tenant_id = u.tenant_id AND l.user_id = u.id
+         WHERE u.kind = 'app';
+      IF NOT EXISTS (SELECT 1 FROM app_sign_ins) THEN
+        RETURN;
+      END IF;
+      CREATE TEMP TABLE app_signals ON COMMIT DROP AS
+        SELECT tenant_id, user_id, alias_id, evidence, linked_by, is_primary, first_spoke,
+               CASE WHEN bot AND person THEN 'bot and person' WHEN bot THEN 'bot' WHEN person THEN 'person' ELSE 'none'
+               END AS signal
+          FROM (SELECT s.tenant_id, s.user_id, s.alias_id, s.evidence, s.linked_by, s.is_primary,
+                       min(t.created_at) AS first_spoke, count(t.speaker) > 0 AS bot,
+                       EXISTS (SELECT 1 FROM directory_members m
+                                WHERE m.tenant_id = s.tenant_id AND m.slack_id IS NOT NULL
+                                  AND ${fold("m.principal_id")} = s.alias_id)
+                       OR EXISTS (SELECT 1 FROM directory_members m
+                                   WHERE m.tenant_id = s.tenant_id AND m.slack_id = s.alias_id) AS person
+                  FROM app_sign_ins s
+                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker
+                               FROM runs r
+                              CROSS JOIN LATERAL (
+                                    SELECT j #>> '{surfaceOrigin,author,id}' AS author
+                                      FROM (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb')
+                                                        THEN r.request::jsonb END AS j OFFSET 0) parsed
+                                     WHERE j @> '{"botActor": true, "surfaceOrigin": {"author": {"surface": "slack"}}}'
+                                       AND NOT j @> '{"surfaceOrigin": {"audience": "external"}}'
+                                       AND (j #>> '{origin,kind}' IN ('human', 'direct')
+                                            OR j @> '{"origin": {"kind": "ambient", "live": true}}')
+                                       AND coalesce(j ->> 'sessionSenderId', '') = ''
+                                       AND coalesce(j ->> 'delegatingRunId', '') = ''
+                                    OFFSET 0) p
+                               LEFT JOIN directory_members d ON d.tenant_id = r.tenant_id AND d.slack_id = p.author
+                              CROSS JOIN LATERAL (VALUES (${fold("p.author")}), (${fold("d.principal_id")})) v(speaker)) t
+                    ON t.tenant_id = s.tenant_id AND t.speaker = s.alias_id
+                 GROUP BY 1, 2, 3, 4, 5, 6) g;
+      CREATE TEMP TABLE person_users ON COMMIT DROP AS
+        SELECT tenant_id, user_id FROM app_signals GROUP BY 1, 2
+        HAVING bool_and(signal IN ('bot', 'person')) AND bool_or(is_primary AND signal = 'person');
+      CREATE TEMP TABLE mixed_splits ON COMMIT DROP AS
+        SELECT tenant_id, user_id, alias_id, evidence, linked_by, first_spoke FROM app_signals
+         WHERE signal = 'bot' AND NOT is_primary
+           AND (tenant_id, user_id) IN (SELECT tenant_id, user_id FROM app_signals WHERE signal <> 'bot');
+      INSERT INTO users(tenant_id, primary_alias, kind, first_seen_at, source)
+        SELECT tenant_id, alias_id, 'app', ${ts("first_spoke")}, 'turn' FROM mixed_splits;
+      UPDATE user_links l SET user_id = n.id, evidence = 'primary', linked_by = NULL
+        FROM mixed_splits s JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
+       WHERE l.tenant_id = s.tenant_id AND l.alias_id = s.alias_id;
+      UPDATE users u SET kind = 'person' FROM person_users p WHERE u.tenant_id = p.tenant_id AND u.id = p.user_id;
+      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
+      SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, user_id::text, 'users', detail::text
+        FROM (SELECT p.tenant_id, p.user_id, 'user_sign_in_split' AS action,
+                     jsonb_build_object('movedSignIns', coalesce(jsonb_agg(
+                       jsonb_build_object('alias', s.alias_id, 'userId', n.id, 'evidence', s.evidence, 'linkedBy', s.linked_by)
+                       ORDER BY s.alias_id) FILTER (WHERE s.alias_id IS NOT NULL), '[]')) AS detail
+                FROM (SELECT tenant_id, user_id FROM person_users UNION SELECT tenant_id, user_id FROM mixed_splits) p
+                LEFT JOIN mixed_splits s ON s.tenant_id = p.tenant_id AND s.user_id = p.user_id
+                LEFT JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
+               GROUP BY 1, 2
+              UNION ALL
+              SELECT tenant_id, user_id, 'user_sign_in_review',
+                     jsonb_build_object(
+                       'reason', CASE WHEN bool_or(signal NOT IN ('bot', 'person')) THEN 'some sign-ins have no certain signal'
+                                      ELSE 'the primary sign-in is not a person' END,
+                       'signIns', jsonb_agg(jsonb_build_object('alias', alias_id, 'evidence', evidence, 'signal', signal)
+                                            ORDER BY is_primary DESC, alias_id))
+                FROM app_signals
+               WHERE (tenant_id, user_id) NOT IN (SELECT tenant_id, user_id FROM person_users)
+               GROUP BY 1, 2
+              HAVING count(*) > 1 AND NOT bool_and(signal = 'bot')) entries;
+    END $$`,
+  ],
+};
+
 const COLUMNS = `u.id, u.primary_alias, u.kind,
   ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
          ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,

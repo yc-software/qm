@@ -92,7 +92,7 @@ import {
   type IdentityService,
 } from "./identity/identity-service.ts";
 import { createPrincipalLinkService, type PrincipalLinkService } from "./identity/principal-links.ts";
-import { createPostgresUserStore, type UserStore } from "./identity/user-store.ts";
+import { createPostgresUserStore, SPLIT_LINKED_BOTS_MIGRATION, type UserStore } from "./identity/user-store.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
@@ -2017,6 +2017,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
+  pgArtifactMap.pool.registerMigration(SPLIT_LINKED_BOTS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);

@@ -91,3 +91,84 @@ test("a deploy marks crons still running what a bot-marked turn wrote and lists 
     ["cron_update", scripted.id, scope, { botActor: true, ...fromScript }],
   ]);
 });
+
+test("a deploy gives a Slack bot linked to a person its own app user, so the bot marker backfill spares the person", async () => {
+  const url = testDatabaseUrl();
+  const built = buildApp(testConfig({ databaseUrl: url }));
+  await migrateRegisteredPgSchemas(url);
+  const users = createPostgresUserStore(url);
+  const [pat, bot, sam, bot2, app, app2] = ["pat@acme.test", "B0BOT", "U0SAM", "B0BOT2", "B0APP", "B0APP2"];
+  const [kim, lee, dir] = ["kim@acme.test", "U0LEE", "B0DIR"];
+  const schedule = { cron: "0 9 * * *", timezone: "UTC" };
+  const crons = await Promise.all(
+    [pat, bot].map((who) =>
+      built.app.createCron({ ownerScopeId: "channel:C1", owner: who, createdBy: who, schedule, action: who }),
+    ),
+  );
+  for (const [alias, person] of Object.entries({ [bot]: pat, U0PAT: pat, [bot2]: sam, [app2]: app })) {
+    await users.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "U0ADM", createdAt: 1 });
+    await users.markApps([person]);
+  }
+  for (const who of [kim, lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
+  await built.directory.replace([
+    { principalId: pat, displayName: "Pat", type: "internal", slackId: "U0PAT" },
+    { principalId: kim, displayName: "Kim", type: "internal", slackId: "U0KIM" },
+    { principalId: dir, displayName: "Dir", type: "internal" },
+  ]);
+  await users.markApps([kim, lee, dir]);
+  const said = (speaker: string, actor: string, botActor = false) => {
+    const surfaceOrigin = { author: { surface: "slack", account: "default", id: speaker }, audience: "internal" };
+    const request = { actor: { id: actor }, origin: { kind: "human" }, surfaceOrigin, botActor } as never;
+    return built.runs.enqueue({ sessionId: `slack:C1:${speaker}`, request });
+  };
+  await Promise.all([
+    said(bot, pat, true),
+    said(sam, sam),
+    said(bot2, sam, true),
+    said(app, app, true),
+    said(app2, app, true),
+    said(lee, lee),
+  ]);
+  const pg = createPgPool(url);
+  const rerun = async (id: string) => {
+    await pg.q("DELETE FROM qm_schema_migrations WHERE id = $1", [id]);
+    await migrateRegisteredPgSchemas(url);
+  };
+  const state = async () => ({
+    links: await pg.q(`SELECT l.alias_id, u.primary_alias, u.kind, l.evidence, l.linked_by, l.created_at
+      FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id ORDER BY 1`),
+    audit: await pg.q(
+      "SELECT action, resource, scope_label, detail::jsonb FROM audit_log WHERE principal_id = 'system:migration' ORDER BY action, detail COLLATE \"C\"",
+    ),
+  });
+  const before = await state();
+  await rerun("users/v2/0009-split-linked-bots");
+  const after = await state();
+  const person = { kind: "person" };
+  const own = (alias: string) => ({ primary_alias: alias, evidence: "primary", linked_by: null });
+  const moved = { [bot]: own(bot), [bot2]: own(bot2), [pat]: person, U0PAT: person, [kim]: person };
+  assert.deepEqual(
+    after.links,
+    before.links.map((link) => ({ ...link, ...moved[String(link.alias_id)] })),
+  );
+  const signIns = [
+    { alias: sam, evidence: "primary", signal: "none" },
+    { alias: bot2, evidence: "admin", signal: "bot" },
+  ];
+  const review = { reason: "some sign-ins have no certain signal", signIns };
+  const id = async (alias: string) => (await users.get(alias))!.id;
+  const admin = await id("U0ADM");
+  const split = async (alias: string) => ({ alias, userId: await id(alias), evidence: "admin", linkedBy: admin });
+  assert.deepEqual(after.audit.map(Object.values), [
+    ["user_sign_in_review", await id(sam), "users", review],
+    ["user_sign_in_split", await id(kim), "users", { movedSignIns: [] }],
+    ["user_sign_in_split", await id(pat), "users", { movedSignIns: [await split(bot)] }],
+    ["user_sign_in_split", await id(sam), "users", { movedSignIns: [await split(bot2)] }],
+  ]);
+  await rerun("users/v2/0008-bot-marker-backfill");
+  const marks = await Promise.all(crons.map(async (c) => (await built.app.getCron(c.id))?.botActor));
+  await pg.close();
+  assert.deepEqual(marks, [undefined, true]);
+  await users.unlink(app2);
+  assert.equal((await users.get(app))?.kind, "app");
+});
