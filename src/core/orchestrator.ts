@@ -26,7 +26,7 @@ import {
   ownsSessionContext,
   isSubagentThreadRef,
   sessionContextOf,
-  sessionVisibleTo,
+  hiddenFromBotWork,
 } from "../sessions/session-syscalls.ts";
 import {
   type DocumentInput,
@@ -560,8 +560,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         storedSession &&
         !(swarmBinding && swarmBinding.rootSessionId !== storedSession.id) &&
         !ownsSessionContext(conversation.threadRef, input) &&
-        !sessionVisibleTo(input, storedSession) &&
-        !(await forkOfBotWork(tenant, storedSession, deps))
+        (await hiddenFromBotWork(tenant, input, storedSession, deps))
       ) {
         console.error(
           `[orchestrator] turn.silent (bot-flagged turn in a conversation hidden from bot work) thread=${conversation.threadRef}`,

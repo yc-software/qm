@@ -8,7 +8,7 @@ import { botLimited, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import { SandboxAccessError, type SandboxResource, type SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { sessionVisibleTo } from "../sessions/session-syscalls.ts";
+import { hiddenFromBotWork } from "../sessions/session-syscalls.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
@@ -31,7 +31,7 @@ import {
   type SwarmStore,
   type PendingSwarm,
 } from "./swarm-store.ts";
-import { withTenant } from "../tenants/context.ts";
+import { ambientTenant, withTenant } from "../tenants/context.ts";
 
 export type SwarmCaller =
   { kind: "agent"; claims: CapabilityClaims } | { kind: "human"; actorId: string; sessionId: string; runId?: string };
@@ -447,8 +447,9 @@ export function createSwarmService(deps: {
   }
 
   async function deliver(swarm: Swarm, step: <Result>(start: () => Promise<Result>) => Promise<Result>): Promise<void> {
+    const root = swarm.template.botActor ? await sessions.get(swarm.id) : null;
     const rootHidden =
-      !!swarm.template.botActor && !sessionVisibleTo(swarm.template, (await sessions.get(swarm.id)) ?? {});
+      !!root && (await hiddenFromBotWork(ambientTenant(), swarm.template, root, { sessions, swarms: service }));
     for (const message of swarm.messages) {
       for (const [recipientId, notification] of Object.entries(message.notifications)) {
         if (notification.state !== "pending") continue;
@@ -665,7 +666,7 @@ export function createSwarmService(deps: {
   };
   const sweeper = createSweeper(sweep, 2_000, { label: "swarm-outbox", immediate: true });
 
-  return {
+  const service: SwarmService = {
     ...sweeper,
     sweep,
     async inspect(caller) {
@@ -1146,4 +1147,5 @@ export function createSwarmService(deps: {
       return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
     },
   };
+  return service;
 }
