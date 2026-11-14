@@ -464,6 +464,7 @@ test("a child sandbox whose first creation failed is created on a later turn sta
   const carol: Principal = { id: "carol", type: "internal", displayName: "Carol" };
   assert.equal((await rig.turn(child, carol).tools.execute("echo ok")).stdout.trim(), "ok");
   assert.equal((await rig.resources.get(childId)).state, "ready");
+  assert.equal((await rig.resources.get(childId)).createdBy, actor.id);
 });
 
 test("a computer a person creates with the sandbox tool is person-used even if its first open fails", async () => {
