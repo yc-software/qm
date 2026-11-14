@@ -222,7 +222,7 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
-import { approvalUnavailableNote, unavailableApprovalRefusal } from "./approval-requester.ts";
+import { BOT_REQUESTER_APPROVAL_NOTE, cannotApprove, unavailableApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -606,7 +606,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { spendLimit, refusal: spendRefusal } = await checkSpendLimit(tenant, spendLimits, deps, scopeId, audit);
       if (spendRefusal) return spendRefusal;
       const botRequester = input.botActor === true;
-      const approvalUnavailable = approvalUnavailableNote(input);
+      const noApprover = cannotApprove(input);
       const issueApproval = async (
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
@@ -729,7 +729,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
         const heldReason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
-        if (approvalUnavailable)
+        if (noApprover)
           return unavailableApprovalRefusal(audit, session.id, "security-screen", heldReason, botRequester);
         let approval: PendingApproval;
         try {
@@ -2376,7 +2376,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }),
                 }
               : {}),
-            ...(approvalUnavailable ? { approvalUnavailable } : {}),
+            ...(botRequester ? { approvalUnavailable: BOT_REQUESTER_APPROVAL_NOTE } : {}),
             toolApprovalGate: (tool: string, callKey?: string) => {
               if (callKey) return consumeApproval(callKey);
               return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
@@ -2605,6 +2605,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           approvalSummary: (summaryScope, command, reason, purpose) =>
             approvalSummary(tenant, summaryScope, command, reason, purpose),
           issueApproval,
+          ...(noApprover
+            ? {
+                refuseApproval: (command: string, reason: string) =>
+                  unavailableApprovalRefusal(audit, session.id, command, reason, botRequester),
+              }
+            : {}),
           withManagedRosterVersion,
         });
 
@@ -2623,7 +2629,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } catch (err) {
         if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
         if (err instanceof NeedsApproval) {
-          if (approvalUnavailable)
+          if (noApprover)
             return unavailableApprovalRefusal(audit, session.id, err.command, err.approvalReason, botRequester);
           const summary = await approvalSummary(tenant, scopeId, err.command, err.approvalReason);
           let approval: PendingApproval;

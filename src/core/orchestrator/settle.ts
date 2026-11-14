@@ -123,6 +123,7 @@ export async function selectTurnResult(turn: {
     requestId: string,
     fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
   ) => Promise<PendingApproval>;
+  refuseApproval?: (command: string, reason: string) => TurnResult;
   withManagedRosterVersion: <T>(work: () => Promise<T>) => Promise<T>;
 }): Promise<TurnResult> {
   const {
@@ -144,6 +145,7 @@ export async function selectTurnResult(turn: {
     emittedEntries,
     approvalSummary,
     issueApproval,
+    refuseApproval,
     withManagedRosterVersion,
   } = turn;
   let finalResult: TurnResult;
@@ -162,6 +164,8 @@ export async function selectTurnResult(turn: {
     finalResult = heldReply(true, false)!;
   } else if (replyOptional && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
     finalResult = { status: "silent", sessionId: session.id };
+  } else if (refuseApproval && result.pendingApprovals?.[0]) {
+    finalResult = refuseApproval(result.pendingApprovals[0].command, result.pendingApprovals[0].reason);
   } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
     const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
     const turnApprovals: Array<

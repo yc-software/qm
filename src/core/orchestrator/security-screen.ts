@@ -38,7 +38,7 @@ import { filterConnectorSkills, loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import type { Session } from "../../types.ts";
 import { SECURITY_TOOL_RESULT_QUARANTINE } from "../../audit/audit-log.ts";
-import { approvalUnavailableNote } from "../approval-requester.ts";
+import { cannotApprove } from "../approval-requester.ts";
 import {
   quarantineReleaseKey,
   toolLabelOf,
@@ -644,7 +644,7 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
         }),
       });
       if (
-        !approvalUnavailableNote(input) &&
+        !cannotApprove(input) &&
         !quarantineReleaseApprovals.some(
           (qa) =>
             qa.approvalKey === releaseKey &&

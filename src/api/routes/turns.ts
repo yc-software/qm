@@ -136,6 +136,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     spawned: _spawned,
     cronScript: _cronScript,
     infrequentCron: _infrequentCron,
+    noApprover: _noApprover,
     redeliveryKey: _redeliveryKey,
     ...safeBody
   } = body;

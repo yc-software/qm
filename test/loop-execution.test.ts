@@ -2,7 +2,6 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
-import { withCommandRules } from "./support/command-rules.ts";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -15,7 +14,7 @@ const GATED = "rm -rf ./ship-target && printf shipped";
 
 for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
-    const built = await withCommandRules(buildApp(testConfig()));
+    const built = buildApp(testConfig());
     const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
     await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
     const org = scopeId("org", "default-org");
@@ -56,7 +55,7 @@ for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
           assert.notEqual(req.addressed, true);
           if (stage === "ship" && checkResult === "gated") {
             shipThread = req.conversation.threadRef;
-            return built.app.turn({ ...req, text: `!run ${GATED}` });
+            return built.app.turn({ ...req, text: `!paused-approval ${GATED}` });
           }
           let command: string;
           if (stage === "intake")
