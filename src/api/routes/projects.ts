@@ -5,6 +5,10 @@ import { validProjectIcon, type ProjectIcon } from "../../projects/project-store
 
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
   if (!ctx.capability) return requested;
+  if (ctx.capability.botActor === true) {
+    sendJson(ctx.res, 403, { error: "forbidden", message: "bot work can't use a person's projects" });
+    return null;
+  }
   if (requested && requested !== ctx.capability.actorId) {
     sendJson(ctx.res, 404, { error: "not_found" });
     return null;
