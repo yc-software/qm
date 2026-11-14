@@ -68,7 +68,16 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     ]);
     return [...parents!, ...ownReplies.flat()];
   }
-  async function judgeAmbientContainer(
+  function judgeAmbientContainer(
+    surface: string,
+    container: string,
+    opts?: { reason?: "messages" | "scheduled" },
+  ): Promise<AmbientDecision> {
+    return deps.advisoryLock.withLock(`ambient-judge:${orgIdOf()}:${surface}:${container}`, () =>
+      judgeAmbientOnce(surface, container, opts),
+    );
+  }
+  async function judgeAmbientOnce(
     surface: string,
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
@@ -92,8 +101,16 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const advanceCursor = async (): Promise<void> => {
       if (deps.ambientCursors && rawDelta.length && rawLatestTs)
         await deps.ambientCursors
-          .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
-          .catch(() => undefined);
+          .mutateMany([
+            {
+              id: cursorKey,
+              apply: (current) =>
+                current && current.lastJudgedTs >= rawLatestTs
+                  ? current
+                  : { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() },
+            },
+          ])
+          .catch(reportFailureAs("ambient: advance cursor", undefined));
     };
     if (!delta.length && !scheduled) {
       await advanceCursor();
