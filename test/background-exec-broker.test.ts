@@ -294,11 +294,11 @@ test("reattach by FULL command key: a second start of the same command reattache
   const { broker, registry, starts, sandbox } = build();
   const first = await broker.start(handle, "npm test", "Run background tests");
   const second = await broker.start(handle, "npm test", "Run background tests");
-  assert.equal(starts.length, 1, "no second startProcess");
   assert.deepEqual([second.processId, second.reattached], [first.processId, true]);
   assert.equal((await registry.listByScope(SCOPE)).filter((r) => r.kind === "background").length, 1);
   const refused = { sandbox, registry, scopeId: SCOPE, assertComputerUsable: () => Promise.reject(new Error("no")) };
   await assert.rejects(createBackgroundBroker(refused).start(handle, "npm test", "Run background tests"), /no/);
+  assert.equal(starts.length, 1, "no second startProcess");
 });
 
 test("start does NOT reattach to a matching command whose process has already exited", async () => {
