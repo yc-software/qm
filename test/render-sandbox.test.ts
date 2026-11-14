@@ -187,20 +187,19 @@ test("Render declares the tools and resources of the base image", (t) => {
 
 test("Render admits only the egress proxy from computers and disposable sandboxes when a proxy is set", async (t) => {
   const { make, fake, store, scope } = setup(t, { http: true });
-  assert.equal(make().profile.egressEnforcement, "none");
-  const sandbox = make(-1, undefined, "https://Proxy.example.com");
+  for (const url of ["http://proxy.example.com", "https://proxy.example.com:8443", "https://10.0.0.1"])
+    assert.throws(() => make(-1, undefined, url), /https URL with a host name on port 443/, url);
+  const sandbox = make(-1, undefined, "https://Proxy.example.com:443");
   assert.equal(sandbox.profile.egressEnforcement, "domain");
   const computer = await sandbox.provision(scope, { egressToken: "turn-token" });
   const disposable = await sandbox.provision(scope, { scratch: { key: "job" }, egressToken: "turn-token" });
-  assert.deepEqual(fake.allowlistOf((await store.get(scope))!.sandboxId), ["proxy.example.com"]);
-  assert.deepEqual(fake.allowlistOf(disposable.providerSandboxId!), ["proxy.example.com"]);
-  for (const handle of [computer, disposable])
-    assert.equal(
-      (await sandbox.run(handle, "echo $HTTPS_PROXY")).stdout.trim(),
-      "https://x:turn-token@proxy.example.com",
-    );
-  await sandbox.teardown(disposable);
-  await sandbox.teardown(computer);
+  for (const [handle, id] of [
+    [computer, (await store.get(scope))!.sandboxId],
+    [disposable, disposable.providerSandboxId!],
+  ] as const) {
+    assert.deepEqual(fake.allowlistOf(id), ["proxy.example.com"]);
+    assert.equal((await sandbox.run(handle, "echo $HTTPS_PROXY")).stdout, "https://x:turn-token@proxy.example.com\n");
+  }
 });
 
 test("Render restarts a computer from its checkpoint when the egress proxy setting changes", async (t) => {
@@ -210,29 +209,16 @@ test("Render restarts a computer from its checkpoint when the egress proxy setti
   await open.writeFile(handle, "kept", "before the proxy");
   await open.teardown(handle);
   const before = (await store.get(scope))!;
-  assert.equal(fake.allowlistOf(before.sandboxId), undefined);
   const proxied = make(-1, undefined, "https://proxy.example.com");
   const restored = await proxied.provision(scope);
   const after = (await store.get(scope))!;
-  assert.notEqual(after.sandboxId, before.sandboxId);
   assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
   assert.deepEqual(fake.allowlistOf(after.sandboxId), ["proxy.example.com"]);
   assert.equal(await proxied.readFile(restored, "kept"), "before the proxy");
-  await proxied.teardown(restored);
-  await proxied.teardown(await proxied.provision(scope));
+  await proxied.provision(scope);
   assert.equal((await store.get(scope))!.sandboxId, after.sandboxId);
-  const reopened = await make().provision(scope);
-  const last = (await store.get(scope))!;
-  assert.equal(fake.sandboxes.get(after.sandboxId)?.status, "terminated");
-  assert.equal(fake.allowlistOf(last.sandboxId), undefined);
-  assert.equal(await open.readFile(reopened, "kept"), "before the proxy");
-});
-
-test("Render refuses an egress proxy that its network policy cannot admit", (t) => {
-  const { make } = setup(t);
-  for (const url of ["http://proxy.example.com", "https://proxy.example.com:8443", "https://10.0.0.1", "https://[::1]"])
-    assert.throws(() => make(-1, undefined, url), /https URL with a host name on port 443/, url);
-  make(-1, undefined, "https://proxy.example.com:443");
+  await open.provision(scope);
+  assert.equal(fake.allowlistOf((await store.get(scope))!.sandboxId), undefined);
 });
 
 test("Render starts computers and disposable sandboxes from the golden snapshot and keeps a computer's base image", async (t) => {

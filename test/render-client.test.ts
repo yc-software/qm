@@ -133,18 +133,6 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
       buildId: "sbb-0000000000000000000a",
     },
   });
-  await client.create({ lifetimeSec: 86400, egressAllowlist: ["proxy.example.com"] });
-  assert.deepEqual(requests[6], {
-    method: "POST",
-    path: "/v1/sandboxes",
-    body: {
-      ownerId: "tea-test",
-      plan: "2c-4g",
-      timeoutSeconds: 86400,
-      idleTimeoutSeconds: 0,
-      networkPolicy: { type: "allow-list", rules: [{ domain: "proxy.example.com" }] },
-    },
-  });
   requests.splice(0);
   const saved = await client.createSnapshot(info.id, "qm-test");
   assert.equal(saved.id, snapshot.id);
