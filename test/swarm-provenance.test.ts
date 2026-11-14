@@ -5,7 +5,7 @@ import { forkOfBotWork } from "../src/sessions/session-syscalls.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { SwarmCaller } from "../src/swarms/swarm-service.ts";
+import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
 import { errMessage } from "../src/util/errors.ts";
 
 const outcome = (work: Promise<unknown>) =>
@@ -49,12 +49,25 @@ test("a swarm worker started by a Slack bot's turn keeps the bot marker and bind
   await assert.rejects(f.service.binding(unmarked), /forged swarm provenance/);
 });
 
-test("a turn doing a bot's work starts a swarm whose workers do the bot's work", async () => {
+test("a turn doing a bot's work starts a swarm whose workers do the bot's work and mail a hidden root unless it is a fork", async () => {
   const f = await swarmFixture({ claims: { botActor: true } });
-  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
-  await f.service.sweep();
+  const runId = f.caller.kind === "agent" ? f.caller.claims.runId! : "";
+  await f.runs.markBotLimited(testTenant, runId);
+  const aborted: string[] = [];
+  const service = createSwarmService({ ...f.serviceOptions, signals: { send: async (id) => aborted.push(id) > 0 } });
+  const [worker] = await service.spawn(f.caller, { requestId: "initial", text: "work" });
+  await service.sweep();
   const caller = await f.workerCaller(worker!.id);
   assert.equal(caller.kind === "agent" && caller.claims.botActor, true);
+  await service.send(caller, { requestId: "report", audience: [f.root.id], text: "done" });
+  await service.sweep();
+  await f.sessions.updateForkProvenance(f.root.id, { forkedFrom: { sessionId: randomUUID() }, forkBoundarySeq: 1 });
+  await service.send(caller, { requestId: "fork-report", audience: [f.root.id], text: "done in the fork" });
+  await service.sweep();
+  const states = (await f.store.get(f.root.id))!.messages.slice(-2).map((m) => m.notifications[f.root.id]!.state);
+  assert.deepEqual(states, ["mailbox", "queued"]);
+  await service.notePersonUse({ swarmId: f.root.id });
+  assert.ok(aborted.includes(runId), "a person's use of the swarm's computers stops the turn that started it");
 });
 
 test("a fork of a worker in a swarm a Slack bot started does the bot's work", async () => {
@@ -68,6 +81,7 @@ test("a fork of a worker in a swarm a Slack bot started does the bot's work", as
     assert.equal(await forkOfBotWork(testTenant, session, { sessions: f.sessions }), true);
     await f.sessions.updateForkProvenance(fork.id, { forkedFrom: { sessionId: randomUUID() }, forkBoundarySeq: 1 });
     assert.equal(await forkOfBotWork(testTenant, await f.sessions.get(fork.id), { sessions: f.sessions }), true);
+    assert.equal(await f.service.botStartedWorker({ id: worker.id, threadRef: `swarm:${randomUUID()}:w` }), true);
   }
 });
 
