@@ -1,8 +1,11 @@
-import SwiftUI
-import UIKit
+import Foundation
 import cmark_gfm
 import cmark_gfm_extensions
 
+/// Puts the GitHub mark before links to github.com, as web does. MarkdownUI has no hook into
+/// its link nodes, so this parses with the same cmark-gfm setup MarkdownUI uses, puts an inline
+/// image before each GitHub link, and renders back to Markdown. `WorkspaceInlineImages` draws
+/// the image from the `GitHubLinkMark` asset, which carries the `.gitHub` theme's link colours.
 enum GitHubLinkMark {
   static let scheme = "qm-github-mark"
 
@@ -29,7 +32,10 @@ enum GitHubLinkMark {
     guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return nil }
     defer { cmark_parser_free(parser) }
     for name in ["autolink", "strikethrough", "tagfilter", "tasklist", "table"] {
-      guard let syntax = cmark_find_syntax_extension(name) else { return nil }
+      guard let syntax = cmark_find_syntax_extension(name) else {
+        Log.markdown.error("cmark has no \(name, privacy: .public) extension")
+        return nil
+      }
       cmark_parser_attach_syntax_extension(parser, syntax)
     }
     cmark_parser_feed(parser, markdown, markdown.utf8.count)
@@ -67,17 +73,5 @@ enum GitHubLinkMark {
       event = cmark_iter_next(iterator)
     }
     return links
-  }
-
-  static func image(dark: Bool, pointSize: CGFloat) -> Image {
-    guard let logo = UIImage(named: "Service-github") else { return Image(systemName: "link") }
-    let style = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
-    let color = QMTheme.markdownLinkColor.resolvedColor(with: style)
-    let size = CGSize(width: pointSize, height: pointSize)
-    let drawn = UIGraphicsImageRenderer(size: size).image { _ in
-      logo.withTintColor(color, renderingMode: .alwaysOriginal)
-        .draw(in: CGRect(origin: .zero, size: size))
-    }
-    return Image(uiImage: drawn.withBaselineOffset(fromBottom: pointSize * 0.125))
   }
 }

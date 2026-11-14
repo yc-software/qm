@@ -9,24 +9,16 @@ struct MessageMarkdown: View {
   var textColor: Color? = nil
   @State private var copiedCode: String?
   @State private var previewFile: DeliveredFile?
-  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     Markdown(GitHubLinkMark.decorate(text), baseURL: client.baseURL)
       .markdownImageProvider(WorkspaceMarkdownImages(client: client, files: files))
-      .markdownInlineImageProvider(
-        WorkspaceInlineImages(
-          client: client, files: files, dark: colorScheme == .dark,
-          pointSize: 16 * textScale)
-      )
+      .markdownInlineImageProvider(WorkspaceInlineImages(client: client, files: files))
       .id(files.map { "\($0.name ?? ""):\($0.artifactId ?? "")" }.sorted())
       .markdownTextStyle(\.text) {
         ForegroundColor(textColor ?? QMTheme.ink)
         BackgroundColor(.clear)
         FontSize(.em(textScale))
-      }
-      .markdownTextStyle(\.link) {
-        ForegroundColor(Color(uiColor: QMTheme.markdownLinkColor))
       }
       .markdownBlockStyle(\.codeBlock) { configuration in
         VStack(alignment: .leading, spacing: 0) {
