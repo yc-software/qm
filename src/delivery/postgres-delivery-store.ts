@@ -173,8 +173,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       id: "delivery/store/0014-creation-order",
       statements: [
         `SET LOCAL lock_timeout = '3s'`,
-        `SET LOCAL statement_timeout = 0`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS seq BIGSERIAL`,
+        `ALTER TABLE deliveries ADD COLUMN seq BIGINT NOT NULL DEFAULT 0`,
+        `CREATE SEQUENCE deliveries_seq_seq OWNED BY deliveries.seq`,
+        `UPDATE deliveries d SET seq = live.seq
+           FROM (SELECT tenant_id, id, nextval('deliveries_seq_seq') AS seq
+                   FROM (SELECT tenant_id, id FROM deliveries WHERE delivered_at IS NULL ORDER BY created_at, ctid) waiting) live
+          WHERE d.tenant_id = live.tenant_id AND d.id = live.id`,
+        `ALTER TABLE deliveries ALTER COLUMN seq SET DEFAULT nextval('deliveries_seq_seq')`,
         claimDeliveries(servingTenant, "seq"),
       ],
     },
