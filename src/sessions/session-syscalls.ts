@@ -193,7 +193,7 @@ const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 const HIDDEN_PARENT =
-  "your parent conversation is hidden from bot work because a person's turn ran there last; your completion still reaches it.";
+  "your parent conversation is hidden from bot work; finish and return your result, which still reaches it.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
 const LAST_SAID_SCAN = 40;

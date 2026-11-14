@@ -2333,6 +2333,20 @@ test("pg child parentage and spawn metadata survive reopening", { skip }, async 
   assert.equal((await reopened.get(child.id))?.parentSessionId, undefined);
 });
 
+test("pg spawn metadata that jsonb can't hold still saves", { skip }, async () => {
+  const store = createPostgresSessionStore(URL!);
+  const session = await store.getOrCreateByThread(`nul-${randomUUID()}`, "dm", scopeId("personal", randomUUID()));
+  const actor = { id: "tester\u0000\ud800", type: "internal" as const };
+  const meta = {
+    surface: "web",
+    botActor: true,
+    actor,
+    conversation: { kind: "dm" as const, threadRef: "t", audience: [actor] },
+  };
+  await store.setSpawnMeta(session.id, meta);
+  assert.deepEqual((await store.get(session.id))?.spawnMeta, meta);
+});
+
 test(
   "pg legacy completion wakeups remain discoverable after return and restart until withdrawn",
   { skip },

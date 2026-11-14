@@ -593,9 +593,14 @@ const HUMAN_PROMPT_INDEX: PgMigrationDefinition = {
 const BOT_WORK_COLUMN: PgMigrationDefinition = {
   id: "sessions/store/0064-bot-work",
   statements: [
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS bot_work BOOLEAN NOT NULL
-       GENERATED ALWAYS AS (CASE WHEN spawn_meta IS JSON OBJECT
-         THEN COALESCE(spawn_meta::jsonb -> 'botActor' = 'true'::jsonb, false) ELSE false END) STORED`,
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE OR REPLACE FUNCTION session_bot_work(spawn_meta TEXT) RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE AS $bot_work$
+BEGIN
+  RETURN COALESCE(spawn_meta::jsonb -> 'botActor' = 'true'::jsonb, false);
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RETURN false;
+END $bot_work$`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS bot_work BOOLEAN NOT NULL GENERATED ALWAYS AS (session_bot_work(spawn_meta)) STORED`,
   ],
 };
 
