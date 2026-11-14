@@ -88,7 +88,7 @@ export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
   layerToolFiles?: () => readonly LayerInstallFile[];
   store: DurableMap<StoredManagedAgentsSandbox>;
   snapshots?: HomeSnapshotStore;
-  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }, error?: unknown) => void;
 }
 
 export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): Sandbox {
@@ -106,8 +106,8 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
-    opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
+  const reportError = (category: string, code: string, message: string, scopeLabel?: string, error?: unknown): void => {
+    opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) }, error);
   };
 
   const homeSnapshots = opts.snapshots
@@ -545,7 +545,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
         try {
           restored = await client.rollback(stored.sessionId, checkpointId);
         } catch (e) {
-          reportError("agent_computer", "checkpoint_rollback_failed", errMessage(e), scopeId);
+          reportError("agent_computer", "checkpoint_rollback_failed", errMessage(e), scopeId, e);
           throw e;
         }
         await store.merge(scopeId, {
@@ -662,7 +662,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     } catch (error) {
       pauseFailed.add(handle.id);
       await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
-      reportError("sandbox_preservation", "pause_failed", errMessage(error), scope);
+      reportError("sandbox_preservation", "pause_failed", errMessage(error), scope, error);
       throw error;
     }
   }

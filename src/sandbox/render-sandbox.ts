@@ -89,7 +89,7 @@ export interface RenderSandboxOptions extends BlobStagingOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
-  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }, error?: unknown) => void;
 }
 
 export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
@@ -139,12 +139,15 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       }
     };
   const reportError = (code: string, error: unknown, scopeLabel?: string): void =>
-    opts.onError?.({
-      category: "sandbox_snapshot",
-      code,
-      message: errMessage(error),
-      ...(scopeLabel ? { scopeLabel } : {}),
-    });
+    opts.onError?.(
+      {
+        category: "sandbox_snapshot",
+        code,
+        message: errMessage(error),
+        ...(scopeLabel ? { scopeLabel } : {}),
+      },
+      error,
+    );
   const scopeFor = (name: string): string => {
     const scope = base.scopeFor(name);
     if (!scope) throw new Error(`Render sandbox scope is unknown: ${name}`);

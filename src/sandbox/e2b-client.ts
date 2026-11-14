@@ -1,5 +1,6 @@
 import type { ExecResult } from "./sandbox.ts";
 import { shq } from "../util/shell.ts";
+import { retryOperation } from "../util/async.ts";
 
 export interface E2bCommandResult {
   stdout: string;
@@ -53,6 +54,13 @@ export class E2bSandboxGoneError extends Error {
   constructor(sandboxId: string, detail: string) {
     super(`e2b sandbox ${sandboxId} is gone: ${detail}`);
     this.name = "E2bSandboxGoneError";
+  }
+}
+
+export class E2bSandboxBusyError extends Error {
+  constructor(sandboxId: string, cause: Error) {
+    super(`e2b sandbox ${sandboxId} could not be paused because its host is busy: ${cause.message}`, { cause });
+    this.name = "E2bSandboxBusyError";
   }
 }
 
@@ -259,8 +267,11 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       keepAlive: (ms) => extend(ms),
       async pause(): Promise<void> {
         try {
-          await sbx.pause({ keepMemory: true });
+          await retryOperation((signal) => sbx.pause({ keepMemory: true, signal }), "idempotent", {
+            statusOf: (err) => (err instanceof lib.ServiceBusyError ? err.statusCode : undefined),
+          });
         } catch (err) {
+          if (err instanceof lib.ServiceBusyError) throw new E2bSandboxBusyError(sbx.sandboxId, err);
           throw gone(err);
         }
       },
