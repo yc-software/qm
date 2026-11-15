@@ -68,6 +68,22 @@ test("local sandbox dry-run derives a deployment-scoped runnable image", async (
   }
 });
 
+test("docker up rejects an unpublished local sandbox before docker is required", async () => {
+  const dir = makeDeployment({ sandbox: { backend: "local" } });
+  const path = process.env.PATH;
+  process.env.PATH = "";
+  try {
+    await assert.rejects(dockerUp(loadConfigAt(join(dir, CONFIG_FILENAME)).config, dir), (err: Error) => {
+      assert.match(err.message, /pins no published sandbox base image[\s\S]*set sandbox\.image/);
+      assert.doesNotMatch(err.message, /docker not found|docker build --build-arg failed/);
+      return true;
+    });
+  } finally {
+    process.env.PATH = path ?? "";
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the deployment's sandbox/ skills + tools wire into the core via DEPLOYMENT_LAYER", async () => {
   const dir = makeDeployment({}, sandboxLayer);
   try {

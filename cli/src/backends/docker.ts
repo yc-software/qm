@@ -18,7 +18,7 @@ import {
   tailString,
   which,
 } from "../util.ts";
-import { manifestRef, sandboxBaseRef } from "../manifest.ts";
+import { isPlaceholderRef, manifestRef, sandboxBaseRef } from "../manifest.ts";
 import {
   brokerWiring,
   ordered,
@@ -90,6 +90,17 @@ const pgVolume = (ctx: DockerCtx): string => `${ctx.prefix}-pgdata`;
 const localSandboxImage = (config: QmConfig): string =>
   config.sandbox?.image ?? `${dockerPrefix(config).toLowerCase()}-sandbox-local:latest`;
 
+export function dockerConfigErrors(config: QmConfig): Array<{ clause: string; message: string }> {
+  if (!localSandboxActive(config) || config.sandbox?.image || !isPlaceholderRef(sandboxBaseRef())) return [];
+  return [
+    {
+      clause: "config.v1",
+      message:
+        "This qm build pins no published sandbox base image; set sandbox.image to a locally built runnable image. A published digest belongs in sandbox.baseImage, which the local backend does not accept",
+    },
+  ];
+}
+
 function localAgentSource(): Buffer {
   const source = new URL("../../templates/aws/microvm-agent/agent.mjs", import.meta.url);
   const packaged = new URL("../../../templates/aws/microvm-agent/agent.mjs", import.meta.url);
@@ -113,6 +124,8 @@ function builtFrom(image: string): string | undefined {
 function ensureLocalSandboxImage(config: QmConfig): string {
   const image = localSandboxImage(config);
   if (config.sandbox?.image) return image;
+  const error = dockerConfigErrors(config)[0];
+  if (error) throw new CliError(error.message, { clause: error.clause });
   const base = sandboxBaseRef();
   if (builtFrom(image) === base) return image;
   const dir = mkdtempSync(join(tmpdir(), "qm-local-sandbox-"));
@@ -649,7 +662,11 @@ export async function dockerUp(
   opts: { sandboxDir?: string; buildFrom?: boolean; buildFromPath?: string; envFile?: string; dryRun?: boolean } = {},
 ): Promise<void> {
   requireFrontDoorPort(config);
-  if (!opts.dryRun) requireDocker();
+  if (!opts.dryRun) {
+    const error = dockerConfigErrors(config)[0];
+    if (error) throw new CliError(error.message, { clause: error.clause });
+    requireDocker();
+  }
   const resolvedLocalImage = localSandboxActive(config) ? localSandboxImage(config) : undefined;
   const ctx = buildCtx(config, configDir, {
     sandboxDir: opts.sandboxDir,

@@ -27,6 +27,7 @@ import {
   awsDeploymentLayerTransport,
 } from "./aws.ts";
 import {
+  dockerConfigErrors,
   dockerDeploymentLayerTransport,
   dockerDoctor,
   dockerDown,
@@ -148,7 +149,7 @@ const docker: HostingProvider = {
     },
   }),
   coordinates: () => ({}),
-  validateConfig: () => [],
+  validateConfig: dockerConfigErrors,
 };
 
 const fly: HostingProvider = {
