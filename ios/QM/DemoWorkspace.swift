@@ -47,14 +47,13 @@ struct DemoState: Sendable {
   }
 
   private struct Entry: Encodable, Sendable {
-    struct Payload: Encodable, Sendable {
-      let text: String
-      var runId: String?
-    }
-    let type: String
+    struct Body: Encodable, Sendable {}
+    let kind: String
     let seq: Int
     let createdAt: Double
-    let payload: Payload
+    let text: String
+    var turnId: String?
+    let body = Body()
   }
 
   private struct Failure: Encodable {
@@ -70,7 +69,7 @@ struct DemoState: Sendable {
   private struct Sessions: Encodable { let sessions: [Conversation] }
   private struct Session: Encodable { let session: Conversation }
   private struct History: Encodable {
-    let entries: [Entry]
+    let items: [Entry]
     let session: Conversation
   }
   private struct Turn: Encodable {
@@ -156,8 +155,8 @@ struct DemoState: Sendable {
           threadRef: "web:\(DemoWorkspace.user):\(sample.id)", surface: "web", canContinue: true,
           title: sample.title, lastActivityAt: at, pinned: sample.pinned))
       entries[sample.id] = [
-        Entry(type: "user", seq: 1, createdAt: at - 60_000, payload: .init(text: sample.ask)),
-        Entry(type: "assistant", seq: 2, createdAt: at, payload: .init(text: sample.answer)),
+        Entry(kind: "UserMessage", seq: 1, createdAt: at - 60_000, text: sample.ask),
+        Entry(kind: "AgentMessage", seq: 2, createdAt: at, text: sample.answer),
       ]
     }
   }
@@ -210,7 +209,7 @@ struct DemoState: Sendable {
 
   private func history(_ id: String) -> Reply {
     guard let session = conversations.first(where: { $0.id == id }) else { return unavailable }
-    return Reply(History(entries: entries[id] ?? [], session: session))
+    return Reply(History(items: entries[id] ?? [], session: session))
   }
 
   private mutating func update(_ id: String, _ patch: [String: Any]) -> Reply {
@@ -243,10 +242,9 @@ struct DemoState: Sendable {
     let run = "demo-run-\(turns)"
     let next = (entries[session]?.last?.seq ?? 0) + 1
     entries[session, default: []] += [
-      Entry(type: "user", seq: next, createdAt: now, payload: .init(text: text, runId: run)),
+      Entry(kind: "UserMessage", seq: next, createdAt: now, text: text, turnId: run),
       Entry(
-        type: "assistant", seq: next + 1, createdAt: now,
-        payload: .init(text: Self.scriptedReply)),
+        kind: "AgentMessage", seq: next + 1, createdAt: now, text: Self.scriptedReply, turnId: run),
     ]
     conversations[index].lastActivityAt = now
     return Reply(Turn(runId: run, reply: Self.scriptedReply))
