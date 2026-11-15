@@ -260,6 +260,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return claimed.sort((a, b) => a.createdAt - b.createdAt);
     },
     undeliveredTenants: (type) => claimRows(pg, "undelivered_delivery_tenants", [type]),
+    async retryAfter(tenant, id, delayMs) {
+      await pg.forTenant(tenant).query(
+        `UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $3
+          WHERE tenant_id = $1 AND id = $2 AND delivered_at IS NULL AND expired_at IS NULL`,
+        [tenant.id, id, delayMs],
+      );
+    },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(
