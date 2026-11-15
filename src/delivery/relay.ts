@@ -6,6 +6,8 @@ import { type Tenant, withTenant } from "../tenants/context.ts";
 
 export type Send = (d: Delivery, tenant: Tenant) => Promise<{ refused: string } | void>;
 
+const RETRY_CAP_MS = 30 * 60_000;
+
 export function refusedStatus(status: number): boolean {
   return status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
 }
@@ -34,11 +36,19 @@ export function createDeliveryRelay(
   };
   const deliver = async (d: Delivery, tenant: Tenant): Promise<void> => {
     if (await held?.(d)) return;
-    const outcome = await send(d, tenant).catch((e: unknown) => {
-      reportFailure(`${type} delivery: not accepted; retrying once its claim lapses`, e, `delivery=${d.id}`);
-      return null;
-    });
-    if (outcome === null) return;
+    let outcome: { refused: string } | void;
+    try {
+      outcome = await send(d, tenant);
+    } catch (e) {
+      const delayMs = Math.min(Math.max(claimMs, Date.now() - d.createdAt), RETRY_CAP_MS);
+      reportFailure(
+        `${type} delivery: not accepted; retrying once its claim lapses`,
+        e,
+        `delivery=${d.id} retry_in=${Math.round(delayMs / 1000)}s`,
+      );
+      await deliveries.retryAfter(tenant, d.id, delayMs);
+      return;
+    }
     if (outcome) await fail(d.id, outcome.refused);
     else await deliveries.ack(d.id, Date.now());
     pass();
