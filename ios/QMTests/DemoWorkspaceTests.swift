@@ -112,6 +112,22 @@ final class DemoWorkspaceTests: XCTestCase {
     XCTAssertFalse(relaunched.conversations.contains { $0.localOnly == true })
   }
 
+  func testLeavingTheDemoKeepsDraftsWaitingForTheSavedWorkspace() async throws {
+    let model = model()
+    let account = "https://saved.example" + "alice"
+    let kept = Conversation(
+      id: "kept", scopeId: "personal:alice", threadRef: "web:alice:kept", surface: "web",
+      localOnly: true)
+    try DraftStore(account: account, thread: kept.threadRef).write(
+      .init(text: "Finish after signing back in", conversation: kept))
+    defer { DraftStore.removeAccount(account) }
+
+    await model.exploreDemo()
+    model.signOut()
+
+    XCTAssertEqual(DraftStore.conversations(account).map(\.id), ["kept"])
+  }
+
   func testTheDemoAddressCannotBeChosenAsAWorkspace() {
     XCTAssertNil(AppModel.workspaceURL("demo.qm.invalid"))
     XCTAssertNil(AppModel.workspaceURL("https://demo.qm.invalid"))
