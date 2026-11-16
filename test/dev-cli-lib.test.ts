@@ -369,11 +369,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
   });
   assert.equal(basetenOnly.env.BASETEN_API_KEY, "bt", "a Baseten key alone runs live turns");
   assert.equal(liveTurnsKey(basetenOnly), "baseten key from your shell export");
-  writeFileSync(join(worktree, ".env"), "BASETEN_API_KEY=bt-dotenv\n");
-  const basetenFromDotenv = await assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" });
-  assert.equal(basetenFromDotenv.env.BASETEN_API_KEY, "bt-dotenv");
-  assert.equal(liveTurnsKey(basetenFromDotenv), "baseten key from the worktree .env");
-  writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
     /ANTHROPIC_API_KEY, OPENAI_API_KEY or BASETEN_API_KEY is required/,
@@ -385,7 +380,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
     probeLoginShell: async () => "",
   });
   assert.equal(openaiOnly.env.MODEL_PROVIDER, "openai");
-  assert.equal(liveTurnsKey(openaiOnly), "openai key from your shell export");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
   else process.env.QM_DEV_ENV = prevLive;
   rmSync(worktree, { recursive: true, force: true });

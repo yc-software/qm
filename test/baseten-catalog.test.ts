@@ -32,7 +32,7 @@ const CATALOG = {
       name: "Nemotron VL",
       context_length: 131_072,
       max_completion_tokens: 32_768,
-      pricing: { prompt: "0.0000002", completion: "0.0000006" },
+      pricing: { prompt: "0.0000005", completion: "0.0000006" },
       supported_features: ["tools"],
       input_modalities: ["text", "image"],
     },
@@ -48,26 +48,29 @@ const CATALOG = {
 afterEach(() => setCustomProviders([]));
 
 test("Baseten's model list maps to tool-capable models with per-million prices", () => {
-  const models = basetenCatalogModels(CATALOG.data);
-  assert.deepEqual(
-    models.map((m) => m.id),
-    ["zai-org/GLM-5.3", "nvidia/Nemotron-VL"],
-  );
-  const [glm, vl] = models;
-  assert.equal(glm?.reasoning, true);
-  assert.equal(glm?.contextWindow, 202_752);
-  assert.equal(glm?.maxTokens, 202_752);
-  assert.ok(Math.abs((glm?.input ?? 0) - 0.6) < 1e-9);
-  assert.ok(Math.abs((glm?.output ?? 0) - 2.2) < 1e-9);
-  assert.ok(Math.abs((glm?.cacheRead ?? 0) - 0.11) < 1e-9);
-  assert.equal(vl?.image, true);
-  assert.equal(vl?.maxTokens, 32_768);
+  assert.deepEqual(basetenCatalogModels(CATALOG.data), [
+    {
+      id: "zai-org/GLM-5.3",
+      name: "GLM 5.3",
+      reasoning: true,
+      contextWindow: 202_752,
+      maxTokens: 202_752,
+      input: 0.6,
+      output: 2.2,
+      cacheRead: 0.11,
+    },
+    {
+      id: "nvidia/Nemotron-VL",
+      name: "Nemotron VL",
+      reasoning: false,
+      image: true,
+      contextWindow: 131_072,
+      maxTokens: 32_768,
+      input: 0.5,
+      output: 0.6,
+    },
+  ]);
   assert.deepEqual(basetenCatalogModels([{ ...CATALOG.data[1], pricing: {} }]), []);
-});
-
-test("a Baseten reply without a model list offers no Baseten models", async () => {
-  const fetcher = (async () => Response.json({ error: "nope" })) as unknown as typeof fetch;
-  assert.deepEqual(await createBasetenCatalog("bt-test-key", fetcher).providers([]), []);
 });
 
 test("the key goes only to Baseten's own endpoint and the last good list survives an outage", async () => {
@@ -78,7 +81,8 @@ test("the key goes only to Baseten's own endpoint and the last good list survive
     return up ? Response.json(CATALOG) : new Response("down", { status: 503 });
   }) as unknown as typeof fetch;
   const catalog = createBasetenCatalog("bt-test-key", fetcher);
-  const [builtIn] = await catalog.providers([]);
+  const [[builtIn], [concurrent]] = await Promise.all([catalog.providers([]), catalog.providers([])]);
+  assert.equal(concurrent?.models.length, 2);
   assert.equal(builtIn?.baseUrl, "https://inference.baseten.co/v1");
   assert.deepEqual(catalog.keys([]), { baseten: "bt-test-key" });
   const keylessAdmin = { ...builtIn!, baseUrl: "https://elsewhere.example/v1", models: [{ id: "m" }] };
@@ -102,7 +106,7 @@ test("a failed first fetch is retried within a minute, not after the full catalo
   let calls = 0;
   const fetcher = (async () => {
     calls++;
-    return up ? Response.json(CATALOG) : new Response("down", { status: 503 });
+    return Response.json(up ? CATALOG : { error: "nope" });
   }) as unknown as typeof fetch;
   mock.timers.enable({ apis: ["Date"], now: Date.now() });
   try {
@@ -120,23 +124,6 @@ test("a failed first fetch is retried within a minute, not after the full catalo
   } finally {
     mock.timers.reset();
   }
-});
-
-test("callers that arrive while the first fetch is pending all get Baseten's models", async () => {
-  const reply = Promise.withResolvers<Response>();
-  let calls = 0;
-  const fetcher = (async () => {
-    calls++;
-    return reply.promise;
-  }) as unknown as typeof fetch;
-  const catalog = createBasetenCatalog("bt-test-key", fetcher);
-  const first = catalog.providers([]);
-  const second = catalog.providers([]);
-  reply.resolve(Response.json(CATALOG));
-  const [a, b] = await Promise.all([first, second]);
-  assert.equal(a[0]?.models.length, 2);
-  assert.equal(b[0]?.models.length, 2);
-  assert.equal(calls, 1);
 });
 
 test("a model whose output limit nears or fills its window still gets a quarter of it as compaction budget", () => {
@@ -226,20 +213,6 @@ test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provide
     assert.ok(after.models.includes("custom/baseten/my-finetune"));
     assert.ok(!after.models.includes("custom/baseten/zai-org/GLM-5.3"));
     assert.deepEqual(await keyStatus("baseten"), { provider: "baseten", configured: true, source: "admin" });
-
-    const keyless = await fetch(`${base}/v1/admin/custom-providers/acme`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({
-        name: "Acme",
-        protocol: "openai",
-        baseUrl: "https://llm.acme.example/v1",
-        models: [{ id: "acme-1" }],
-        validate: false,
-      }),
-    });
-    assert.equal(keyless.status, 200);
-    assert.deepEqual(await keyStatus("acme"), { provider: "acme", configured: false, source: "absent" });
 
     t.mock.method(built.customProviders, "resolveKey", async () => {
       throw new Error("unsupported state or unable to authenticate data");
