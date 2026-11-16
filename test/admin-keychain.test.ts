@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -89,7 +90,7 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
 
     const denied = await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "user-uma@default-org" } });
     assert.equal(denied.status, 403);
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "keychain.read"));
+    assert.ok((await s.built.auditLog.events(testTenant)).some((e) => e.action === "keychain.read"));
   } finally {
     await s.close();
   }

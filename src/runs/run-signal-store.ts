@@ -1,5 +1,6 @@
 import type { ClientToolResult, StopScope, TurnRequest } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 export type RunSignalKind = "abort" | "steer" | "client_result";
 
@@ -23,7 +24,7 @@ export interface RunSignalStore {
   acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
-  pendingRunIds(): Promise<string[]>;
+  pendingRuns(): Promise<ClaimedRow[]>;
   prune(olderThanMs: number): Promise<void>;
   onSignal(runId: string, cb: () => void): () => void;
   close?(): Promise<void>;
@@ -78,10 +79,13 @@ export function waitForClientResult(
       }
     };
     const timer = setTimeout(() => finish("timeout"), opts.timeoutMs);
-    const unsubscribe = signals.onSignal(runId, () => void check());
+    const checkInBackground = (): void => {
+      check().catch(swallowAs("client result check", undefined));
+    };
+    const unsubscribe = signals.onSignal(runId, checkInBackground);
     if (opts.signal?.aborted) return finish("cancelled");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    void check();
+    checkInBackground();
   });
 }
 
@@ -158,6 +162,7 @@ export function startSignalPoll(
       });
   };
   const unsubscribe = signals.onSignal(runId, drain);
+  void deliverStop().catch((e: unknown) => opts?.onError?.(e));
   const timer = setInterval(drain, opts?.intervalMs ?? SIGNAL_POLL_MS);
   timer.unref?.();
   return async () => {
@@ -170,5 +175,6 @@ export function startSignalPoll(
       await current;
       if (!draining && inFlight === current) break;
     }
+    await Promise.allSettled([stopCheck]);
   };
 }

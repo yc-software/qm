@@ -4,6 +4,7 @@ import {
   MemoryFactsMissing,
   captureProvenance,
   factCandidate,
+  fromOtherSession,
   factLine,
   mergeProvenance,
   normalizeClaim,
@@ -86,10 +87,16 @@ export interface MemoryService {
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
-export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): MemoryCandidate[] {
+export function queryFacts(
+  facts: readonly MemoryFact[],
+  q: string,
+  limit: number,
+  sessionId?: string,
+): MemoryCandidate[] {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return facts
+    .filter((fact) => fromOtherSession(fact, sessionId))
     .filter((fact) => terms.every((term) => fact.text.toLowerCase().includes(term)))
     .slice(0, limit)
     .map((fact) => ({ ...factCandidate(fact), text: factLine(fact) }));
@@ -173,6 +180,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
             text,
             ...provenance,
             ...(by?.actorId ? { author: by.actorId } : {}),
+            ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
             createdAt: at,
             updatedAt: at,
           };
@@ -184,8 +192,8 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       });
     },
 
-    async query(scopeId, q, limit = 20) {
-      return queryFacts(await store.list(scopeId), q, limit);
+    async query(scopeId, q, limit = 20, context) {
+      return queryFacts(await store.list(scopeId), q, limit, context?.sessionId);
     },
 
     async read(scopeId) {

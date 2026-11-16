@@ -39,6 +39,9 @@ import {
   resolveModel,
 } from "./pi-models.ts";
 import { providerTurnError } from "./provider-error.ts";
+import { PrivateNetworkAddressError, publicFetch } from "../util/network.ts";
+import { errMessage } from "../util/errors.ts";
+import { perTenant } from "../tenants/cache.ts";
 
 export function piUsageToCallUsage(
   u: Partial<Usage> | undefined,
@@ -82,9 +85,8 @@ function servedTierCard(
       ? ({ ...base, cost: scaleCost(base.cost, getServiceTierCostMultiplier(base, servedTier)) } as Model<Api>)
       : undefined;
   }
-  return fast && !servedTier
-    ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>)
-    : undefined;
+  const servedFast = model.api === "anthropic-messages" && servedTier ? servedTier === "fast" : fast && !servedTier;
+  return servedFast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : undefined;
 }
 
 export interface ProviderKeys {
@@ -94,10 +96,11 @@ export interface ProviderKeys {
   [provider: string]: string | undefined;
 }
 
-let cachedCustomModels: { version: number; path: string | null } | null = null;
+const customModelFiles = perTenant<{ cached?: { version: string; path: string | null } }>(() => ({}));
 function customModelsPath(): string | null {
-  const version = customProvidersVersion() + gatewayModelsVersion();
-  if (cachedCustomModels?.version === version) return cachedCustomModels.path;
+  const files = customModelFiles();
+  const version = `${customProvidersVersion()}:${gatewayModelsVersion()}`;
+  if (files.cached?.version === version) return files.cached.path;
   const providers = { ...customModelsJson()?.providers, ...gatewayModelsJson() };
   const custom = Object.keys(providers).length ? { providers } : undefined;
   let path: string | null = null;
@@ -105,7 +108,7 @@ function customModelsPath(): string | null {
     path = join(mkdtempSync(join(tmpdir(), "pi-custom-models-")), "models.json");
     writeFileSync(path, JSON.stringify(custom));
   }
-  cachedCustomModels = { version, path };
+  files.cached = { version, path };
   return path;
 }
 
@@ -155,8 +158,21 @@ export async function buildModelRuntime(
       return getAuth(model, overrides);
     }) as typeof runtime.getAuth;
   }
-  const retained = <T extends object | undefined>(options: T): T =>
-    cacheRetention ? ({ ...options, cacheRetention } as T) : options;
+  const thenPayload =
+    (options: Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined, model: Model<Api>, step: PayloadStep) =>
+    async (payload: unknown) => {
+      const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
+      return step(transformed === undefined ? payload : transformed);
+    };
+  const retained = <T extends ModelsSimpleStreamOptions | undefined>(options: T): T =>
+    cacheRetention
+      ? ({
+          ...options,
+          cacheRetention,
+          onPayload: (payload: unknown, model: Model<Api>) =>
+            thenPayload(options, model, (body) => shortConversationCache(body, model.api))(payload),
+        } as T)
+      : options;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(
     options: T,
     model: Model<Api>,
@@ -164,14 +180,12 @@ export async function buildModelRuntime(
   ): T =>
     ({
       ...options,
-      onPayload: async (payload: unknown) => {
-        const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-        const body = transformed === undefined ? payload : transformed;
+      onPayload: thenPayload(options, model, async (body) => {
         if (!body || typeof body !== "object" || Array.isArray(body)) {
           throw new Error("model request payload must be an object");
         }
         return { ...body, ...modelRequestOverrides(model.id), model: await target() };
-      },
+      }),
     }) as T;
   const route = <T extends ModelsSimpleStreamOptions | undefined>(
     model: Model<Api>,
@@ -186,12 +200,20 @@ export async function buildModelRuntime(
           : (modelRequestOverrides(model.id)?.model ?? custom?.upstreamId ?? model.id);
       const unregistered = !custom && hasCustomModelPrefix(model.id);
       const candidate = withRequestHeaders(model, true, false, apiKeys[String(model.provider)]);
+      const base = retained(options);
       const passthrough = {
-        ...retained(options),
-        onPayload: async (payload: unknown) => {
-          const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-          return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
-        },
+        ...base,
+        ...(hasCustomModelPrefix(model.id)
+          ? {
+              fetch: (input: string | URL, init?: RequestInit) =>
+                publicFetch(input, init).catch((error: unknown) => {
+                  if (error instanceof PrivateNetworkAddressError)
+                    console.error(`[model] custom provider ${String(model.provider)}: ${errMessage(error)}`);
+                  throw error;
+                }),
+            }
+          : {}),
+        onPayload: thenPayload(base, model, (body) => applyThinkingBinding(body, candidate)),
       } as T;
       return {
         model: candidate,
@@ -317,6 +339,19 @@ export function applyThinkingBinding<T>(
   if (thinking?.type === "adaptive" || thinking?.type === "enabled") {
     (payload as Record<string, unknown>).thinking = { ...thinking, block_binding: THINKING_BINDING };
   }
+  return payload;
+}
+
+type PayloadStep = (payload: unknown) => unknown;
+
+function shortConversationCache(payload: unknown, api: Api): unknown {
+  const messages = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages;
+  const breakpoint = (api === "anthropic-messages" && Array.isArray(messages) ? messages : [])
+    .flatMap((message) =>
+      Array.isArray(message?.content) ? (message.content as Array<{ cache_control?: object }>) : [],
+    )
+    .findLast((block) => block?.cache_control);
+  if (breakpoint) breakpoint.cache_control = { type: "ephemeral" };
   return payload;
 }
 

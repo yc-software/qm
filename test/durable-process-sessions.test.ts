@@ -17,12 +17,14 @@ import type { Conversation, Principal } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { settle } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -121,9 +123,10 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
     acl,
   });
   return createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
+    config,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
@@ -142,7 +145,7 @@ async function memoryScope(): Promise<string> {
     testConfigStore(ORG),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
-  return (await resolution.resolve(conv, actor)).writableScopeId;
+  return (await resolution.resolve(tenant, conv, actor, false, false)).writableScopeId;
 }
 
 const turn = (text: string): OrchestratorInput => ({

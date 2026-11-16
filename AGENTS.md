@@ -40,16 +40,53 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
   exact commit that will land, reusing the PR's run when `main` has not moved, and
   `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
+- **Check the plan against the Wall of shame before writing code.** Before building,
+  hold what you plan to add against each lens in the
+  [Wall of shame](./docs/SPEC.md#wall-of-shame) below and change the plan where it would
+  draw a finding. Changing the plan is free; the same finding at review costs a rewrite. The spec holds each lens's full text and examples.
+  - **Overengineering:** a subsystem, layer, flag, hook or option the change does not
+    need. Prefer deleting; net-negative lines are rewarded.
+  - **Band-aid fixes:** hiding a symptom with a special case, a string match or one more
+    branch instead of fixing the cause.
+  - **Duplication:** a second implementation or source of truth for something that
+    already has an owner.
+  - **Hand-rolling:** reimplementing what an SDK, library or supported API provides.
+  - **Non-durability:** state the system relies on kept in process memory, not Postgres.
+  - **Config-matrix expansion:** new env vars, settings or schema, and implicit modes
+    picked by conditionals, text matching or flags.
+  - **Historylessness:** shims, dual paths or special handling for old data shapes
+    instead of one migration.
+  - **Provider drift:** sandbox providers giving the agent different machines.
+  - **God files:** one file or module taking on unrelated responsibilities.
+  - **Mismatched UI:** interface that disagrees with the product around it instead of
+    reusing its components.
+  - **Over-indexing on YC:** architecture bent around YC's own usage.
+  - **Regex:** reaching for regular expressions.
+  - **YC info leaking into public qm:** organization-specific names, details or
+    references in the public repository.
+  - **Discarded error evidence:** replacing or swallowing a failure so it cannot be
+    diagnosed.
+  - **Arbitrary limits:** a cap, timeout or retry budget no real constraint requires.
+  - **Explaining-away UI:** copy that justifies the UI not doing what the person asked.
+  - **Category gate without census:** gating on a category without listing everything
+    that falls into it.
+  - **Over-testing:** net test lines above the source lines added; CI counts it.
+  - **Prod-like QA:** a behavior change not exercised on the real system and the
+    production path before merge.
+  - **Performance:** unnecessary, repeated or serialized work, N+1 queries and
+    unbounded reads.
+  - **Token performance:** anything added to the system prompt or per-turn context that
+    does not earn its place.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
   not, keeping any lens it is unsure about. Lenses marked _always reviewed_ in the spec
   skip triage and always get a reviewer. Then dispatch a separate fresh-context
-  subagent or independent reviewer for each relevant lens. Only
-  Honorable mentions may share one combined reviewer. Launch reviews asynchronously
+  subagent or independent reviewer for each relevant lens. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
-  Each reviewer reads their lens and examples, examines the diff and affected paths,
+  Give each reviewer the raw evidence (diff, commands, logs, provider config), never the
+  author's summary of it. Each reviewer reads their lens and examples, examines the diff and affected paths,
   and returns **accept** or **request changes**, a **score out of 100** (higher is
   better), and **1–2 sentences** explaining their assessment. Cite concrete findings
   and state the smallest correction needed; explain when a lens has no applicable
@@ -60,10 +97,15 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every relevant lens must have accepted
-  and all requested changes must be resolved. The `Wall of shame review` CI check fails
-  until the description's report covers every lens for the PR head: relevant lenses with
-  an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
-  its one-line reason as the assessment.
+  and all requested changes must be resolved. Only a human maintainer can waive a lens, for
+  one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
+  assessment as `Waived by <name>:` followed by the objection that was waived. Never
+  write a waiver the maintainer did not give, and never record one as Accept. The
+  `Wall of shame review` CI check fails until the description's report covers every lens
+  for the PR head: relevant lenses with an Accept or Waived verdict, and the rest as
+  `Not relevant` with the triage model as reviewer and its one-line reason as the
+  assessment. Lenses marked _checked by CI_ are computed by that check from the diff: skip
+  them in triage and review, and give them a row only to record a waiver.
 - **Disclose configuration changes in the PR description.** Name added, removed,
   or changed settings, flags, modes, and providers, including defaults, precedence,
   and supported combinations. Explain why; keep this proportional to the change.
@@ -86,6 +128,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   on the old code through the real path and assert the correct behavior, not the inverse
   of the specific fix. Don't write checks that can't fail — a fixture compared against
   itself, a job that always reports success. When a feature is removed, delete its tests.
+  CI enforces the spec's Over-testing limit on test lines per PR; remove or reshape
+  existing tests to stay within it.
 - **Verify non-trivial behavior changes in a live dev instance before opening a PR.**
   When a change is substantial enough that unit tests alone won't prove it works
   end-to-end — new or changed agent behavior, or anything touching the Slack/web
@@ -105,7 +149,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   in a temporary directory outside the checkout or an ignored local output directory,
   and attach them to the PR or host them externally. Do not bundle review screenshots
   into the app. Only actual product assets, such as icons and instructional media,
-  belong in the app bundle.
+  belong in the app bundle. `.gitignore` ignores image files and CI fails when a tracked
+  file is ignored; a product asset needs its own `!path` line there.
 - **Demo every front-end change in the PR.** Anything an operator or user sees
   rendered — admin/web/portal UI, Slack surfaces, emails — ships with a way for a
   reviewer to see the result without booting it. Prefer a link to a live demo app

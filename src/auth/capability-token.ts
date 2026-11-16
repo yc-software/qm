@@ -1,12 +1,15 @@
 import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
+import { boundTenant, isTenantId } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
+import { isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
-export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
+export const APP_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
 const DEFAULT_SANDBOX_CAPABILITY_TTL_HOURS = 48;
 
 export function parseSandboxCapabilityTtlMs(value: string | undefined): number {
@@ -39,9 +42,30 @@ interface BlobGrant {
   id?: string;
 }
 
+export async function botWorkInPersonsName(
+  users: Pick<UserStore, "resolve"> | undefined,
+  capability: Pick<CapabilityClaims, "actorId" | "botActor">,
+): Promise<boolean> {
+  return (
+    capability.botActor === true &&
+    (await users?.resolve([capability.actorId]))?.get(capability.actorId)?.kind === "person"
+  );
+}
+
+export async function personOrOwningBot(
+  caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+  owns: () => Promise<boolean>,
+  record?: { botActor?: boolean } | null,
+): Promise<boolean> {
+  return (
+    caller.botActor !== true || (!isSystemActor(caller.actorId) && (!record || record.botActor === true) && owns())
+  );
+}
+
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
+  tenant?: string;
   externalSlack?: true;
   actorId: string;
   browserModel?: string;
@@ -74,9 +98,9 @@ export interface CapabilityClaims {
   liveAuthor?: boolean;
   actAsActor?: boolean;
   triggered?: boolean;
-  grants?: string[];
   threadRef?: string;
   surface?: string;
+  liveReplies?: boolean;
   exp: number;
 }
 
@@ -89,7 +113,8 @@ export async function mintCapabilityToken(
   secret: string,
   compressionEnabled = false,
 ): Promise<string> {
-  const value = { orgId: configOrgId(), ...claims };
+  const tenant = boundTenant();
+  const value = { orgId: configOrgId(), ...claims, ...(tenant ? { tenant } : {}) };
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(
@@ -115,7 +140,7 @@ async function readCapabilityClaims(token: string, secret: string | string[]): P
 
 export function isValidCapabilityTimezone(timezone: unknown): timezone is string {
   if (typeof timezone !== "string") return false;
-  if (timezone.length === 0 || timezone.length > 64 || timezone.trim() !== timezone) return false;
+  if (timezone.length === 0 || timezone.trim() !== timezone) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
     return true;
@@ -132,6 +157,7 @@ export async function verifyCapabilityToken(
   const claims = await readCapabilityClaims(token, secret);
   if (
     !claims ||
+    (claims.tenant !== undefined && !isTenantId(claims.tenant)) ||
     typeof claims.actorId !== "string" ||
     typeof claims.scopeId !== "string" ||
     typeof claims.exp !== "number"
@@ -151,14 +177,10 @@ export async function verifyCapabilityToken(
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
   if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
-  if (
-    claims.grants !== undefined &&
-    (!Array.isArray(claims.grants) || !claims.grants.every((g) => typeof g === "string"))
-  )
-    return null;
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
+  if (claims.liveReplies !== undefined && typeof claims.liveReplies !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;

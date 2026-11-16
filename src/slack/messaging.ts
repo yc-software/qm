@@ -1,13 +1,13 @@
 import { extractPrivateContinuation } from "./external-access.ts";
 import {
   type ReactionDirective,
-  MAX_REACTIONS_PER_TURN,
   SLACK_TEXT_LIMIT,
   applyReactions,
   botIdentityArgs,
   extractReactions,
   stripReactionDirectives,
 } from "./lib.ts";
+import { withinReactionBudget } from "../surfaces/reactions.ts";
 
 import type { SlackConversationKind } from "./message-gating.ts";
 export type { SlackConversationKind } from "./message-gating.ts";
@@ -32,9 +32,6 @@ export async function updateSlackMessage(
   return true;
 }
 
-export const HANDOFF_INSTRUCTION =
-  "When work needs another person's own logins, files or memory, follow the `hand-off` skill.";
-
 export function cleanAgentReplyForSlack(text: string): { text: string; reactions: ReactionDirective[] } {
   const extracted = extractReactions(text);
   return { text: extractPrivateContinuation(extracted.text).text, reactions: extracted.reactions };
@@ -50,13 +47,9 @@ export async function applyAndLogReactions(
   defaultTs: string | undefined,
   directives: readonly ReactionDirective[],
 ): Promise<void> {
-  let budget = MAX_REACTIONS_PER_TURN;
-  for (const d of directives) {
-    if (budget <= 0) break;
-    const timestamp = d.target ?? defaultTs;
-    if (!d.names.length || !timestamp) continue;
-    const { added, failed } = await applyReactions(client, channel, timestamp, d.names.slice(0, budget));
-    budget -= added.length + failed.length;
+  for (const d of withinReactionBudget(directives.filter((r) => r.target ?? defaultTs))) {
+    const timestamp = (d.target ?? defaultTs)!;
+    const { failed } = await applyReactions(client, channel, timestamp, d.names);
     if (failed.length) {
       console.error(
         `[slack-plugin] couldn't add reaction(s): ${failed.join(", ")} on ${timestamp} (check the reactions:write scope / message ts)`,

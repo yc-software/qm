@@ -101,13 +101,14 @@ export interface AgentTurnInput {
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
+  botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
   surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
-  pollFire?: boolean;
+  replyOptional?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
   history: Item[];
@@ -118,6 +119,7 @@ export interface AgentTurnInput {
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
+  approvalUnavailable?: string;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   approvedToolCalls?: ApprovedToolCall[];
@@ -178,7 +180,7 @@ export interface AgentTurnResult {
   cacheUsage?: { cacheRead: number; cacheWrite: number; uncachedInput: number };
 }
 
-export interface DetectInput {
+export interface DetectInput extends SessionRoute {
   session: Session;
   message: string;
   recentContext: string;
@@ -197,7 +199,7 @@ export interface DetectResult {
 }
 
 export type SessionRoute = Partial<
-  Pick<AgentTurnInput, "scopeLabel" | "runtime" | "runtimePurpose" | "runtimePinned" | "providerKeys">
+  Pick<AgentTurnInput, "scopeLabel" | "runtime" | "runtimePurpose" | "runtimePinned" | "providerKeys" | "session">
 >;
 
 export interface CompactInput extends SessionRoute {
@@ -209,7 +211,7 @@ export interface CompactInput extends SessionRoute {
 export interface ModelUtilities {
   shouldRespond?(input: DetectInput): Promise<DetectResult>;
   compactHistory?(input: CompactInput): Promise<string>;
-  contextTokenBudget?(model?: string): number | undefined;
+  contextTokenBudget?(model?: string, cap?: number): number | undefined;
   oneShot?(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined>;
   judge?(
     systemPrompt: string,
@@ -219,8 +221,9 @@ export interface ModelUtilities {
   ): Promise<string | undefined>;
   screenSecurity?(input: ScreenSecurityInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
-  generateTitle?(transcript: string, opts?: { descriptive?: boolean }): Promise<string | undefined>;
+  generateTitle?(transcript: string): Promise<string | undefined>;
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
+  suggestNextPrompt?(transcript: string): Promise<string | undefined>;
 }
 
 export interface Agent extends ModelUtilities {

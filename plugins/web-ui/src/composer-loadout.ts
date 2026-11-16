@@ -8,8 +8,6 @@ export interface LoadoutEntry {
   fast: boolean;
 }
 
-export const LOADOUT_CAP = 8;
-
 const ULTRAFAST_BASE_MODELS = new Map([
   ["gpt-6-astra-ultrafast", "gpt-6-astra"],
   ["gpt-6.1-sol-ultrafast", "gpt-6.1-sol"],
@@ -55,17 +53,16 @@ export function parseLoadout(raw: string | null): LoadoutEntry[] {
         continue;
       entries.push({ value: entry.value, effort: entry.effort, fast: entry.fast === true });
     }
-    return uniqueLoadout(entries).slice(0, LOADOUT_CAP);
+    return uniqueLoadout(entries);
   } catch {
     return [];
   }
 }
 
 export function upsertLoadout(entries: readonly LoadoutEntry[], entry: LoadoutEntry): LoadoutEntry[] {
-  const next = uniqueLoadout(entries).slice(0, LOADOUT_CAP);
+  const next = uniqueLoadout(entries);
   const index = next.findIndex(({ value }) => presetModelId(value) === presetModelId(entry.value));
   if (index >= 0) next[index] = { ...entry };
-  else if (next.length === LOADOUT_CAP) next[LOADOUT_CAP - 1] = { ...entry };
   else next.push({ ...entry });
   return next;
 }
@@ -77,7 +74,7 @@ export function reconcileLoadout(
 ): LoadoutEntry[] {
   const available = new Set(options.map(({ value }) => value));
   const next = uniqueLoadout(entries).filter((entry) => available.has(entry.value));
-  return available.has(active.value) ? upsertLoadout(next, active) : next.slice(0, LOADOUT_CAP);
+  return available.has(active.value) ? upsertLoadout(next, active) : next;
 }
 
 export function effortLevelsForModel(model?: Model<Api>): Array<{ value: EffortLevel; label: string }> {
@@ -118,7 +115,7 @@ export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
 
 export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY): void {
   try {
-    localStorage.setItem(key, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
+    localStorage.setItem(key, JSON.stringify(entries));
   } catch {
     return;
   }

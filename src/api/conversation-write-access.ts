@@ -1,6 +1,7 @@
 import type { Principal, TurnRequest } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
+import { ownsWebThread } from "../directory/person.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
@@ -71,7 +72,7 @@ export async function conversationWriteAccess(
     if (existing.scopeId !== claimed) return { ok: false, reason: "that conversation lives in a different context" };
     if (!(await h.mayWriteSession(actor.id, existing)))
       return { ok: false, reason: "you can't continue that conversation from the web" };
-  } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
+  } else if (threadRef.startsWith("web:") && !ownsWebThread(threadRef, actor.id)) {
     return { ok: false, reason: "you can only start a new conversation on your own thread" };
   }
   return access;

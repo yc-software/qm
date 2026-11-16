@@ -160,7 +160,7 @@ export function createWebReleaseReader(
     now?: () => number;
     log?: (line: string) => void;
   } = {},
-): WebReleases & { live(): Promise<string> } {
+): WebReleases {
   const log = opts.log ?? ((line: string) => console.error(line));
   let reported = "";
   let failure: unknown;

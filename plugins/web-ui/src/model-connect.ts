@@ -199,7 +199,6 @@ const API_ERROR_COPY: Record<string, string> = {
   oauth_complete_failed: "Sign-in didn't complete. Try again — the code may have expired.",
 };
 
-// Classifies from the route's structured `error` code, or fetch's spec'd TypeError / TimeoutError; never the text.
 function friendly(e: unknown): string {
   const code = e instanceof ApiError ? (e.body as { error?: unknown } | null)?.error : undefined;
   if (typeof code === "string" && API_ERROR_COPY[code]) return API_ERROR_COPY[code];

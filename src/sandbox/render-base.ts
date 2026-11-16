@@ -44,7 +44,7 @@ export interface RenderBaseOptions {
 }
 
 const isReady = (record: StoredRenderBase): boolean =>
-  record.readyAtMs !== undefined && record.snapshot !== undefined && record.snapshot.expiresAtMs > Date.now();
+  record.readyAtMs !== undefined && record.snapshot?.status === "available" && record.snapshot.expiresAtMs > Date.now();
 
 export function createRenderBase(opts: RenderBaseOptions): RenderBase {
   const { client, store } = opts;

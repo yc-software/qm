@@ -33,7 +33,7 @@ test(".env.example does not pin a base model that drifts from the shipped defaul
 });
 
 test("README describes the shipped Slack topology", () => {
-  assert.match(start, /startSlackPlugin\(desired, built\.slackCore\)/);
+  assert.match(start, /startSlackPlugin\(desired, built\.slackCore\b/);
   assert.match(readme, /Slack is an optional in-process plugin that core starts\s+and supervises/);
   assert.doesNotMatch(readme, /nothing in the core knows about Slack/);
 });

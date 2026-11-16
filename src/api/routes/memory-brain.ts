@@ -1,5 +1,4 @@
 import { canonicalPerson } from "../../directory/person.ts";
-import { livePersonCapability } from "../artifact-share.ts";
 import {
   deleteMemberBrain,
   memberBrainId,
@@ -15,10 +14,8 @@ import {
 import { sendJson } from "../http.ts";
 import { registryError, writeRegistry } from "./admin/memory-registry.ts";
 import { parseScopeId, scopeId } from "../../types.ts";
-import type { ApiCtx, Route } from "./route.ts";
-import { adminStanding, audit, orgScope } from "./shared.ts";
-
-const NOT_LIVE = "a member's memory brain can only be managed on a turn that person sent";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
+import { adminStanding, audit, livePersonTurn, orgScope } from "./shared.ts";
 
 const PRIVATE = "your memory brain's url and client id are private — ask the agent in a DM";
 
@@ -32,10 +29,7 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  if (capability.triggered || !livePersonCapability(capability)) {
-    sendJson(res, 403, { error: "forbidden", message: NOT_LIVE });
-    return null;
-  }
+  if (!(await livePersonTurn(ctx))) return null;
   if (
     parseScopeId(capability.scopeId).kind !== "personal" &&
     (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==
@@ -45,7 +39,7 @@ async function member(ctx: ApiCtx) {
     return null;
   }
   const owner = canonicalPerson(capability.actorId);
-  if ((await adminStanding(deps, owner)) === "inactive") {
+  if ((await adminStanding(deps, tenantOf(ctx), owner)) === "inactive") {
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;
   }
@@ -69,7 +63,7 @@ async function getOwnBrain(ctx: ApiCtx): Promise<void> {
   const found = await member(ctx);
   if (!found) return;
   const { owner, registry } = found;
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: owner,
     action: "memory-registry.member-brain.read",
     resource: memberBrainId(owner),

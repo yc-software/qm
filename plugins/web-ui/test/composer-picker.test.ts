@@ -171,7 +171,6 @@ test("the personal-account picker preserves composer choices and saves context d
           resolvingApprovals: new Set<string>(),
         },
         activePendingApprovals: () => [],
-        hasUnresolvedApproval: () => false,
         turnRuntime: () => null,
         hasLiveRun: () => false,
         drawActiveChat: draw,
@@ -500,6 +499,8 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.ok(contextHost.querySelector('[role="menu"][aria-label="Model settings"]'));
     assert.equal(contextHost.querySelector("select"), null);
     assert.equal(contextHost.querySelector(".loadout-make-default"), null);
+    assert.ok(contextHost.querySelector(".loadout-row:not(.active) .loadout-remove"));
+    assert.equal(contextHost.querySelector(".loadout-row.active .loadout-remove"), null);
     const betaPreset = [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-pick")].find((item) =>
       item.textContent?.includes("Beta"),
     );
@@ -651,7 +652,13 @@ test("the personal-account picker preserves composer choices and saves context d
       await composer!.refreshRuntimeSelection(null, agent, true);
       await mount();
       button('[aria-label="Ultrafast"]').click();
-      assert.equal(button(".loadout-button").getAttribute("aria-label"), `Model: ${label}, High effort, Ultrafast`);
+      const ultrafastTrigger = button(".loadout-button");
+      assert.equal(ultrafastTrigger.getAttribute("aria-label"), `Model: ${label}, High effort, Ultrafast`);
+      assert.equal(ultrafastTrigger.textContent?.replace(/\s+/g, " ").trim(), `${label} High`);
+      assert.ok(ultrafastTrigger.querySelector(".loadout-ultrafast-badge svg"), "the chip marks Ultrafast with a bolt");
+      ultrafastTrigger.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+      assert.equal(document.querySelector(".qm-tooltip")?.textContent, "Ultrafast");
+      ultrafastTrigger.dispatchEvent(new dom.window.MouseEvent("mouseleave"));
       assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
       assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
       assert.deepEqual(
@@ -727,6 +734,34 @@ test("the personal-account picker preserves composer choices and saves context d
     });
     draw();
     assert.match(button(".loadout-button").getAttribute("aria-label")!, /^Model: Gamma, /);
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => null;
+    const beta = { value: "beta", effort: "high", fast: true };
+    const alpha = { value: "alpha", effort: "low", fast: false };
+    const gamma = { value: "gamma", effort: "medium", fast: false };
+    localStorage.setItem("web-ui:loadout", JSON.stringify([beta, gamma, alpha]));
+    ctx.chat.state.threadRef = "web:tester:remove-selected";
+    await mount();
+    const remove = (label: string): HTMLButtonElement | null =>
+      pick(label).closest(".loadout-row")!.querySelector<HTMLButtonElement>(".loadout-remove");
+    assert.equal(pick("Gamma").getAttribute("aria-checked"), "true");
+    remove("Gamma")!.click();
+    await tick();
+    assert.deepEqual(names(), ["Beta", "Alpha"], "removing the selected preset keeps the menu open without it");
+    assert.equal(pick("Alpha").getAttribute("aria-checked"), "true", "the preset that takes its place is selected");
+    assert.equal(document.activeElement, pick("Alpha"));
+    assert.equal(agent.state.model.id, "alpha");
+    assert.equal(composer!.state.effortLevel, "low");
+    assert.deepEqual(saved(), [beta, alpha]);
+    remove("Alpha")!.click();
+    await tick();
+    assert.deepEqual(names(), ["Beta"], "removing the last row selects the one above it");
+    assert.equal(pick("Beta").getAttribute("aria-checked"), "true");
+    assert.equal(document.activeElement, pick("Beta"));
+    assert.equal(agent.state.model.id, "beta");
+    assert.equal(composer!.state.effortLevel, "high");
+    assert.equal(composer!.state.fastMode, true);
+    assert.deepEqual(saved(), [beta]);
+    assert.equal(remove("Beta"), null, "the only preset cannot be removed");
   } finally {
     resetContext?.();
     composer?.dispose();

@@ -1,4 +1,5 @@
 import { parseScopeId, type Principal } from "../../../types.ts";
+import { COMPACT_KEEP_PERCENT } from "../../../agent/context-compaction.ts";
 import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
@@ -9,6 +10,7 @@ import {
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
+  HISTORY_BUDGET_DEFAULT_TOKENS,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -20,7 +22,8 @@ import {
 import { sendJson } from "../../http.ts";
 import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { ADMIN_RESOURCES, ADMIN_RESOURCE_BY_ID, adminResourceManifest } from "../admin-resources.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
+import type { Tenant } from "../../../tenants/context.ts";
 import {
   composePolicy,
   defaultOrgPolicy,
@@ -64,7 +67,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     let ruleSource: "organization" | "scope" | null = null;
     if (effectiveRuleIndex >= 0) ruleSource = effectiveRuleIndex < orgRuleCount ? "organization" : "scope";
     const ruleIndex = effectiveRuleIndex < 0 ? null : effectiveRuleIndex - (ruleSource === "scope" ? orgRuleCount : 0);
-    audit(deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "command-policy.simulate",
       resource: "command-policy",
@@ -94,7 +97,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       await deps.config!.refreshScope(targetScope);
       throw err;
     }
-    audit(deps, { principalId: actor.id, action: `${resource}.update`, resource, scopeLabel: targetScope });
+    audit(ctx, { principalId: actor.id, action: `${resource}.update`, resource, scopeLabel: targetScope });
     return sendJson(res, 200, { ok: true, scopeId: targetScope, resource });
   });
 }
@@ -105,13 +108,13 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   await deps.refreshModels?.();
-  audit(deps, { principalId: actor.id, action: "resources.read", resource: "resources", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "resources.read", resource: "resources", scopeLabel: scope });
   return sendJson(res, 200, { resources: adminResourceManifest() });
 }
 
-export async function adminPermissions(deps: ApiCtx["deps"], actor: Principal) {
+export async function adminPermissions(deps: ApiCtx["deps"], tenant: Tenant, actor: Principal) {
   if (!deps.admin || !(await activePrincipal(deps, actor.id))) return null;
-  const status = await deps.admin.adminStatusOf(actor);
+  const status = await deps.admin.adminStatusOf(tenant, actor);
   return { ...status, permissions: status.isAdmin ? ["admin"] : [] };
 }
 
@@ -119,9 +122,9 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
-  const status = actor ? await adminPermissions(deps, actor) : null;
+  const status = actor ? await adminPermissions(deps, tenantOf(ctx), actor) : null;
   if (!actor || !status) return sendJson(res, 200, { isAdmin: false, permissions: [] });
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "admin.whoami",
     resource: "whoami",
@@ -135,10 +138,10 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
-  const [crons, deployments, skills, environmentRows] = await Promise.all([
+  audit(ctx, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
+  const [crons, publishedApps, skills, environmentRows] = await Promise.all([
     app.listCrons(),
-    app.listDeployments(),
+    app.listApps(),
     app.listSkills(),
     app.listEnvironments(),
   ]);
@@ -156,12 +159,12 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   );
   const owners = [
     ...crons.map((c) => c.ownerScopeId),
-    ...deployments.map((d) => d.ownerScopeId),
+    ...publishedApps.map((d) => d.ownerScopeId),
     ...skills.map((s) => s.scopeId),
     ...environments.map((environment) => environment.id),
     ...environments.flatMap((environment) => environment.attachedScopes),
   ];
-  const labels = await discoverScopes(app, deps, owners);
+  const labels = await discoverScopes(app, deps, tenantOf(ctx), owners);
   const activity = scopeActivity(deps.sessions);
   const countBy = (ids: string[]): Map<string, number> => {
     const m = new Map<string, number>();
@@ -169,7 +172,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     return m;
   };
   const cronN = countBy(crons.map((c) => c.ownerScopeId));
-  const deployN = countBy(deployments.map((d) => d.ownerScopeId));
+  const appN = countBy(publishedApps.map((d) => d.ownerScopeId));
   const skillN = countBy(skills.map((s) => s.scopeId));
   const scopes = [...labels].map(([id, label]) => {
     const counts = activity?.byScope.get(id);
@@ -193,7 +196,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
           }
         : {}),
       crons: cronN.get(id) ?? 0,
-      deployments: deployN.get(id) ?? 0,
+      apps: appN.get(id) ?? 0,
       skills: skillN.get(id) ?? 0,
     };
   });
@@ -246,7 +249,7 @@ const SETTINGS_RESOURCES = {
     "egress",
     "orgAmbient",
   ],
-  customize: ["soul", "branding", "featureFlags", "decisions"],
+  customize: ["soul", "branding", "appHandle", "featureFlags", "decisions"],
   "slack-settings": ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",
@@ -254,11 +257,14 @@ const SETTINGS_RESOURCES = {
     "cronRuntime",
     "subagentRuntime",
     "fallbackRuntime",
+    "appEditRuntime",
     "webuiModels",
     "interactiveFastMode",
     "individualModelAuth",
     "memoryEmbeddingModel",
     "browseMaxSteps",
+    "compactionKeepPercent",
+    "historyBudgetTokens",
   ],
   credentials: [],
   connectors: ["connectors"],
@@ -267,10 +273,10 @@ const SETTINGS_RESOURCES = {
 
 type SettingsView = keyof typeof SETTINGS_RESOURCES;
 
-async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string) {
+async function scopeServiceCredentials(deps: ApiCtx["deps"], tenant: Tenant, targetScope: string) {
   const [credentials, grants] = await Promise.all([
     deps.serviceCreds?.listServiceCredentials(targetScope) ?? [],
-    deps.acl?.find({ ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
+    deps.acl?.find(tenant, { ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
   ]);
   const grantees = new Map<string, string[]>();
   for (const grant of grants) {
@@ -290,7 +296,10 @@ export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
   if (!(await authorizeAdmin(ctx, targetScope))) return;
   const credentials = (await ctx.deps.serviceCreds?.listServiceCredentials(targetScope)) ?? [];
   if (!ctx.deps.credentialUsage) return sendJson(ctx.res, 503, { error: "usage_unavailable" });
-  const summaries = await ctx.deps.credentialUsage.summary(credentials.map((credential) => credential.slug));
+  const summaries = await ctx.deps.credentialUsage.summary(
+    tenantOf(ctx),
+    credentials.map((credential) => credential.slug),
+  );
   return sendJson(ctx.res, 200, { summaries });
 }
 
@@ -348,7 +357,12 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     name: resolvedCurrent?.name ?? currentId + " (configured)",
     provider: resolvedCurrent?.provider ?? "",
   };
-  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
+  const purposeRuntimes = [
+    values.cronRuntime,
+    values.subagentRuntime,
+    values.fallbackRuntime,
+    values.appEditRuntime,
+  ].filter(
     (value): value is { modelId: string } => !!value && typeof (value as { modelId?: unknown }).modelId === "string",
   );
   const models = selectableCatalog(catalog);
@@ -374,6 +388,8 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     modelCatalog: modelCatalogFor(baseModelOptions.map((model) => model.id)),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     memoryEmbeddingOptions: embeddingModelCatalog(),
+    compactionKeepPercentDefault: COMPACT_KEEP_PERCENT.default,
+    historyBudgetTokensDefault: HISTORY_BUDGET_DEFAULT_TOKENS,
   };
 }
 
@@ -405,7 +421,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     needsConfig ? read("config", () => deps.config!.refreshScope(targetScope)) : undefined,
     needsModels ? read("modelRegistry", () => deps.refreshModels?.()) : undefined,
   ]);
-  audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
+  audit(ctx, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
   const selectedKeys: readonly string[] | undefined = view === null ? undefined : SETTINGS_RESOURCES[view];
   const resources = ADMIN_RESOURCES.filter(
     (r) => r.readKey && r.get && (!selectedKeys || selectedKeys.includes(r.readKey)),
@@ -420,10 +436,14 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     egress,
   ] = await Promise.all([
     Promise.all(
-      resources.map(async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope))] as const),
+      resources.map(
+        async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope, tenantOf(ctx)))] as const,
+      ),
     ),
     view === "connectors" ? {} : read("environment", () => scopeEnvironmentMetadata(deps, targetScope)),
-    includes("credentials") ? read("credentials", () => scopeServiceCredentials(deps, targetScope)) : undefined,
+    includes("credentials")
+      ? read("credentials", () => scopeServiceCredentials(deps, tenantOf(ctx), targetScope))
+      : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
       ? read("people", () => deps.directory?.list())
       : undefined,
@@ -474,7 +494,7 @@ export async function retention(ctx: ApiCtx): Promise<void> {
   }
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "retention.read", resource: "retention", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "retention.read", resource: "retention", scopeLabel: scope });
   const sessionCount = (await deps.sessions?.countSessions()) ?? 0;
   const activity = (await deps.admin?.users.activity()) ?? [];
   const report = computeRetention({ sessionCount, activity, nowMs: Date.now() });

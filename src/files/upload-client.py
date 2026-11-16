@@ -109,7 +109,7 @@ def main():
         return
     if args.file is None:
         parser.error("a file path, --list or --abort is required")
-    state_path = args.state or args.file.with_name(args.file.name + ".qm-upload.json")
+    state_path = args.state or args.file.with_name(f".qm-upload-{hashlib.sha256(os.fsencode(args.file.name)).hexdigest()}.json")
     checksums = []
     size = 0
     with args.file.open("rb") as source:

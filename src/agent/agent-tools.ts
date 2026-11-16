@@ -13,6 +13,7 @@ import { createToolKit } from "./agent-tools/kit.ts";
 import { computerTools, validateSandboxTool } from "./agent-tools/computer.ts";
 import { turnTools } from "./agent-tools/turn.ts";
 import { workspaceTools } from "./agent-tools/workspace.ts";
+import { appFileTools } from "./agent-tools/app-files.ts";
 import { recallTools } from "./agent-tools/recall.ts";
 import { sessionTools } from "./agent-tools/sessions.ts";
 import { cronTools } from "./agent-tools/cron.ts";
@@ -44,6 +45,7 @@ export interface ToolContextRef {
     call?: ApprovedToolCallSpec;
   }>;
   pausedOnApproval?: boolean;
+  approvalUnavailable?: string;
   emit?: (item: NewItem) => Promise<Item | undefined>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
@@ -60,7 +62,7 @@ export interface ToolContextRef {
   abortSignal?: AbortSignal;
   steered?: AbortSignal;
   shutdown?: AbortSignal;
-  pollFire?: boolean;
+  replyOptional?: boolean;
   silentRequested?: boolean;
   swarmHeld?: boolean;
 
@@ -93,6 +95,7 @@ export interface AgentToolsOptions {
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
   readOnly?: boolean;
+  botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
@@ -103,7 +106,14 @@ export interface AgentToolsOptions {
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "memoryNotebookOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
+  | "readOnly"
+  | "botActor"
+  | "memoryNotebookOnly"
+  | "surfaceTools"
+  | "surfaceName"
+  | "surfacePrompt"
+  | "delegateWork"
+  | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
@@ -135,6 +145,8 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async () => (endedOnPurpose(ref) ? { terminate: true } : undefined);
 }
+
+const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const controlTools = !!opts?.controlTools;
@@ -171,6 +183,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       publish,
       ...(controlTools ? { share: sharingTool("deploy") } : {}),
     }),
+    ...(ref.current?.appFiles ? [resourceTool("app_files", appFileTools(kit))] : []),
     memory,
     history,
     ...(!delegateWork ? [background] : []),
@@ -201,10 +214,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
   tools.push(...inlineTools, ...connectorTools);
-  const active = tools.filter((t) =>
-    opts?.readOnly
-      ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
-      : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name)),
+  const active = tools.filter(
+    (t) =>
+      (!ref.current?.appFiles || APP_EDIT_TOOL_NAMES.has(t.name)) &&
+      (opts?.readOnly
+        ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
+        : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name))),
   );
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {

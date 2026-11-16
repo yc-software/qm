@@ -40,9 +40,29 @@ final class ClientTests: XCTestCase {
         data: Data(#"{"message":"Ask your administrator to enable app connections."}"#.utf8)),
       "Ask your administrator to enable app connections.")
     XCTAssertEqual(
-      APIClient.errorMessage(status: 403, data: Data("<html>Proxy error</html>".utf8)),
-      "You don’t have access to this action or feature.")
-    XCTAssertFalse(APIClient.errorMessage(status: 404, data: nil).contains("message and try"))
+      APIClient.errorMessage(
+        status: 403,
+        data: Data(
+          #"{"status":"refused","reason":"that model is not enabled for the web UI"}"#.utf8)),
+      "that model is not enabled for the web UI")
+    let proxied = APIClient.errorMessage(status: 403, data: Data("<html>Proxy error</html>".utf8))
+    XCTAssertFalse(proxied.isEmpty)
+    XCTAssertFalse(proxied.contains("Proxy error"))
+    XCTAssertFalse(proxied.contains("<"))
+  }
+
+  @MainActor
+  func testQueryValuesReachAFormDecodingServerUnchanged() throws {
+    let client = APIClient(baseURL: URL(string: "https://query.example.test")!)
+    let sent = "c++ a&b=1 100%"
+    let url = client.url(
+      "api/search", query: [.init(name: "q", value: sent), .init(name: "limit", value: "5")])
+    let pairs = try XCTUnwrap(url.query).split(separator: "&").map {
+      $0.split(separator: "=", maxSplits: 1).map {
+        $0.replacingOccurrences(of: "+", with: " ").removingPercentEncoding
+      }
+    }
+    XCTAssertEqual(pairs, [["q", sent], ["limit", "5"]])
   }
 
   @MainActor

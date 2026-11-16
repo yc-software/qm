@@ -16,7 +16,6 @@ type Entry = {
   write: Promise<void> | null;
   listeners: Set<() => void>;
 };
-// Reuse boot/multiview reads briefly; returning to a view still revalidates server policy.
 const FRESH_MS = 30_000;
 const entries = new Map<string, Entry>();
 let accountRevision = 0;
@@ -55,7 +54,6 @@ function publish(scopeId: string, entry: Entry, config: RuntimeConfig): void {
   }
 }
 
-/** Boot hydration is shared by every pane, not consumed by the first mount. */
 export function seedRuntimeConfig(scopeId: string, config: RuntimeConfig): void {
   const entry = entryFor(scopeId);
   setRuntimeBootScope(scopeId);
@@ -82,7 +80,6 @@ export async function loadRuntimeConfig(
   account?: "company",
 ): Promise<RuntimeConfig | null> {
   const entry = entryFor(runtimeConfigKey(scopeId, account)!);
-  // Reads started during a save must not race ahead of that save on the server.
   while (entry.write) await entry.write;
   const cached = getRuntimeConfig(entry.key);
   if (!refresh && cached && Date.now() - entry.fetchedAt < FRESH_MS) return cached;
@@ -107,8 +104,6 @@ export async function loadRuntimeConfig(
 
 export async function saveRuntimeConfig(scopeId: string, change: Change): Promise<RuntimeConfig> {
   const entry = entryFor(scopeId);
-  // Serialize writes per scope so both the server and every view see the same order.
-  // Invalidate old reads at enqueue time, including when the save ultimately fails.
   ++entry.generation;
   entry.load = null;
   const revision = accountRevision;

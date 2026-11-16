@@ -82,10 +82,10 @@ export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backen
       const left = randomUUID();
       const right = randomUUID();
       const root = await ch.mention(
-        `Use the execute tool with sandbox_id ${sandbox.id} to run exactly this command: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result. Do not use another sandbox or a background process.`,
+        `Have a subagent use the execute tool with sandbox_id ${sandbox.id} to run exactly this command: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result. Do not use another sandbox or a background process.`,
       );
-      await ch.waitForBotReply(root, { timeoutMs: 3 * 60_000 });
-      const session = await core.findSessionByThread(ch.id, root);
+      await ch.waitForBotReply(root, { match: new RegExp(`${left}${right}`), timeoutMs: 3 * 60_000 });
+      const session = await core.findSessionTreeByThread(ch.id, root);
       assert.ok(session, `no session for ${backend} execution`);
       assertSandboxExecution(session.items, sandbox.id, `${left}${right}\n`);
     } catch (error) {

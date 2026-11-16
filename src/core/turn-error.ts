@@ -8,6 +8,15 @@ export class NonRetryableTurnError extends Error {
   }
 }
 
+export class HeldTurnError extends Error {
+  readonly retryAfterMs: number;
+  constructor(message: string, retryAfterMs: number) {
+    super(message);
+    this.name = "HeldTurnError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
 export type ProviderErrorCode =
   | "model_budget"
   | "rate_limit"

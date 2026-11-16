@@ -36,6 +36,7 @@ test(
         items,
         outputs: createLoopOutputStore(testMap()),
         lock,
+        tenants: { gmailTenants: async () => [] },
         fire: {
           fire: async () =>
             lock.withLock(`loop-lifecycle:${loop.id}`, async () => {

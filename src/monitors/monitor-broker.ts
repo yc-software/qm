@@ -1,5 +1,6 @@
-import type { Destination, ScopeId } from "../types.ts";
-import type { Monitor } from "../triggers/types.ts";
+import { isSystemActor, type Destination, type ScopeId } from "../types.ts";
+import { samePerson } from "../directory/person.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 
@@ -30,6 +31,7 @@ export interface BackgroundOutputTail {
 export interface BackgroundUnwatchResult {
   monitorId: string;
   removed: boolean;
+  notYours?: true;
 }
 
 export interface MonitorBroker {
@@ -38,7 +40,6 @@ export interface MonitorBroker {
     opts?: { instructions?: string; pattern?: string; sinceCursor?: number },
   ): Promise<BackgroundWatchResult>;
   unwatch(monitorId: string): Promise<BackgroundUnwatchResult>;
-  list(): Promise<Monitor[]>;
 }
 
 const EXPIRY_GRACE_MS = 5 * 60_000;
@@ -101,9 +102,12 @@ export interface MonitorBrokerDeps {
   scopeId: string;
   owner: string;
   ownerScopeId: ScopeId;
+  botActor?: boolean;
   threadRef: string;
   destination?: Destination;
+  returnsToParent?: boolean;
   graceMs?: number;
+  assertComputerUsable?: (sandboxId: string | undefined) => Promise<void>;
 }
 
 export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
@@ -114,6 +118,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job to watch");
       }
+      await deps.assertComputerUsable?.(rec.sandboxId);
       if (rec.status !== "running") {
         const tail = await deps.readOutputTail(processId, WATCH_COMPLETED_TAIL_BYTES);
         return {
@@ -133,7 +138,12 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         }
       }
       const existing = (await deps.store.list()).find(
-        (m) => m.enabled && m.processId === processId && m.threadRef === deps.threadRef,
+        (m) =>
+          m.enabled &&
+          m.processId === processId &&
+          m.threadRef === deps.threadRef &&
+          samePerson(m.owner, deps.owner) &&
+          Boolean(m.botActor) === Boolean(deps.botActor),
       );
       if (existing) {
         await deps.store.update(existing.id, {
@@ -147,7 +157,8 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         owner: deps.owner,
         createdBy: deps.owner,
         ownerScopeId: deps.ownerScopeId,
-        ...(deps.destination ? { destination: deps.destination } : {}),
+        ...(deps.botActor ? { botActor: true } : {}),
+        ...(deps.destination && !deps.returnsToParent ? { destination: deps.destination } : {}),
         processId,
         command: rec.command,
         ...(rec.purpose ? { purpose: rec.purpose } : {}),
@@ -162,11 +173,12 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     async unwatch(monitorId) {
       const m = await deps.store.get(monitorId);
       if (!m || m.ownerScopeId !== deps.ownerScopeId) return { monitorId, removed: false };
+      const owns = async () => samePerson(m.owner, deps.owner);
+      const caller = { actorId: deps.owner, botActor: deps.botActor };
+      if (!(await personOrOwningBot(caller, owns, m)) || !(isSystemActor(m.owner) || (await owns())))
+        return { monitorId, removed: false, notYours: true };
       await deps.store.delete(monitorId);
       return { monitorId, removed: true };
-    },
-    async list() {
-      return deps.store.ownedBy(deps.ownerScopeId);
     },
   };
 }

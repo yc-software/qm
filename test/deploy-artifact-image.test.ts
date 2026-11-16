@@ -3,14 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  createDeployStore,
-  type DeployStore,
-  type Deployment,
-  type DeploymentVersion,
-} from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type DeployStore, type PublishedApp, type AppVersion } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
-import type { DeployReconcileInput } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -32,7 +26,7 @@ function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; pr
     deployDir: mkdtempSync(join(tmpdir(), "deploy-img-")),
     provider: {
       profile: { managedScaleToZero: true },
-      apply: async (_d: Deployment, version: DeploymentVersion) => {
+      apply: async (_d: PublishedApp, version: AppVersion) => {
         probe.appliedImages.push(version.image);
         const image = version.image ?? `registry.fly.io/app:v${version.version}`;
         return { host: "app.flycast", port: 80, image };
@@ -84,7 +78,7 @@ test("rollback reuses the stored image — the provider gets the recorded ref, n
   await deploy.redeploy(d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] });
   probe.appliedImages.length = 0;
 
-  await deploy.rollbackDeployment(d.id, 1);
+  await deploy.rollbackApp(d.id, 1);
   assert.deepEqual(
     probe.appliedImages,
     ["registry.fly.io/app:v1"],
@@ -121,9 +115,9 @@ test("a runtime-mount provider (no image) leaves versions image-less — Docker 
   );
 });
 
-test("a reconcile-capable provider receives the git diff and marks the applied version", async () => {
+test("a reconcile-capable provider receives each version's git bundle and marks the applied version", async () => {
   const deployStore = createDeployStore(testDeployBackings());
-  const reconciles: DeployReconcileInput[] = [];
+  const reconciles: Array<{ commit: string | undefined; bundle: Uint8Array }> = [];
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -131,12 +125,12 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "deploy-reconcile-")),
     provider: {
-      profile: { managedScaleToZero: true, inPlaceReconcile: true },
+      profile: { managedScaleToZero: true },
       apply: async () => {
         throw new Error("image path should not be used for git-backed versions");
       },
-      reconcile: async (_d, _version, input) => {
-        reconciles.push(input);
+      reconcile: async (_d, version, bundle) => {
+        reconciles.push({ commit: version.commit, bundle });
         return { host: "app.flycast", port: 80 };
       },
       destroy: async () => {},
@@ -160,10 +154,15 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
     ],
   });
 
-  assert.deepEqual([...reconciles[0]!.changedPaths].sort(), ["data.json", "s.js"]);
-  assert.ok((reconciles[0]!.gitBundle?.byteLength ?? 0) > 0, "v1 reconcile receives a git bundle");
-  assert.deepEqual(reconciles[1]!.changedPaths, ["data.json"], "only the changed file is sent on redeploy");
-  assert.ok((reconciles[1]!.gitBundle?.byteLength ?? 0) > 0, "v2 reconcile receives a git bundle");
+  const versions = (await deployStore.get(d.id))!.versions;
+  assert.deepEqual(
+    reconciles.map((r) => r.commit),
+    versions.map((v) => v.commit),
+  );
+  assert.ok(
+    reconciles.every((r) => r.bundle.byteLength > 0),
+    "each reconcile receives a git bundle",
+  );
   assert.equal((await deployStore.get(d.id))!.appliedVersion, 2);
 });
 

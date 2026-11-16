@@ -48,7 +48,8 @@ type TurnReason =
   | "automation-live"
   | "unprompted-live"
   | "queue-preference"
-  | "bot-message";
+  | "bot-message"
+  | "bot-turn";
 
 export type IncomingRoute =
   { kind: "turn"; reason: TurnReason } | { kind: "steer" } | { kind: "abort" } | { kind: "drop"; reason: "empty" };
@@ -93,6 +94,8 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     return { kind: "abort" };
   if (live.kind === "descendants") return { kind: "turn", reason: "only-subagents-live" };
   if (!message.text.trim() && !message.hasFiles) return { kind: "drop", reason: "empty" };
+  if (live.bot && message.person && !message.bot && !live.handlesThisMessage)
+    return { kind: "turn", reason: "bot-turn" };
   const sameAccount =
     message.modelAccount !== undefined &&
     message.modelAccount === live.modelAccount &&

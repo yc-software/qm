@@ -8,12 +8,15 @@ import {
   tokenFromRequest,
   hostFromAuthority,
   type EgressAuthzDeps,
+  tenantRecorder,
 } from "../src/egress-authz-main.ts";
 import { isNeverAllowedIp } from "../src/util/network.ts";
 import { verifySignature } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
+import { randomUUID } from "node:crypto";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 
 const CAPABILITY_SECRET = "test-egress-capability-secret";
 const SOURCE_SECRET = "test-egress-source-secret";
@@ -171,6 +174,22 @@ test("valid token, open policy => 200 + audited as ok with scope/principal", asy
   }
 });
 
+test("a decision is audited under the tenant named in the capability token", async () => {
+  const tenant = "0b7e9c7e-6a43-4c55-9a51-3d3c1f2b8e11";
+  const { server, records } = boot();
+  const port = await listen(server);
+  try {
+    const token = await withTenant(tenant, () => egressToken({ allowedHosts: [] }));
+    assert.equal(await check(port, "example.com:443", token), 200);
+    assert.equal(records.at(-1)?.tenant, tenant);
+    const untenanted = await withoutTenant(() => egressToken({ allowedHosts: [] }));
+    assert.equal(await check(port, "example.com:443", untenanted), 200);
+    assert.equal(records.at(-1)?.tenant, undefined);
+  } finally {
+    await close(server);
+  }
+});
+
 test("valid token with a denylist => 403 + audited as denied", async () => {
   const { server, records } = boot();
   const port = await listen(server);
@@ -288,8 +307,6 @@ test("a name RESOLVING to link-local / denied IP is denied (rebind guard)", asyn
   }
 });
 
-// A forward proxy dials from ITS namespace, so an allowed `CONNECT 127.0.0.1:<port>` would bridge
-// any caller to the services colocated with the proxy — this decision service, Envoy's admin.
 test("loopback destinations are denied even under an open policy, by literal and by resolved IP", async () => {
   const { server, records } = boot({ lookup: async () => ["127.0.0.1"] });
   const port = await listen(server);
@@ -476,4 +493,60 @@ test("relay sink: a batch is only dequeued once core acknowledges it", async () 
   );
   await sink.flush();
   assert.equal(calls.length, 2, "acknowledged records are not re-sent");
+});
+
+test("the proxy stamps each decision with the tenant from the verified token and records it in that tenant", () =>
+  withoutTenant(async () => {
+    const tenant = randomUUID();
+    const seen: Array<{ tenant: string | undefined; token: string }> = [];
+    const server = buildEgressAuthzServer({
+      capabilitySecret: CAPABILITY_SECRET,
+      audit: tenantRecorder({
+        record: (t, r) => seen.push({ tenant: r.tenant, token: t.id }),
+        list: async () => [],
+      }),
+      lookup: async () => ["93.184.216.34"],
+    });
+    const port = await listen(server);
+    try {
+      const token = await withTenant(tenant, () => egressToken({ allowedHosts: [] }));
+      assert.equal(await check(port, "example.com:443", token), 200);
+      assert.equal(await check(port, "example.com:443", await egressToken({ allowedHosts: [] })), 200);
+      assert.deepEqual(seen, [{ tenant, token: tenant }]);
+    } finally {
+      await close(server);
+    }
+  }));
+
+test("the proxy never takes a tenant from a token it could not verify", () =>
+  withoutTenant(async () => {
+    const { server, records } = boot();
+    const port = await listen(server);
+    try {
+      const forged = await withTenant(randomUUID(), () => egressToken({ allowedHosts: [] }, { secret: "other" }));
+      assert.equal(await check(port, "example.com:443", forged), 403);
+      assert.equal(records.at(-1)?.tenant, undefined);
+    } finally {
+      await close(server);
+    }
+  }));
+
+test("relay sink: forwards each decision's tenant to core", async () => {
+  const tenant = randomUUID();
+  const bodies: any[] = [];
+  const fakeFetch = (async (_url: any, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const sink = createRelayAuditSink("http://core.example:4000", SOURCE_SECRET, fakeFetch);
+  sink.record({
+    source: "proxy",
+    host: "a.example",
+    allowed: true,
+    verdict: "ok",
+    scopeLabel: scopeId("personal", "U1"),
+    tenant,
+  });
+  await sink.flush();
+  assert.equal(bodies[0].records[0].tenant, tenant);
 });

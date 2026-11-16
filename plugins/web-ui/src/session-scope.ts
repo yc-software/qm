@@ -5,8 +5,6 @@ import { closeFormMenus, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
 import { tip } from "./tooltip";
 
-/** A session's context carried into the crons/files/memory views so the whole
- * view stays scoped to that project and keeps the session top bar. */
 export interface ScopedSessionInfo {
   scopeId: string;
   sessionId: string | null;
@@ -44,17 +42,15 @@ const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<numb
     return count;
   },
   apps: async (scope) => {
-    const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
-      "/api/deployments",
+    const r = await api<{ apps?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
+      "/api/apps",
     );
-    return (r.deployments ?? []).filter(
+    return (r.apps ?? []).filter(
       (d) => d.status !== "archived" && (d.createdInScope === scope || d.ownerScopeId === scope),
     ).length;
   },
 };
 
-/** Cached count of a tool's items in a scope; kicks off a refresh and calls
- * onReady when a fresh count lands. Tools without a counter return null. */
 export function scopeToolCount(tool: SessionTool, scope: string, onReady: () => void): number | null {
   const counter = TOOL_COUNTERS[tool];
   if (!counter || !scope) return null;
@@ -213,8 +209,6 @@ export function openProjectPage(scopeId: string): void {
   void import("./contexts").then(({ openProjectDetail }) => openProjectDetail(scopeId));
 }
 
-/** Top bar for the scoped crons/files/memory views: same bar, title links back
- * to the session, tools swap views while keeping the scope. */
 export function scopedViewTopbar(current: SessionTool, redraw: () => void): TemplateResult | typeof nothing {
   const active = scopedSession.active;
   if (!active) return nothing;
@@ -241,7 +235,7 @@ export function scopedViewTopbar(current: SessionTool, redraw: () => void): Temp
     },
     onTool: (t) => {
       if (t === current) return;
-      void import("./shell").then(({ switchView }) => switchView(t === "apps" ? "deploys" : t));
+      void import("./shell").then(({ switchView }) => switchView(t));
     },
   });
 }

@@ -1,6 +1,6 @@
 import { isAgentReply, isUserItem, type Item } from "../sessions/items.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
-import { factCandidate, recentCandidates, type MemoryCandidate } from "./facts.ts";
+import { factCandidate, fromOtherSession, recentCandidates, type MemoryCandidate, type MemoryFact } from "./facts.ts";
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { disclosedMemory } from "./disclosure.ts";
@@ -53,7 +53,9 @@ export function createSemanticMemoryService(
       async recall(scope: string, context: MemoryRecallContext = {}): Promise<MemoryCandidate[]> {
         const pending = index && context.query?.trim() ? queryFor(context) : undefined;
         void pending?.catch(() => undefined);
-        const facts = (await context.disclosedFacts)?.get(scope) ?? (await notebook.facts?.(scope)) ?? [];
+        const recallable = (list: readonly MemoryFact[]) =>
+          list.filter((fact) => fromOtherSession(fact, context.sessionId));
+        const facts = recallable((await context.disclosedFacts)?.get(scope) ?? (await notebook.facts?.(scope)) ?? []);
         if (!facts.length) return [];
         try {
           const query = await pending;
@@ -74,7 +76,7 @@ export function createSemanticMemoryService(
           return recentCandidates(facts);
         } catch (error) {
           opts.onError?.(error);
-          return recentCandidates((await notebook.facts?.(scope)) ?? []);
+          return recentCandidates(recallable((await notebook.facts?.(scope)) ?? []));
         }
       },
     };

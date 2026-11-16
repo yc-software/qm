@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,6 +32,7 @@ import { routedTo, startMcpTestServer, type McpTestServer } from "./support/mcp-
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const change = {
   actor: "admin-alice",
@@ -484,7 +486,7 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   const unreadable = await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org");
   assert.equal(unreadable.status, 409);
   assert.equal(JSON.parse(unreadable.text).error, "conflict");
-  const rows = JSON.stringify(await built.auditLog.events());
+  const rows = JSON.stringify(await built.auditLog.events(testTenant));
   assert.match(rows, /memory-registry\.brain\.update/);
   assert.match(rows, /memory-registry\.binding\.delete/);
   assert.match(rows, /memory-registry\.member-brains\.update/);
@@ -616,6 +618,7 @@ test("an agent reaches every registry route only where the registry may be shown
     config: built.config,
     auditLog: built.auditLog,
     memoryRegistry: built.memoryRegistry,
+    runs: liveRunStore(),
     capabilitySecret: secret,
     signingSecret: secret,
   });
@@ -624,11 +627,9 @@ test("an agent reaches every registry route only where the registry may be shown
   await built.memoryRegistry.update((record) =>
     putBinding(personalBrain()(record), "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
   );
+  const admin = { ...liveRunClaims("admin-alice"), actorId: "admin-alice", aud: CONTROL_PLANE_AUD };
   const capabilityIn = (scopeId: string) =>
-    mintCapabilityToken(
-      { actorId: "admin-alice", scopeId, aud: CONTROL_PLANE_AUD, liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
-      secret,
-    );
+    mintCapabilityToken({ ...admin, scopeId, exp: Date.now() + CAPABILITY_TTL_MS }, secret);
   const call = async (cap: string, method: string, path: string, body: unknown) => {
     const res = await fetch(`http://localhost:${(server.address() as AddressInfo).port}${path}`, {
       method,
@@ -907,7 +908,6 @@ test("Alice's own turn into a notebook-only subagent leaves her brain alone, and
   };
   const { brain, built, bind } = await boundToBrain(t, agent);
   await bind();
-  await built.featureFlags.setEnabled("persistent_subagents", ALICE_SCOPE, true, "admin");
   const alice = { id: "U1", type: "internal" as const };
   const session = await built.sessions.getOrCreateByThread(subagent, "dm", ALICE_SCOPE);
   await built.sessions.addParticipant(session.id, alice.id);

@@ -185,3 +185,13 @@ test("a quota refusal tells the caller which of its uploads hold the quota", asy
     await new Promise<void>((resolve) => full.close(() => resolve()));
   }
 });
+
+test("an unrouted method gets a 404 pointing at the catalog, not a capability refusal", async () => {
+  const res = await fetch(`${base}/v1/files/uploads/${upload.id}/parts/1`, {
+    method: "PUT",
+    headers: { "x-agent-capability": await token("U1") },
+    body: new Uint8Array([0xff]),
+  });
+  assert.equal(res.status, 404);
+  assert.match(((await res.json()) as { message: string }).message, /^no route PUT .+; GET \/v1\/apis lists/);
+});

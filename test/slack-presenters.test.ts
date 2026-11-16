@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAckPresenter, renderGoalNotice, createGoalNoticePresenter } from "../src/slack/lib.ts";
+import {
+  DEFAULT_ACK_REACTIONS,
+  createAckPresenter,
+  renderGoalNotice,
+  createGoalNoticePresenter,
+} from "../src/slack/lib.ts";
+import { escapeSlackText } from "../src/slack/mrkdwn.ts";
 import { stripAckPrefix } from "../src/core/orchestrator/turn-helpers.ts";
 
 function presenterHarness(opts: { reactionDelayMs?: number } = {}) {
@@ -122,6 +128,20 @@ test("ack presenter: settle never blocks on a never-resolving pick", async () =>
   assert.deepEqual(calls, ["add:eyes", "remove:eyes"]);
 });
 
+test("ack presenter: the reported emoji is the one it reacts with, whether the pick is early or late", async () => {
+  const early = pickHarness(Promise.resolve("bug"));
+  assert.equal(await early.presenter.emoji(), "bug");
+  await tick(30);
+  assert.deepEqual(early.calls, ["add:bug"]);
+  const late = pickHarness(new Promise<string>(() => {}));
+  const reported = late.presenter.emoji();
+  await tick(30);
+  assert.equal(await reported, "eyes");
+  assert.deepEqual(late.calls, ["add:eyes"]);
+  await early.presenter.settle();
+  await late.presenter.settle();
+});
+
 test("stripAckPrefix: removes exactly the posted ack prefix (plus the gap), and only when it leads", () => {
   assert.equal(stripAckPrefix("On it.\n\nDone — cloned it.", "On it."), "Done — cloned it.");
   assert.equal(stripAckPrefix("  On it.\nDone.", "On it."), "Done.");
@@ -143,6 +163,7 @@ test("ack presenter: postedAck exposes the exact posted text; a held block expos
 
 test("ack presenter does not report a failed post as surfaced", async () => {
   const presenter = createAckPresenter({
+    emojiCandidates: DEFAULT_ACK_REACTIONS,
     postAck: async () => {
       throw new Error("checkpoint failed");
     },
@@ -156,18 +177,19 @@ test("ack presenter does not report a failed post as surfaced", async () => {
 
 test("renderGoalNotice: one line per status, floor shown while active", () => {
   assert.equal(
-    renderGoalNotice({ objective: "get the tests\ngreen <fast>", status: "active", floor: "30m" }),
+    renderGoalNotice({ objective: "get the tests\ngreen <fast>", status: "active", floor: "30m" }, escapeSlackText),
     "◐ Pursuing goal: get the tests green &lt;fast&gt; · at least 30m",
   );
-  assert.equal(renderGoalNotice({ objective: "obj", status: "complete" }), "✓ Goal complete: obj");
-  assert.equal(renderGoalNotice({ objective: "obj", status: "cancelled" }), "✕ Goal cancelled: obj");
-  assert.equal(renderGoalNotice({ objective: "obj", status: "paused" }), "⏸ Goal paused: obj");
+  assert.equal(renderGoalNotice({ objective: "obj", status: "complete" }, escapeSlackText), "✓ Goal complete: obj");
+  assert.equal(renderGoalNotice({ objective: "obj", status: "cancelled" }, escapeSlackText), "✕ Goal cancelled: obj");
+  assert.equal(renderGoalNotice({ objective: "obj", status: "paused" }, escapeSlackText), "⏸ Goal paused: obj");
 });
 
 test("goal notice presenter posts once, updates in place, and dedupes", async () => {
   const posts: string[] = [];
   const updates: Array<{ ts: string; text: string }> = [];
   const presenter = createGoalNoticePresenter({
+    escape: escapeSlackText,
     post: async (text) => {
       posts.push(text);
       return "111.222";

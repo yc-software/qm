@@ -8,6 +8,7 @@ import {
 import { descendantsOf } from "./subagent-activity.ts";
 import { goalFloorLabel, goalWorkedLabel } from "./goal-strip.ts";
 import { relTime } from "./ui.ts";
+import { appState, type Me } from "./shell-state.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
@@ -29,8 +30,17 @@ export function activityOf(s: CoreSession): number {
 
 export type ChatBrowseStatus = "active" | "waiting" | "archived";
 
-export function surfaceOf(s: Pick<CoreSession, "surface">): "web" | "slack" | "core" {
-  return s.surface === "web" || s.surface === "slack" ? s.surface : "core";
+export function chatSurfaceOf(s: Pick<CoreSession, "surface">): NonNullable<Me["chatSurfaces"]>[number] | null {
+  return appState.me?.chatSurfaces?.find((surface) => surface.kind === s.surface) ?? null;
+}
+
+export function surfaceOf(s: Pick<CoreSession, "surface">): "web" | "chat" | "core" {
+  if (s.surface === "web") return "web";
+  return chatSurfaceOf(s) ? "chat" : "core";
+}
+
+export function repliesAsViewer(s: Pick<CoreSession, "surface">): boolean {
+  return s.surface === "slack";
 }
 
 const AUTOMATION_RUN_LABELS: Record<string, string> = {
@@ -136,7 +146,6 @@ export function withPendingSession(list: CoreSession[], pending: CoreSession): C
   return [pending, ...list.filter((s) => s.threadRef !== pending.threadRef)];
 }
 
-/** An unsent new chat the user walked away from, with nothing worth keeping. */
 export function isAbandonedNewChat(state: {
   threadRef: string | null;
   nextThreadRef: string | null;
@@ -158,17 +167,8 @@ export function withoutUnsentPending(list: CoreSession[], threadRef: string): Co
   return list.filter((s) => s.id !== "" || s.threadRef !== threadRef);
 }
 
-export function bumpActivity(list: CoreSession[], threadRef: string, at: number, sent?: string): CoreSession[] {
-  return list.map((s) => {
-    if (s.threadRef !== threadRef) return s;
-    return sent?.trim() && s.lastUserPreview !== undefined
-      ? { ...s, lastActivityAt: at, lastUserPreview: sent }
-      : { ...s, lastActivityAt: at };
-  });
-}
-
-export function lastMessageTitle(s: CoreSession): string | null {
-  return s.lastUserPreview?.trim() || null;
+export function bumpActivity(list: CoreSession[], threadRef: string, at: number): CoreSession[] {
+  return list.map((s) => (s.threadRef === threadRef ? { ...s, lastActivityAt: at } : s));
 }
 
 export function upsertSessions(prev: CoreSession[], rows: readonly CoreSession[]): CoreSession[] {

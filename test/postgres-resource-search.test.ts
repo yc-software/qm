@@ -3,6 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const database = process.env.DATABASE_URL;
 test(
@@ -13,7 +14,8 @@ test(
     const schema = `search_${randomUUID().replaceAll("-", "")}`;
     await admin.q(`CREATE SCHEMA ${schema}`);
     const url = new URL(database!);
-    url.searchParams.set("options", `-c search_path=${schema}`);
+    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+    await seedTestTenant(url.toString());
     const pg = createPgPool(url.toString());
     try {
       let searchSql = "";
@@ -28,7 +30,7 @@ test(
           return pg.q(sql, params, options);
         },
       });
-      for (const kind of ["skills", "crons", "deploys", "webhooks"] as const) await store.search(kind, "zanzibar", 50);
+      for (const kind of ["skills", "crons", "apps", "webhooks"] as const) await store.search(kind, "zanzibar", 50);
       for (const [table, record] of [
         [
           "skills",
@@ -63,7 +65,7 @@ test(
           "hit",
           JSON.stringify({ id: "hit", ...record, owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" }),
         ]);
-        const kind = table === "deployments" ? "deploys" : table;
+        const kind = table === "deployments" ? "apps" : table;
         const rows = await store.search(kind, "zanz release", 50);
         const actualSql = searchSql;
         const actualParams = searchParams;

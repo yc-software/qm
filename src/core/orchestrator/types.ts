@@ -56,6 +56,7 @@ import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
+import type { PromptSnapshot } from "./prompt-snapshot.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
@@ -69,6 +70,7 @@ import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import type { SurfaceRegistry } from "../../surfaces/registry.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -100,7 +102,6 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
-  /** Tracks each turn's detached tail so shutdown drains it (box reclaim, fallback title). */
   admittedWork?: AdmittedWork;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
@@ -108,8 +109,8 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   users: Pick<UserStore, "record" | "markApps">;
   resolution: ResolutionService;
-  config?: ScopedConfigStore;
-  defaultTurnWallClockMs?: number;
+  config: ScopedConfigStore;
+  defaultTurnWallClockMs: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   surfaces: SurfaceRegistry;
@@ -118,27 +119,25 @@ export interface OrchestratorDeps {
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
   files: FileArtifactStore;
-  toolOutput?: ToolOutputStore;
+  toolOutput: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
   advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   budget?: BudgetTracker;
-  maxContextTokens?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
+  execTimeoutMs: number;
+  execTimeoutCeilingMs: number;
   approvalSummaryTimeoutMs?: number;
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
-  backgroundJobTtlMs?: number;
+  backgroundJobTtlMs: number;
   sandboxCapabilityTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
+  backgroundJobTtlMaxMs: number;
   agent: Agent;
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
-  sandboxModels?: boolean;
   publicWebUrl?: string;
   webhookPublicUrl?: string;
   deploy: DeployService;
@@ -153,9 +152,10 @@ export interface OrchestratorDeps {
   skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
-  errors?: ErrorLog;
-  signals?: RunSignalStore;
-  turnStream?: TurnStream;
+  promptSnapshots: DurableMap<PromptSnapshot>;
+  errors: ErrorLog;
+  signals: RunSignalStore;
+  turnStream: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
   blobTransfer: BlobTransferStore;
@@ -178,8 +178,8 @@ export interface OrchestratorDeps {
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
-  deliveries?: DeliveryStore;
-  directory?: DirectoryStore;
+  deliveries: DeliveryStore;
+  directory: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
   personas?: Pick<PersonaService, "forTurn">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
@@ -204,6 +204,7 @@ export interface SurfaceContextPuller {
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
   screenSecuritySteer(input: {
+    tenant: Tenant;
     payload: string;
     actor: Principal;
     conversation: Conversation;
@@ -211,4 +212,10 @@ export interface Orchestrator {
     verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
   regenerateTitle(sessionId: string, principalId: string, personal?: boolean): Promise<{ title: string | null } | null>;
+  suggestNextPrompt(sessionId: string, principalId: string): Promise<NextPromptSuggestion | null>;
+}
+
+interface NextPromptSuggestion {
+  enabled: boolean;
+  suggestion: string | null;
 }

@@ -33,7 +33,6 @@ test("long Slack conversations show the latest messages and reveal earlier ones 
           title: "Conversation",
           from: "Sam",
           snippet: "latest",
-          sourceContextFetched: true,
           context: Array.from({ length: count }, (_, i) => ({ author: "Alex", at: 1000 + i, text: `m${i}` })),
         },
         sourceAt: 2000,

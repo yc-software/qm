@@ -1,18 +1,20 @@
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
-import { notifyDeploymentShared } from "../deploy/share-notice.ts";
-import { deploymentShareScope } from "../deploy/email-access.ts";
-import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { notifyAppShared } from "../deploy/share-notice.ts";
+import { appShareScope } from "../deploy/email-access.ts";
+import { sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
+import { ambientTenant } from "../tenants/context.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { cancelGoal, goalCancelledItem, openGoal } from "../agent/goal.ts";
+import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
@@ -35,7 +37,7 @@ import {
   SoulUpdateDeniedError,
   SoulVersionConflictError,
   toFileItem,
-  type ScopeDeployment,
+  type ScopeApp,
   type SessionPinView,
   type SessionSearchHit,
 } from "./app-types.ts";
@@ -108,7 +110,9 @@ export function createSessionMethods(
   | "updateSession"
   | "detachSession"
   | "cancelSessionGoal"
+  | "resumeSessionGoal"
   | "regenerateTitle"
+  | "suggestNextPrompt"
   | "spawnSession"
   | "discardSession"
   | "forkSession"
@@ -127,7 +131,7 @@ export function createSessionMethods(
     sessionsForViewer,
     sessionForViewer,
     mayWriteSession,
-    managedProjectMembership,
+    managedProjectMemberships,
     filesForViewer,
     canUseContext,
     currentResourceScopesForViewer,
@@ -140,7 +144,7 @@ export function createSessionMethods(
     principalCanAccessCurrentScope,
     principalCanWriteScope,
     canContinueOnWeb,
-    principalGitPermission,
+    appPermissions,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,
@@ -166,24 +170,22 @@ export function createSessionMethods(
   const decoratedPins = async (
     pins: readonly { id: string; text?: string; entrySeq?: number; addedBy: string; createdAt: number }[],
     visibleToReader: readonly Item[],
-    resolveMissing: (seq: number) => Promise<Item | undefined>,
+    resolveMissing: (seqs: number[]) => Promise<Item[]>,
   ): Promise<SessionPinView[]> => {
     if (!pins.length) return [];
     const bySeq = new Map(visibleToReader.map((e) => [e.seq, e]));
-    return Promise.all(
-      pins.map(async (p) => {
-        const item =
-          p.entrySeq !== undefined ? (bySeq.get(p.entrySeq) ?? (await resolveMissing(p.entrySeq))) : undefined;
-        return pinView(p, item);
-      }),
-    );
+    const missing = [
+      ...new Set(pins.flatMap((p) => (p.entrySeq !== undefined && !bySeq.has(p.entrySeq) ? [p.entrySeq] : []))),
+    ];
+    if (missing.length) for (const item of await resolveMissing(missing)) bySeq.set(item.seq, item);
+    return pins.map((p) => pinView(p, p.entrySeq !== undefined ? bySeq.get(p.entrySeq) : undefined));
   };
 
-  const storedItemAt = (sessionId: string, seq: number) => deps.sessions.getItem(sessionId, seq);
+  const storedItemsAt = (sessionId: string, seqs: number[]) => deps.sessions.getItems(sessionId, { seqs });
 
-  const viewerStoredItemAt = async (sessionId: string, principalId: string, seq: number) => {
-    if (!(await deps.sessions.participantsOf(sessionId)).includes(principalId)) return undefined;
-    return storedItemAt(sessionId, seq);
+  const viewerStoredItemsAt = async (sessionId: string, principalId: string, seqs: number[]) => {
+    if (!(await deps.sessions.participantsOf(sessionId)).includes(principalId)) return [];
+    return storedItemsAt(sessionId, seqs);
   };
 
   const viewerItemAt = async (sessionId: string, principalId: string, seq: number) => {
@@ -193,7 +195,7 @@ export function createSessionMethods(
     if (scoped.length && scoped[0]!.seq > seq) {
       scoped = (await transcripts.forViewer(sessionId, principalId)).items;
     }
-    return scoped.find((e) => e.seq === seq) ?? (await viewerStoredItemAt(sessionId, principalId, seq));
+    return scoped.find((e) => e.seq === seq) ?? (await viewerStoredItemsAt(sessionId, principalId, [seq]))[0];
   };
 
   const renderedItemAt = async (sessionId: string, seq: number) => {
@@ -201,7 +203,7 @@ export function createSessionMethods(
     if (seq > latest) return undefined;
     let scoped = (await transcripts.forRender(sessionId, { limit: latest - seq + 1 })).items;
     if (scoped.length && scoped[0]!.seq > seq) scoped = (await transcripts.forRender(sessionId)).items;
-    return scoped.find((e) => e.seq === seq) ?? (await storedItemAt(sessionId, seq));
+    return scoped.find((e) => e.seq === seq) ?? (await deps.sessions.getItem(sessionId, seq));
   };
 
   const slackDmChannel = (session: { surface?: string; threadRef: string }): string | null => {
@@ -228,19 +230,20 @@ export function createSessionMethods(
     });
   };
 
-  /** Sessions whose title matches the query — the entry index only covers message text. */
-  const titleSearchHits = async (principalId: string, query: string, capped: number): Promise<SessionSearchHit[]> => {
-    const matches = await deps.sessions.searchSessionTitles(principalId, query, capped);
+  const titleSearchHits = async (
+    principalId: string,
+    query: string,
+    capped: number,
+    botActor: boolean | undefined,
+  ): Promise<SessionSearchHit[]> => {
+    const matches = await deps.sessions.searchSessionTitles(principalId, query, capped, botActor);
     if (!matches.length) return [];
-    const allowed = new Map(
-      await Promise.all(
-        [...new Set(matches.map((s) => s.scopeId))].map(
-          async (scope) => [scope, (await managedProjectMembership(scope, principalId)) !== false] as const,
-        ),
-      ),
+    const allowed = await managedProjectMemberships(
+      matches.map((s) => s.scopeId),
+      principalId,
     );
     return matches
-      .filter((s) => allowed.get(s.scopeId))
+      .filter((s) => allowed.get(s.scopeId) !== false)
       .map((s) => ({
         sessionId: s.id,
         title: s.title ?? null,
@@ -407,7 +410,7 @@ export function createSessionMethods(
       }
       const w = windowedTranscript(all, window);
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, all, (seq) => storedItemAt(sessionId, seq));
+      const pins = await decoratedPins(pinRecords, all, (seqs) => storedItemsAt(sessionId, seqs));
       return {
         session,
         items: w.items,
@@ -420,12 +423,13 @@ export function createSessionMethods(
       return !!(await sessionForViewer(sessionId, principalId));
     },
 
-    async getSessionForViewer(sessionId, principalId, window) {
+    async getSessionForViewer(sessionId, viewer, window) {
+      const principalId = viewer.actorId;
       const found = await sessionForViewer(sessionId, principalId);
-      if (!found) return null;
+      if (!found || !sessionVisibleTo(viewer, found)) return null;
       const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords, goals] = await Promise.all([
+      const [initialRead, pinRecords, goals, latestPromptAt] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -433,6 +437,7 @@ export function createSessionMethods(
         }),
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
+        window?.beforeSeq === undefined ? deps.sessions.latestVisiblePromptAt(sessionId, principalId) : undefined,
       ]);
       const goal = openGoal(goals.get(sessionId));
       const runtime = window?.beforeSeq === undefined ? found.runtime : undefined;
@@ -445,10 +450,13 @@ export function createSessionMethods(
       }
       const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, visible, (seq) => viewerStoredItemAt(sessionId, principalId, seq));
+      const pins = await decoratedPins(pinRecords, visible, (seqs) =>
+        viewerStoredItemsAt(sessionId, principalId, seqs),
+      );
       return {
         session,
         items: w.items,
+        ...(latestPromptAt !== undefined ? { latestPromptAt } : {}),
         ...(earlier > 0 ? { earlierItems: earlier } : {}),
         ...(pins.length ? { pins } : {}),
         ...(goal ? { goal: goalView(goal) } : {}),
@@ -485,7 +493,7 @@ export function createSessionMethods(
       const pinRecords = await deps.sessions.listPins(session.id);
       if (!pinRecords.length) return [];
       const seqs = pinRecords.filter((p) => p.entrySeq !== undefined).map((p) => p.entrySeq!);
-      const resolveMissing = (seq: number) => viewerStoredItemAt(session.id, reader, seq);
+      const resolveMissing = (seqs: number[]) => viewerStoredItemsAt(session.id, reader, seqs);
       if (!seqs.length) return decoratedPins(pinRecords, [], resolveMissing);
       const latest = await deps.sessions.latestItemSeq(session.id);
       const minSeq = Math.min(...seqs);
@@ -509,11 +517,11 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(principalId, opts, inScope) {
-      return filesForViewer(principalId, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork) {
+      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope);
     },
 
-    async uploadFileForViewer(principalId, input) {
+    async uploadFileForViewer(tenant, principalId, input) {
       const ownerScopeId = scopeId("personal", principalId);
       const createdInScope = input.scopeId ?? ownerScopeId;
       if (!(await canUseContext(principalId, createdInScope))) return null;
@@ -534,7 +542,7 @@ export function createSessionMethods(
         maxBytes: MAX_ATTACHMENT_BYTES,
       });
       if (createdInScope !== ownerScopeId) {
-        await deps.acl.grant({
+        await deps.acl.grant(tenant, {
           ownerScopeId,
           ref: artifact.id,
           granteeScopeId: createdInScope,
@@ -542,7 +550,7 @@ export function createSessionMethods(
           grantedBy: principalId,
         });
       }
-      deps.auditLog?.record({
+      deps.auditLog?.record(tenant, {
         at: Date.now(),
         principalId,
         action: "file.upload",
@@ -552,13 +560,13 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(id, principalId) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
       const art = await deps.files.get(id);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId);
+      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
-        const grants = await deps.acl.grantsFor(art.ownerScopeId, art.id);
+        const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
@@ -567,8 +575,8 @@ export function createSessionMethods(
       return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
     },
 
-    async listSessions(principalId) {
-      return decorateSessions(principalId, await sessionsForViewer(principalId));
+    async listSessions(viewer) {
+      return decorateSessions(viewer.actorId, await sessionsForViewer(viewer));
     },
 
     async listSessionPage(principalId, query) {
@@ -594,10 +602,11 @@ export function createSessionMethods(
         firstPage ? deps.sessions.listParticipantPage(principalId, { ...filter, archived: true, limit: 1 }) : null,
       ]);
       const viewable = async (rows: Session[]) => {
-        const allowed = await Promise.all(
-          rows.map(async (row) => (await managedProjectMembership(row.scopeId, principalId)) !== false),
+        const allowed = await managedProjectMemberships(
+          rows.map((row) => row.scopeId),
+          principalId,
         );
-        return rows.filter((_, index) => allowed[index]);
+        return rows.filter((row) => allowed.get(row.scopeId) !== false);
       };
       const rows = await viewable([...(pinned?.sessions ?? []), ...page.sessions]);
       let decorated = await decorateSessions(principalId, rows);
@@ -613,12 +622,19 @@ export function createSessionMethods(
 
     async sideChats(principalId, sessionId) {
       if (!(await sessionForViewer(sessionId, principalId))) return null;
-      const rows = await deps.sessions.sideChatsOf(sessionId);
-      const visible = await Promise.all(rows.map((row) => sessionForViewer(row.id, principalId)));
+      const rows = await deps.sessions.sideChatsOf(sessionId, principalId);
+      const membership = await managedProjectMemberships(
+        rows.map((row) => row.scopeId),
+        principalId,
+      );
+      const sharedAccess = new Map<string, Promise<boolean>>();
       return Promise.all(
-        visible
-          .filter((row): row is Session => row !== null)
-          .map(async (row) => ({ ...withoutStoredFacts(row), canContinue: await canContinueOnWeb(principalId, row) })),
+        rows
+          .filter((row) => membership.get(row.scopeId) !== false)
+          .map(async (row) => ({
+            ...withoutStoredFacts(row),
+            canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
+          })),
       );
     },
 
@@ -647,23 +663,21 @@ export function createSessionMethods(
       return decorated ?? null;
     },
 
-    async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
+    async searchSessions(viewer, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
+      const principalId = viewer.actorId;
       const capped = Math.max(1, Math.min(Math.floor(limit), 100));
       const [hits, titleHits] = await Promise.all([
-        deps.sessions.searchEntries(principalId, query, capped),
-        titleSearchHits(principalId, query, capped),
+        deps.sessions.searchEntries(principalId, query, capped, viewer.botActor),
+        titleSearchHits(principalId, query, capped, viewer.botActor),
       ]);
       if (!hits.length) return titleHits;
-      const allowed = new Map(
-        await Promise.all(
-          [...new Set(hits.map((hit) => hit.scopeId))].map(
-            async (scope) => [scope, (await managedProjectMembership(scope, principalId)) !== false] as const,
-          ),
-        ),
+      const allowed = await managedProjectMemberships(
+        hits.map((hit) => hit.scopeId),
+        principalId,
       );
       const terms = searchTerms(query);
       const entryHits: SessionSearchHit[] = hits.flatMap((hit) => {
-        if (!allowed.get(hit.scopeId)) return [];
+        if (allowed.get(hit.scopeId) === false) return [];
         const session = hit;
         return [
           {
@@ -766,7 +780,7 @@ export function createSessionMethods(
       const principal = deps.identity.classify(principalId);
       if (!deps.projects || !deps.identity.isInternal(principal) || !name.trim()) return null;
       const project = await deps.projects.create({ name, ownerId: principalId });
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "project.create",
@@ -787,7 +801,7 @@ export function createSessionMethods(
         return { status: "invalid_member" };
       const result = await deps.projects.addMember(id, principalId, memberId, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.member.add",
@@ -809,7 +823,7 @@ export function createSessionMethods(
       if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
       const result = await deps.projects.removeMember(id, principalId, memberId, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.member.remove",
@@ -842,8 +856,6 @@ export function createSessionMethods(
         };
         let match = await findChannel();
         if (!match) {
-          // The synced directory may not have caught up with a just-created channel;
-          // ask the surface for a fresh sync and look once more before giving up.
           await h.refreshSurfaceDirectory().catch(() => undefined);
           match = await findChannel();
         }
@@ -856,7 +868,7 @@ export function createSessionMethods(
       const manual = new Set([existing.ownerId, ...existing.memberIds]);
       const result = await deps.projects.setSlackChannel(id, principalId, link, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: link ? "project.slack_channel.link" : "project.slack_channel.unlink",
@@ -866,7 +878,7 @@ export function createSessionMethods(
         if (!link) {
           for (const m of prevDerived) {
             if (manual.has(m)) continue;
-            deps.auditLog.record({
+            h.recordAudit({
               at: Date.now(),
               principalId,
               action: "project.member.remove",
@@ -890,7 +902,7 @@ export function createSessionMethods(
       if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
       const result = await deps.projects.rename(id, principalId, name, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.rename",
@@ -915,7 +927,7 @@ export function createSessionMethods(
       }
       const result = await deps.projects.setIcon(id, principalId, icon, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.icon",
@@ -929,41 +941,39 @@ export function createSessionMethods(
       return result;
     },
 
-    async listScopeResources(principalId, scope) {
+    async listScopeResources(tenant, principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
-      const [page, allCrons, allWebhooks, allDeployments, allSkills] = await Promise.all([
-        filesForViewer(principalId, undefined, scope),
+      const [page, allCrons, allWebhooks, allApps, allSkills] = await Promise.all([
+        filesForViewer(tenant, principalId, false, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
-        deps.deploy.listDeployments(),
+        deps.deploy.listApps(),
         deps.skills.list(),
       ]);
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
       while (cursor) {
-        const next = await filesForViewer(principalId, { limit: 200, cursor }, scope);
+        const next = await filesForViewer(tenant, principalId, false, { limit: 200, cursor }, scope);
         files.push(...next.owned, ...next.shared);
         cursor = next.nextCursor;
       }
       files.sort((a, b) => b.createdAt - a.createdAt);
-      const deployments = (
-        await Promise.all(
-          allDeployments
-            .filter((d) => d.createdInScope === scope || d.ownerScopeId === scope)
-            .map(async (d): Promise<ScopeDeployment | null> => {
-              const permission = await principalGitPermission(d, principalId);
-              return permission
-                ? {
-                    id: d.id,
-                    name: d.displayName ?? d.name ?? d.id,
-                    status: d.status,
-                    permission,
-                    currentVersion: d.currentVersion,
-                  }
-                : null;
-            }),
-        )
-      ).filter((d): d is ScopeDeployment => d != null);
+      const inScope = allApps.filter((d) => d.createdInScope === scope || d.ownerScopeId === scope);
+      const permissions = await appPermissions(tenant, inScope, principalId);
+      const publishedApps = inScope.flatMap((d, i): ScopeApp[] => {
+        const permission = permissions[i];
+        return permission
+          ? [
+              {
+                id: d.id,
+                name: d.displayName ?? d.name ?? d.id,
+                status: d.status,
+                permission,
+                currentVersion: d.currentVersion,
+              },
+            ]
+          : [];
+      });
       const skills = allSkills
         .filter((s) => s.scopeId === scope)
         .map((s) => ({ id: s.id, name: s.manifest.name, description: s.manifest.description, status: s.status }));
@@ -971,7 +981,7 @@ export function createSessionMethods(
         files,
         webhooks: allWebhooks.filter((w) => w.ownerScopeId === scope),
         crons: allCrons.filter((c) => c.ownerScopeId === scope),
-        deployments,
+        apps: publishedApps,
         skills,
         manageable: await principalCanManageScope(principalId, scope),
       };
@@ -1013,9 +1023,10 @@ export function createSessionMethods(
       return authorizesCapabilityScope(claims);
     },
 
-    async updateSession(sessionId, principalId, patch) {
+    async updateSession(sessionId, viewer, patch) {
+      const principalId = viewer.actorId;
       const session = await sessionForViewer(sessionId, principalId);
-      if (!session) return null;
+      if (!session || !sessionVisibleTo(viewer, session)) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       const updated = await sessionForViewer(sessionId, principalId);
       return updated && { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
@@ -1050,6 +1061,20 @@ export function createSessionMethods(
       return { cancelled: true as const };
     },
 
+    async resumeSessionGoal(sessionId, principalId) {
+      const session = await sessionForViewer(sessionId, principalId);
+      if (!session || !(await mayWriteSession(principalId, session))) return null;
+      if (!(await waitForNoRunningRun(deps.runs, session.threadRef, 0)))
+        return { resumed: false as const, reason: "busy" as const };
+      const goal = openGoal((await deps.sessions.goals([session.id])).get(session.id));
+      if (!goal) return { resumed: false as const, reason: "no_open_goal" as const };
+      if (goal.status === "paused") {
+        resumeGoal(goal);
+        await deps.sessions.setGoal({ sessionId: session.id }, goal);
+      }
+      return { resumed: true as const, goal: goalView(goal) };
+    },
+
     async regenerateTitle(sessionId, principalId) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
@@ -1059,6 +1084,11 @@ export function createSessionMethods(
         principalId,
         parsed.kind === "group" && projectIdFromGroupRef(parsed.ref) !== null,
       );
+    },
+
+    async suggestNextPrompt(sessionId, principalId) {
+      if (!(await sessionForViewer(sessionId, principalId))) return null;
+      return deps.orchestrator.suggestNextPrompt(sessionId, principalId);
     },
 
     async forkSession(sessionId, principalId, opts) {
@@ -1083,9 +1113,6 @@ export function createSessionMethods(
           source.channelName,
           "web",
         );
-        await Promise.all(
-          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
-        );
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
           copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
@@ -1098,10 +1125,13 @@ export function createSessionMethods(
             ...(opts?.sideChat ? { sideChat: { ...opts.sideChat, expanded: false } } : {}),
           });
         }
+        await Promise.all(
+          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
+        );
         const sourceTitle = source.title?.trim();
         if (sourceTitle && projectMembers === undefined)
           await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId,
           action: "session.fork",
@@ -1137,7 +1167,7 @@ export function createSessionMethods(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(session.id, memberId)),
         );
         if (opts.title?.trim()) await deps.sessions.updateTitle(session.id, opts.title.trim());
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId,
           action: "session.spawn",
@@ -1170,7 +1200,7 @@ export function createSessionMethods(
       if (!session) return false;
       if ((await deps.runs.inFlightForThread(session.threadRef)).length) return false;
       if (!(await deps.sessions.deleteSessionIfEmpty(sessionId))) return false;
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "session.discard",
@@ -1180,11 +1210,11 @@ export function createSessionMethods(
       return true;
     },
 
-    async grant(g, opts) {
+    async grant(tenant, g, opts) {
       if (parseRef(g.ref).kind === "deploy") {
         g = {
           ...g,
-          granteeScopeId: await deploymentShareScope(
+          granteeScopeId: await appShareScope(
             g.granteeScopeId,
             g.permission,
             async (email) =>
@@ -1194,8 +1224,8 @@ export function createSessionMethods(
         };
         await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
-      await deps.acl.grant(g, await artifactAuthor(g.ownerScopeId, g.ref));
-      deps.auditLog.record({
+      await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,
         action: "grant",
@@ -1204,17 +1234,18 @@ export function createSessionMethods(
       });
       const ref = parseRef(g.ref);
       if (ref.kind === "deploy" && opts?.notify !== false)
-        await notifyDeploymentShared(
-          deps,
-          deps.deploy.getDeployment(ref.id),
-          g.granteeScopeId,
-          g.permission,
-          g.grantedBy,
-        );
+        await notifyAppShared(deps, deps.deploy.getApp(ref.id), g.granteeScopeId, g.permission, g.grantedBy);
     },
-    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
-      await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await artifactAuthor(ownerScopeId, ref));
-      deps.auditLog.record({
+    async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
+      await deps.acl.revoke(
+        tenant,
+        ownerScopeId,
+        ref,
+        granteeScopeId,
+        revokedBy,
+        await artifactAuthor(ownerScopeId, ref),
+      );
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: revokedBy,
         action: "revoke",
@@ -1228,10 +1259,10 @@ export function createSessionMethods(
       if (liveActor !== true)
         throw new AdminError(403, "promoting a skill org-wide takes a live person, never an autonomous trigger");
       if (!deps.admin) throw new Error("org promotion requires an admin service");
-      const status = await deps.admin.adminStatusOf({ id: actorId, type: "internal" });
+      const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");
       const promoted = await deps.skills.promote(id, targetScopeId);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: actorId,
         action: "skill_promote",
@@ -1272,7 +1303,7 @@ export function createSessionMethods(
           ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.id)) }
           : null;
       }
-      const d = await deps.deploy.getDeployment(idOrName);
+      const d = await deps.deploy.getApp(idOrName);
       return d
         ? { id: d.id, ownerScopeId: d.ownerScopeId, createdBy: d.createdBy, grantRef: encodeRef(deployRef(d.id)) }
         : null;
@@ -1280,14 +1311,14 @@ export function createSessionMethods(
 
     async moveArtifactHome(type, id, toScope, movedBy) {
       if (type === "deploy") {
-        await deps.deploy.transferDeploymentOwner(id, toScope, { callerId: movedBy });
+        await deps.deploy.transferAppOwner(id, toScope, { callerId: movedBy });
         return;
       }
       if (type !== "skill") {
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       }
       await deps.skills.move(id, toScope);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: movedBy,
         action: "skill_move",
@@ -1296,14 +1327,15 @@ export function createSessionMethods(
       });
     },
 
-    getSoul(scopeIdValue) {
+    getSoul(scopeIdValue, reader) {
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
-      const soul = deps.config.getSoul(scopeIdValue);
+      const readable = loadsScopeContext(reader.actorId, scopeIdValue, reader.ownScopeBotWork);
+      const soul = readable ? deps.config.getSoul(scopeIdValue) : null;
       return {
         scopeId: scopeIdValue,
         soul,
-        soulVersion: deps.config.soulVersion(scopeIdValue),
+        soulVersion: readable ? deps.config.soulVersion(scopeIdValue) : 0,
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
@@ -1313,7 +1345,10 @@ export function createSessionMethods(
 
     async updateSoul(scopeIdValue, content, actorId, opts) {
       const { kind, ref } = parseScopeId(scopeIdValue);
-      const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
+      const allowedPersonal =
+        kind === "personal" &&
+        samePerson(ref, actorId) &&
+        loadsScopeContext(actorId, scopeIdValue, opts?.botActor === true);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();
@@ -1334,7 +1369,7 @@ export function createSessionMethods(
                   opts.sessionId,
                 );
           if (version === null) throw new SoulVersionConflictError();
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId: actorId,
             action: "soul_update",

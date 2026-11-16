@@ -1,4 +1,4 @@
-import type { DeploymentInvitation } from "../deploy/email-access.ts";
+import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
@@ -20,6 +20,12 @@ export function livePersonCapability(
   c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean } | undefined,
 ): boolean {
   return c?.botActor !== true && (c?.liveAuthor === true || c?.liveActor === true);
+}
+
+export function personAtKeyboard(
+  c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean; triggered?: boolean } | undefined,
+): boolean {
+  return livePersonCapability(c) && c?.triggered !== true;
 }
 
 export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;
@@ -100,7 +106,7 @@ export type ShareArtifactResult =
       id: string;
       target: { scope: ScopeId; label: string };
       permission: Permission;
-      invitation?: DeploymentInvitation;
+      invitation?: AppInvitation;
     }
   | {
       ok: false;

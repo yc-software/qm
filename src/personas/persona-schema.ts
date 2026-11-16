@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { parseScopeId, type ScopeId } from "../types.ts";
+import { isSharedScope, parseScopeId, type ScopeId } from "../types.ts";
 
 export const PERSONA_ROLES = ["read", "write", "owner"] as const;
 export type PersonaRole = (typeof PERSONA_ROLES)[number];
@@ -9,7 +9,7 @@ export const atLeast = (role: PersonaRole | null | undefined, floor: PersonaRole
   roleRank(role) >= roleRank(floor);
 export const activeHolder = (holder: ScopeId, isActive: (principalId: string) => boolean): boolean => {
   const { kind, ref } = parseScopeId(holder);
-  return kind !== "channel" && (kind !== "personal" || isActive(ref!));
+  return !isSharedScope(holder) && (kind !== "personal" || isActive(ref!));
 };
 
 export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
-import { approvedCallsOnEarlierAttempt } from "../src/core/orchestrator/approvals.ts";
+import { approvedCallsOnEarlierAttempt, withdrawCallApprovals } from "../src/core/orchestrator/approvals.ts";
+import { createPostgresMap } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import type { PendingApprovalRecord } from "../src/types.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput, SteeredApproval } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
@@ -291,3 +294,50 @@ test("a retried turn only finishes approved calls the same person decided", () =
   assert.equal(approvedCallsOnEarlierAttempt([decided], "U2").unstarted.length, 0);
   assert.deepEqual(approvedCallsOnEarlierAttempt([decided], "U1").unstarted, [{ call, approvalKey: "tool-call:abc" }]);
 });
+
+test(
+  "withdrawing a card that a concurrent click already decided reports and audits nothing",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const withdrawCore = createPgPool(process.env.DATABASE_URL!);
+    const clickCore = createPgPool(process.env.DATABASE_URL!);
+    try {
+      const key = `tool-call:${"a".repeat(64)}`;
+      const record = {
+        sessionId: "s1",
+        command: "example_send",
+        approvalKey: key,
+        call: { tool: "example_send", input: {} },
+        request: { actor: { id: "internal:U1", externalId: "U1" } },
+      } as unknown as PendingApprovalRecord;
+      const pending = createPostgresMap<PendingApprovalRecord>(withdrawCore, "withdraw_race_approvals", ["sessionId"]);
+      const clicked = createPostgresMap<PendingApprovalRecord>(clickCore, "withdraw_race_approvals", ["sessionId"]);
+      await pending.put("r1", record);
+      let claimedByClick: PendingApprovalRecord | null = null;
+      const racing = {
+        ...pending,
+        selectEntries: async (...args: Parameters<typeof pending.selectEntries>) => {
+          const rows = await pending.selectEntries(...args);
+          claimedByClick = await clicked.take("r1");
+          return rows;
+        },
+      } as typeof pending;
+      const audited: unknown[] = [];
+      const out = await withdrawCallApprovals(racing, "s1", "U1", "a".repeat(12), (event) => audited.push(event));
+      assert.ok(claimedByClick, "the click claimed the row");
+      assert.deepEqual(out.withdrawn, []);
+      assert.equal(audited.length, 0);
+
+      await pending.put("r2", record);
+      const withdrawn = await withdrawCallApprovals(pending, "s1", "U1", "a".repeat(12), (event) =>
+        audited.push(event),
+      );
+      assert.deepEqual(withdrawn.withdrawn, ["example_send"]);
+      assert.equal(audited.length, 1);
+      assert.equal(await pending.get("r2"), null);
+    } finally {
+      await withdrawCore.close();
+      await clickCore.close();
+    }
+  },
+);

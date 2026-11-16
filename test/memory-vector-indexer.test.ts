@@ -4,6 +4,8 @@ import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import type { MemoryVectorStore, MemoryVector } from "../src/memory/postgres-vector-store.ts";
 import type { MemoryEmbedder } from "../src/model/embeddings.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { currentTenant } from "../src/tenants/context.ts";
 
 function fixture() {
   let now = 1000;
@@ -11,7 +13,8 @@ function fixture() {
   const writes: MemoryVector[][] = [];
   const failures: unknown[] = [];
   const prunes: string[] = [];
-  const store: Pick<MemoryVectorStore, "missing" | "put" | "prune"> = {
+  const store: Pick<MemoryVectorStore, "missing" | "put" | "prune" | "claimTenants"> = {
+    claimTenants: async () => [{ tenantId: TEST_TENANT, id: "memory" }],
     async missing(model, limit, dimensions, _signal, afterId) {
       requests.push({ model, limit, dimensions, afterId });
       return [
@@ -39,6 +42,7 @@ function fixture() {
     },
   };
   const indexer = createMemoryVectorIndexer({
+    claim: store.claimTenants,
     resolve: async () => ({ store, embedder }),
     leaderLease: createNoopLeaderLease(),
     now: () => now,
@@ -144,6 +148,7 @@ test("indexer refuses malformed batches and never writes after losing its leader
     return texts.map(() => [1, 0]);
   };
   const indexer = createMemoryVectorIndexer({
+    claim: f.store.claimTenants,
     resolve: async () => ({ store: f.store, embedder: f.embedder }),
     leaderLease: { hold: async (_key, fn) => fn(lost) },
     onError: (error) => {
@@ -193,7 +198,7 @@ for (const operation of ["embed", "put"] as const) {
     };
     await f.indexer.tick();
     assert.equal(f.failures.length, 2);
-    assert.ok(f.failures.includes(primary));
+    assert.ok(f.failures.some((e) => e === primary || (e instanceof Error && e.cause === primary)));
     assert.ok(f.failures.includes(cleanup));
   });
 }
@@ -258,4 +263,40 @@ test("stopping a mid-drain indexer aborts promptly without another put", { timeo
   assert.equal(f.writes.length, 1);
   assert.equal(f.requests.length, 2);
   assert.equal(f.prunes.length, 0);
+});
+
+test("one tenant's failing embedder does not stop later tenants from indexing", async () => {
+  const f = fixture();
+  const broken = "00000000-0000-4000-8000-0000000000b2";
+  const claim = async () => [
+    { tenantId: broken, id: "memory" },
+    { tenantId: TEST_TENANT, id: "memory" },
+  ];
+  const indexer = createMemoryVectorIndexer({
+    claim,
+    resolve: async () => ({
+      store: f.store,
+      embedder:
+        currentTenant() === broken
+          ? {
+              id: "model",
+              async embed() {
+                throw new Error("bad key");
+              },
+            }
+          : f.embedder,
+    }),
+    leaderLease: createNoopLeaderLease(),
+    now: () => 1000,
+    onError: (error) => {
+      f.failures.push(error);
+    },
+  });
+  await indexer.tick();
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.failures.length, 1);
+  assert.equal((f.failures[0] as Error).message, `tenant ${broken}`);
+  await indexer.tick();
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.failures.length, 2);
 });

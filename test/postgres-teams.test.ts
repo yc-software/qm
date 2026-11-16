@@ -2,6 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTeamStore } from "../src/teams/teams.ts";
 import { scopeId } from "../src/types.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres team tests";
@@ -22,21 +23,22 @@ test("pg teams: members are rows, edited one at a time, looked up by person", { 
   const teams = store();
   const members = Array.from({ length: 1000 }, (_, i) => `p${i}@x.com`);
   await teams.apply(
+    tenant,
     { id: "finance", name: "Finance", addMembers: members, addAdmins: ["Boss@X.com"], addRooms: [room] },
     "a",
   );
-  await teams.apply({ id: "legal", addMembers: ["p1@x.com"] }, "a");
+  await teams.apply(tenant, { id: "legal", addMembers: ["p1@x.com"] }, "a");
 
-  const [finance] = await teams.list();
+  const [finance] = await teams.list(tenant);
   assert.equal(finance!.memberCount, 1001);
   assert.deepEqual(finance!.rooms, [room]);
 
-  assert.equal(await teams.isMember("boss@x.com", "finance"), true);
-  await teams.apply({ id: "finance", drop: ["p0@x.com"] }, "a");
-  assert.equal(await teams.isMember("p0@x.com", "finance"), false);
-  assert.equal((await teams.list())[0]!.memberCount, 1000);
+  assert.equal(await teams.isMember(tenant, "boss@x.com", "finance"), true);
+  await teams.apply(tenant, { id: "finance", drop: ["p0@x.com"] }, "a");
+  assert.equal(await teams.isMember(tenant, "p0@x.com", "finance"), false);
+  assert.equal((await teams.list(tenant))[0]!.memberCount, 1000);
 
-  const turn = await teams.forTurn(room, ["p1@x.com", "outsider@x.com"]);
+  const turn = await teams.forTurn(tenant, room, ["p1@x.com", "outsider@x.com"]);
   assert.deepEqual(
     turn.map((t) => [t.id, t.configured, [...t.present]]),
     [
@@ -48,10 +50,10 @@ test("pg teams: members are rows, edited one at a time, looked up by person", { 
 
 test("pg teams: removing a team removes its members and rooms", { skip }, async () => {
   const teams = store();
-  await teams.apply({ id: "finance", addMembers: ["ann@x.com"], addRooms: [room] }, "a");
-  await teams.apply({ id: "finance", remove: true }, "a");
-  assert.deepEqual(await teams.list(), []);
-  assert.deepEqual(await teams.forTurn(room, ["ann@x.com"]), []);
+  await teams.apply(tenant, { id: "finance", addMembers: ["ann@x.com"], addRooms: [room] }, "a");
+  await teams.apply(tenant, { id: "finance", remove: true }, "a");
+  assert.deepEqual(await teams.list(tenant), []);
+  assert.deepEqual(await teams.forTurn(tenant, room, ["ann@x.com"]), []);
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   const { rows } = await p.query(
@@ -62,9 +64,9 @@ test("pg teams: removing a team removes its members and rooms", { skip }, async 
 });
 
 test("pg teams: the feature flag gates every read", { skip }, async () => {
-  await store().apply({ id: "finance", addMembers: ["ann@x.com"] }, "a");
+  await store().apply(tenant, { id: "finance", addMembers: ["ann@x.com"] }, "a");
   const off = store(false);
-  assert.deepEqual(await off.list(), []);
-  assert.deepEqual(await off.forTurn(room, ["ann@x.com"]), []);
-  assert.equal(await off.isMember("ann@x.com", "finance"), false);
+  assert.deepEqual(await off.list(tenant), []);
+  assert.deepEqual(await off.forTurn(tenant, room, ["ann@x.com"]), []);
+  assert.equal(await off.isMember(tenant, "ann@x.com", "finance"), false);
 });

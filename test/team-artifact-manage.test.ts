@@ -4,7 +4,10 @@ import { createCanManageScope, createManagesArtifactHome } from "../src/resoluti
 
 const alpha = new Set(["bo@x.com", "ann@x.com"]);
 const deps = {
-  teams: { isMember: async (principalId: string, teamId: string) => teamId === "alpha" && alpha.has(principalId) },
+  teams: {
+    isMember: async (_tenant: unknown, principalId: string, teamId: string) =>
+      teamId === "alpha" && alpha.has(principalId),
+  },
   identity: {
     classify: (principalId: string) => ({
       type: principalId.startsWith("ext") ? ("external" as const) : ("internal" as const),

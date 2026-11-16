@@ -31,7 +31,7 @@ test("desktop connection buttons hand off before creating authorization state", 
       name: "Gmail",
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(browserUrls, ["/settings", "/settings"]);
+    assert.deepEqual(browserUrls, ["/settings?connect=slack", "/settings?connect=gmail"]);
     assert.deepEqual(authorized, []);
     assert.equal(sessionStorage.getItem("qm-slack-account"), null);
     assert.equal(sessionStorage.getItem("qm-connection-return:test:tester"), null);
@@ -40,4 +40,20 @@ test("desktop connection buttons hand off before creating authorization state", 
     globalThis.fetch = fetchBefore;
     await h.close();
   }
+});
+
+test("the browser starts the connect flow the desktop app handed off", async () => {
+  const bodies: string[] = [];
+  const h = await harness({
+    path: "/settings?connect=gmail&replaces=ca_old",
+    welcome: true,
+    api: (path, init) => void (path === "/api/composio/authorize" && bodies.push(String(init?.body))),
+  });
+  h.releaseSessions();
+  await h.boot();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(JSON.parse(bodies[0]!).toolkit, "gmail");
+  assert.equal(JSON.parse(sessionStorage.getItem("qm-connection-return:test:tester")!).replaces, "ca_old");
+  assert.equal(location.search, "");
+  await h.close();
 });

@@ -1,3 +1,4 @@
+import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
@@ -7,7 +8,7 @@ import {
   type SlackSessionStatusState,
 } from "../slack/session-status.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { decideDeploymentAccess } from "../slack/deploy-access.ts";
+import { decideAppAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
@@ -31,24 +32,18 @@ import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { RunStore, SessionWatch } from "../runs/run-store.ts";
-import { isTerminal } from "../runs/run-store.ts";
-import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
+import type { RunStore } from "../runs/run-store.ts";
+import type { TurnStream } from "../runs/turn-stream.ts";
+import { createRunWaiter } from "../surfaces/run-wait.ts";
+import type { RunHooks } from "../surfaces/turn-flow.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
-import { sleep } from "../util/async.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
-
-interface SlackRunHooks {
-  onReplying?(): void;
-  onFirstBlock?(text: string): void;
-  onSurfacePosted?(): void;
-  onGoal?(goal: GoalView): void | Promise<void>;
-}
+import { ambientTenant } from "../tenants/context.ts";
 
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
   createdAt?: number;
@@ -82,7 +77,7 @@ interface DirectoryPush {
 
 export interface SlackCoreClient {
   privateContinuationSource?(runId: string): Promise<TurnRequest | null>;
-  decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
+  decideAppAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
@@ -101,7 +96,7 @@ export interface SlackCoreClient {
   readSurfaceMessages?(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
-  waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
+  waitRun(runId: string, hooks?: RunHooks): Promise<TurnResult | null>;
   ackRunDelivery(runId: string): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
@@ -171,19 +166,22 @@ export interface SlackCoreClientDeps {
   inboxEvent?(event: ConversationEvent): Promise<void>;
 }
 
-const RUN_FALLBACK_POLL_MS = 1_000;
-const RUN_STALL_BUDGET_MS = 300_000;
-
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
+  const recordDeliveryError = (e: Omit<ErrorEvent, "ts">): void => recordErrorInBinding(deps.errors, e);
   const lease = deps.leaderLease;
   const orgScope: ScopeId = scopeId("org", configOrgId());
 
   return {
-    decideDeploymentAccess: (value, actor, approve) =>
-      decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
+    decideAppAccess: (value, actor, approve) =>
+      decideAppAccess(ambientTenant(), deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
-      ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
+      ? {
+          taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, {
+            runs: deps.runs,
+            ...(deps.statusActivity?.work ? { work: deps.statusActivity.work } : {}),
+          }),
+        }
       : {}),
     ...(deps.sessionStatus && deps.featureFlags
       ? {
@@ -248,7 +246,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async readFileArtifact(artifactId, viewerId) {
-      const opened = await deps.app.openFileForViewer(artifactId, viewerId);
+      const opened = await deps.app.openFileForViewer(ambientTenant(), artifactId, viewerId, false);
       if (!opened) throw new Error(`file artifact ${artifactId} not found (or not visible to ${viewerId})`);
       return buffer(opened.stream);
     },
@@ -289,84 +287,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return deps.app.turn({ ...body, surface: "slack" });
     },
 
-    async waitRun(runId, hooks = {}) {
-      let replyingSignaled = false;
-      let firstBlockSignaled = false;
-      let surfaceSignaled = false;
-      const signalReplying = (durable = false): void => {
-        if (replyingSignaled || !(durable || deps.turnStream.replying(runId))) return;
-        replyingSignaled = true;
-        hooks.onReplying?.();
-      };
-      const signalFirstBlock = (text: string): void => {
-        if (firstBlockSignaled || !text.trim()) return;
-        firstBlockSignaled = true;
-        hooks.onFirstBlock?.(text);
-      };
-      const signalSurface = (): void => {
-        if (surfaceSignaled) return;
-        surfaceSignaled = true;
-        hooks.onSurfacePosted?.();
-      };
-      let watch: SessionWatch | undefined;
-      const unsubscribe = deps.turnStream.subscribe(runId, {
-        onFirstBlock: signalFirstBlock,
-        onSurfacePosted: signalSurface,
-      });
-      let lastProgressAt = Date.now();
-      let lastMark = "";
-      let goalSnapshot = "";
-      const emitGoal = async (): Promise<void> => {
-        if (!hooks.onGoal) return;
-        const goal = deps.turnStream.goal(runId);
-        if (!goal) return;
-        const next = JSON.stringify(goal);
-        if (next === goalSnapshot) return;
-        goalSnapshot = next;
-        await hooks.onGoal(goal);
-      };
-      try {
-        for (;;) {
-          let run;
-          try {
-            run = await deps.runs.get(runId);
-          } catch (err) {
-            if (Date.now() - lastProgressAt >= RUN_STALL_BUDGET_MS) throw err;
-            run = undefined;
-          }
-          if (run !== undefined) {
-            if (!run) throw new Error(`run ${runId} not found`);
-            watch ??= deps.runs.watchSession(run.sessionId);
-            if (deps.turnStream.surfacePosted(runId)) signalSurface();
-            if (isTerminal(run.status)) {
-              const view = await deps.app.getRun(runId);
-              await emitGoal().catch(swallowAs("slack-core-client: terminal goal refresh", undefined));
-              if (view?.surfacePosted) signalSurface();
-              return (view?.result as TurnResult | null | undefined) ?? null;
-            }
-            signalReplying(run.deliveryState?.replying === true);
-            await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
-            const fb = deps.turnStream.firstBlock(runId);
-            if (fb?.closed) signalFirstBlock(fb.text);
-            const mark = `${run.status}:${run.attempts}:${run.leaseExpiresAt ?? ""}`;
-            if (mark !== lastMark) {
-              lastMark = mark;
-              lastProgressAt = Date.now();
-            }
-            if (Date.now() - lastProgressAt >= RUN_STALL_BUDGET_MS) {
-              throw Object.assign(
-                new Error(`run ${runId} made no progress for ${Math.round(RUN_STALL_BUDGET_MS / 1000)}s — giving up`),
-                { code: "run_stalled" },
-              );
-            }
-          }
-          await (watch ? watch.changed(RUN_FALLBACK_POLL_MS) : sleep(RUN_FALLBACK_POLL_MS));
-        }
-      } finally {
-        unsubscribe();
-        watch?.close();
-      }
-    },
+    waitRun: createRunWaiter({ runs: deps.runs, turnStream: deps.turnStream, getRun: (id) => deps.app.getRun(id) }),
 
     async ackRunDelivery(runId) {
       await deps.app.ackDeliveryByKey(`run:${runId}`);
@@ -438,7 +359,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async reportDeliveryUndeliverable(id, reason) {
-      deps.errors?.record({
+      recordDeliveryError({
         category: "delivery",
         code: "delivery_undeliverable",
         message: `delivery ${id} cannot be delivered (${reason}) — retrying until the TTL expires it`,
@@ -449,7 +370,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async failDelivery(id, reason) {
       const failed = await deps.app.failDelivery(id, reason);
       if (!failed) return;
-      deps.errors?.record({
+      recordDeliveryError({
         category: "delivery",
         code: "delivery_failed",
         message:
@@ -460,7 +381,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async reportSlowDeliveryDrain(info) {
-      deps.errors?.record({
+      recordDeliveryError({
         category: "delivery",
         code: "delivery_drain_slow",
         message: `drain cycle took ${Math.round(info.durationMs / 1000)}s for ${info.rows} rows`,

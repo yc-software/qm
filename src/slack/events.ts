@@ -24,7 +24,7 @@ import type { DenyResponder } from "./allow-from.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Mirror } from "./mirror.ts";
 import type { TurnHandler } from "./turn-handler.ts";
-import { shouldMirrorMessage, isOwnStatusCard } from "./message-gating.ts";
+import { shouldMirrorMessage, isOwnStatusCard, isBotAuthored } from "./message-gating.ts";
 
 interface EventArgs {
   event: unknown;
@@ -143,7 +143,7 @@ export function registerSlackEvents(
           channel: e.channel,
           userId: identity.userId,
           kind: "channel",
-          isBot: Boolean(e.bot_id || identity.actor?.isBot),
+          isBot: isBotAuthored(e) || Boolean(identity.actor?.isBot),
         });
         return;
       }
@@ -168,7 +168,7 @@ export function registerSlackEvents(
           files: content.files,
           threadTs: e.thread_ts,
           ts: e.ts,
-          ...(e.bot_id || e.subtype === "bot_message" ? { botAuthored: true } : {}),
+          ...(isBotAuthored(e) ? { botAuthored: true } : {}),
           message: e,
           ackGate: context.ackGate,
         },
@@ -204,7 +204,7 @@ export function registerSlackEvents(
         await forceDirectorySync(client);
       }
       const ackGate = context.ackGate;
-      if (m.channel && m.ts && !m.hidden && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
+      if (m.channel && m.ts && !m.hidden && !m.subtype && !isBotAuthored(m)) {
         const text = slackMessageContent(m).text;
         deps.inboxMessage?.(client, {
           channel: m.channel,
@@ -235,7 +235,7 @@ export function registerSlackEvents(
             userId: m.user,
             kind: "dm",
             threadTs: m.thread_ts,
-            isBot: Boolean(m.bot_id || m.subtype === "bot_message"),
+            isBot: isBotAuthored(m),
           });
         }
         return;
@@ -302,7 +302,7 @@ export function registerSlackEvents(
             files: content.files,
             threadTs: m.thread_ts,
             ts: m.ts,
-            ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            ...(isBotAuthored(m) ? { botAuthored: true } : {}),
             message: m,
             ackGate,
           },
@@ -351,7 +351,7 @@ export function registerSlackEvents(
             threadTs: m.thread_ts,
             ts: m.ts,
             unprompted: true,
-            ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            ...(isBotAuthored(m) ? { botAuthored: true } : {}),
             message: m,
             ackGate,
           },

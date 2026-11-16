@@ -2,8 +2,9 @@ import type { DeliveryStore } from "./delivery-store.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { Delivery } from "../types.ts";
+import { type Tenant, withTenant } from "../tenants/context.ts";
 
-export type Send = (d: Delivery) => Promise<{ refused: string } | void>;
+export type Send = (d: Delivery, tenant: Tenant) => Promise<{ refused: string } | void>;
 
 export function refusedStatus(status: number): boolean {
   return status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
@@ -11,7 +12,19 @@ export function refusedStatus(status: number): boolean {
 
 export function createDeliveryRelay(
   deliveries: DeliveryStore,
-  { type, send, claimMs }: { type: string; send: Send; claimMs: number },
+  {
+    type,
+    send,
+    claimMs,
+    fail = (id, reason) => deliveries.fail(id, reason, Date.now()),
+    held,
+  }: {
+    type: string;
+    send: Send;
+    claimMs: number;
+    fail?: (id: string, reason: string) => Promise<unknown>;
+    held?: (d: Delivery) => boolean | Promise<boolean>;
+  },
 ) {
   let stopped = true;
   const inFlight = new Set<Promise<void>>();
@@ -19,13 +32,14 @@ export function createDeliveryRelay(
     inFlight.add(work);
     void work.finally(() => inFlight.delete(work));
   };
-  const deliver = async (d: Delivery): Promise<void> => {
-    const outcome = await send(d).catch((e: unknown) => {
+  const deliver = async (d: Delivery, tenant: Tenant): Promise<void> => {
+    if (await held?.(d)) return;
+    const outcome = await send(d, tenant).catch((e: unknown) => {
       reportFailure(`${type} delivery: not accepted; retrying once its claim lapses`, e, `delivery=${d.id}`);
       return null;
     });
     if (outcome === null) return;
-    if (outcome) await deliveries.fail(d.id, outcome.refused, Date.now());
+    if (outcome) await fail(d.id, outcome.refused);
     else await deliveries.ack(d.id, Date.now());
     pass();
   };
@@ -33,9 +47,14 @@ export function createDeliveryRelay(
     if (stopped) return;
     track(
       deliveries
-        .claimPending(type, claimMs, { oldestPerConversation: true })
+        .claimDue(type, claimMs)
         .then((rows) => {
-          for (const d of rows) track(deliver(d).catch((e) => reportFailure(`${type} delivery failed`, e)));
+          for (const d of rows)
+            track(
+              withTenant(d.tenantId, (tenant) => deliver(d, tenant)).catch((e) =>
+                reportFailure(`${type} delivery failed`, e),
+              ),
+            );
         })
         .catch((e) => reportFailure(`${type} delivery: claim failed`, e)),
     );

@@ -34,7 +34,7 @@ export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "slack_mirror.read", resource: "slack-mirror", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "slack_mirror.read", resource: "slack-mirror", scopeLabel: scope });
   const raw = await app.listSurfaceContainers({ limit: SLACK_MIRROR_PAGE_MAX + 1 });
   const hasMore = raw.length > SLACK_MIRROR_PAGE_MAX;
   const channelsById = new Map((await app.directoryChannels()).map((c) => [c.channelId.toLowerCase(), c.name]));
@@ -57,7 +57,7 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
     SLACK_MIRROR_PAGE_MAX,
     Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || SLACK_MIRROR_PAGE_DEFAULT),
   );
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "slack_mirror.messages.read",
     resource: container || `search:${q}`,
@@ -97,7 +97,7 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
   if (!store) return sendJson(res, 200, { scopeId: scope, judgments: [], counts: { act: 0, ignore: 0, fastlane: 0 } });
   const container = (url.searchParams.get("container") ?? "").trim() || undefined;
   const id = Number(url.searchParams.get("id"));
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "ambient_judgments.read",
     resource: container ?? "all",
@@ -145,7 +145,7 @@ export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
   if (!store) return sendJson(res, 200, { scopeId: scope, picks: [], counts: { picked: 0, declined: 0 } });
   const channel = (url.searchParams.get("container") ?? "").trim() || undefined;
   const id = Number(url.searchParams.get("id"));
-  audit(deps, { principalId: actor.id, action: "ack_emoji_picks.read", resource: channel ?? "all", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "ack_emoji_picks.read", resource: channel ?? "all", scopeLabel: scope });
   if (id) {
     const pick = await store.get(id);
     if (!pick) return sendJson(res, 404, { error: "not_found" });

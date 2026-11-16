@@ -2,7 +2,7 @@ import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
-import { livePersonCapability } from "../artifact-share.ts";
+import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
@@ -10,13 +10,14 @@ import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
+import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledScopes } from "../../resolution/context-filter.ts";
-import { sendJson } from "../http.ts";
+import { refuseImpersonated, refuseWithoutPerson, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, audit } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { activePrincipal, activeRun, audit } from "./shared.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 
@@ -27,31 +28,7 @@ export function composioUserId(org: string, principal: string): string {
 }
 
 export function composioUserIds(principal: string): string[] {
-  return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
-}
-
-export async function activeRun(ctx: ApiCtx): Promise<boolean> {
-  const cap = ctx.capability;
-  if (!cap) return true;
-  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
-  if (
-    !run ||
-    run.status !== "running" ||
-    !cap.runLeaseToken ||
-    run.leaseToken !== cap.runLeaseToken ||
-    run.attempts !== cap.runAttempt ||
-    run.sessionId !== cap.threadRef ||
-    !samePerson(run.request.actor.id, cap.actorId) ||
-    (run.leaseExpiresAt ?? 0) <= Date.now()
-  ) {
-    sendJson(ctx.res, 403, {
-      error: "inactive_run",
-      message:
-        "Connected app access requires this run's current capability: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses connected-app access; make these calls from a foreground command in a live turn (a cron fire is one).",
-    });
-    return false;
-  }
-  return true;
+  return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
 }
 
 export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
@@ -111,11 +88,12 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   }
   const grants =
     (await ctx.deps.acl?.grantsOfKind(
+      tenantOf(ctx),
       "service-cred",
       audience,
       ctx.capability?.scopeId ?? personal,
       org,
-      entitledScopes,
+      entitledScopes(false),
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
@@ -270,13 +248,14 @@ const SCOPES_TTL_MS = 5 * 60_000;
 const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
 
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cached = scopeCache.get(authConfigId);
+  const cacheKey = JSON.stringify([tenantOf(ctx).id, authConfigId]);
+  const cached = scopeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.scopes;
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
     const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
     const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(authConfigId, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
+    scopeCache.set(cacheKey, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
     return scopes;
   } catch (error) {
     const mask = createExactSecretValueMasker([key]);
@@ -338,8 +317,8 @@ async function connections(ctx: ApiCtx): Promise<void> {
 }
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
-  if ((ctx.capability && !livePersonCapability(ctx.capability)) || ctx.actor?.imp)
-    return sendJson(ctx.res, 403, { error: "human_consent_required" });
+  if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
+  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
   const access = await credential(ctx);
   if (!access) return;
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;
@@ -351,7 +330,7 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
     const { toolkit } = owned;
     if (!(await activeRun(ctx))) return;
     await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`, undefined, 20_000, "DELETE");
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.disconnected",
       resource: `${toolkit}/${accountId}`,
@@ -444,7 +423,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     if (!(await activeRun(ctx))) return;
     if (!composioUserIds(access.principal).includes(String(account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.execute.started",
       resource,
@@ -462,7 +441,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
       },
       EXECUTE_TIMEOUT_MS,
     );
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.execute.completed",
       resource,
@@ -474,7 +453,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
       error: result.error ?? null,
     });
   } catch (error) {
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.execute.failed",
       resource,
@@ -684,7 +663,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         const priorAccounts = await request(
           ctx,
           projectKey,
-          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgId(), member.principalId), limit: "1" })}`,
+          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(externalOrgId(), member.principalId), limit: "1" })}`,
         );
         if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
         hasPriorAccounts ||= priorAccounts.items.length > 0;
@@ -708,7 +687,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         linkedBy: access.principal,
       });
       await deps.identity?.refresh(true);
-      audit(deps, {
+      audit(ctx, {
         principalId: access.principal,
         action: "principal_link.create",
         resource: `${member.principalId} -> ${access.principal}`,

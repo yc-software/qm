@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext } from "../src/tools/primitives.ts";
@@ -23,6 +24,7 @@ function ctxFor(opts: {
   memoryScopeId?: ScopeId;
 }) {
   return createToolContext({
+    tenant: testTenant,
     sandbox: noSandbox,
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
@@ -70,6 +72,7 @@ test("memorySearch() honors the explicit limit and never the model's scope (no s
 test("memory ops signal unavailable (null) when memory is not wired", async () => {
   const personal = scopeId("personal", "U1");
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox: noSandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     writableScopeId: personal,
@@ -204,6 +207,7 @@ test("capture-off policy: search/read work, but add/edit/delete are unavailable"
   const personal = scopeId("personal", "U1");
   await memory.capture(personal, ["Owns the billing service"], at);
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox: noSandbox,
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
@@ -234,6 +238,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   await memory.capture(personal, ["deploys happen on Fridays"], at);
   await memory.capture(org, ["deploys are frozen in December"], at);
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox: noSandbox,
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");

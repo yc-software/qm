@@ -76,7 +76,7 @@ export async function recordStoppedTurn(
         kind: "AgentMessage",
         text: partial,
         step: replay?.step ?? null,
-        body: { stopped: true, ...replay?.body },
+        body: { stopped: true, ...(turn.cancel?.aborted ? { cancelled: true } : {}), ...replay?.body },
       })
     : null;
   const note = await turn.emit({ kind: "Stop", body: { reason } });
@@ -208,11 +208,12 @@ export async function resumeInterruptedToolCall(
   turn: AgentTurnInput,
   ref: ToolContextRef,
   tools: readonly BridgedTool[],
+  cancel = turn.cancel,
 ): Promise<ResumedToolResult | null> {
   const call = turn.resumeToolCall;
   if (!call) return null;
   const ran = await runToolCallOnce(call, ref, tools, {
-    ...(turn.cancel ? { cancel: turn.cancel } : {}),
+    ...(cancel ? { cancel } : {}),
     notRun: () => INTERRUPTED_TOOL_RESULT,
     fallbackBody: { interrupted: true },
   });

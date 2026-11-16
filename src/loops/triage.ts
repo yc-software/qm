@@ -172,7 +172,7 @@ export async function removeFromGroup(ledger: LoopItemLedger, item: LoopItem): P
 
 export async function settleGroup(ledger: LoopItemLedger, representative: LoopItem): Promise<void> {
   if (representative.triage?.groupId !== representative.id || !isResolved(representative)) return;
-  const preview = representative.inboxPreview?.title;
+  const preview = representative.sourcePayload?.title;
   const title =
     typeof preview === "string" && preview ? preview : (representative.sourceSummary ?? representative.sourceKey);
   for (const member of await openMembers(ledger, representative, representative.id)) {

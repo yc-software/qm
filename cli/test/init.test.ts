@@ -66,8 +66,6 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config), ".env.example is exactly renderEnvExample output");
-    // The scaffold names anthropic as the base model provider, so its key is required
-    // rather than deferred to Admin; the providers not selected stay optional.
     for (const line of ["CORE_SIGNING_SECRET=", "SKILL_SIGNING_SECRET=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
     }

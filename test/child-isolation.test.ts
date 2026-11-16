@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -265,6 +266,7 @@ function turnRig() {
   const records = testMap<SandboxResource>();
   const resources = createSandboxResources({
     records,
+    loads: testMap(),
     defaults: testMap<SandboxDefault>(),
     backends: { local: disk.backend },
     defaultBackend: "local",
@@ -290,6 +292,7 @@ function turnRig() {
       visibleSkillsForTurn: async () => [],
     } as unknown as TurnSandboxContext);
     const tools = createToolContext({
+      tenant: testTenant,
       sandbox: router,
       sandboxResources: resources,
       provision: sandboxes.provision,
@@ -457,9 +460,24 @@ test("a child sandbox whose first creation failed is created on a later turn sta
   rig.failing.add(`sandbox-${childId}`);
   await assert.rejects(rig.turn(child).tools.execute("true"), /provider hiccup/);
   assert.equal((await rig.resources.get(childId)).state, "failed");
+  assert.equal((await rig.resources.get(childId)).personUsed, true);
   const carol: Principal = { id: "carol", type: "internal", displayName: "Carol" };
   assert.equal((await rig.turn(child, carol).tools.execute("echo ok")).stdout.trim(), "ok");
   assert.equal((await rig.resources.get(childId)).state, "ready");
+  assert.equal((await rig.resources.get(childId)).createdBy, actor.id);
+});
+
+test("a computer a person creates with the sandbox tool is person-used even if its first open fails", async () => {
+  const rig = turnRig();
+  const provision = rig.backend.provision;
+  rig.backend.provision = async () => {
+    rig.backend.provision = provision;
+    throw new Error("provider hiccup");
+  };
+  const create = rig.turn(rig.session("s")).tools.sandboxResources!("create", { backend: "local", name: "box" });
+  await assert.rejects(create, /provider hiccup/);
+  const { sandboxes } = await rig.resources.list(actor.id, scope);
+  assert.equal(sandboxes.find((computer) => computer.name === "box")?.personUsed, true);
 });
 
 test("a child cannot get its own sandbox on a provider that cannot retire computers", async () => {

@@ -160,7 +160,6 @@ export interface CommonSourceFields {
   context?: MessageContext[];
   receivedAt: number;
   externalUrl?: string;
-  probablyResolved?: boolean;
   images?: string[];
 }
 
@@ -176,7 +175,6 @@ export function parseCommonFields(raw: Record<string, unknown>): CommonSourceFie
   const fromDetail = clipOpt(raw.fromDetail, 200);
   const context = parseContext(raw.context);
   const externalUrl = httpUrl(raw.externalUrl);
-  const probablyResolved = raw.probablyResolved === true;
   const images = parseImageUrls(raw.images);
   return {
     title,
@@ -186,7 +184,6 @@ export function parseCommonFields(raw: Record<string, unknown>): CommonSourceFie
     ...(fromDetail ? { fromDetail } : {}),
     ...(context ? { context } : {}),
     ...(externalUrl ? { externalUrl } : {}),
-    ...(probablyResolved ? { probablyResolved } : {}),
     ...(images ? { images } : {}),
   };
 }

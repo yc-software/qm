@@ -1,6 +1,6 @@
 import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
-import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { validateRuntimeChoice, validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -100,7 +100,7 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.equal(modelGatewayRequest(f.catalog.transport, model)?.target, "vendor/new-model");
   assert.ok(builtInModelCatalog().some((m) => m.id === id));
   const availability = { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) };
-  assert.equal(validateWebTurnModelOptions({ model: id }, null, availability), null);
+  assert.equal(validateWebTurnModelOptions({ model: id }, [id], availability), null);
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
   assert.equal(modelSupported(id), true);
@@ -155,6 +155,7 @@ test("output limits at or above the context window fall back to a safe limit ins
   assert.deepEqual(limits("vendor/honest-output"), [1_000_000, 128_000]);
   assert.equal(contextTokenBudgetForModel("gateway/vendor/equal-limits"), 150_000);
   assert.equal(contextTokenBudgetForModel("gateway/vendor/small-context"), 8_000);
+  assert.equal(contextTokenBudgetForModel("gateway/vendor/small-context", 50_000), 8_000);
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {
@@ -178,11 +179,16 @@ test("successful revocation clears legacy aliases and cached models and cannot b
   assert.throws(() => modelGatewayRequest(undefined, stale), /unavailable/);
 });
 
-test("legacy routes work without discovery support, then discovery adds models and governs access", async () => {
+test("legacy routes work without discovery support, then discovery adds models and governs access", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  });
   const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   f.status(404);
   await f.catalog.refresh();
   assert.equal(f.catalog.transport.models["claude-opus-5"], "vendor/new-model");
+  assert.match(logged[0]!, /gateway discovery failed; routing configured aliases only.*HTTP 404/);
   f.tick();
   f.status(200);
   await f.catalog.refresh();
@@ -219,7 +225,6 @@ test("a transient discovery blip keeps last known routes; a prolonged outage hid
 test("malformed and oversized catalogs cannot grant access", async () => {
   for (const response of [
     Response.json({ nope: [] }),
-    Response.json({ data: Array(1001).fill({ id: "m" }) }),
     new Response("x".repeat(2 * 1024 * 1024 + 1)),
     new Response("{}", { headers: { "content-length": "99999999" } }),
   ]) {
@@ -227,6 +232,14 @@ test("malformed and oversized catalogs cannot grant access", async () => {
     await catalog.refresh();
     assert.deepEqual(catalog.transport.models, {});
   }
+});
+
+test("a gateway catalog over a thousand models with long ids is discovered whole", async () => {
+  const long = `vendor/${"m".repeat(250)}`;
+  const f = fixture([...Array.from({ length: 1_000 }, (_, i) => group(`vendor/model-${i}`)), group(long)]);
+  await f.catalog.refresh();
+  assert.equal(Object.keys(f.catalog.transport.models).length, 1_001);
+  assert.ok(resolveModel(`gateway/${long}`));
 });
 
 test("custom provider models live in their own namespace, never the gateway one", () => {
@@ -286,7 +299,7 @@ test("gateway aliases hide duplicate picker options while preserving saved route
   for (const id of ["claude-opus-5", `gateway/${target}`]) {
     assert.equal(modelGatewayRequest(f.catalog.transport, resolveModel(id)!)?.target, target);
     assert.equal(
-      validateWebTurnModelOptions({ model: id }, null, {
+      validateWebTurnModelOptions({ model: id }, [id], {
         anthropic: false,
         openai: false,
         openrouter: false,
@@ -354,6 +367,21 @@ test("gateway document support uses provider metadata rather than vision alone",
   assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
+});
+
+test("the Fast toggle is accepted on a gateway model only when the gateway flags it for Anthropic fast mode", async () => {
+  const f = fixture([
+    group("vendor/flagged", { providers: ["anthropic"], supports_fast_mode: true }),
+    group("vendor/unflagged", { providers: ["anthropic"] }),
+    group("vendor/flagged-openai", { providers: ["openai"], supports_fast_mode: true }),
+  ]);
+  await f.catalog.refresh();
+  assert.equal(safeModelMetadata("gateway/vendor/flagged")?.fastMode, true);
+  assert.equal(validateRuntimeChoice({ modelId: "gateway/vendor/flagged", fastMode: true }), null);
+  for (const id of ["gateway/vendor/unflagged", "gateway/vendor/flagged-openai"]) {
+    assert.equal(safeModelMetadata(id)?.fastMode, false);
+    assert.equal(validateRuntimeChoice({ modelId: id, fastMode: true }), "fast_mode_not_supported");
+  }
 });
 
 test("gateway models send session-affinity headers on every API", async () => {

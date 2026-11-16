@@ -1,3 +1,4 @@
+import AuthenticationServices
 import XCTest
 
 @testable import QM
@@ -78,5 +79,26 @@ final class WebAuthenticationTests: XCTestCase {
       XCTFail("Cancelled task succeeded")
     } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
     XCTAssertEqual(cancellations, 1)
+  }
+
+  func testSystemCancelIsNormalizedToCancellation() async {
+    let authentication = WebAuthentication { _, reply in
+      .init(
+        start: {
+          reply(
+            nil,
+            NSError(
+              domain: ASWebAuthenticationSessionErrorDomain,
+              code: ASWebAuthenticationSessionError.Code.canceledLogin.rawValue))
+          return true
+        }, cancel: {})
+    }
+    do {
+      _ = try await authentication.open(provider)
+      XCTFail("Cancelled authorization succeeded")
+    } catch is CancellationError {
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
   }
 }

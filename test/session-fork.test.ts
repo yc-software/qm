@@ -53,7 +53,7 @@ test("forking copies the transcript into a fresh independent web session", async
   assert.deepEqual(fork.session.forkedFrom, { sessionId: sid, title: source.session.title ?? null });
   assert.equal(fork.session.forkBoundarySeq, fork.items.at(-1)?.seq);
 
-  const mine = await app.listSessions("U1");
+  const mine = await app.listSessions({ actorId: "U1" });
   assert.ok(mine.some((s) => s.id === fork.session.id));
   const forkItems = await sessions.getItems(fork.session.id);
   assert.deepEqual(forkItems, fork.items);
@@ -111,7 +111,7 @@ test("the fork inherits a marked title and the original keeps its own history", 
   const { app } = freshApp();
   const r = await app.turn(dm("Plan the database migration", "web:U1:f3"));
   const sid = r.sessionId!;
-  await app.updateSession(sid, "U1", { title: "Migration plan" });
+  await app.updateSession(sid, { actorId: "U1" }, { title: "Migration plan" });
 
   const fork = (await app.forkSession(sid, "U1"))!;
   const before = (await app.getSession(sid))!.items.length;

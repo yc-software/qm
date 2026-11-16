@@ -114,6 +114,11 @@ test("connector onboarding is governed by the live admin-configured list", () =>
     assert.match(skill, /never switch credentials to evade a denial/i);
     assert.doesNotMatch(skill, /If it says none are enabled, skip|offer none when that list is/);
   }
+  assert.match(connectApps, /^description: Link a user's Slack account or add QM to the company Slack/m);
+  assert.match(connectApps, /reply with one short line and `::link-slack-account\{\}`/);
+  assert.match(connectApps, /add or install QM in their Slack, reply with `::add-to-slack\{\}`/);
+  assert.match(connectApps, /never pair it with `::link-slack-account\{\}`/);
+  assert.doesNotMatch(connectApps, /put `::add-to-slack\{\}` before it/);
   assert.match(onboarding, /complete allowlist|same allowlist/);
   assert.doesNotMatch(onboarding, /machine-local credentials such as|`gh`, `glab`, or AWS/);
 });
@@ -166,6 +171,13 @@ test("onboarding composes existing access skills without a provider-setup prereq
   assert.match(onboarding, /never ask regular users to provision it/);
   assert.match(admin, /GET \/v1\/admin\/slack-installation/);
   assert.match(admin, /installAvailable: true/);
+  assert.match(admin, /In web chat, reply\s+with one short line and `::add-to-slack\{\}`/);
+  assert.match(admin, /\*\*\[Add to Slack\]\(installUrl\)\*\*/);
+  assert.match(
+    admin,
+    /Do not name a workspace,\s+mention unavailable setup, offer creating their own app, or use `createUrl`/,
+  );
+  assert.doesNotMatch(admin, /Give its known entry link/);
   assert.match(admin, /App Configuration Tokens/);
   assert.match(admin, /not the refresh token/);
   assert.match(admin, /manage other apps they own/);

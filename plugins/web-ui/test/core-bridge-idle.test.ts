@@ -64,7 +64,7 @@ function stubRuns(snapshots: Array<Record<string, unknown>>): void {
   globalThis.fetch = (async () => {
     const body = snapshots[Math.min(i, snapshots.length - 1)] ?? {};
     i++;
-    return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
+    return Response.json(body);
   }) as typeof fetch;
 }
 
@@ -87,7 +87,7 @@ test("the idle deadline RESETS on each delta — sustained progress past the win
     const body = snapshots[Math.min(i, snapshots.length - 1)] ?? {};
     i++;
     clock += step;
-    return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
+    return Response.json(body);
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
@@ -144,7 +144,7 @@ test("a delta just before the window resets it — no premature timeout", async 
     const body = snapshots[Math.min(i, snapshots.length - 1)] ?? {};
     i++;
     clock += Math.floor(RUN_IDLE_MS / 4);
-    return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
+    return Response.json(body);
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
@@ -180,7 +180,7 @@ test("tool-activity growth (no assistant text) ALSO resets the idle clock", asyn
     const body = snapshots[Math.min(i, snapshots.length - 1)] ?? {};
     i++;
     clock += step;
-    return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
+    return Response.json(body);
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
@@ -213,7 +213,7 @@ test("core-attested liveness (alive:true) resets the idle clock — a long silen
     const body = snapshots[Math.min(i, snapshots.length - 1)] ?? {};
     i++;
     clock += step;
-    return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
+    return Response.json(body);
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();

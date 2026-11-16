@@ -67,7 +67,6 @@ Object.assign(process.env, {
   OIDC_ALLOWED_EMAIL_DOMAIN: "",
   OIDC_PRINCIPAL_CLAIM: "email",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
-  PORTAL_PLAYGROUND: "0",
   PORTAL_SESSION_RENEW_AFTER_S: "1",
 });
 const { server } = await import("../src/index.ts");
@@ -150,7 +149,7 @@ test("app-only sessions cannot reach or renew on any ordinary portal surface", a
     "/api/deliveries/events",
     "/ws",
     "/v1/status",
-    "/v1/deployments",
+    "/v1/apps",
     "/d/demo/",
     "/app-edit/demo",
     "/auth/desktop",

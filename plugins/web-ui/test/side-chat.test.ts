@@ -29,6 +29,11 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
   let forkBody: unknown;
   let failFork = true;
   let failOpen = true;
+  let openingSide = false;
+  let releaseOpen!: () => void;
+  const openReady = new Promise<void>((resolve) => {
+    releaseOpen = resolve;
+  });
   let releaseFork!: () => void;
   let forkReady = new Promise<void>((resolve) => {
     releaseFork = resolve;
@@ -81,10 +86,12 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
           return Response.json({ session: fork, items });
         });
       }
+      if (path === "/api/sessions/side?tailTurns=1") return Response.json({ session: fork, items });
       if (path.startsWith("/api/sessions/side?") || path === "/api/sessions/side") {
         if (failOpen) {
           failOpen = false;
-          return Response.json({ error: "Load temporarily unavailable" }, { status: 503 });
+          openingSide = true;
+          return openReady.then(() => Response.json({ error: "Load temporarily unavailable" }, { status: 503 }));
         }
         return Response.json({ session: fork, items });
       }
@@ -138,8 +145,30 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     assert.equal(document.querySelector(".side-chat-discuss"), null);
     paragraph.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true }));
     discuss = document.querySelector<HTMLButtonElement>(".side-chat-discuss")!;
-    discuss.click();
+    for (const options of [
+      { key: "c", metaKey: true },
+      { key: "c", ctrlKey: true },
+      { key: "e", altKey: true },
+      { key: "ArrowLeft" },
+      { key: "e", isComposing: true },
+      { key: "Dead" },
+    ]) {
+      const key = new window.KeyboardEvent("keydown", { ...options, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(key);
+      assert.equal(key.defaultPrevented, false);
+      assert.equal(document.querySelector(".side-chat-panel"), null);
+    }
+    const composerInput = document.querySelector("textarea")!;
+    const editableKey = new window.KeyboardEvent("keydown", { key: "E", bubbles: true, cancelable: true });
+    composerInput.dispatchEvent(editableKey);
+    assert.equal(editableKey.defaultPrevented, false);
+    assert.equal(document.querySelector(".side-chat-panel"), null);
+    const firstKey = new window.KeyboardEvent("keydown", { key: "E", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(firstKey);
+    assert.equal(firstKey.defaultPrevented, true);
     assert.ok(document.querySelector(".side-chat-panel"));
+    assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value, "E");
+    assert.equal(document.activeElement, document.querySelector(".side-chat-draft textarea"));
     const pendingInput = document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!;
     pendingInput.value = "Explain this";
     pendingInput.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -157,8 +186,20 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value, "Explain this");
     retry()!.dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
     retry()!.click();
+    document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.setSelectionRange(3, 3);
+    await until(() => openingSide);
+    const loadingInput = document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!;
+    assert.equal(document.activeElement, loadingInput);
+    assert.equal(loadingInput.selectionStart, 3);
+    assert.equal(loadingInput.selectionEnd, 3);
+    loadingInput.value = "Explain this while loading";
+    loadingInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+    releaseOpen();
     await until(() => Boolean(retry() && !retry()!.disabled));
-    assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value, "Explain this");
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value,
+      "Explain this while loading",
+    );
     const forkRequests = h.requests.filter((path) => path === "/api/sessions/source/fork").length;
     retry()!.dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
     retry()!.click();
@@ -173,7 +214,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     );
     assert.equal(
       document.querySelector<HTMLTextAreaElement>(".side-chat-conversation textarea")!.value,
-      "Explain this",
+      "Explain this while loading",
     );
     document.querySelector<HTMLButtonElement>('.side-chat-panel [aria-label="Expand side chat"]')!.click();
     document.querySelector<HTMLButtonElement>('.side-chat-panel [aria-label="Remove excerpt"]')!.click();
@@ -185,9 +226,16 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
       .dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
     assert.ok(document.querySelector(".side-chat-panel"));
     paragraph.dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
+    assert.ok(document.querySelector(".side-chat-panel"));
+    const composer = document.querySelector(".side-chat-conversation textarea");
+    document.querySelector(".chat-scroll")!.dispatchEvent(new window.Event("scroll"));
+    assert.equal(document.querySelector(".side-chat-conversation textarea"), composer);
+    document.querySelector<HTMLButtonElement>('[aria-label="Collapse conversation"]')!.click();
     assert.equal(document.querySelector(".side-chat-panel"), null);
+    assert.ok(document.querySelector(".side-chat-card"));
     await until(() => Boolean(document.querySelector(".side-chat-marker")));
     assert.equal(document.querySelector(".side-chat-marker")!.getAttribute("aria-expanded"), "false");
+    assert.match(document.querySelector(".side-chat-marker")!.textContent!, /QM · Re:\s*“durable”/);
     document.querySelector<HTMLButtonElement>(".side-chat-markers button")!.click();
     await until(() => Boolean(document.querySelector(".side-chat-conversation .custom-chat")));
     document
@@ -196,6 +244,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     assert.equal(document.querySelector(".side-chat-panel"), null);
     assert.equal(document.activeElement, document.querySelector(".side-chat-markers button"));
     assert.equal(document.querySelector(".side-chat-marker")!.getAttribute("aria-expanded"), "false");
+    assert.match(document.querySelector(".side-chat-marker")!.textContent!, /QM · Re:\s*“durable”/);
     const { passageRange } = await import("../src/passage-range.ts");
     const anchor = passageRange(paragraph, "durable", fork!.sideChat!.occurrence);
     assert.equal(anchor?.toString(), "durable");
@@ -245,11 +294,12 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     again.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true }));
     document.querySelector<HTMLButtonElement>(".side-chat-discuss")!.click();
     assert.ok(document.querySelector(".side-chat-panel"));
-    document.querySelector<HTMLButtonElement>('[aria-label="Close side chat"]')!.click();
+    document.querySelector<HTMLButtonElement>('[aria-label="Collapse conversation"]')!.click();
     releaseFork();
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(document.querySelector(".side-chat-panel"), null);
   } finally {
+    releaseOpen();
     releaseFork();
     await h.close();
   }

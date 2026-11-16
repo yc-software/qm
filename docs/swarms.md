@@ -14,17 +14,23 @@ credentials and deployment-specific settings. Workers use the provider of the sc
 retirement. That choice is stored once; later default changes never move workers
 to another provider, and the selected computer's files are never copied.
 
-Swarms are also gated per person by the `swarms` feature flag, off by default.
-Enable it for a person's personal scope (for example `personal:alice@example.com`)
-or the org scope in the admin feature-flag table. Without it the swarm routes refuse
-the caller, `/v1/apis` omits them, and existing swarms owned by that person stop
-reconciling and delivering. `SWARMS_ENABLED=false` remains the deployment kill switch.
+Swarms are available to every internal person; swarm routes refuse external callers
+and members. `SWARMS_ENABLED=false` is the deployment kill switch.
 
 The `swarms` durable-map table has its own registered migration,
 `durable-map/swarms/0001`. Apply registered migrations through the normal QM deploy
 path before starting workers. Memory stores implement the same contract for tests;
 they are not a production durability substitute. Swarms are unavailable with
 mixed memory/Postgres stores so execution leases and writes share one authority.
+
+Each swarm board and worker computer records its swarm's id (`swarmId`), which is how
+a Slack bot's turn is kept off a person's swarm computers. Releases from before that
+field leave it unset; `durable-map/swarms/0040-stamp-computers` stamps the computers of
+existing swarms once at startup. Drain an older release's cores and workers before
+upgrading from it, because a computer the older release provisions after that migration
+stays unmarked. A computer a person's swarm takes as its forum counts as used by a person;
+`durable-map/swarms/0041-mark-forums-person-used` marks the forums of existing
+swarms the same way once at startup and needs the same drain first.
 
 ## Agent API
 
@@ -88,7 +94,7 @@ provider creation/retry loops.
 Each worker gets a dedicated **blank** computer owned by the parent's
 authorization scope. No parent files are copied. Data access, keychain policy,
 memory resolution, and approval grants continue through QM's existing scope and
-identity rules, with unattended rather than human-attended permissions. Session
+identity rules; a worker turn carries no person's live authority of its own. Session
 grants belong only to the session that received them, not its workers. A computer's backing storage key
 is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.
@@ -100,7 +106,10 @@ it as `forumSandboxId`; the root session and all workers reach it with
 fails that worker like any other provisioning failure. The board outlives worker
 cleanup so its files remain available to the root. To use an existing computer instead,
 supply `forumSandboxId` naming an authorized sandbox in the same scope; no board is
-then created. Every worker still gets its own blank private computer.
+then created. Only a swarm a person starts can take one: a swarm a Slack bot starts
+never takes a forum, whether the bot names one or a person spawning into that swarm
+does, so it always uses its own board. Every worker still gets its own blank private
+computer.
 The forum ID appears in peer metadata and the worker prompt; select it explicitly
 with `execute`'s `sandbox_id` for commands that should use the shared computer.
 This is not a new filesystem synchronization feature. Workers using a forum share
@@ -146,7 +155,10 @@ rosters must remain the original roster; changes fail closed. Current scope and
 identity authorization is rechecked before access and execution.
 
 Notification state is persisted as `pending`, `mailbox`, `queued` with a durable
-`runId`, `handed`, or `failed`. A queued notification means the run was accepted, not that the agent has
+`runId`, `handed`, or `failed`. In a swarm a bot started, once anyone else has posted or a person's turn has worked on its computers,
+a notification for the root or for a worker the bot may no longer direct is stored as
+`mailbox` instead of waking it, so no bot turn runs for it; a person's next turn in the
+root reads it. A queued notification means the run was accepted, not that the agent has
 finished. Idle recipients wake through the normal durable worker queue. Active
 recipients receive queued unattended turns, not forged human steer signals.
 Notification enqueue uses a stable deduplication key so a crash between enqueue
@@ -247,10 +259,24 @@ notifications still run unattended.
 Agent operations require credentials bound to the exact session, run attempt, and
 unexpired execution lease. Swarm writes recheck that lease inside their database
 transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
-operations. A Slack bot's turn cannot direct a person's swarm: `spawn`, `send`,
-`context`, `control` and message reads refuse it unless a bot's
-turn started the swarm. In the swarm root, a bot's turn also loses that access once
-anyone other than that bot has posted a swarm message.
+operations. A Slack bot's turn cannot direct a person's swarm: `inspect`, `spawn`,
+`send`, `context`, `control` and message reads refuse it unless a bot's turn started
+the swarm. Once anyone other than that bot has posted a swarm message, or a person's turn has worked on one of the swarm's computers, the bot's root
+turn and every worker it started lose that access too. Only the bot's own turns
+can add workers to a swarm a bot started: a person's turn that tries is refused, so
+every worker in a bot-started swarm is the bot's work and runs as the bot. A swarm counts as bot-started when the turn that starts it does a bot's work, and forks of its workers are bot work too. The same rule covers the board and worker computers a
+swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
+`sandbox_id`, make one the conversation's default, use one a person made the default, or
+run on its own worker computer. The check runs each time the turn uses a computer, so a
+turn that is already running loses that access as soon as someone else posts or a person's turn works on one of those computers. Background
+jobs on those computers are covered too: the bot's `background` list leaves them out, it
+cannot watch them, and a watch it armed while it could stops reading the job's output.
+When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and the process reaper sweeps right away: it stops the bot's background jobs on the swarm's board and worker computers and marks them reaped, by the rule in [Sandbox resources](sandbox-resources.md) that stops a bot's jobs on any computer it may no longer use. The reaper is the only thing that stops them, and one sweep runs at a time across instances, so a job a running sweep missed waits for the next periodic sweep.
+A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
+why a swarm a bot starts never takes one, from the bot or from a person: every computer in
+a swarm a bot starts belongs to the swarm. A person's own swarm can still take one, and
+taking it counts as a person using that computer, so from then on a Slack bot's turn can
+no longer use it, even when the bot made it.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.

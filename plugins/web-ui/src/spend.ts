@@ -8,7 +8,7 @@ import { api } from "./core-bridge";
 import { cronScheduleSummary } from "./cron-format";
 import type { CronView } from "./crons";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
-import { friendlyPrincipal } from "./deploy-view";
+import { friendlyPrincipal } from "./app-view";
 import { appState } from "./shell-state";
 
 interface SpendTotals {

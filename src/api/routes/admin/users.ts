@@ -15,7 +15,8 @@ import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
+import { personNamer } from "./common.ts";
 import { trimTrailingSlashes } from "../../../util/text.ts";
 
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
@@ -32,11 +33,11 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "users.read", resource: "users", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "users.read", resource: "users", scopeLabel: scope });
   const [roster, activity, grants] = await Promise.all([
     deps.admin!.users.list(),
     deps.admin!.users.activity(),
-    deps.admin?.listGrants() ?? [],
+    deps.admin?.listGrants(tenantOf(ctx)) ?? [],
   ]);
   const now = Date.now();
   const externalUsers = ((await deps.identity?.listExternalMembers()) ?? [])
@@ -57,11 +58,17 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     ...(signInUrl ? { signInUrl } : {}),
   };
   const actorKey = deps.modelGatewayTransport?.actorKey;
+  const nameOf = await personNamer(ctx.app, deps);
   return sendJson(res, 200, {
     scopeId: scope,
-    users: actorKey
-      ? rows.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
-      : rows,
+    users: rows.map((user) => {
+      const displayName = nameOf(user.principalId);
+      return {
+        ...user,
+        ...(displayName && displayName !== user.principalId ? { displayName } : {}),
+        ...(actorKey ? { gatewayActor: gatewayActorId(user.principalId, actorKey) } : {}),
+      };
+    }),
     grants,
     externalUsers,
     inviteEmail,
@@ -137,7 +144,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     });
   const existing = deps.identity.externalMember(email);
   if (!teammate && existing?.kind === "teammate") return bad("Manage this teammate in Users.");
-  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;
+  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(tenantOf(ctx)), email).isAdmin;
   const ownsGrant = existing?.role === "org_admin";
   if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
     return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
@@ -151,13 +158,14 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   else if (!teammate && role === "member" && holdsGrant) grantChange = "grant.revoke";
   try {
     if (grantChange === "grant.create")
-      await deps.admin!.createGrant(actor, { principalId: email, role: "org_admin", scopeId: scope });
-    else if (grantChange === "grant.revoke") await deps.admin!.revokeGrant(actor, email, scope, "org_admin");
+      await deps.admin!.createGrant(tenantOf(ctx), actor, { principalId: email, role: "org_admin", scopeId: scope });
+    else if (grantChange === "grant.revoke")
+      await deps.admin!.revokeGrant(tenantOf(ctx), actor, email, scope, "org_admin");
   } catch (e) {
     return grantError(res, "grant_failed", e);
   }
   if (grantChange)
-    audit(deps, { principalId: actor.id, action: grantChange, resource: `${email}/org_admin`, scopeLabel: scope });
+    audit(ctx, { principalId: actor.id, action: grantChange, resource: `${email}/org_admin`, scopeLabel: scope });
   const created = existing === undefined;
   const readmitted = existing !== undefined && !externalMemberActive(existing, now);
   const member: ExternalMember = {
@@ -172,7 +180,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if (member.kind === "teammate") await deps.admin!.users.record({ id: email, source: "invite", at: member.createdAt });
   await deps.identity.putExternalMember(member);
   const action = created || readmitted ? "external_user.invite" : "external_user.update";
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: teammate ? "user.invite" : action,
     resource: email,
@@ -240,7 +248,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   await deps.identity.refresh(true);
   const existing = deps.identity.externalMember(params.email ?? "");
   if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
-  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
+  const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(tenantOf(ctx)), existing.email).isAdmin;
   const ownsGrant = existing.role === "org_admin";
   if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant)) {
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
@@ -248,11 +256,11 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   if (holdsGrant) {
     try {
-      await deps.admin!.revokeGrant(actor, existing.email, scope, "org_admin");
+      await deps.admin!.revokeGrant(tenantOf(ctx), actor, existing.email, scope, "org_admin");
     } catch (e) {
       return grantError(res, "revoke_failed", e);
     }
-    audit(deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "grant.revoke",
       resource: `${existing.email}/org_admin`,
@@ -268,12 +276,12 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   };
   if (externalMemberActive(existing, now) || existing.role !== "member") {
     await deps.identity.putExternalMember(tombstone);
-    audit(deps, { principalId: actor.id, action: "external_user.revoke", resource: existing.email, scopeLabel: scope });
+    audit(ctx, { principalId: actor.id, action: "external_user.revoke", resource: existing.email, scopeLabel: scope });
   }
   if (existing.kind === "teammate" || now - tombstone.expiresAt! < FORGET_AFTER_MS)
     return sendJson(res, 200, { ok: true, removed: false });
   await deps.identity.removeExternalMember(existing.email);
-  audit(deps, { principalId: actor.id, action: "external_user.forget", resource: existing.email, scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "external_user.forget", resource: existing.email, scopeLabel: scope });
   return sendJson(res, 200, { ok: true, removed: true });
 }
 
@@ -297,7 +305,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "keychain.read", resource: "keychain", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "keychain.read", resource: "keychain", scopeLabel: scope });
 
   if (!deps.keychain)
     return sendJson(res, 200, { scopeId: scope, people: [], credentials: [], grants: [], asks: [], enabled: false });
@@ -328,7 +336,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     deps.keychain.listGrants({}),
     deps.keychain.listAsks({}),
     deps.admin!.users.list(),
-    deps.admin?.listGrants() ?? Promise.resolve([]),
+    deps.admin?.listGrants(tenantOf(ctx)) ?? Promise.resolve([]),
   ]);
   const ids = [
     ...roster.map((u) => u.principalId),
@@ -388,10 +396,10 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const { member, user, principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
-  audit(deps, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
+  audit(ctx, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
 
   const [grants, stats, onboarding] = await Promise.all([
-    deps.admin?.listGrants() ?? [],
+    deps.admin?.listGrants(tenantOf(ctx)) ?? [],
     deps.sessions?.scopeConversationCount(personal),
     deps.memory ? deps.memory.read(personal).then(detectOnboardingStatus) : null,
   ]);
@@ -430,7 +438,7 @@ export async function startImpersonation(ctx: ApiCtx): Promise<void> {
   if (!target) return sendJson(res, 400, { error: "bad_request", message: "target principal required" });
   if (target === actor.id) return sendJson(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
   const member = await app.directoryMember(target);
-  audit(deps, { principalId: actor.id, action: "impersonate.start", resource: target, scopeLabel: org });
+  audit(ctx, { principalId: actor.id, action: "impersonate.start", resource: target, scopeLabel: org });
   return sendJson(res, 200, { ok: true, target, displayName: member?.displayName ?? target });
 }
 
@@ -440,7 +448,7 @@ export async function stopImpersonation(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
-  audit(deps, { principalId: actor.id, action: "impersonate.stop", resource: target || "-", scopeLabel: org });
+  audit(ctx, { principalId: actor.id, action: "impersonate.stop", resource: target || "-", scopeLabel: org });
   return sendJson(res, 200, { ok: true });
 }
 
@@ -465,7 +473,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
     actorId: actor.id,
     context: "admin",
   });
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "user.onboarding.set",
     resource: `${principalId}/${status}`,
@@ -491,7 +499,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
       deletedSessions++;
     }
   }
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "user.reset",
     resource: `${principalId}/sessions=${deletedSessions}`,
@@ -506,12 +514,12 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const b = body as { principalId?: string; role?: string; scopeId?: string };
   try {
-    const grant = await deps.admin!.createGrant(actor, {
+    const grant = await deps.admin!.createGrant(tenantOf(ctx), actor, {
       principalId: String(b.principalId ?? ""),
       role: b.role as AdminRole,
       scopeId: String(b.scopeId ?? ""),
     });
-    audit(deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "grant.create",
       resource: `${grant.principalId}/${grant.role}`,
@@ -538,8 +546,8 @@ export async function revokeAdminGrant(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    await deps.admin!.revokeGrant(actor, principalId, scope, role);
-    audit(deps, {
+    await deps.admin!.revokeGrant(tenantOf(ctx), actor, principalId, scope, role);
+    audit(ctx, {
       principalId: actor.id,
       action: "grant.revoke",
       resource: `${principalId}/${role}`,

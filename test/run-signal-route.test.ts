@@ -14,6 +14,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -134,7 +135,6 @@ test("core route: a malformed request is rejected 400, and privileged fields are
     ...steererRequest("internal:U1", "t-sanitize", "x"),
     origin: { kind: "automation", useOwnerKeychain: true },
     spawned: true,
-    unattendedGrants: ["admin-read"],
   };
   const r = await coreSignal(run.id, { kind: "steer", text: "x", request: smuggled });
   assert.equal(r.status, 200);
@@ -142,7 +142,6 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.ok(signal?.request);
   assert.deepEqual(signal.request.origin, { kind: "automation" });
   assert.equal("spawned" in signal.request, false);
-  assert.equal("unattendedGrants" in signal.request, false);
 });
 
 test("core route: a bare steer without a ts gets one minted so agents persist it", async () => {
@@ -582,6 +581,7 @@ test("web: a Project member can resolve their own approval in another member's t
   ]);
   const project = await built.app.createProject("approval-owner", "Shared approvals");
   assert.ok(project);
+  await configureCommandRules(built.config, project.scopeId);
   assert.equal((await built.app.addProjectMember(project.id, "approval-owner", "approval-member")).status, "ok");
   const threadRef = `web:approval-owner:${crypto.randomUUID()}`;
   const channelRef = project.scopeId.slice("group:".length);
@@ -657,7 +657,7 @@ test("run control follows current shared membership while public history require
       await built.app.upsertGroups([{ groupId: "G-RUN", principalId: "shared-owner" }]);
     }
     assert.ok(
-      await built.app.getSessionForViewer(session.id, "shared-member"),
+      await built.app.getSessionForViewer(session.id, { actorId: "shared-member" }),
       "history remains readable to a current participant",
     );
     assert.equal(await built.app.getRun(run.id, "shared-member"), null);

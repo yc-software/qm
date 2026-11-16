@@ -4,7 +4,7 @@ import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
-import type { ApiCtx } from "./route.ts";
+import { tenantOf, type ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
 import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
@@ -18,17 +18,19 @@ import {
   thinkingLevelsFor,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
+  HISTORY_BUDGET_DEFAULT_TOKENS,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
+import { APP_EDIT_DEFAULT_RUNTIME } from "../runtime-config.ts";
+import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
+import { credentialInjectionError, type CredentialInjection } from "../../credentials/credential-injection.ts";
 import {
-  credentialInjectionError,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
   isValidBrokerHost,
   isValidBrokerMethod,
   isValidBrokerPathPrefix,
-  type CredentialInjection,
   type DecryptedServiceCredential,
   type PublicServiceCredential,
   type ServiceCredentialInput,
@@ -43,6 +45,9 @@ import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import { appHandleResource } from "./admin/app-handle.ts";
+import type { Tenant } from "../../tenants/context.ts";
+import { COMPACT_KEEP_PERCENT } from "../../agent/context-compaction.ts";
 
 type Actor = { id: string };
 
@@ -54,7 +59,7 @@ export interface AdminResource {
   id: string;
   kind: AdminResourceKind;
   readKey?: string;
-  get?: (deps: ServerDeps, scope: string) => unknown | Promise<unknown>;
+  get?: (deps: ServerDeps, scope: string, tenant: Tenant) => unknown | Promise<unknown>;
   apply: (ctx: ApiCtx, actor: Actor, scope: string) => Promise<ApplyResult>;
   target?: "org" | "any";
   secret?: boolean;
@@ -85,6 +90,17 @@ const orgOnly = (scope: string, label: string): { error: string } | null =>
 
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
 
+function clearableInt(
+  raw: unknown,
+  min: number,
+  max: number,
+  error: string,
+): { value: number | null } | { error: string } {
+  if (raw === undefined || raw === null || raw === "") return { value: null };
+  const value = typeof raw === "number" || typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isInteger(value) && value >= min && value <= max ? { value } : { error };
+}
+
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
 
@@ -92,6 +108,22 @@ function channelContainer(scope: string): string | undefined {
   const { kind, ref } = parseScopeId(scope);
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
 }
+
+const RUNTIME_RESOURCES: {
+  id: string;
+  purpose?: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
+  label?: string;
+}[] = [
+  { id: "runtime" },
+  { id: "cron-runtime", purpose: "cron" },
+  { id: "subagent-runtime", purpose: "subagent" },
+  { id: "fallback-runtime", purpose: "fallback" },
+  {
+    id: "app-edit-runtime",
+    purpose: "appEdit",
+    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
+  },
+];
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
   {
@@ -241,7 +273,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         bots: parsed.bots,
         ambientEnabled: b.ambientEnabled as boolean | null | undefined,
       });
-      audit(ctx.deps, { principalId: actor.id, action: "surface.policy.set", resource: ref, scopeLabel: scope });
+      audit(ctx, { principalId: actor.id, action: "surface.policy.set", resource: ref, scopeLabel: scope });
       return { ok: true };
     },
   },
@@ -288,7 +320,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         body.on === true,
         actor.id,
       );
-      audit(ctx.deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: "feature-flag.update",
         resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
@@ -304,13 +336,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "teams",
     label:
       "Teams. Each team is a team:<id> scope shared by its members. Send { id, name?, isolatedInOpen?, addMembers?, addAdmins?, drop?, addRooms?, dropRooms? } or { id, remove: true }. Rooms are channel or group scopes where the team stays available; isolatedInOpen keeps it isolated when the org posture is Open.",
-    get: (deps) => deps.teams?.list(),
+    get: (deps, _scope, tenant) => deps.teams?.list(tenant),
     apply: async (ctx, actor, scope) => {
       if (!ctx.deps.teams) return { error: "not available on this deployment", status: 404 };
       const change = parseTeamChange(ctx.body);
       if ("error" in change) return change;
-      await ctx.deps.teams.apply(change, actor.id);
-      audit(ctx.deps, {
+      await ctx.deps.teams.apply(tenantOf(ctx), change, actor.id);
+      audit(ctx, {
         principalId: actor.id,
         action: change.remove ? "team.remove" : "team.update",
         resource: `team:${change.id}`,
@@ -470,8 +502,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  ...([undefined, "cron", "subagent", "fallback"] as const).map((purpose): AdminResource => ({
-    id: purpose ? `${purpose}-runtime` : "runtime",
+  ...RUNTIME_RESOURCES.map(({ id, purpose, label }): AdminResource => ({
+    id,
+    ...(label ? { label } : {}),
     refreshesModels: true,
     kind: "custom",
     target: purpose ? "org" : "any",
@@ -577,6 +610,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
     ),
   },
+  appHandleResource,
   {
     id: "branding",
     kind: "custom",
@@ -616,20 +650,55 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "browseMaxSteps",
     get: (deps, scope) => deps.config!.getBrowseMaxSteps(scope),
     apply: generic<number | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the browse step limit is org-wide");
-        if (bad) return bad;
-        const raw = (body as { steps?: unknown }).steps;
-        if (raw === undefined || raw === null || raw === "") return { value: null };
-        let steps = NaN;
-        if (typeof raw === "number") steps = raw;
-        else if (typeof raw === "string") steps = Number(raw.trim());
-        if (!Number.isInteger(steps) || steps < 1 || steps > 500) {
-          return { error: "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)" };
-        }
-        return { value: steps };
-      },
+      (body, { scope }) =>
+        orgOnly(scope, "the browse step limit is org-wide") ??
+        clearableInt(
+          (body as { steps?: unknown }).steps,
+          1,
+          500,
+          "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)",
+        ),
       (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
+    ),
+  },
+  {
+    id: "compaction-keep-percent",
+    kind: "string",
+    target: "org",
+    clearable: true,
+    label: `Percent of the history budget compaction keeps verbatim, ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
+    readKey: "compactionKeepPercent",
+    get: (deps) => deps.config!.getCompactionSettings().keepPercent,
+    apply: generic<number | null>(
+      (body, { scope }) =>
+        orgOnly(scope, "the compaction keep percent is org-wide") ??
+        clearableInt(
+          (body as { percent?: unknown }).percent,
+          COMPACT_KEEP_PERCENT.min,
+          COMPACT_KEEP_PERCENT.max,
+          `compaction-keep-percent requires { percent: integer ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} } (empty clears to the default of ${COMPACT_KEEP_PERCENT.default})`,
+        ),
+      (deps, _scope, percent) => deps.config!.setCompactionKeepPercent(percent),
+    ),
+  },
+  {
+    id: "history-budget-tokens",
+    kind: "string",
+    target: "org",
+    clearable: true,
+    label: `Ceiling on the conversation history budget in tokens, a positive integer (empty restores the default of ${HISTORY_BUDGET_DEFAULT_TOKENS}). The budget still never exceeds half of a model's usable context window. Applies to every model. Lower makes long conversations cheaper on per-token providers but keeps less history verbatim.`,
+    readKey: "historyBudgetTokens",
+    get: (deps) => deps.config!.getCompactionSettings().historyBudgetTokens,
+    apply: generic<number | null>(
+      (body, { scope }) =>
+        orgOnly(scope, "the history budget is org-wide") ??
+        clearableInt(
+          (body as { tokens?: unknown }).tokens,
+          1,
+          Number.MAX_SAFE_INTEGER,
+          `history-budget-tokens requires { tokens: positive integer } (empty clears to the default of ${HISTORY_BUDGET_DEFAULT_TOKENS})`,
+        ),
+      (deps, _scope, tokens) => deps.config!.setHistoryBudgetTokens(tokens),
     ),
   },
   {
@@ -692,6 +761,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     secret: true,
     apply: async (ctx, actor, scope) => {
       const { deps } = ctx;
+      const tenant = tenantOf(ctx);
       if (!deps.acl) return { error: "ACL store not wired", code: "not_found", status: 404 };
       if (!deps.serviceCreds) return { error: "credential store not wired", code: "not_found", status: 404 };
       const bad = orgOnly(scope, "service credentials are org-scoped");
@@ -735,7 +805,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         };
       }
       if (!existing && typeof b.expectedUpdatedAt === "number") return conflict();
-      const grantsBefore = await deps.acl.grantsFor(scope, ref);
+      const grantsBefore = await deps.acl.grantsFor(tenant, scope, ref);
       const secretBefore = existing ? await deps.serviceCreds.getServiceCredentialSecret(scope, slug) : null;
       const desiredGrants = (desired: string[]): Grant[] => {
         const desiredSet = new Set(desired);
@@ -825,14 +895,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           }
           if (!credentialRestored) return false;
           const grantsRestored =
-            (await deps.acl!.replaceGrantsIfCurrent(scope, ref, grantsWritten, grantsBefore, actor.id)) ||
-            grantShape(await deps.acl!.grantsFor(scope, ref)) === grantShape(grantsBefore);
+            (await deps.acl!.replaceGrantsIfCurrent(tenant, scope, ref, grantsWritten, grantsBefore, actor.id)) ||
+            grantShape(await deps.acl!.grantsFor(tenant, scope, ref)) === grantShape(grantsBefore);
           if (!grantsRestored) return false;
           const restored = (await deps.serviceCreds!.listServiceCredentials(scope)).find(
             (credential) => credential.slug === slug,
           );
           const restoredSecret = restored ? await deps.serviceCreds!.getServiceCredentialSecret(scope, slug) : null;
-          const restoredGrants = await deps.acl!.grantsFor(scope, ref);
+          const restoredGrants = await deps.acl!.grantsFor(tenant, scope, ref);
           return (
             publicShape(restored) === publicShape(existing) &&
             (restoredSecret?.secret ?? null) === (secretBefore?.secret ?? null) &&
@@ -854,7 +924,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       };
       const auditGrantChanges = (changes: Array<{ action: "share" | "unshare"; grantee: string }>) => {
         for (const change of changes)
-          audit(deps, {
+          audit(ctx, {
             principalId: actor.id,
             action: `service_credential.${change.action}`,
             resource: ref,
@@ -871,7 +941,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const replacement: Grant[] = [];
         grantsWritten = replacement;
         try {
-          if (!(await deps.acl.replaceGrantsIfCurrent(scope, ref, grantsBefore, replacement, actor.id)))
+          if (!(await deps.acl.replaceGrantsIfCurrent(tenant, scope, ref, grantsBefore, replacement, actor.id)))
             return mutationFailed("delete");
           auditGrantChanges(grantChanges(replacement));
           return { ok: true };
@@ -977,7 +1047,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       );
       grantsWritten = replacement;
       try {
-        if (!(await deps.acl.replaceGrantsIfCurrent(scope, ref, grantsBefore, replacement, actor.id)))
+        if (!(await deps.acl.replaceGrantsIfCurrent(tenant, scope, ref, grantsBefore, replacement, actor.id)))
           return mutationFailed(existing ? "update" : "create");
         auditGrantChanges(grantChanges(replacement));
         return { ok: true };

@@ -98,7 +98,6 @@ test("derived Fly configs contain only the deployment's region, org, sandbox, an
   assert.match(core, /^\s*FLY_ORG = "example-org"$/m);
   assert.match(core, /^\s*PI_MODEL = "example-model"$/m);
   assert.match(core, /^\s*QM_DEPLOYMENT_ID = "qm-v2:example-org:example:example-stack"$/m);
-  assert.doesNotMatch(core, /PI_DETECT_MODEL/);
   assert.doesNotMatch(core, /OIDC_ALLOWED_EMAIL_DOMAIN|OIDC_AUTH_ENDPOINT/);
 });
 

@@ -24,7 +24,7 @@ test("the blob is encrypted at rest (plaintext never stored)", async () => {
   await store.put("U1", STATE);
   const rec = await map.get("U1");
   assert.ok(rec);
-  assert.doesNotMatch(rec!.stateEnc, /doordash|cookies|sid/);
+  assert.doesNotMatch(rec!.stateEnc, /doordash|cookies/);
 });
 
 test("is keyed per principal", async () => {

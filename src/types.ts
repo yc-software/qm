@@ -116,9 +116,9 @@ export interface ChildIsolation {
 export interface SpawnMeta {
   surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
+  liveReplies?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
-  unattendedGrants?: string[];
   openFingerprint?: string;
   scopeVersion?: string;
   sessionParticipantIds?: readonly string[];
@@ -135,6 +135,8 @@ export interface SpawnMeta {
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolation;
+  persistent?: boolean;
+  retired?: boolean;
 }
 
 export interface Session {
@@ -161,7 +163,6 @@ export interface Session {
   runtime?: TurnRuntime;
   personaId?: string;
   lastActivityAt?: number;
-  lastUserPreview?: string | null;
   hasEntries?: boolean;
   working?: boolean;
   awaitingInput?: boolean;
@@ -188,6 +189,7 @@ export interface Resolution {
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
   guidance?: string;
+  soulScopeId?: ScopeId;
 }
 
 export type Permission = "read" | "write";
@@ -331,20 +333,21 @@ export interface AttachmentMeta {
 export interface GatewayContext {
   location?: string;
   details?: Record<string, string>;
+  hostIds?: Record<string, string>;
   instructions?: string;
   reactionGuidance?: string;
   botHandle?: string;
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
   text: string;
   files?: string[];
@@ -359,6 +362,7 @@ export type TurnOrigin =
       screenData?: string;
       destination?: Destination;
       useOwnerKeychain?: boolean;
+      ownerFire?: true;
     }
   | { kind: "direct" };
 
@@ -404,7 +408,6 @@ export interface TurnRequest {
   text: string;
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
-  unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
   infrequentCron?: boolean;
   personaId?: string;
@@ -424,6 +427,7 @@ export interface TurnRequest {
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
+  liveReplies?: boolean;
   envelopeWrapped?: boolean;
   displayText?: string;
   turnWallClockMs?: number;
@@ -466,6 +470,8 @@ export interface ApprovedToolCallSpec {
   input: Record<string, unknown>;
 }
 
+export const APPROVAL_LIFETIME_MS = 60 * 60_000;
+
 export interface PendingApprovalRecord {
   screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;
@@ -479,6 +485,7 @@ export interface PendingApprovalRecord {
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
+  homeChannel?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;
@@ -514,7 +521,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only" | "linked_bot";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

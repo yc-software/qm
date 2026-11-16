@@ -1,6 +1,7 @@
 import type { TurnOrigin } from "../src/types.ts";
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
-import { renderSourceInboxTask, loadInboxVoiceProfile, EMAIL_VOICE_PROFILE_NAME } from "../src/loops/inbox-loop.ts";
+import { loadInboxVoiceProfile, EMAIL_VOICE_PROFILE_NAME } from "../src/loops/inbox-loop.ts";
+import type { InboxPass, InboxPassOptions, InboxPassSummary } from "../src/loops/verdict/pass.ts";
 import { Readable } from "node:stream";
 import type { FileArtifact } from "../src/files/file-artifact-store.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
@@ -17,7 +18,7 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { securityScreenPayload } from "../src/security/security-posture.ts";
-import { ProviderTurnError } from "../src/core/turn-error.ts";
+import { ProviderTurnError, TransientTurnFailure } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
@@ -56,12 +57,11 @@ function service(
     turnResult?: TurnResult;
     dynamicResult?: () => TurnResult | undefined;
     grants?: ReturnType<typeof createShipGrantStore>;
-    samePerson?: (a: string, b: string) => Promise<boolean>;
     triageEnabledFor?: (owner: string) => Promise<boolean>;
     directory?: DirectoryStore;
     resolveRecipient?: TriggerDeps["resolveRecipient"];
     files?: Parameters<typeof createLoopFireService>[0]["files"];
-    inboxQuiet?: Parameters<typeof createLoopFireService>[0]["inboxQuiet"];
+    inboxPass?: InboxPass;
   },
 ) {
   const loops = createLoopStore(testMap());
@@ -75,14 +75,15 @@ function service(
   const fire = createLoopFireService({
     admittedWork: overrides?.admittedWork,
     crons,
-    samePerson: overrides?.samePerson,
     triageEnabledFor: overrides?.triageEnabledFor ?? (async () => true),
     loops,
     items,
     outputs,
     grants,
     files: overrides?.files ?? fakeFiles([]).store,
-    ...(overrides?.inboxQuiet ? { inboxQuiet: overrides.inboxQuiet } : {}),
+    inboxPass:
+      overrides?.inboxPass ??
+      (async (_loop, options) => ({ discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: options.discover })),
     trigger: {
       deliveries: deliveries.store as never,
       idempotency,
@@ -639,66 +640,45 @@ async function bindCron(
   return cron;
 }
 
-for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
-  test(`bound scheduled and manual loop turns use current cron grants: ${unattendedGrants}`, async () => {
-    const s = service(HAPPY);
-    const loop = await makeLoop(s.loops);
-    const cron = await bindCron(s, loop, { unattendedGrants, destination: { type: "slack", target: "C-alerts" } });
-    const scheduler = createScheduler({
-      ...singleProcessDeps(),
-      crons: s.crons,
-      deliveries: s.deliveries.store as never,
-      idempotency: s.idempotency,
-      identity: fakeIdentity() as never,
-      run: async () => {
-        throw new Error("must delegate to loop");
-      },
-      fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
-    });
-    await scheduler.tick(cron.createdAt + 60_000);
-    assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
-    assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
-    await s.fire.fire(loop.id, "manual");
-    const output = (await s.outputs.awaitingReview(loop.id))[0]!;
-    await s.fire.shipOutput(loop.id, output.id, loop.owner);
-    for (const turn of s.turns) {
-      assert.deepEqual(turn.unattendedGrants, unattendedGrants);
-      assert.equal(turn.actor.externalId, loop.owner);
-      assert.equal(turn.origin?.kind, "automation");
-      assert.equal(automationOrigin(turn)?.destination, undefined);
-      assert.equal(turn.surfaceTools, undefined);
-      assert.equal(turn.readOnly, undefined);
-    }
-    assert.equal(s.deliveries.sent.length, 0);
-  });
-}
-
-test("bound loop stages reread grants after revocation", async () => {
-  const s = service(async (req) => {
-    if (stage(req) === "intake") await s.crons.update(cron.id, { unattendedGrants: [] });
-    return HAPPY(req);
-  });
+test("bound scheduled and manual loop turns run as the owner", async () => {
+  const s = service(HAPPY);
   const loop = await makeLoop(s.loops);
-  const cron = await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
-  await s.fire.fire(loop.id, "revocation");
-  assert.deepEqual(
-    s.turns.map((t) => t.unattendedGrants),
-    [["admin.sessions.read"], [], []],
-  );
+  const cron = await bindCron(s, loop, { destination: { type: "slack", target: "C-alerts" } });
+  const scheduler = createScheduler({
+    ...singleProcessDeps(),
+    crons: s.crons,
+    deliveries: s.deliveries.store as never,
+    idempotency: s.idempotency,
+    identity: fakeIdentity() as never,
+    run: async () => {
+      throw new Error("must delegate to loop");
+    },
+    fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
+  });
+  await scheduler.tick(cron.createdAt + 60_000);
+  assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
+  assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
+  await s.fire.fire(loop.id, "manual");
   const output = (await s.outputs.awaitingReview(loop.id))[0]!;
   await s.fire.shipOutput(loop.id, output.id, loop.owner);
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, []);
+  for (const turn of s.turns) {
+    assert.equal(turn.actor.externalId, loop.owner);
+    assert.equal(automationOrigin(turn)?.ownerFire, true);
+    assert.equal(automationOrigin(turn)?.destination, undefined);
+    assert.equal(turn.surfaceTools, undefined);
+    assert.equal(turn.readOnly, undefined);
+  }
+  assert.equal(s.deliveries.sent.length, 0);
 });
 
-test("a channel loop fires as its owner with their keychain and no unattended grants", async () => {
+test("a channel loop fires as its owner with their keychain", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, { ownerScopeId: scopeId("channel", "C1") });
-  await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
+  await bindCron(s, loop);
   const result = await s.fire.fire(loop.id, "shared");
   assert.equal(result.status, "ok");
   assert.equal(s.turns.length, 3);
   for (const turn of s.turns) {
-    assert.equal(turn.unattendedGrants, undefined);
     assert.equal(automationOrigin(turn)?.useOwnerKeychain, true);
     assert.equal(turn.actor.externalId, loop.owner);
     assert.equal(turn.conversation.kind, "channel");
@@ -727,34 +707,7 @@ test("bound loops reject missing crons, foreign scheduler bindings, and authorit
   assert.equal(s.turns.length, 0);
 });
 
-test("privileged item turns inherit grants only for the owner", async () => {
-  const s = service(HAPPY);
-  const created = await makeLoop(s.loops);
-  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
-  await s.fire.fire(created.id, "setup");
-  const loop = (await s.loops.get(created.id))!;
-  const item = (await s.items.byLoop(loop.id))[0]!;
-  await s.fire.followUp(loop, item, "inspect", "josh");
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
-  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "josh")).ok, true);
-  const before = s.turns.length;
-  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "mallory")).ok, false);
-  await assert.rejects(s.fire.followUp(loop, item, "inspect", "mallory"), /only the owner/);
-  assert.equal(s.turns.length, before);
-});
-
-for (const patch of [{ enabled: false }, { archived: true }]) {
-  test(`disabled or archived bound cron cannot authorize loop turns: ${JSON.stringify(patch)}`, async () => {
-    const s = service(HAPPY);
-    const loop = await makeLoop(s.loops);
-    const cron = await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
-    await s.crons.update(cron.id, patch);
-    assert.equal((await s.fire.fire(loop.id, "disabled")).status, "failed");
-    assert.equal(s.turns.length, 0);
-  });
-}
-
-test("pausing an unprivileged cron does not block held-item follow-up", async () => {
+test("pausing a bound cron does not block held-item follow-up", async () => {
   const s = service(HAPPY);
   const created = await makeLoop(s.loops);
   const cron = await bindCron(s, created);
@@ -766,23 +719,19 @@ test("pausing an unprivileged cron does not block held-item follow-up", async ()
   const before = s.turns.length;
   await s.fire.followUp(loop, item, "inspect", loop.owner);
   assert.equal(s.turns.length, before + 1);
-  assert.equal(s.turns.at(-1)?.unattendedGrants, undefined);
-});
-
-test("privileged item turns recognize the owner's verified directory alias", async () => {
-  const s = service(HAPPY, { samePerson: async (a, b) => a === "josh" && b === "josh@example.test" });
-  const created = await makeLoop(s.loops);
-  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
-  const loop = (await s.loops.get(created.id))!;
-  await s.fire.fire(loop.id, "alias-owner");
-  const item = (await s.items.byLoop(loop.id))[0]!;
-  const result = await s.fire.itemAction(loop, item, "custom", {}, "josh@example.test");
-  assert.equal(result.ok, true);
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
-  const before = s.turns.length;
-  const refused = await s.fire.itemAction(loop, item, "custom", {}, "other@example.test");
-  assert.equal(refused.ok, false);
-  assert.equal(s.turns.length, before);
+  assert.equal(automationOrigin(s.turns.at(-1)!)?.ownerFire, true);
+  await s.fire.followUp(loop, item, "read every transcript", loop.owner, { unattended: true });
+  assert.equal(
+    automationOrigin(s.turns.at(-1)!)?.ownerFire,
+    undefined,
+    "words an automated turn sent carry no person's authority",
+  );
+  await s.fire.followUp(loop, item, "read every transcript", "another-admin");
+  assert.equal(
+    automationOrigin(s.turns.at(-1)!)?.ownerFire,
+    undefined,
+    "another administrator's words carry no owner authority",
+  );
 });
 
 test("an admitted loop drains all stages after ownership closes", async () => {
@@ -826,39 +775,6 @@ test("an admitted loop drains all stages after ownership closes", async () => {
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
 });
 
-test("inbox fires repair an existing shell without creating generic intake records", async () => {
-  const s = service(async (req) => {
-    assert.equal(req.text, renderSourceInboxTask(loop.id, "slack"));
-    await s.items.ingest([
-      {
-        loopId: loop.id,
-        dedupeKey: "channel:123",
-        source: "slack",
-        sourceAt: 123,
-        sourcePayload: {
-          title: "#support",
-          from: "Alex",
-          snippet: "Can you help?",
-          slack: { channelId: "channel", ts: "123" },
-        },
-        proposal: { by: "agent", data: { body: "Yes, I will take a look." } },
-      },
-    ]);
-    return "Synced";
-  });
-  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
-  await s.items.enqueue({ loopId: loop.id, sourceKey: "channel:123", sourceSummary: "support request" });
-  assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
-  assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
-  assert.equal(s.turns.length, 1);
-  const rows = await s.items.byLoop(loop.id);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.status, "ready");
-  assert.equal(rows[0]?.sourcePayload?.title, "#support");
-  assert.equal(rows[0]?.proposal?.data.body, "Yes, I will take a look.");
-  assert.equal((await s.outputs.byLoop(loop.id)).length, 0);
-});
-
 test("closed admission leaves item follow-ups and ship attempts untouched", async () => {
   const admission = createAdmittedWork();
   const s = service(HAPPY, { admittedWork: admission });
@@ -876,80 +792,6 @@ test("closed admission leaves item follow-ups and ship attempts untouched", asyn
   assert.deepEqual(await s.outputs.get(output.id), output);
 });
 
-test("inbox sync exceptions count once and recover on a successful retry", async () => {
-  let fail = true;
-  const s = service(() => {
-    if (fail) throw new Error("connector unavailable");
-    return "Synced";
-  });
-  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
-  assert.equal((await s.fire.fire(loop.id, "broken")).status, "failed");
-  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
-  assert.equal((await s.items.byLoop(loop.id)).length, 0);
-  fail = false;
-  assert.equal((await s.fire.fire(loop.id, "recovery")).status, "silent");
-  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
-  await s.loops.setState(loop.id, "paused");
-  assert.equal((await s.fire.fire(loop.id, "paused")).status, "silent");
-  assert.equal(s.turns.length, 2);
-});
-
-test("an inbox fire skips the sync turn only when the pre-check proves nothing new", async () => {
-  let verdict: () => Promise<{ quiet: true } | { quiet: false; reason: string }> = async () => ({ quiet: true });
-  const seen: number[] = [];
-  const s = service(() => "Synced", {
-    inboxQuiet: async (_loop, items) => {
-      seen.push(items.length);
-      return verdict();
-    },
-  });
-  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
-  const before = Date.now();
-  assert.deepEqual(await s.fire.fire(loop.id, "quiet"), {
-    status: "silent",
-    note: "inbox quiet: nothing new since the last pass",
-  });
-  assert.equal(s.turns.length, 0);
-  const afterQuiet = await s.loops.get(loop.id);
-  assert.ok((afterQuiet?.lastScanAt ?? 0) >= before);
-  assert.equal(afterQuiet?.consecutiveFailedFires, 0);
-
-  verdict = async () => ({ quiet: false, reason: "new Slack message for the user" });
-  assert.deepEqual(await s.fire.fire(loop.id, "news"), {
-    status: "silent",
-    note: "inbox sync ran: new Slack message for the user",
-  });
-  assert.equal(s.turns.length, 1);
-  assert.match(s.turns[0]?.text ?? "", /Slack inbox loop current/);
-
-  verdict = async () => {
-    throw new Error("token store down");
-  };
-  assert.deepEqual(await s.fire.fire(loop.id, "broken-check"), {
-    status: "silent",
-    note: "inbox sync ran: pre-check failed: token store down",
-  });
-  assert.equal(s.turns.length, 2);
-  assert.deepEqual(seen, [0, 0, 0]);
-
-  const plain = await makeLoop(s.loops);
-  await s.fire.fire(plain.id, "not-inbox");
-  assert.equal(seen.length, 3);
-});
-
-test("a failed inbox sync turn keeps the pre-check reason in its note", async () => {
-  const s = service(
-    () => {
-      throw new Error("connector unavailable");
-    },
-    { inboxQuiet: async () => ({ quiet: false, reason: "new Slack message for the user" }) },
-  );
-  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
-  const result = await s.fire.fire(loop.id, "news-fails");
-  assert.equal(result.status, "failed");
-  assert.match(result.note ?? "", /connector unavailable; inbox sync ran: new Slack message for the user$/);
-});
-
 const RATE_LIMITED = new ProviderTurnError("Model provider API error (rate_limit_error): slow down", {
   code: "rate_limit",
   retryable: true,
@@ -957,39 +799,120 @@ const RATE_LIMITED = new ProviderTurnError("Model provider API error (rate_limit
   raw: "429",
 });
 
-for (const [label, failure] of [
-  ["a thrown provider rate limit", { throws: RATE_LIMITED }],
-  [
-    "a failed run whose provider was rate limited",
-    { result: { status: "failed", reason: "slow down", errorCode: "rate_limit" } },
-  ],
-  ["a fire interrupted by shutdown", { result: { status: "queued" } }],
-] as const) {
-  test(`inbox fires do not quarantine on ${label}`, async () => {
-    let fail = true;
-    const s = service(
-      () => {
-        if (fail && "throws" in failure) throw failure.throws;
-        return "Synced";
-      },
-      { dynamicResult: () => (fail && "result" in failure ? (failure.result as TurnResult) : undefined) },
-    );
-    const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
-    for (let i = 0; i < 5; i++) assert.equal((await s.fire.fire(loop.id, `limited-${i}`)).status, "failed");
-    const limited = await s.loops.get(loop.id);
-    assert.equal(limited?.state, "enabled");
-    assert.equal(limited?.health, "degraded");
-    assert.equal(limited?.consecutiveFailedFires ?? 0, 0);
-    fail = false;
-    assert.equal((await s.fire.fire(loop.id, "recovered")).status, "silent");
-    assert.equal((await s.loops.get(loop.id))?.health, "healthy");
-  });
+function recordingPass(
+  respond: (loop: { id: string }, options: InboxPassOptions) => Promise<InboxPassSummary> | InboxPassSummary = (
+    _loop,
+    options,
+  ) => ({ discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: options.discover }),
+) {
+  const calls: InboxPassOptions[] = [];
+  const pass: InboxPass = async (loop, options) => {
+    calls.push(options);
+    return respond(loop, options);
+  };
+  return { pass, calls };
 }
 
-test("persistent inbox failures still quarantine and alert the owner when no destination is set", async () => {
-  const s = service(() => {
-    throw new Error("playbook asked for a tool that does not exist");
+test("inbox fires run the fetch and verdict pass instead of an agent turn", async () => {
+  const { pass, calls } = recordingPass((_loop, options) => ({
+    discovered: 2,
+    checked: 5,
+    verdicts: 3,
+    failures: [],
+    scanned: options.discover,
+  }));
+  const s = service(() => "never", { inboxPass: pass });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  const before = Date.now();
+  assert.deepEqual(await s.fire.fire(loop.id, "sync-one"), { status: "silent", note: "scanned 5, new 2, verdicts 3" });
+  assert.equal(s.turns.length, 0);
+  assert.deepEqual(calls, [{ discover: true, voiceProfile: undefined }]);
+  const after = await s.loops.get(loop.id);
+  assert.ok((after?.lastScanAt ?? 0) >= before);
+  assert.equal(after?.consecutiveFailedFires, 0);
+  assert.equal((await s.outputs.byLoop(loop.id)).length, 0);
+
+  await s.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
+  assert.equal(calls.at(-1)?.discover, false);
+  assert.equal((await s.loops.get(loop.id))?.lastScanAt, after?.lastScanAt);
+});
+
+test("inbox pass exceptions count once and recover on a successful retry", async () => {
+  let fail = true;
+  const { pass } = recordingPass(() => {
+    if (fail) throw new Error("connector unavailable");
+    return { discovered: 0, checked: 1, verdicts: 0, failures: [], scanned: true };
   });
+  const s = service(() => "never", { inboxPass: pass });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  assert.equal((await s.fire.fire(loop.id, "broken")).status, "failed");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
+  fail = false;
+  assert.equal((await s.fire.fire(loop.id, "recovery")).status, "silent");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
+  await s.loops.setState(loop.id, "paused");
+  assert.equal((await s.fire.fire(loop.id, "paused")).status, "silent");
+  assert.equal(s.turns.length, 0);
+});
+
+test("an inbox pass where every conversation failed is a failed fire that keeps the pass note", async () => {
+  const { pass } = recordingPass(() => ({
+    discovered: 0,
+    checked: 2,
+    verdicts: 0,
+    failures: ["Slack rate limited; the next sync will retry", "Slack rate limited; the next sync will retry"],
+    scanned: false,
+    firstError: new TransientTurnFailure("Slack rate limited; the next sync will retry"),
+  }));
+  const s = service(() => "never", { inboxPass: pass });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  const result = await s.fire.fire(loop.id, "limited");
+  assert.equal(result.status, "failed");
+  assert.match(result.note ?? "", /rate limited.*; scanned 2, new 0, verdicts 0; failures: /);
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires ?? 0, 0);
+  assert.equal((await s.loops.get(loop.id))?.lastScanAt, undefined);
+});
+
+test("a partly failed inbox pass is a clean fire that reports the failures", async () => {
+  const { pass } = recordingPass(() => ({
+    discovered: 0,
+    checked: 3,
+    verdicts: 2,
+    failures: ['verdict was not a JSON object: "nope"'],
+    scanned: true,
+  }));
+  const s = service(() => "never", { inboxPass: pass });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  assert.deepEqual(await s.fire.fire(loop.id, "partial"), {
+    status: "silent",
+    note: 'scanned 3, new 0, verdicts 2; failures: verdict was not a JSON object: "nope"',
+  });
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
+});
+
+test("inbox fires do not quarantine on a rate-limited pass", async () => {
+  let fail = true;
+  const { pass } = recordingPass(() => {
+    if (fail) throw RATE_LIMITED;
+    return { discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: true };
+  });
+  const s = service(() => "never", { inboxPass: pass });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  for (let i = 0; i < 5; i++) assert.equal((await s.fire.fire(loop.id, `limited-${i}`)).status, "failed");
+  const limited = await s.loops.get(loop.id);
+  assert.equal(limited?.state, "enabled");
+  assert.equal(limited?.health, "degraded");
+  assert.equal(limited?.consecutiveFailedFires ?? 0, 0);
+  fail = false;
+  assert.equal((await s.fire.fire(loop.id, "recovered")).status, "silent");
+  assert.equal((await s.loops.get(loop.id))?.health, "healthy");
+});
+
+test("persistent inbox failures still quarantine and alert the owner when no destination is set", async () => {
+  const { pass } = recordingPass(() => {
+    throw new Error("the Slack token store is unreachable");
+  });
+  const s = service(() => "never", { inboxPass: pass });
   const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   for (let i = 0; i < 3; i++) await s.fire.fire(loop.id, `broken-${i}`);
   const after = await s.loops.get(loop.id);
@@ -1083,21 +1006,11 @@ function fakeFiles(entries: Array<{ name: string; body: string; ownerScopeId?: s
   };
 }
 
-test("Email drafting turns carry the owner's voice profile from Files instead of the stored playbook", async () => {
+test("Email passes and follow-up chats carry the owner's voice profile from Files instead of the stored playbook", async () => {
   const profile = "Hard rule: opens with hey, never Best.";
   const files = fakeFiles([{ name: EMAIL_VOICE_PROFILE_NAME, body: profile }]);
-  const w = service(
-    (req) => {
-      if (stage(req) === "work") {
-        assert.equal((req.text ?? "").split(profile).length, 2);
-        assert.doesNotMatch(req.text ?? "", /Stale stored instructions/);
-        return '```json\n{"proposal":{"to":["sender@example.com"],"body":"hey, Thursday works"},"outputs":[]}\n```';
-      }
-      if (stage(req) === "judge") assert.doesNotMatch(req.text ?? "", /opens with hey/);
-      return '```json\n{"outcome":"met","reason":"Draft ready for review"}\n```';
-    },
-    { files: files.store },
-  );
+  const { pass, calls } = recordingPass();
+  const w = service(() => "Sure.", { files: files.store, inboxPass: pass });
   const loop = await makeLoop(w.loops, {
     surface: "inbox:gmail",
     sources: ["gmail"],
@@ -1111,36 +1024,41 @@ test("Email drafting turns carry the owner's voice profile from Files instead of
       source: "gmail",
       sourceAt: 1000,
       sourcePayload: { snippet: "Does Thursday work?", gmail: { threadId: "thread1" } },
+      proposal: { by: "agent", data: { body: "Thursday works" } },
     },
   ]);
   await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
-  assert.deepEqual(w.turns.map(stage), ["work", "judge"]);
+  assert.equal(w.turns.length, 0);
+  assert.equal(calls[0]?.voiceProfile, profile);
   assert.equal(files.opened, 1);
   const held = (await w.items.byLoop(loop.id))[0]!;
   await w.fire.followUp(loop, held, "make it shorter", loop.owner);
   const chat = w.turns.at(-1)?.text ?? "";
   assert.equal(chat.split(profile).length, 2);
-  assert.doesNotMatch(chat, /No email voice profile is on file/);
+  assert.doesNotMatch(chat, /Stale stored instructions/);
+  assert.match(chat, /Gmail inbox loop/);
 });
 
 test("a Slack loop never reads the email voice profile", async () => {
   const files = fakeFiles([{ name: EMAIL_VOICE_PROFILE_NAME, body: "Hard rule: opens with hey." }]);
-  const s = service(() => "Synced", { files: files.store });
+  const { pass, calls } = recordingPass();
+  const s = service(() => "never", { files: files.store, inboxPass: pass });
   const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   assert.equal((await s.fire.fire(loop.id, "sync-1")).status, "silent");
-  assert.doesNotMatch(s.turns[0]?.text ?? "", /opens with hey/);
+  assert.equal(calls[0]?.voiceProfile, undefined);
   assert.equal(files.opened, 0);
 });
 
-test("the inbox sync pass scans since the last clean sync began, untouched by failures or item-only fires", async () => {
-  let outcome: "ok" | "failed" | "transient" = "ok";
-  const s = service((req) => {
+test("the scan watermark moves only on a clean discovery fire, untouched by failures or item-only fires", async () => {
+  let outcome: "ok" | "failed" | "transient" | "unscanned" = "ok";
+  const { pass } = recordingPass((_loop, options) => {
     if (outcome === "failed") throw new Error("connector unavailable");
     if (outcome === "transient") throw RATE_LIMITED;
-    if (stage(req) === "work") return '```json\n{"proposal":{"body":"on it"},"outputs":[]}\n```';
-    if (stage(req) === "judge") return '```json\n{"outcome":"met","reason":"ok"}\n```';
-    return "Synced";
+    if (outcome === "unscanned")
+      return { discovered: 0, checked: 3, verdicts: 2, failures: ["search is down"], scanned: false };
+    return { discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: options.discover };
   });
+  const s = service(() => "never", { inboxPass: pass });
   const loop = await makeLoop(s.loops, {
     surface: "inbox:slack",
     sources: ["slack"],
@@ -1148,21 +1066,19 @@ test("the inbox sync pass scans since the last clean sync began, untouched by fa
   });
   const before = Date.now();
   assert.equal((await s.fire.fire(loop.id, "sync-1")).status, "silent");
-  assert.doesNotMatch(s.turns[0]?.text ?? "", /since \d{4}-/);
   const firstStart = (await s.loops.get(loop.id))?.lastScanAt;
   assert.ok(firstStart && firstStart >= before);
   outcome = "transient";
   await s.fire.fire(loop.id, "sync-2");
   outcome = "failed";
   await s.fire.fire(loop.id, "sync-3");
+  outcome = "unscanned";
+  assert.equal((await s.fire.fire(loop.id, "sync-3b")).status, "silent");
   outcome = "ok";
-  await s.items.ingest([
-    { loopId: loop.id, dedupeKey: "channel:1", source: "slack", sourceAt: 1, sourcePayload: { snippet: "hi" } },
-  ]);
   await s.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
   assert.equal((await s.loops.get(loop.id))?.lastScanAt, firstStart);
   assert.equal((await s.fire.fire(loop.id, "sync-4")).status, "silent");
-  assert.ok(s.turns.at(-1)?.text?.includes(`since ${new Date(firstStart).toISOString()}`));
+  assert.ok(((await s.loops.get(loop.id))?.lastScanAt ?? 0) > firstStart);
 });
 
 test("the voice profile loader takes only the exact file name", async () => {
@@ -1406,7 +1322,6 @@ test("Slack work and follow-up prompts preserve message images without repeating
             avatarUrl: "https://example.com/avatar.png",
           },
         ],
-        slackAvatarsRefreshAt: 12345,
       },
     },
   ]);
@@ -1414,63 +1329,11 @@ test("Slack work and follow-up prompts preserve message images without repeating
   const [item] = await s.items.byLoop(loop.id);
   await s.fire.followUp(loop, item!, "Please revise", loop.owner);
   for (const req of s.turns.filter((req) => stage(req) === "work" || req.text?.startsWith("[Loop item chat]"))) {
-    assert.doesNotMatch(req.text ?? "", /avatarUrl|slackAvatarsRefreshAt/);
+    assert.doesNotMatch(req.text ?? "", /avatarUrl/);
     assert.match(req.text ?? "", /task.png/);
     assert.match(req.text ?? "", /Alex/);
   }
   assert.match(JSON.stringify((await s.items.get(item!.id))!.sourcePayload), /avatar.png/);
-});
-
-test("a reply Loop's work stage can settle an event as replied or no reply needed", async () => {
-  for (const [kind, actionKind, actionResult] of [
-    ["replied", "replied", "Sent it over"],
-    ["no_reply_needed", "no_reply_needed", "Answered in Gmail"],
-  ] as const) {
-    let judged = false;
-    const w = service((req) => {
-      if (stage(req) === "intake") throw new Error("Event work must not enumerate");
-      if (stage(req) === "work")
-        return `Done.\n\`\`\`json\n{"resolution":{"kind":"${kind}","reason":"Answered in Gmail"}}\n\`\`\``;
-      judged = true;
-      return '```json\n{"outcome":"met","reason":"ok"}\n```';
-    });
-    const loop = await makeLoop(w.loops, { sources: ["gmail"], shipActions: [{ action: "send", gate: "hold" }] });
-    await w.items.ingest([
-      {
-        loopId: loop.id,
-        dedupeKey: "thread1",
-        source: "gmail",
-        sourceAt: 2000,
-        sourcePayload: {
-          snippet: "Can you send the deck?",
-          gmail: { threadId: "thread1" },
-          latestEvent: { author: "owner", at: 2000, text: "Sent it over" },
-        },
-      },
-    ]);
-    const result = await w.fire.fire(loop.id, `push:${kind}`, undefined, { enumerate: false });
-    const [item] = await w.items.byLoop(loop.id);
-    assert.equal(item?.status, "skipped");
-    assert.equal(item?.actionKind, actionKind);
-    assert.equal(item?.actionResult, actionResult);
-    assert.equal(item?.proposal, undefined);
-    assert.equal(judged, false);
-    assert.deepEqual(result.summary?.ready, []);
-    assert.deepEqual(result.summary?.shipped, []);
-  }
-});
-
-test("a resolution from a non-reply Loop is ignored", async () => {
-  const w = service((req) =>
-    stage(req) === "work"
-      ? '```json\n{"resolution":{"kind":"replied","reason":"x"},"outputs":[]}\n```'
-      : '```json\n{"outcome":"met","reason":"ok"}\n```',
-  );
-  const loop = await makeLoop(w.loops);
-  await w.items.ingest([{ loopId: loop.id, dedupeKey: "k", sourceAt: 1, sourcePayload: {} }]);
-  await w.fire.fire(loop.id, "push:generic", undefined, { enumerate: false });
-  const [item] = await w.items.byLoop(loop.id);
-  assert.notEqual(item?.status, "skipped");
 });
 
 test("an unclosed fence after the real reply parses in linear time", async () => {

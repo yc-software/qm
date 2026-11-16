@@ -158,10 +158,12 @@ async function refreshDetail(id: string): Promise<void> {
       api<LoopDetail>(`/api/loops/${encodeURIComponent(id)}`),
       api<NonNullable<typeof ingestion>>(`/api/loops/${encodeURIComponent(id)}/ingestion`),
     ]);
+    if (id !== activeLoopId) return;
     activeDetail = detail;
     ingestion = sources;
     loopsNotice = "";
   } catch (e) {
+    if (id !== activeLoopId) return;
     loopsNotice = errMessage(e);
   }
   paint();
@@ -202,8 +204,6 @@ async function setLoopIcon(loop: LoopView, value: string | null | File): Promise
 export function openLoop(id: string): void {
   resetActiveLoop();
   activeLoopId = id;
-  activeDetail = null;
-  playbookDraft = null;
   void refreshDetail(id);
   paint();
 }

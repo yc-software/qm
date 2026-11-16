@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emptyEndingNote, EMPTY_ENDING_NOTE, EMPTY_ENDING_MIN_BUDGET_MS } from "../src/agent/agent-run.ts";
+import { emptyEndingNote, EMPTY_ENDING_NOTE, EMPTY_ENDING_MIN_BUDGET_MS } from "../src/agent/turn-wall-clock.ts";
 
 type Opts = Parameters<typeof emptyEndingNote>[0];
 
@@ -17,7 +17,7 @@ function base(over: Partial<Opts> = {}): Opts {
     userAborted: false,
     cancelled: false,
     surfaceTools: false,
-    pollFire: false,
+    replyOptional: false,
     ref: { modelCalls: 48 },
     session: session(""),
     turnWallClockMs: 1_800_000,
@@ -27,10 +27,10 @@ function base(over: Partial<Opts> = {}): Opts {
 }
 
 test("a poll fire ending empty is the silence contract — never nudged into narration", () => {
-  assert.equal(emptyEndingNote(base({ pollFire: true })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, ref: { modelCalls: 1 } })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, ref: {} })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, session: session("  \n ") })), null);
+  assert.equal(emptyEndingNote(base({ replyOptional: true })), null);
+  assert.equal(emptyEndingNote(base({ replyOptional: true, ref: { modelCalls: 1 } })), null);
+  assert.equal(emptyEndingNote(base({ replyOptional: true, ref: {} })), null);
+  assert.equal(emptyEndingNote(base({ replyOptional: true, session: session("  \n ") })), null);
 });
 
 test("a non-poll turn ending empty mid-work gets the plain note", () => {

@@ -3,12 +3,6 @@ import assert from "node:assert/strict";
 import { CORE_SECRET_SPECS } from "../src/deployment/secret-schema.ts";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
 
-// The runtime schema (src/deployment/secret-schema.ts, validated on core boot) and the CLI
-// provisioning schema (cli/src/secrets.ts, driving `qm secrets`) are maintained separately by
-// design — the CLI never imports core. This test keeps them from drifting apart silently:
-// every secret the runtime can demand must be one the CLI knows how to provision.
-
-// The env name a CLI spec ultimately delivers to the core process.
 const cliCoreEnvNames = new Set(
   FIRST_PARTY_SECRET_SPECS.filter((spec) => spec.service === "core").map((spec) => spec.envName ?? spec.name),
 );
@@ -25,8 +19,6 @@ test("every runtime-validated core secret is provisionable through the CLI schem
 });
 
 test("runtime schema conditions reference env vars the CLI schema also conditions on", () => {
-  // Env vars the runtime's requiredWhen rules read. Each must also drive a CLI spec condition,
-  // so `qm secrets` and core boot validation agree about when a secret becomes required.
   const runtimeConditionEnv = [
     "SANDBOX_BACKEND",
     "DEPLOY_PROVIDER",

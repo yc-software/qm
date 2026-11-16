@@ -22,6 +22,9 @@ const CLEANUP_TIMEOUT_MS = 5_000;
 const CHECKPOINT_SETTLE_MS = 180_000;
 const SANDBOX_START_MS = 180_000;
 const STALE_SCRIPT_MINUTES = 5;
+const LIST_PAGE_SIZE = 100;
+const LIVE_STATUSES = ["creating", "running", "suspending", "suspended", "resuming"] as const;
+const KILL_AFTER_SEC = 5;
 
 const sdkErrors = {
   statusOf: (error: unknown): number | undefined =>
@@ -35,10 +38,21 @@ export interface RenderSandboxInfo {
   expiresAtMs: number;
 }
 
+export interface RenderLiveSandbox extends RenderSandboxInfo {
+  egressAllowlist?: string[];
+}
+
+export interface RenderListedSandbox {
+  id: string;
+  createdAtMs: number;
+}
+
 interface RenderCreateOptions {
+  name?: string;
   snapshotId?: string;
   image?: string;
   lifetimeSec: number;
+  egressAllowlist?: string[];
   onCreated?: (sandboxId: string) => Promise<void>;
 }
 
@@ -61,7 +75,8 @@ export interface RenderImage {
 export interface RenderClient {
   create(options: RenderCreateOptions): Promise<RenderSandboxInfo>;
   importImage(source: string, name: string): Promise<RenderImage>;
-  get(sandboxId: string): Promise<RenderSandboxInfo | null>;
+  get(sandboxId: string): Promise<RenderLiveSandbox | null>;
+  listLive(name: string): Promise<RenderListedSandbox[]>;
   terminate(sandboxId: string): Promise<void>;
   runScript(
     sandboxId: string,
@@ -97,11 +112,17 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     ...(value.error ? { error: value.error } : {}),
   });
   const isMissing = (error: unknown): boolean => error instanceof ClientError && error.statusCode === 404;
-  const get = async (sandboxId: string): Promise<RenderSandboxInfo | null> => {
+  const get = async (sandboxId: string): Promise<RenderLiveSandbox | null> => {
     try {
-      return normalizeInfo(
-        await retryOperation(() => api.get(sandboxId), "idempotent", { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS }),
-      );
+      const value = await retryOperation(() => api.get(sandboxId), "idempotent", {
+        ...sdkErrors,
+        timeoutMs: CONTROL_TIMEOUT_MS,
+      });
+      const { type, rules } = value.networkPolicy;
+      return {
+        ...normalizeInfo(value),
+        ...(type === "allow-all" ? {} : { egressAllowlist: (rules ?? []).map((rule) => rule.domain.toLowerCase()) }),
+      };
     } catch (error) {
       if (isMissing(error)) return null;
       throw error;
@@ -181,7 +202,9 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   };
   const runScript: RenderClient["runScript"] = async (sandboxId, script, timeoutSec) => {
     const path = `${RENDER_SCRIPT_DIR}/${randomUUID()}.sh`;
-    const signal = AbortSignal.timeout(timeoutSec * 1000 + Math.min(CONTROL_TIMEOUT_MS, timeoutSec * 1000));
+    const signal = AbortSignal.timeout(
+      (timeoutSec + KILL_AFTER_SEC) * 1000 + Math.min(CONTROL_TIMEOUT_MS, Math.max(timeoutSec, KILL_AFTER_SEC) * 1000),
+    );
     const prelude = `rm -f ${shq(path)}; find ${shq(RENDER_SCRIPT_DIR)} -type f -mmin +${STALE_SCRIPT_MINUTES} -delete 2>/dev/null\n`;
     try {
       await retryOperation(
@@ -189,7 +212,13 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         "idempotent",
         { ...sdkErrors, signal, timeoutMs: TRANSFER_TIMEOUT_MS },
       );
-      return await exec(sandboxId, `timeout ${timeoutSec} sh ${shq(path)}`, signal);
+      return await exec(
+        sandboxId,
+        `sh -c ${shq(
+          `s=$(date +%s); $(command -v setsid) timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh ${shq(path)} & p=$!; wait $p; rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then [ $(($(date +%s) - s)) -lt ${timeoutSec} ] || kill -s KILL -- -$p 2>/dev/null; fi; exit $rc`,
+        )}`,
+        signal,
+      );
     } catch (error) {
       if (error instanceof SandboxEndedError) throw error;
       await exec(sandboxId, `rm -f ${shq(path)}`, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(
@@ -199,12 +228,23 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     }
   };
   return {
-    async create({ snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, egressAllowlist, onCreated }) {
       let source: { snapshotId: string } | { image: string } | Record<string, never> = {};
       if (snapshotId) source = { snapshotId };
       else if (image) source = { image };
+      const label = name ? { name } : {};
       const created = await retryOperation(
-        () => api.create({ plan: RENDER_SANDBOX_PLAN, timeoutSeconds: lifetimeSec, idleTimeoutSeconds: 0, ...source }),
+        () =>
+          api.create({
+            plan: RENDER_SANDBOX_PLAN,
+            timeoutSeconds: lifetimeSec,
+            idleTimeoutSeconds: 0,
+            networkPolicy: egressAllowlist
+              ? { type: "allow-list", rules: egressAllowlist.map((domain) => ({ domain })) }
+              : { type: "allow-all" },
+            ...label,
+            ...source,
+          }),
         "refused",
         {
           ...sdkErrors,
@@ -259,6 +299,21 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       };
     },
     get,
+    async listLive(name) {
+      const listed: RenderListedSandbox[] = [];
+      for (let cursor: string | undefined; ;) {
+        const after = cursor ? { cursor } : {};
+        const page = await retryOperation(
+          () => api.list({ name, status: [...LIVE_STATUSES], limit: LIST_PAGE_SIZE, ...after }),
+          "idempotent",
+          { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS },
+        );
+        for (const entry of page)
+          listed.push({ id: entry.sandbox.id, createdAtMs: Date.parse(entry.sandbox.createdAt) });
+        if (page.length < LIST_PAGE_SIZE) return listed;
+        cursor = page.at(-1)!.cursor;
+      }
+    },
     terminate,
     runScript,
     async readFileBytes(sandboxId, absPath) {

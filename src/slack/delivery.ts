@@ -4,7 +4,7 @@ import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import type { WornPersona } from "../types.ts";
-import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
+import { emojiNameOf } from "./emoji-map.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -31,19 +31,19 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const defaultIdentity: { identity: BotIdentityOverride } = { identity: {} };
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  defaultIdentity.identity = identity ?? {};
 }
 
 function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
   if (icon?.kind === "custom") return icon.name;
-  if (icon?.kind === "emoji") return EMOJI_NAME_BY_CHAR[icon.value.replace(/\uFE0F/g, "")];
+  if (icon?.kind === "emoji") return emojiNameOf(icon.value);
   return undefined;
 }
 
 export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
-  const id = defaultIdentity;
+  const id = defaultIdentity.identity;
   const username = persona?.name.trim() || id.username;
   const personaEmoji = slackEmojiName(persona?.icon);
   const icon_emoji = personaEmoji ? `:${personaEmoji}:` : id.icon_emoji;
@@ -362,7 +362,6 @@ export function createDeliveryTracker(
       const count = (failures.get(id) ?? 0) + 1;
       if (count >= maxAttempts) {
         failures.delete(id);
-        posted.delete(id);
         dead.set(id, Date.now() + giveUpRetryMs);
         capMap(dead, maxTracked);
         return true;
@@ -482,10 +481,6 @@ export async function findPostedByKey(
   return undefined;
 }
 
-export function statusPlaceholderKey(runId: string): string {
-  return `status:run:${runId}`;
-}
-
 export function recoveryVerifyOldest(createdAt: number | undefined, editRef: string | undefined): string | undefined {
   const bounds: number[] = [];
   if (typeof createdAt === "number") bounds.push(createdAt / 1000 - 60);
@@ -578,12 +573,10 @@ export async function postWithVerify(
         const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
         await sleep(retryAfter * 1000);
 
-        try {
-          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
-          if (found) return { ...found, reused: true };
-        } catch {
-          /* verification is best-effort on this path */
-        }
+        const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(
+          swallowAs("slack: rate-limit verify", null),
+        );
+        if (found) return { ...found, reused: true };
         continue;
       }
       let found: { ts: string; channel: string } | undefined;

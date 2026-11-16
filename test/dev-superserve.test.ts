@@ -7,7 +7,7 @@ const resolve = (worktree: string, env: Record<string, string> = {}) =>
     worktree,
     requested: "superserve",
     corePort: 8080,
-    lock: "/tmp/qm-dev-superserve-test",
+    tunnel: async () => null,
     baseEnv: {
       SUPERSERVE_API_KEY: "test-key",
       SUPERSERVE_TEMPLATE: "qm-agent-test",

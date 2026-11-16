@@ -47,12 +47,14 @@ final class QueuedInputsModel {
   let scopeID: String
   let onSnapshot: (QueuedInputsResponse) async -> Void
   var inputs: [QueuedInput] = []
+  private(set) var steering: [QueuedInput] = []
   var edit: QueuedInputEdit?
-  var expanded = false
   private var refreshError: String?
   private var actionError: String?
-  var error: String? { actionError ?? refreshError }
-  var mutating = false
+  var error: String? { actionError ?? (inputs.isEmpty && edit == nil ? nil : refreshError) }
+  private(set) var mutatingRunID: String?
+  var mutating: Bool { mutatingRunID != nil }
+  private(set) var retrying = false
   var activeRunID: String?
   private var mutation: Task<Void, Never>?
   private var retry: Task<Void, Never>?
@@ -69,6 +71,19 @@ final class QueuedInputsModel {
     self.onSnapshot = onSnapshot
   }
 
+  func apply(_ snapshot: QueuedInputsResponse) {
+    refreshRevision += 1
+    if snapshot.runId != activeRunID { steering = [] }
+    activeRunID = snapshot.runId
+    inputs = snapshot.queued ?? []
+    refreshError = nil
+  }
+
+  func settleSteering(recorded timestamps: Set<String>) {
+    guard !steering.isEmpty else { return }
+    steering.removeAll { timestamps.contains("queued-steer:\(threadRef):\($0.runId)") }
+  }
+
   func refresh() async {
     guard !mutating else { return }
     let expectedRevision = revision
@@ -79,9 +94,7 @@ final class QueuedInputsModel {
         "api/runs/active", query: [.init(name: "threadRef", value: threadRef)])
       try Task.checkCancellation()
       guard expectedRevision == revision, expectedRefresh == refreshRevision else { return }
-      activeRunID = result.runId
-      inputs = result.queued ?? []
-      refreshError = nil
+      apply(result)
       await onSnapshot(result)
     } catch is CancellationError {
     } catch {
@@ -93,7 +106,7 @@ final class QueuedInputsModel {
 
   func poll() async {
     while !Task.isCancelled {
-      await refresh()
+      if !retrying { await refresh() }
       do { try await Task.sleep(for: .seconds(3)) } catch { return }
     }
   }
@@ -102,16 +115,22 @@ final class QueuedInputsModel {
     revision += 1
     retry?.cancel()
     retry = nil
+    retrying = false
     mutation?.cancel()
     mutation = nil
-    mutating = false
+    mutatingRunID = nil
   }
 
   func retryRefresh() {
-    retry?.cancel()
+    guard !mutating, !retrying else { return }
+    let expectedRevision = revision
+    retrying = true
     refreshError = nil
     actionError = nil
-    retry = Task { await refresh() }
+    retry = Task {
+      defer { if revision == expectedRevision { retrying = false } }
+      await refresh()
+    }
   }
 
   func save() {
@@ -149,7 +168,7 @@ final class QueuedInputsModel {
 
   private func perform(runID: String, body: [String: Any], action: Action) {
     guard !mutating else { return }
-    mutating = true
+    mutatingRunID = runID
     revision += 1
     let expectedRevision = revision
     actionError = nil
@@ -190,7 +209,9 @@ final class QueuedInputsModel {
         case .edit, .withdraw:
           if edit?.runID == runID { edit = nil }
         case .steer:
-          break
+          if response.accepted == true, let input = inputs.first(where: { $0.runId == runID }) {
+            steering.append(input)
+          }
         }
       } catch is CancellationError {
       } catch {
@@ -199,120 +220,157 @@ final class QueuedInputsModel {
           "\(action.failure) The message may have changed or started. \(error.localizedDescription)"
       }
       guard expectedRevision == revision else { return }
-      mutating = false
+      mutatingRunID = nil
       mutation = nil
       if !Task.isCancelled { await refresh() }
     }
   }
 }
 
-struct QueuedRunsView: View {
-  let client: APIClient
-  let threadRef: String
-  let scopeID: String
-  let onSnapshot: (QueuedInputsResponse) async -> Void
-
-  var body: some View {
-    QueuedRunsContent(
-      client: client, threadRef: threadRef, scopeID: scopeID, onSnapshot: onSnapshot
-    ).id(threadRef)
-  }
-}
-
 @MainActor
-private struct QueuedRunsContent: View {
-  @State private var model: QueuedInputsModel
-  @Environment(\.scenePhase) private var phase
+struct QueuedRunsView: View {
+  let model: QueuedInputsModel
 
-  init(
-    client: APIClient, threadRef: String, scopeID: String,
-    onSnapshot: @escaping (QueuedInputsResponse) async -> Void
-  ) {
-    _model = State(
-      initialValue: QueuedInputsModel(
-        client: client, threadRef: threadRef, scopeID: scopeID, onSnapshot: onSnapshot))
+  private var waiting: [QueuedInput] {
+    model.inputs.filter { input in !model.steering.contains { $0.runId == input.runId } }
   }
 
   var body: some View {
-    @Bindable var model = model
-    VStack(alignment: .leading, spacing: 10) {
-      if !model.inputs.isEmpty || model.edit != nil {
-        DisclosureGroup(isExpanded: $model.expanded) {
-          ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 10) {
-              ForEach(model.inputs) { input in
-                VStack(alignment: .leading, spacing: 8) {
-                  Text(input.text.isEmpty ? "Attachments" : input.text).lineLimit(3)
-                  if input.hasAttachments == true {
-                    Label("Includes attachments", systemImage: "paperclip").foregroundStyle(
-                      .secondary)
-                  }
-                  HStack {
-                    Button("Edit") { model.edit = QueuedInputEdit(input) }
-                    Button("Steer now") { model.steer(input) }
-                      .disabled(model.activeRunID == nil)
-                      .accessibilityHint("Use this queued message to direct the running task")
-                    Spacer()
-                    Button("Withdraw", role: .destructive) { model.withdraw(input) }
-                  }
-                }.padding(.vertical, 6)
-              }
-              if let edit = model.edit {
-                VStack(alignment: .leading, spacing: 8) {
-                  Text("Edit queued message").font(.subheadline.weight(.semibold))
-                  TextField(
-                    "Message",
-                    text: Binding(get: { model.edit?.text ?? "" }, set: { model.edit?.text = $0 }),
-                    axis: .vertical
-                  )
-                  .lineLimit(2...6).textFieldStyle(.roundedBorder)
-                  if let current = model.inputs.first(where: { $0.id == edit.runID }),
-                    current.text != edit.original
-                  {
-                    Text(
-                      "This message changed elsewhere. Your draft is kept; cancel and reopen to edit the latest version."
-                    )
-                    .foregroundStyle(.orange)
-                  } else if !model.inputs.contains(where: { $0.id == edit.runID }) {
-                    Text("This message is no longer queued. Copy your draft before closing.")
-                      .foregroundStyle(.secondary)
-                  }
-                  HStack {
-                    Button("Cancel") { model.edit = nil }
-                    Spacer()
-                    Button("Save edit") { model.save() }.disabled(
-                      !edit.canSave
-                        || !model.inputs.contains(where: {
-                          $0.id == edit.runID && $0.text == edit.original
-                        }))
-                  }
-                }
-              }
-            }
+    VStack(alignment: .leading, spacing: 0) {
+      if !model.steering.isEmpty || !waiting.isEmpty || model.edit != nil {
+        Group {
+          if model.steering.count + waiting.count > 3 {
+            ScrollView(.vertical) { rows }.frame(height: 200)
+          } else {
+            rows
           }
-          .frame(maxHeight: 240)
-        } label: {
-          Label(
-            "Queued messages (\(model.inputs.count))",
-            systemImage: "text.line.first.and.arrowtriangle.forward"
-          )
-          .font(.subheadline)
         }
-        .disabled(model.mutating)
+        .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(QMTheme.border, lineWidth: 1) }
+        .padding(.bottom, 10)
       }
-      if model.mutating { NativeWave().accessibilityLabel("Updating queue") }
+      if model.retrying {
+        NativeLoadingRail()
+          .accessibilityHidden(false)
+          .accessibilityLabel("Refreshing queued messages")
+          .padding(.bottom, 10)
+      }
       if let error = model.error {
         HStack(alignment: .top) {
           Text(error).font(.caption).foregroundStyle(.red)
           Button("Refresh") {
             model.retryRefresh()
-          }.font(.caption).disabled(model.mutating)
+          }.font(.caption).disabled(model.mutating || model.retrying)
         }
+        .padding(.bottom, 10)
       }
     }
-    .task(id: phase) {
-      if phase == .active { await model.poll() } else { model.stop() }
+  }
+
+  private var rows: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Queued").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 2)
+      ForEach(model.steering) { input in
+        row(input) {
+          Text("Steering…").font(.footnote).foregroundStyle(.secondary).padding(.trailing, 8)
+        }
+      }
+      ForEach(waiting) { input in
+        if model.edit?.runID == input.runId {
+          editor
+        } else {
+          row(input) { actions(input) }
+        }
+      }
+      if let edit = model.edit, !waiting.contains(where: { $0.runId == edit.runID }) {
+        editor
+      }
     }
-    .onDisappear { model.stop() }
+    .padding(.bottom, 4)
+  }
+
+  private func row(_ input: QueuedInput, @ViewBuilder trailing: () -> some View) -> some View {
+    HStack(spacing: 8) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(input.text.isEmpty ? "Attachments" : input.text).font(.subheadline).lineLimit(2)
+        if input.hasAttachments == true, !input.text.isEmpty {
+          Label("Attachments", systemImage: "paperclip").font(.caption).foregroundStyle(.secondary)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      trailing()
+    }
+    .padding(.leading, 14).padding(.trailing, 6).frame(minHeight: 44)
+  }
+
+  @ViewBuilder
+  private func actions(_ input: QueuedInput) -> some View {
+    if model.mutatingRunID == input.runId {
+      NativeWave().accessibilityLabel("Updating queue").padding(.trailing, 8)
+    } else {
+      Button {
+        model.steer(input)
+      } label: {
+        Label("Steer", systemImage: "arrow.turn.down.right")
+          .font(.footnote.weight(.semibold))
+          .foregroundStyle(QMTheme.paper)
+          .padding(.horizontal, 12).frame(minHeight: 32)
+          .background(QMTheme.ink.opacity(model.activeRunID == nil ? 0.25 : 1), in: Capsule())
+          .frame(minHeight: 44)
+      }
+      .disabled(model.activeRunID == nil || model.mutating || model.retrying)
+      .accessibilityHint("Send this queued message to the running task now")
+      Menu {
+        Button("Edit", systemImage: "pencil") { model.edit = QueuedInputEdit(input) }
+        Button("Remove", systemImage: "trash", role: .destructive) { model.withdraw(input) }
+      } label: {
+        Image(systemName: "ellipsis").frame(width: 36, height: 44)
+      }
+      .disabled(model.mutating || model.retrying)
+      .accessibilityLabel("More actions for queued message")
+    }
+  }
+
+  @ViewBuilder
+  private var editor: some View {
+    if let edit = model.edit {
+      let current = model.inputs.first { $0.runId == edit.runID }
+      VStack(alignment: .leading, spacing: 8) {
+        TextField(
+          "Message",
+          text: Binding(get: { model.edit?.text ?? "" }, set: { model.edit?.text = $0 }),
+          axis: .vertical
+        )
+        .lineLimit(1...6).font(.subheadline)
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(QMTheme.paper, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityLabel("Edit queued message")
+        if let current, current.text != edit.original {
+          Text(
+            "This message changed elsewhere. Your draft is kept; cancel and reopen to edit the latest version."
+          )
+          .font(.caption).foregroundStyle(QMTheme.warning)
+        } else if current == nil {
+          Text("This message is no longer queued. Copy your draft before closing.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        HStack {
+          Button("Cancel") { model.edit = nil }
+          Spacer()
+          if model.mutatingRunID == edit.runID {
+            NativeWave().accessibilityLabel("Updating queue")
+          } else {
+            Button("Save") { model.save() }
+              .fontWeight(.semibold)
+              .disabled(
+                !edit.canSave || current?.text != edit.original || model.mutating
+                  || model.retrying)
+          }
+        }
+        .font(.footnote).frame(minHeight: 32)
+      }
+      .padding(.horizontal, 14).padding(.vertical, 8)
+    }
   }
 }

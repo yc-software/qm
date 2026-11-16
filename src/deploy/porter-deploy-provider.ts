@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
-import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
+import type { PublishedApp, AppVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import {
   appEnv as declaredAppEnv,
@@ -32,6 +32,8 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
+import { appHostLabel } from "../tenants/app-handle.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
 import { execFailure, swallow, swallowAs } from "../util/errors.ts";
 
 const APP_DIR = "/app";
@@ -56,6 +58,7 @@ export interface StoredPorterDeployBody {
   name: string;
   host: string;
   port?: number;
+  domain?: string;
   createdAtMs: number;
 }
 
@@ -99,28 +102,32 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     ttl: Math.max(1, resolveCacheMs),
   });
 
-  const baseName = (d: Deployment): string => `${prefix}-app-${d.id.slice(0, 12).toLowerCase()}`;
-  const volumeName = (d: Deployment): string => `${baseName(d)}-data`;
-  const domainOf = (d: Deployment): string | undefined =>
-    appsDomain && visibility !== "internal" ? `${porterDnsLabel(d.name ?? d.id)}.${appsDomain}` : undefined;
+  const baseName = (d: PublishedApp): string => `${prefix}-app-${d.id.slice(0, 12).toLowerCase()}`;
+  const volumeName = (d: PublishedApp): string => `${baseName(d)}-data`;
+  const domainOf = (d: PublishedApp): string | undefined => {
+    const handle = tenantAppHandle();
+    return appsDomain && handle && visibility !== "internal"
+      ? `${porterDnsLabel(appHostLabel(handle, d.name ?? d.id))}.${appsDomain.toLowerCase()}`
+      : undefined;
+  };
   const endpointOf = (body: { host: string; port?: number }): DeployEndpoint =>
     body.port
       ? { host: body.host, port: body.port }
       : { host: body.host, port: ENDPOINT_PORT, tls: true, publicUrl: `https://${body.host}/` };
 
-  const serialized = <T>(d: Deployment, fn: () => Promise<T>): Promise<T> =>
+  const serialized = <T>(d: PublishedApp, fn: () => Promise<T>): Promise<T> =>
     queue(d.id, () => advisoryLock.withLock(`porter-deploy:${d.id}`, fn));
 
-  async function liveBodies(d: Deployment): Promise<PorterSandboxLike[]> {
+  async function liveBodies(d: PublishedApp): Promise<PorterSandboxLike[]> {
     const found = await listPorterSandboxes(client, { [DEPLOY_TAG]: d.id });
     return found.filter((b) => !porterPhaseSettled(b.phase));
   }
 
-  async function retireBodies(d: Deployment, drain: boolean): Promise<void> {
+  async function retireBodies(d: PublishedApp, drain: boolean): Promise<void> {
     for (const b of await liveBodies(d)) await retirePorterBody(b, drain);
   }
 
-  function appEnv(version: DeploymentVersion): Record<string, string> {
+  function appEnv(version: AppVersion): Record<string, string> {
     return declaredAppEnv(version.env, { HOME: HOME_DIR, PORT: String(appPort), DATA_DIR });
   }
 
@@ -144,12 +151,12 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     if (r.code !== 0) throw execFailure(`porter deploy: unpacking into ${guestDir}`, r);
   }
 
-  async function materialize(sandboxId: string, volumeId: string, version: DeploymentVersion): Promise<void> {
+  async function materialize(sandboxId: string, volumeId: string, version: AppVersion): Promise<void> {
     await unpackTree(sandboxId, volumeId, APP_DIR, version.snapshotDir);
     if (version.homeDir) await unpackTree(sandboxId, volumeId, HOME_DIR, version.homeDir);
   }
 
-  async function startApp(d: Deployment, sandboxId: string, version: DeploymentVersion): Promise<void> {
+  async function startApp(d: PublishedApp, sandboxId: string, version: AppVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const script = [
       `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
@@ -165,7 +172,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     });
   }
 
-  async function addressOf(d: Deployment, sb: PorterSandboxLike): Promise<{ host: string; port?: number }> {
+  async function addressOf(d: PublishedApp, sb: PorterSandboxLike): Promise<{ host: string; port?: number }> {
     const status = await sb.refresh();
     if (visibility === "internal") {
       const address = status.internal_address ?? "";
@@ -187,7 +194,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     return { host };
   }
 
-  async function liveStored(d: Deployment): Promise<StoredPorterDeployBody | null> {
+  async function liveStored(d: PublishedApp): Promise<StoredPorterDeployBody | null> {
     const stored = await store.get(d.id);
     if (!stored) return null;
     const status = await client.sandboxes.raw.get(stored.sandboxId).catch((e) => {
@@ -195,7 +202,9 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       throw e;
     });
     if (status?.phase === "running") return stored;
-    await store.delete(d.id).catch((e) => swallow("porter-deploy: drop dead body pointer", e));
+    await store
+      .deleteIf(d.id, (cur) => cur.sandboxId === stored.sandboxId)
+      .catch((e) => swallow("porter-deploy: drop dead body pointer", e));
     return null;
   }
 
@@ -209,6 +218,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         await retireBodies(d, true);
         await store.delete(d.id).catch((e) => swallow("porter-deploy: clear stale pointer", e));
         const name = `${baseName(d)}-${randomUUID().slice(0, 5)}`;
+        const domain = domainOf(d);
         const sb = await client.sandboxes.create({
           image,
           name,
@@ -219,7 +229,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
           networking:
             visibility === "internal"
               ? [{ port: appPort, internal: true }]
-              : [{ port: appPort, ...(domainOf(d) ? { domains: [{ domain: domainOf(d), visibility }] } : {}) }],
+              : [{ port: appPort, ...(domain ? { domains: [{ domain, visibility }] } : {}) }],
           ...(opts.ttlSec ? { ttl_seconds: opts.ttlSec } : {}),
         });
         try {
@@ -227,7 +237,14 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
           const address = await addressOf(d, sb);
           await materialize(sb.id, volumeId, version);
           await startApp(d, sb.id, version);
-          await store.put(d.id, { deploymentId: d.id, sandboxId: sb.id, name, ...address, createdAtMs: Date.now() });
+          await store.put(d.id, {
+            deploymentId: d.id,
+            sandboxId: sb.id,
+            name,
+            ...address,
+            ...(domain ? { domain } : {}),
+            createdAtMs: Date.now(),
+          });
           return endpointOf(address);
         } catch (e) {
           await sb.terminate().catch((err) => swallow("porter-deploy: abandon failed body", err));
@@ -239,7 +256,8 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       const cached = resolveCache.get(d.id);
       if (cached) return cached;
       const stored = await liveStored(d);
-      if (!stored) {
+      const domain = domainOf(d);
+      if (!stored || (domain && (stored.domain ?? stored.host) !== domain)) {
         resolveCache.delete(d.id);
         return null;
       }

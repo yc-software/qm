@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type PublishedApp } from "../src/deploy/deploy-store.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
@@ -20,7 +20,7 @@ test("crons persist to the backing map (a second store instance reads them back)
     createdBy: "U1",
     destination: { type: "dm", target: "U1" },
   });
-  await s1.markFired(c.id, 123);
+  await s1.markFired(c, 123);
 
   const s2 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const got = await s2.get(c.id);
@@ -70,8 +70,8 @@ test("skill mutations reject names that could escape or collide when materialize
   );
 });
 
-test("deployments persist with immutable versions across store instances", async () => {
-  const map = testMap<Deployment>();
+test("apps persist with immutable versions across store instances", async () => {
+  const map = testMap<PublishedApp>();
   const s1 = createDeployStore(testDeployBackings({ deployments: map }));
   const d = await s1.create({
     ownerScopeId: scopeId("team", "T1"),

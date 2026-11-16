@@ -8,15 +8,15 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp, AppVersion } from "../src/deploy/deploy-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 const tmp = () => mkdtempSync(join(tmpdir(), "deployment-env-"));
 
-function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>) {
+function svc(appEnv?: (publishedApp: PublishedApp) => Promise<Record<string, string>>) {
   const deployStore = createDeployStore(testDeployBackings());
-  let applied: DeploymentVersion | undefined;
+  let applied: AppVersion | undefined;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
     apply: async (_d, version) => {
@@ -32,7 +32,7 @@ function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, 
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: tmp(),
-    ...(deploymentEnv ? { deploymentEnv } : {}),
+    ...(appEnv ? { appEnv } : {}),
   });
   return {
     service,
@@ -43,10 +43,10 @@ function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, 
   };
 }
 
-test("deploy-service: deploymentEnv sees the deployment record and is merged into the version handed to the provider, never persisted", async () => {
-  const s = svc(async (deployment) => ({
+test("deploy-service: appEnv sees the app record and is merged into the version handed to the provider, never persisted", async () => {
+  const s = svc(async (publishedApp) => ({
     AGENT_API_URL: "https://core",
-    AGENT_CREDENTIAL_TOKEN: `tok-${deployment.id}-${deployment.createdBy}`,
+    AGENT_CREDENTIAL_TOKEN: `tok-${publishedApp.id}-${publishedApp.createdBy}`,
   }));
   const d = await s.service.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -60,7 +60,7 @@ test("deploy-service: deploymentEnv sees the deployment record and is merged int
   assert.equal(stored.env?.AGENT_CREDENTIAL_TOKEN, undefined, "the stored version record never holds the token");
 });
 
-test("deploy-service: without deploymentEnv the provider sees no deployment env", async () => {
+test("deploy-service: without appEnv the provider sees no app env", async () => {
   const s = svc();
   await s.service.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "node x", files: [] });
   assert.equal(s.applied?.env?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -81,7 +81,7 @@ test("deploy-service: redeploy inherits the current version's env and home files
   await s.service.redeploy(d.id, { entrypoint: "node x", files: [] });
   assert.deepEqual((await versionAt(2)).env, { DB_URL: "postgres://one" }, "omitted env inherits");
   assert.equal((await versionAt(2)).homeDir, (await versionAt(1)).homeDir, "omitted homeFiles inherit");
-  assert.deepEqual(s.applied?.env, { DB_URL: "postgres://one", VIEWER_IDENTITY_KEY: "viewer" }, "deploymentEnv on top");
+  assert.deepEqual(s.applied?.env, { DB_URL: "postgres://one", VIEWER_IDENTITY_KEY: "viewer" }, "appEnv on top");
 
   await s.service.redeploy(d.id, { entrypoint: "node x", files: [], env: { DB_URL: "postgres://two" } });
   assert.deepEqual((await versionAt(3)).env, { DB_URL: "postgres://two" }, "provided env replaces");
@@ -91,7 +91,7 @@ test("deploy-service: redeploy inherits the current version's env and home files
   assert.equal((await versionAt(4)).homeDir, undefined, "empty homeFiles clear");
   assert.deepEqual(s.applied?.env, { VIEWER_IDENTITY_KEY: "viewer" });
 
-  await s.service.rollbackDeployment(d.id, 3);
+  await s.service.rollbackApp(d.id, 3);
   await s.service.redeploy(d.id, { entrypoint: "node x", files: [] });
   assert.deepEqual((await versionAt(5)).env, { DB_URL: "postgres://two" }, "inherits from the rolled-back version");
 

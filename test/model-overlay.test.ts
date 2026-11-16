@@ -1,6 +1,9 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { randomUUID } from "node:crypto";
+import { withTenant } from "../src/tenants/context.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
@@ -59,12 +62,11 @@ import {
   modelSupported,
   modelSupportsFastMode,
   fastModeModelIds,
-  defaultWebuiModelIds,
+  modelOfferedInWebui,
 } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
-import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 
 const createModelOverlayStore: typeof createStore = (backing, write) =>
   createStore(backing, write, async () => ({ fingerprint: "fixture", probe: async () => {} }));
@@ -134,10 +136,14 @@ test("store reload and independent readers observe edits and soft deletion witho
   const inFlight = getRequiredModel(MODEL_ID);
   assert.equal(contextTokenBudgetForModel(MODEL_ID), 150_000);
   assert.deepEqual(inFlight.cost, spec.cost);
-  assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
-  assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
+  assert.ok(modelOfferedInWebui(MODEL_ID));
   assert.equal(modelSupported(MODEL_ID), true);
   assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
+  withTenant(randomUUID(), () => {
+    assert.equal(modelSupported(MODEL_ID), false);
+    setModelOverlays([]);
+  });
+  assert.equal(modelSupported(MODEL_ID), true);
   await writer.upsert(
     { ...spec, contextWindow: 600_000, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
     "editor",
@@ -299,7 +305,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
       });
       assert.equal(recoveredTurn.status, "queued", JSON.stringify(recoveredTurn));
     }
-    const events = await built.auditLog.events();
+    const events = await built.auditLog.events(testTenant);
     assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
     assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
   } finally {
@@ -514,4 +520,18 @@ test("runtime normalization preserves native capabilities and reflects overlay c
   });
   assert.equal(native.fastMode, true);
   assert.equal(native.effortLevel, "max");
+});
+
+test("OpenRouter catalogs keep every tool model past the first thousand, with long names", async () => {
+  const data = Array.from({ length: 1_001 }, (_, i) => ({
+    id: `catalog-vendor/model-${i}`,
+    name: `Model ${i} ${"x".repeat(250)}`,
+    supported_parameters: ["tools"],
+    context_length: 128_000,
+    top_provider: { max_completion_tokens: 8_192 },
+    pricing: { prompt: "0.000001", completion: "0.000002" },
+    architecture: { input_modalities: ["text"] },
+  }));
+  const catalog = await selectableModelCatalog(async () => Response.json({ data }));
+  assert.ok(catalog.some((m) => m.id === "catalog-vendor/model-1000"));
 });

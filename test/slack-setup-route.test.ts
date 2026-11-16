@@ -6,12 +6,14 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { testMap } from "./support/test-database.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 type SlackSetupStatus = {
   configured: boolean;
   source: string;
   setupUnavailable?: boolean;
   installAvailable?: boolean;
+  installUrl?: string;
   setup?: {
     tokenUrl: string;
     submitUrl: string;
@@ -53,7 +55,7 @@ async function fixture(t: test.TestContext) {
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += String(chunk);
-    const ctx = { req, res, deps, body: raw ? JSON.parse(raw) : {} } as unknown as ApiCtx;
+    const ctx = { req, res, deps, tenant, body: raw ? JSON.parse(raw) : {} } as unknown as ApiCtx;
     await (req.method === "GET" ? getSlackInstallation : startSlackInstallation)(ctx);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -112,6 +114,22 @@ test("environment-backed bot skips service lookup and missing service status rem
   assert.equal(legacy.installAvailable, true);
 });
 
+test("shared app status links the settings Add to Slack page even when setup status is unavailable", async (t) => {
+  const f = await fixture(t);
+  const installUrl = "https://agent.example/settings/slack-settings?slack=install";
+  for (const response of [new Response("", { status: 404 }), new Response("", { status: 503 })]) {
+    f.remote(response);
+    const status = (await (await f.request()).json()) as SlackSetupStatus;
+    assert.equal(status.setup, undefined);
+    assert.equal(status.installAvailable, true);
+    assert.equal(status.installUrl, installUrl);
+  }
+  f.remote(Response.json({ companyOwned: true, appReady: false, connected: false }));
+  const owned = (await (await f.request()).json()) as SlackSetupStatus;
+  assert.equal(owned.installUrl, installUrl);
+  assert.equal(owned.setup?.installUrl, installUrl);
+});
+
 test("explicit browser start selects setup or installation and rejects arbitrary steps", async (t) => {
   const f = await fixture(t);
   assert.equal((await f.request("POST", { step: "setup" }, "member")).status, 403);
@@ -119,6 +137,6 @@ test("explicit browser start selects setup or installation and rejects arbitrary
   assert.equal(f.calls.length, 0);
   for (const step of ["setup", "install"]) {
     assert.equal((await f.request("POST", { step })).status, 200);
-    assert.equal(f.calls.at(-1)?.body, JSON.stringify({ step }));
+    assert.equal(JSON.parse(String(f.calls.at(-1)?.body)).step, step);
   }
 });

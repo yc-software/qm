@@ -48,14 +48,20 @@ export function attestableAudience(actorId: string | undefined, scope: string | 
 
 export type AttestAudience = "personal" | "any";
 
+export interface AttestingTurn {
+  actAsActor?: boolean;
+  botActor?: boolean;
+}
+
 export function attestsInAudience(
   audience: AttestAudience | undefined,
   actorId: string | undefined,
   scope: string | undefined,
-  actAsActor: boolean | undefined,
+  turn: AttestingTurn,
 ): boolean {
+  if (turn.botActor === true) return false;
   if (attestableAudience(actorId, scope)) return true;
-  return audience === "any" && actAsActor === true && !!actorId && !isSystemActor(actorId);
+  return audience === "any" && turn.actAsActor === true && !!actorId && !isSystemActor(actorId);
 }
 
 export function attestedPerson(id: string | undefined, callee: string): string {
@@ -70,6 +76,10 @@ export function personIds(id: string): string[] {
   if (!key) return [];
   const canonical = links?.canonical(key) ?? id.trim();
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
+}
+
+export function ownsWebThread(threadRef: string, id: string): boolean {
+  return personIds(id).some((owner) => threadRef.startsWith(`web:${owner}:`));
 }
 
 export function rosterIds(id: string): string[] {

@@ -70,7 +70,10 @@ export function composeCronEditNotice(args: {
   const body = clauses.length
     ? joinAnd(clauses.map((c, i) => (i === 0 ? c : c.replace(` ${cron}`, " it"))))
     : `edited ${cron}`;
-  return `Heads up: ${args.editorName} ${body}.`;
+  const takeover = args.changes.includes("owner")
+    ? " It now runs as them, with their access, since the task is theirs."
+    : "";
+  return `Heads up: ${args.editorName} ${body}.${takeover}`;
 }
 
 export interface CronEditNoticeSink {

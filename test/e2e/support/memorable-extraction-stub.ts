@@ -1,6 +1,5 @@
 import { createServer, type Server } from "node:http";
 
-/** Minimal stand-in for the Memorable extraction service: turns a trace into a deterministic draft. */
 export function startExtractionStub(): Promise<{ server: Server; url: string; requests: unknown[] }> {
   const requests: unknown[] = [];
   const server = createServer((req, res) => {

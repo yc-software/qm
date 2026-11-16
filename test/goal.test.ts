@@ -387,6 +387,8 @@ test("governGoal parses the verdict, treats a non-verdict as no decision, and ga
   assert.equal(goal.status, "active");
   assert.equal(applyGovernorVerdict(goal, pause).verdict, "pause");
   assert.equal(goal.status, "paused");
+  assert.equal(goal.pauseReason, "which account?");
+  assert.equal(goal.governor, undefined, "the pause reason is stored once");
   assert.equal(
     (await judged('{"verdict": "complete", "reasons": "x"}', { trigger: "checkpoint" })).verdict,
     "continue",

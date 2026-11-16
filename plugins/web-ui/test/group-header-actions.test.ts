@@ -111,7 +111,6 @@ async function withTabs(run: (requests: string[]) => Promise<void>): Promise<voi
     );
     canvas.loadPersistedSplit();
     assert.equal(canvas.mountRestoredCanvas(), true);
-    // Warm both tabs so switching does not trigger a transcript load and incidental redraw.
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const title of ["a", "b"]) {
       const tab = Array.from(document.querySelectorAll(".dv-tab")).find(

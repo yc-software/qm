@@ -5,25 +5,26 @@ import type { EntrySearchHit, SessionStore } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
 import { msOf, SEARCHABLE_ITEM, searchTypeExpr, TENANT, USER_KINDS } from "./items.ts";
 import { participantSessionsSql } from "./session-participants.ts";
-import { OWN_CHAT, rowToParticipantSession } from "./session-rows.ts";
+import { BOT_VISIBLE, OWN_CHAT, rowToParticipantSession } from "./session-rows.ts";
 
 const SEARCH_TIMEOUT_MS = 10_000;
 
 export function createSessionSearch(q: PgPool["q"]): Pick<SessionStore, "searchSessionTitles" | "searchEntries"> {
   return {
-    async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {
+    async searchSessionTitles(principalId, query, limit = 20, botActor): Promise<Session[]> {
       const needle = query.trim();
       if (needle.length < 2) return [];
       const rows = await q(
-        participantSessionsSql(` AND ${OWN_CHAT("s")} AND COALESCE(p.title, s.title) ILIKE $2`) +
-          " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
+        participantSessionsSql(
+          ` AND ${OWN_CHAT("s")} AND COALESCE(p.title, s.title) ILIKE $2${BOT_VISIBLE(botActor)}`,
+        ) + " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
         [principalId, likeContains(needle), Math.max(1, Math.min(Math.floor(limit), 100))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.map(rowToParticipantSession);
     },
 
-    async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
+    async searchEntries(principalId, query, limit = 40, botActor): Promise<EntrySearchHit[]> {
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
@@ -34,7 +35,7 @@ export function createSessionSearch(q: PgPool["q"]): Pick<SessionStore, "searchS
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
            FROM items i
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
-           JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}
+           JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}${BOT_VISIBLE(botActor)}
           WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
             AND ${SEARCHABLE_ITEM("i")}
           ORDER BY i.created_at DESC, i.session_id, i.seq DESC

@@ -235,7 +235,9 @@ test("reconstructMessagesFromHistory replays a context summary as a user turn an
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
   assert.equal(msgs[0]!.role, "user");
-  assert.match((msgs[0] as { content: Array<{ text: string }> }).content[0]!.text, /Earlier: set up the project/);
+  const summaryText = (msgs[0] as { content: Array<{ text: string }> }).content[0]!.text;
+  assert.match(summaryText, /Earlier: set up the project/);
+  assert.match(summaryText, /covering entries through seq 0\b/);
   assert.equal(msgs.filter((m) => m.role === "toolResult").length, 2);
 });
 
@@ -745,5 +747,23 @@ test("replayed context marks each Pacific calendar day once, dating overheard Sl
   assert.equal(
     (msgs[4]!.content[0] as { text: string }).text,
     "── Monday, October 19, 2026 ──\nhas the deadline passed?",
+  );
+});
+
+test("a scheduled task's post replays as a tagged message, never merged into the agent's own words", () => {
+  const history = [
+    at({ kind: "UserMessage", text: "post a check here in 3 minutes" }, 1),
+    at({ kind: "AgentMessage", text: "Will post once at 9:52." }, 2),
+    at({ kind: "AgentMessage", text: "live check 2", body: { via: "cron" } }, 3),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => [m.role, m.content.map((c) => (c as { text?: string }).text).join("")]),
+    [
+      ["user", msgs[0]!.content.map((c) => (c as { text?: string }).text).join("")],
+      ["assistant", "Will post once at 9:52."],
+      ["user", '<message from="agent" via="cron">live check 2</message>'],
+    ],
   );
 });

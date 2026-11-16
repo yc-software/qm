@@ -13,7 +13,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   if (!(await activePrincipal(ctx.deps, ctx.actor.p))) return sendJson(ctx.res, 403, { error: "forbidden" });
   const body = ctx.body as { sessionId?: unknown; text?: unknown; clientMessageId?: unknown } | null;
   if (typeof body?.sessionId !== "string") return sendJson(ctx.res, 400, { error: "invalid_session" });
-  const source = await ctx.app.getSessionForViewer(body.sessionId, ctx.actor.p);
+  const source = await ctx.app.getSessionForViewer(body.sessionId, { actorId: ctx.actor.p });
   if (!source) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = parseSlackThreadRef(source.session.threadRef);
   if (!target || !/^[CDG][A-Z0-9]+$/.test(target.container) || (target.root && !/^\d+\.\d+$/.test(target.root)))

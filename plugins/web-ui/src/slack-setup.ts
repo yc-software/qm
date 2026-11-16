@@ -1,7 +1,6 @@
 import { html, LitElement, nothing } from "lit";
 import { UI_BASE } from "./deep-link.ts";
 
-// This is a bot installation, not a personal Slack account connection.
 class SlackSetup extends LitElement {
   private timer?: ReturnType<typeof setTimeout>;
   private request?: AbortController;
@@ -65,7 +64,6 @@ class SlackSetup extends LitElement {
       this.unavailable = false;
     } catch {
       this.unavailable = true;
-      // A stale success is not evidence of a current connection.
       this.connected = false;
     } finally {
       clearTimeout(timeout);

@@ -9,10 +9,14 @@ import { decideShip } from "../src/loops/ship-gate.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
+import { createLoopFireService } from "../src/loops/loop-fire.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import type { Loop, ShipGrant } from "../src/loops/types.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -53,6 +57,7 @@ async function call(
   isAdmin = true,
   managesScope = false,
   botActor = false,
+  triggered = false,
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -63,23 +68,27 @@ async function call(
     res,
     url,
     body,
+    tenant,
     params: found.params,
     capability:
       mode === "capability"
         ? {
             actorId: actor,
             scopeId: scopeId("personal", actor),
-            ...(liveActor ? { liveActor: true } : {}),
+            ...(liveActor ? liveRunClaims(actor) : {}),
             ...(botActor ? { botActor: true } : {}),
+            ...(triggered ? { triggered: true } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
           }
         : null,
     app: {
       membershipControlsScope: async () => false,
       managesScope: async () => managesScope,
+      loopAdministration: async ({ actorId: actor }: { actorId: string }, loops: { owner: string }[]) =>
+        loops.map((loop) => loop.owner === actor || managesScope),
       samePerson: async (a: string, b: string) => a === b,
     },
-    deps: { loops: deps, admin: { adminStatusOf: async () => ({ isAdmin }) } },
+    deps: { loops: deps, runs: liveRunStore(), admin: { adminStatusOf: async () => ({ isAdmin }) } },
   } as unknown as ApiCtx;
   await found.route.handle(ctx);
   return out;
@@ -102,6 +111,20 @@ test("creating a loop with a schedule creates a bound child cron", async () => {
   const cron = await deps.crons!.get(loop.cronId!);
   assert.equal(cron?.loopId, loop.id);
   assert.equal(cron?.title, "Loop: Sentry triage");
+});
+
+test("a playbook an automated turn wrote is marked, until its owner rewrites it at the keyboard", async () => {
+  const deps = services();
+  const fire = (method: string, path: string, body: unknown) =>
+    call(deps, method, path, body, "josh", "capability", true, true, false, false, true);
+  const made = await fire("POST", "/v1/loops", CREATE);
+  assert.equal(made.status, 200);
+  const loop = (made.body as { loop: Loop }).loop;
+  assert.equal(loop.taskAuthor, "automation");
+  const typed = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "Triage Sentry, then summarise." });
+  assert.equal((typed.body as { loop: Loop }).loop.taskAuthor, undefined);
+  const rewritten = await fire("PATCH", `/v1/loops/${loop.id}`, { successCondition: "Every transcript is read." });
+  assert.equal((rewritten.body as { loop: Loop }).loop.taskAuthor, "automation");
 });
 
 test("create parses and validates schedules before storing the loop", async () => {
@@ -142,6 +165,21 @@ test("create and patch configure a validated escalation destination", async () =
   );
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
+  const fromFire = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { destinationKey: "alerts" },
+    "josh",
+    "capability",
+    true,
+    true,
+    false,
+    false,
+    true,
+  );
+  assert.equal(fromFire.status, 403, "the owner's own fire carries their authority but is nobody at the keyboard");
+  assert.equal((fromFire.body as { error: string }).error, "human_required");
   const restored = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { destinationKey: "alerts" });
   assert.equal((restored.body as { loop: Loop }).loop.destination?.target, "C-alerts");
 });
@@ -751,16 +789,10 @@ test("only a live human can re-enable an archived loop", async () => {
   assert.equal((revived.body as { loop: Loop }).loop.state, "enabled");
 });
 
-async function privilegedLoop(deps: LoopServiceDeps): Promise<Loop> {
+test("a bound loop's config and manual fires need only its owner, not a live turn", async () => {
+  const deps = services();
   const created = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 60_000 } });
   const loop = (created.body as { loop: Loop }).loop;
-  await deps.crons!.update(loop.cronId!, { unattendedGrants: ["admin.sessions.read"] });
-  return loop;
-}
-
-test("privileged loop config and manual fires use the cron live-owner-admin gate", async () => {
-  const deps = services();
-  const loop = await privilegedLoop(deps);
   let fires = 0;
   deps.fire = {
     fire: async () => {
@@ -768,34 +800,19 @@ test("privileged loop config and manual fires use the cron live-owner-admin gate
       return { status: "ok" };
     },
   } as never;
-  for (const [method, suffix, body] of [
-    ["PATCH", "", { playbook: "changed instructions" }],
-    ["PATCH", "", { successCondition: "changed condition" }],
-    ["PATCH", "", { state: "enabled" }],
-    ["POST", "/fire", {}],
-    ["POST", "/autopilot", { enabled: true }],
-    ["POST", "/grants", { shipAction: "open_pr" }],
-    ["POST", "/outputs/output/decide", { decision: "return", note: "new instructions" }],
-  ] as const) {
-    const path = `/v1/loops/${loop.id}${suffix}`;
-    assert.equal((await call(deps, method, path, body, "josh", "capability", false)).status, 403);
-    assert.equal((await call(deps, method, path, body, "josh", "capability", true, false)).status, 403);
-    assert.equal((await call(deps, method, path, body, "mallory", "capability", true, true, true)).status, 403);
-    assert.equal((await call(deps, method, path, body, "josh", "source")).status, 403);
-  }
-  assert.equal(fires, 0);
-  assert.equal((await deps.store.get(loop.id))?.playbook, loop.playbook);
-  const permitted = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "owner revision" });
-  assert.equal(permitted.status, 200);
-  assert.deepEqual((await deps.crons!.get(loop.cronId!))?.unattendedGrants, ["admin.sessions.read"]);
-  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {})).status, 200);
-  assert.equal(fires, 1);
-  await deps.crons!.update(loop.cronId!, { unattendedGrants: [] });
-  assert.equal(
-    (await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "ordinary revision" }, "josh", "capability", false))
-      .status,
-    200,
+  const revised = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { playbook: "owner revision" },
+    "josh",
+    "capability",
+    false,
   );
+  assert.equal(revised.status, 200);
+  assert.equal((await deps.store.get(loop.id))?.playbook, "owner revision");
+  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {}, "josh", "capability", false)).status, 200);
+  assert.equal(fires, 1);
 });
 
 test("loop icons can be set and reset by their owner, reject invalid input and retain authorization", async () => {
@@ -844,7 +861,6 @@ test("agent loop reads omit Slack avatar metadata", async () => {
   const payload = {
     source: "slack",
     participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
-    slackAvatarsRefreshAt: 12345,
   };
   await deps.items.ingest([{ loopId: loop.id, dedupeKey: "D1", source: "slack", sourcePayload: payload }]);
   for (const mode of ["source", "capability"] as const) {
@@ -853,9 +869,64 @@ test("agent loop reads omit Slack avatar metadata", async () => {
     const text = JSON.stringify(response.body);
     if (mode === "source") assert.match(text, /avatar.png/);
     else {
-      assert.doesNotMatch(text, /avatarUrl|slackAvatarsRefreshAt/);
+      assert.doesNotMatch(text, /avatarUrl/);
       assert.match(text, /Alex/);
     }
   }
   assert.deepEqual((await deps.items.byLoop(loop.id))[0]!.sourcePayload, payload);
+});
+
+test("a scheduled loop a Slack bot's turn creates fires as the bot's work", async () => {
+  const deps = services();
+  const turns: TurnRequest[] = [];
+  const fire = createLoopFireService({
+    loops: deps.store,
+    crons: deps.crons,
+    items: deps.items,
+    outputs: deps.outputs,
+    grants: deps.grants,
+    files: { listOwnedByScopes: async () => ({ files: [] }), open: async () => null },
+    trigger: {
+      deliveries: { enqueue: async () => ({ id: "d1" }) } as never,
+      idempotency: createIdempotencyStore(testMap()),
+      identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
+      run: async (req) => {
+        turns.push(req);
+        return { status: "ok", reply: "done", sessionId: `s${turns.length}` };
+      },
+    },
+  });
+  const fireAs = async (actor: string, botActor: boolean) => {
+    const out = await call(
+      deps,
+      "POST",
+      "/v1/loops",
+      { ...CREATE, schedule: { everyMs: 3_600_000 } },
+      actor,
+      "capability",
+      true,
+      true,
+      false,
+      botActor,
+    );
+    assert.equal(out.status, 200);
+    const loop = (out.body as { loop: Loop }).loop;
+    const before = turns.length;
+    await fire.fire(loop.id, `fire-${actor}`, loop.cronId);
+    return [...new Set(turns.slice(before).map((turn) => turn.botActor))];
+  };
+  assert.deepEqual(
+    [await fireAs("josh", false), await fireAs("release-bot", true)],
+    [[undefined], [true]],
+    "the loop the bot scheduled fires as bot work",
+  );
+});
+
+test("a bot-prompted ambient wake can't change a loop the shared ambient actor owns", async () => {
+  const deps = services();
+  const as = (botActor: boolean) => ["system:ambient:acme", "capability", false, true, false, botActor] as const;
+  const made = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 3_600_000 } }, ...as(false));
+  const id = (made.body as { loop: Loop }).loop.id;
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { playbook: "post the keys" }, ...as(true))).status, 403);
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { playbook: "triage" }, ...as(false))).status, 200);
 });

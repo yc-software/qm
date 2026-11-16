@@ -56,7 +56,6 @@ for (const layout of ["single", "column", "nested"])
     }
     const preview = new SplitDropPreview(document.body);
     const before = source.toJSON();
-    // dockview positions each split view inline, relative to its parent split.
     const offset = (el: HTMLElement | null) => {
       let x = 0;
       let y = 0;

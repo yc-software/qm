@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMockAgent } from "./support/mock-agent.ts";
@@ -134,7 +135,7 @@ for (const failure of ["error", "timeout"] as const) {
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /NOT security-screened/);
     assert.match(result.reply ?? "", /SCREENING_FIXTURE_BLOCK/);
-    const events = await built.auditLog.events();
+    const events = await built.auditLog.events(testTenant);
     assert.ok(events.some((event) => event.action === "security_screen.classify" && event.status === "error"));
     assert.ok(events.some((event) => event.action === "security_posture.tool_result_failed_open"));
   });

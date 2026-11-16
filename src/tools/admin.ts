@@ -31,11 +31,6 @@ export const adminOperations = {
   whoami: operation("Is the requesting person an admin?", "GET", "/whoami"),
   scopes: operation("List scopes and labels; never guess scope IDs.", "GET", "/scopes"),
   resources: operation("List scope configuration resources.", "GET", "/resources"),
-  unattended_grants: operation(
-    "List admin reads a cron can be granted for unattended fires (grant, route, admin action); unlisted reads have no grant.",
-    "GET",
-    "/unattended-grants",
-  ),
   config: operation("Read a scope's configuration.", "GET", "/scopes/:scope", scope),
   configure: operation(
     "Update one nonsecret configuration resource (connector and credential setters stay on the self-API). The admin skill documents common value shapes.",
@@ -96,7 +91,7 @@ export const adminOperations = {
     value: Type.Object({ blobId: string, name: string, mimetype: optionalString }, { additionalProperties: false }),
   }),
   crons: operation("List crons belonging to a scope.", "GET", "/crons", scope),
-  deployments: operation("List apps belonging to a scope.", "GET", "/deployments", scope),
+  deployments: operation("List apps belonging to a scope.", "GET", "/apps", scope),
   skills: operation("List skills belonging to a scope.", "GET", "/skills", scope),
   skill: operation("Read one skill.", "GET", "/skills/:id", scopedId),
   archive_skill: operation("Archive a skill.", "DELETE", "/skills/:id", scopedId),

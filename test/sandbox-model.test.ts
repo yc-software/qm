@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
+import { configurePublicFetch } from "../src/util/network.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -50,8 +51,11 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   });
   const upstreamUrl = await listen(upstream);
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
-  const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
-  const built = buildApp(config);
+  const config = testConfig({
+    signingSecret: "ingress-secret".repeat(3),
+    modelGateway: { url: `${upstreamUrl}/v1`, apiKey: key, apiKeyHeader: "api-key", models: routes },
+  });
+  const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
   let overBudget = false;
   const server = createServer(built.app, {
     ...serverDeps(config, built),
@@ -112,9 +116,11 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   assert.deepEqual(calls[1]!.body.metadata, { user_id: endUser, trace: "t1" });
 
   const models = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${token}` } });
+  const listed = ((await models.json()) as { data: Array<{ id: string; owned_by: string; endpoints?: string[] }> })
+    .data;
   assert.deepEqual(
-    ((await models.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id),
-    Object.keys(routes),
+    listed.filter((m) => !m.endpoints).map((m) => [m.id, m.owned_by]),
+    Object.keys(routes).map((id) => [id, "gateway"]),
   );
 
   const embeddings = await fetch(`${base}/v1/embeddings?encoding_format=float`, {
@@ -136,6 +142,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
 
   assert.equal((await openai({ ...chat, model: "gpt-4o" })).status, 400);
   assert.equal((await openai({ ...chat, model: "constructor" })).status, 400);
+  assert.equal((await openai({ ...chat, model: "__proto__" })).status, 400);
   assert.equal((await openai({ model: 7, messages: [] })).status, 400);
   assert.equal(
     (await openai(chat, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)))
@@ -230,7 +237,7 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /MODEL_GATEWAY/);
 });
 
-test("deployments without a gateway leave the sandbox gateway variables unset", async () => {
+test("deployments without a gateway still hand the sandbox the model URL and a turn token", async () => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);
   await selectDefaultSandbox(built, "U1", "personal:U1");
@@ -246,5 +253,101 @@ test("deployments without a gateway leave the sandbox gateway variables unset", 
     conversation: { kind: "dm", threadRef: "dm:U1:no-gateway" },
     text: "!run echo none",
   });
-  for (const name of ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_TOKEN"]) assert.equal(captured?.env?.[name], undefined, name);
+  assert.equal(captured?.env?.MODEL_GATEWAY_URL, "https://core.example.test/v1/sandbox-model");
+  const claims = await verifyCapabilityToken(captured!.env!.MODEL_GATEWAY_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims?.aud, SANDBOX_MODEL_AUD);
+});
+
+test("sandbox code reaches a company's own provider through core's chat completions, key kept in core", async (t) => {
+  const seen: Array<{ path: string; auth: string | undefined; body: Record<string, unknown> }> = [];
+  const upstream = httpServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    seen.push({ path: req.url!, auth: req.headers.authorization, body: raw ? JSON.parse(raw) : {} });
+    if (req.url?.endsWith("/models")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      return void res.end(JSON.stringify({ data: [{ id: "gpt-6-astra" }] }));
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const chunk = (delta: object, finish: string | null) =>
+      `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", model: "gpt-6-astra", choices: [{ index: 0, delta, finish_reason: finish }], usage: finish ? { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } : undefined })}\n\n`;
+    res.write(chunk({ role: "assistant", content: "a castle" }, null));
+    res.write(chunk({}, "stop"));
+    res.end("data: [DONE]\n\n");
+  });
+  const upstreamUrl = `${await listen(upstream)}/v1`;
+  t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+  const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
+  const built = buildApp(config, { modelCredentialFetch: fetch });
+  configurePublicFetch(new Set([new URL(upstreamUrl).origin]), () => false);
+  t.after(() => configurePublicFetch(new Set()));
+  const server = createServer(built.app, { ...serverDeps(config, built), modelCredentialFetch: fetch });
+  const root = await listen(server as unknown as ReturnType<typeof httpServer>);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await built.customProviders.upsert(
+    {
+      id: "acme",
+      name: "Acme",
+      protocol: "openai",
+      baseUrl: upstreamUrl,
+      models: [{ id: "gpt-6-astra" }],
+    },
+    "sk-acme-company",
+    "admin-alice",
+  );
+  await built.refreshCustomProviders();
+  const base = `${root}/v1/sandbox-model`;
+  const token = await mintCapabilityToken(
+    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
+    TEST_CAPABILITY_SECRET,
+  );
+  const call = (path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+
+  const listed = (await (
+    await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${token}` } })
+  ).json()) as { data: Array<{ id: string; owned_by: string; endpoints?: string[] }> };
+  assert.deepEqual(
+    listed.data.find((m) => m.id === "custom/acme/gpt-6-astra"),
+    { id: "custom/acme/gpt-6-astra", object: "model", owned_by: "organization", endpoints: ["/v1/chat/completions"] },
+  );
+
+  const image = "data:image/png;base64,iVBORw0KGgo=";
+  const chat = {
+    model: "custom/acme/gpt-6-astra",
+    max_tokens: 50,
+    messages: [
+      { role: "system", content: "describe" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "what is this?" },
+          { type: "image_url", image_url: { url: image } },
+        ],
+      },
+    ],
+  };
+  const reply = await call("/v1/chat/completions", chat);
+  const text = await reply.text();
+  assert.equal(reply.status, 200, text);
+  assert.equal(
+    (JSON.parse(text) as { choices: Array<{ message: { content: string } }> }).choices[0]!.message.content,
+    "a castle",
+  );
+  assert.ok(!text.includes("sk-acme-company"));
+  const sent = seen.find((s) => s.path.endsWith("/chat/completions"))!;
+  assert.equal(sent.auth, "Bearer sk-acme-company");
+  assert.equal(sent.body.model, "gpt-6-astra");
+  assert.match(JSON.stringify(sent.body.messages), /iVBORw0KGgo=/);
+
+  const before = seen.length;
+  assert.equal((await call("/v1/chat/completions", { ...chat, stream: true })).status, 400);
+  assert.equal((await call("/v1/chat/completions", { ...chat, tools: [{ type: "function" }] })).status, 400);
+  assert.equal((await call("/v1/embeddings", { model: "custom/acme/gpt-6-astra", input: "x" })).status, 400);
+  assert.equal((await call("/v1/chat/completions", { ...chat, model: "custom/acme/other" })).status, 400);
+  assert.equal(seen.length, before);
 });

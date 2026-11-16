@@ -2,6 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { PublishInput, PublishAudienceDescriptor } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
+import { LIVE_EDIT_PUBLISH_DELAY_MS, type LiveEditSaved } from "../../deploy/live-edits.ts";
 import { isObj } from "../../util/objects.ts";
 import { text, outsideWorkspace, sandboxSelector, type ToolKit } from "./kit.ts";
 
@@ -19,6 +20,29 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
     return `Owned by you; reachable by ${who} (from any surface they sign in to).${note}`;
   }
   return `Owned by you; owner-only (only you can reach it — use apps action share to widen).${note}`;
+}
+
+export function previousPublishFailure(edit: LiveEditSaved): string {
+  return edit.previousFailure
+    ? `\nThe previous automatic publish failed, so the app kept running the saved edits: ${edit.previousFailure}`
+    : "";
+}
+
+function describeLiveEdit(r: { name?: string; id: string; version: number; url: string }, edit: LiveEditSaved): string {
+  const app = r.name ?? r.id;
+  const minutes = LIVE_EDIT_PUBLISH_DELAY_MS / 60_000;
+  const failed = previousPublishFailure(edit);
+  if (!edit.changed) {
+    const pending = edit.publishAt === undefined ? "" : "; the earlier saved edits still publish as a new version";
+    return `No changes to save in ${app} (v${r.version}) → ${r.url}${pending}.${failed}`;
+  }
+  const hint = edit.first
+    ? " A package.json `dev` script that serves on $PORT (Vite: `vite --host --port $PORT` with server.allowedHosts true) would hot-reload instead."
+    : "";
+  const shown = edit.hot
+    ? "Open tabs hot-reload the change now."
+    : `The app restarted with the change and open tabs reload within seconds.${hint}`;
+  return `Saved ${app} → ${r.url}. ${shown} It publishes as a new version after ${minutes} minutes without edits; v${r.version} until then.${failed}`;
 }
 
 export function workspaceTools(kit: ToolKit) {
@@ -258,7 +282,7 @@ export function workspaceTools(kit: ToolKit) {
     name: "write",
     label: "write",
     description:
-      "Write a workspace file. To share it, upload it with POST /v1/files/uploads, then share the returned ID.",
+      "Write a workspace file. To share it, upload it with the helper from GET /v1/files/upload-client, then share the returned ID.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative path." }),
       data: Type.String({ description: "File contents." }),
@@ -319,7 +343,7 @@ export function workspaceTools(kit: ToolKit) {
           description: "Unique handle (lowercase letters/digits/hyphens) → /d/<name>/.",
         }),
       ),
-      renameFrom: Type.Optional(Type.String({ description: "Existing deployment name to rename to `name`." })),
+      renameFrom: Type.Optional(Type.String({ description: "Existing app name to rename to `name`." })),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description: "Env vars for the version; omit to keep the previous ones, {} clears.",
@@ -371,9 +395,10 @@ export function workspaceTools(kit: ToolKit) {
             url: r.url,
             ...(r.audience ? { audience: r.audience } : {}),
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
+            ...(r.liveEdit ? { liveEdit: r.liveEdit } : {}),
           },
           text(
-            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
+            `${r.liveEdit ? describeLiveEdit(r, r.liveEdit) : `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}`}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
           ),
         );
       } catch (e) {

@@ -173,11 +173,12 @@ export function leaseStale(lease: LeaseInfo): boolean {
   if (lease.heartbeat) {
     return !heartbeatFresh(lease) && !supervisorAlive(lease) && !anyChildAlive(lease.lockDir);
   }
-  if (lease.meta.booting === "1") {
-    if (pidAlive(Number(lease.meta.owner_pid ?? 0))) return false;
-    return !anyChildAlive(lease.lockDir);
-  }
+  if (bootingUnderLiveOwner(lease)) return false;
   return !anyChildAlive(lease.lockDir);
+}
+
+export function bootingUnderLiveOwner(lease: LeaseInfo): boolean {
+  return lease.meta.booting === "1" && pidAlive(Number(lease.meta.owner_pid ?? 0));
 }
 
 export function leaseStartedEpoch(lease: LeaseInfo): number {
@@ -200,6 +201,7 @@ export function leaseReclaimReason(lease: LeaseInfo, nowSec = nowEpoch()): strin
     return "supervisor dead, heartbeat stale";
   }
   if (lease.heartbeat) return null;
+  if (bootingUnderLiveOwner(lease)) return null;
   if (day !== todayYmd(nowSec)) return `started on ${day}, not today`;
   if (age > RECLAIM_AFTER_SEC) return `age ${formatAge(age)} exceeds ${formatAge(RECLAIM_AFTER_SEC)}`;
   return null;

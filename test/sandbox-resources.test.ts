@@ -1,9 +1,17 @@
+import { spawnSync } from "node:child_process";
+import { defaultSandboxLoadLine, sandboxLoadLine } from "../src/core/orchestrator/prompt-blocks.ts";
+import type { LoadSample } from "../src/sandbox/load-probe.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxResources,
+  type SandboxDefault,
+} from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
@@ -14,8 +22,15 @@ import {
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { probedCommand } from "./support/probed-command.ts";
+
+async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
+  const found: SandboxResource[] = [];
+  await resources.eachJobComputer(async (computer) => void found.push(computer));
+  return found;
+}
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
@@ -78,6 +93,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   const options = {
     upgrade: upgrade(),
     records,
+    loads: testMap<LoadSample>(),
     defaults,
     backends: { local: backend },
     defaultBackend: "local",
@@ -158,7 +174,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   assert.equal((await defaults.get("personal:alice"))?.sandboxId, null);
   await assert.rejects(
     router.provision("personal:alice"),
-    /sandbox list, create, set_default, then retry before reporting blocked/,
+    /get one as the sandbox tool describes, then retry before reporting blocked/,
   );
   const explicit = await router.provision("personal:alice", { sandboxId: record.id });
   assert.equal(explicit.resourceId, record.id);
@@ -201,6 +217,43 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.equal((await router.computerStatus!("personal:alice")).machine, record.backingScopeId);
   await router.restartComputer!("personal:alice");
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
+});
+
+test("a person's use of a computer outlasts a failed first boot and a retry it races", async () => {
+  const booting = Promise.withResolvers<void>();
+  const boot = Promise.withResolvers<void>();
+  const { options, records } = fixture((backend) => {
+    const provision = backend.provision.bind(backend);
+    backend.provision = async (id, opts) => {
+      if (id === "sandbox-c1") {
+        booting.resolve();
+        await boot.promise;
+      }
+      return provision(id, opts);
+    };
+  }, []);
+  let markOnRead = "";
+  const resources = createSandboxResources({
+    ...options,
+    records: {
+      ...records,
+      async get(id) {
+        const found = await records.get(id);
+        if (id === markOnRead) await records.update(id, (current) => ({ ...current, personUsed: true }));
+        return found;
+      },
+    },
+  });
+  const creating = resources.create("alice", "channel:team", "local", "computer", "c1");
+  await booting.promise;
+  await resources.notePersonUse("c1");
+  boot.reject(new Error("boot failed"));
+  await assert.rejects(creating, /boot failed/);
+  const failed = (await records.get("c1"))!;
+  assert.equal(failed.personUsed, true);
+  await records.put("c2", { ...failed, id: "c2", backingScopeId: "sandbox-c2", personUsed: undefined });
+  markOnRead = "c2";
+  assert.equal((await resources.create("alice", "channel:team", "local", "computer", "c2")).personUsed, true);
 });
 
 const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
@@ -309,7 +362,7 @@ test("turn default changes invalidate cached provisioning while explicit calls d
   assert.deepEqual(released.sort(), [a.backingScopeId, b.backingScopeId].sort());
 });
 
-test("retirement refuses the default, waits for an active command, and prevents future execution", async () => {
+test("retirement refuses the default, does not queue behind an in-flight command, and prevents future execution", async () => {
   const { resources, router, backend } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
@@ -334,12 +387,13 @@ test("retirement refuses the default, waits for an active command, and prevents 
   };
   const command = router.run(handle, "work");
   await running;
-  const retiring = resources.retire("alice", record.id);
-  assert.equal(destroyed, false);
-  finish();
-  await command;
-  await retiring;
-  assert.equal(destroyed, true);
+  try {
+    await resources.retire("alice", record.id);
+    assert.equal(destroyed, true);
+  } finally {
+    finish();
+    await command;
+  }
   await assert.rejects(router.run(handle, "no resurrection"), /retired/);
   await assert.rejects(resources.setDefault("alice", "personal:alice", record.id), /retired/);
 });
@@ -460,24 +514,23 @@ test("activation preserves routes, cold identities and explicit nulls without ca
       availableBackends: ["local", "modal"],
       legacyScopes: async () => ["personal:old-session", "personal:unset"],
       legacySandboxes: async () => [
-        { scopeId: "personal:routed", backend: "modal", machineId: "sb-old" },
-        { scopeId: "personal:routed", backend: "e2b", machineId: "e2b-cold" },
-        { scopeId: "sandbox-managed", backend: "local", machineId: "managed-machine" },
+        { scopeId: "personal:routed", backend: "modal" },
+        { scopeId: "personal:routed", backend: "e2b" },
+        { scopeId: "sandbox-managed", backend: "local" },
       ],
     }),
   });
   const routed = await resources.resolve("personal:routed");
   assert.equal(routed?.backend, "modal");
   assert.equal(routed?.backingScopeId, "personal:routed");
-  assert.equal(routed?.machineId, "sb-old");
   assert.equal(routed?.state, "unverified");
-  assert.equal((await resources.resolve("personal:old-session"))?.machineId, undefined);
+  assert.ok(await resources.resolve("personal:old-session"));
   assert.equal(await resources.resolve("personal:unset"), null);
   assert.equal((await resources.resolve(managed.ownerScopeId))?.id, "managed");
   assert.equal(await resources.resolve("personal:new-after-activation"), null);
   assert.ok(await marker.get("explicit-defaults"));
   const inventory = await resources.list("admin", "personal:routed");
-  assert.ok(inventory.sandboxes.some((r) => r.backend === "e2b" && r.machineId === "e2b-cold"));
+  assert.ok(inventory.sandboxes.some((r) => r.backend === "e2b" && r.backingScopeId === "personal:routed"));
   assert.ok(!inventory.sandboxes.some((r) => r.legacy && r.backingScopeId === "sandbox-managed"));
   assert.deepEqual(inventory.sandboxes.find((r) => r.id === routed!.id)?.availableActions, []);
   assert.deepEqual(provisioned, []);
@@ -630,8 +683,7 @@ test("retirement waits for background startup to commit its live registry row", 
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
-      if ((await registry.liveByScope(record.ownerScopeId)).some((r) => r.sandboxId === record.id))
-        throw new Error("live background work");
+      if ((await registry.listLive()).some((r) => r.sandboxId === record.id)) throw new Error("live background work");
     },
   });
   const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: "local" });
@@ -708,7 +760,7 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
   assert.equal((await resources.resolve("channel:room"))?.backend, "sprites");
   assert.equal((await resources.resolve("personal:existing"))?.backend, "aws");
   assert.equal(await resources.resolve("personal:new"), null);
-  assert.equal(resources.defaultBackend(), "sprites");
+  assert.equal(await resources.defaultBackend(), "sprites");
   assert.equal(legacySandboxBackendForScope("org", "sprites", scopeDefaults), "sprites");
 });
 
@@ -718,7 +770,7 @@ for (const [kind, waiting] of [
   ["sprites", "command"],
   ["sprites", "checkpoint"],
 ] as const) {
-  test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
+  test(`${kind} restart never queues behind an in-flight ${waiting}`, { timeout: 10000 }, async () => {
     const { options, backend } = fixture();
     const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
     const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: kind, resources });
@@ -733,80 +785,69 @@ for (const [kind, waiting] of [
     };
     backend.teardown = hold;
     backend.run = async (_handle, command) => {
-      if (command === "long") await hold();
-      return { stdout: command, stderr: "", code: 0, timedOut: false };
+      if (probedCommand(command) === "long") await hold();
+      return { stdout: probedCommand(command), stderr: "", code: 0, timedOut: false };
     };
     const long = waiting === "command" ? router.run(handle, "long") : router.teardown(handle);
     let restarted = false;
     backend.restartComputer = async () => {
       restarted = true;
     };
-    let restarting: Promise<void> | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await entered.promise;
-      const result = await Promise.race([
-        router.run(handle, "responsive"),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("ordinary tool was serialized")), 1000);
-        }),
-      ]);
-      assert.equal(result.stdout, "responsive");
+      assert.equal((await router.run(handle, "responsive")).stdout, "responsive");
       assert.equal((await resources.status("alice", record.id)).guestResponsive, true);
-      restarting =
-        waiting === "command" ? resources.restart("alice", record.id) : router.restartComputer!("personal:alice");
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      assert.equal(restarted, false);
+      if (waiting === "command") await resources.restart("alice", record.id);
+      else await router.restartComputer!("personal:alice");
+      assert.equal(restarted, true);
     } finally {
-      clearTimeout(timer);
       release.resolve();
       await long;
-      await restarting;
     }
-    assert.equal(restarted, true);
     await resources.setDefault("alice", "personal:alice", null);
     await resources.retire("alice", record.id);
     await assert.rejects(router.run(handle, "retired"), /retired/);
   });
 }
 
-test("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
-  const { options, backend } = fixture();
-  const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
-  const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: "modal", resources });
-  const record = await resources.create("alice", "personal:alice", "modal");
-  const handle = await router.provision("personal:alice", { sandboxId: record.id });
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  backend.run = async () => {
-    entered.resolve();
-    await release.promise;
-    return { stdout: "done", stderr: "", code: 0, timedOut: false };
-  };
-  const running = router.run(handle, "long");
-  await entered.promise;
-  let provisioned = false;
-  let destroyed = false;
-  backend.provision = async () => {
-    provisioned = true;
-    return handle;
-  };
-  backend.teardown = async () => {
-    destroyed = true;
-  };
-  const provision = router.provision("personal:alice", { sandboxId: record.id });
-  const teardown = router.teardown(handle, { destroy: true });
-  try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(provisioned, false);
-    assert.equal(destroyed, false);
-  } finally {
-    release.resolve();
-    await Promise.all([running, provision, teardown]);
-  }
-  assert.equal(provisioned, true);
-  assert.equal(destroyed, true);
-});
+test(
+  "Modal provisioning and destructive cleanup proceed while a command is in flight",
+  { timeout: 10000 },
+  async () => {
+    const { options, backend } = fixture();
+    const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
+    const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: "modal", resources });
+    const record = await resources.create("alice", "personal:alice", "modal");
+    const handle = await router.provision("personal:alice", { sandboxId: record.id });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    backend.run = async () => {
+      entered.resolve();
+      await release.promise;
+      return { stdout: "done", stderr: "", code: 0, timedOut: false };
+    };
+    const running = router.run(handle, "long");
+    await entered.promise;
+    let provisioned = false;
+    let destroyed = false;
+    backend.provision = async () => {
+      provisioned = true;
+      return handle;
+    };
+    backend.teardown = async () => {
+      destroyed = true;
+    };
+    try {
+      await router.provision("personal:alice", { sandboxId: record.id });
+      await router.teardown(handle, { destroy: true });
+      assert.equal(provisioned, true);
+      assert.equal(destroyed, true);
+    } finally {
+      release.resolve();
+      await running;
+    }
+  },
+);
 
 test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
   const { options, backend } = fixture();
@@ -822,7 +863,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
     if (peak === 3) release.resolve();
     await release.promise;
     running--;
-    return { stdout: command, stderr: "", code: 0, timedOut: false };
+    return { stdout: probedCommand(command), stderr: "", code: 0, timedOut: false };
   };
   const results = await Promise.all(["a", "b", "c"].map((command) => router.run(handle, command)));
   assert.deepEqual(
@@ -832,7 +873,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
   assert.equal(peak, 3);
 });
 
-test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
+test("parking teardown does not queue behind an in-flight command", { timeout: 10000 }, async () => {
   const { options, backend } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
@@ -852,15 +893,60 @@ test("parking teardown waits for active commands on the computer", { timeout: 10
   };
   const running = router.run(handle, "long");
   await entered.promise;
-  const teardown = router.teardown(handle);
   try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(parked, false);
+    await router.teardown(handle);
+    assert.equal(parked, true);
   } finally {
     release.resolve();
-    await Promise.all([running, teardown]);
+    await running;
   }
-  assert.equal(parked, true);
+});
+
+test("a parking teardown keeps the computer warm when another run holds it by the time it parks", async () => {
+  const { options, backend } = fixture();
+  const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
+  const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
+  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
+  const record = await resources.create("alice", "personal:alice", "e2b");
+  const handle = await router.provision("personal:alice", { sandboxId: record.id });
+  const teardowns: unknown[] = [];
+  parking.teardown = async (_handle, opts) => {
+    teardowns.push(opts ?? {});
+  };
+  await resources.hold(record.id, "late-run");
+  await router.teardown(handle);
+  await resources.release(record.id, "late-run", async () => false);
+  await router.teardown(handle);
+  assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);
+});
+
+test("concurrent routed commands hold no Postgres session connection while they run", { timeout: 10000 }, async () => {
+  const sessions = testCountedAdvisoryLock();
+  const { options, backend } = fixture();
+  const resources = createSandboxResources({ ...options, lock: sessions.lock });
+  const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: "local", resources });
+  const parallel = 8;
+  let running = 0;
+  const allRunning = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  backend.run = async (_handle, command) => {
+    if (++running === parallel) allRunning.resolve();
+    await gate.promise;
+    return { stdout: command, stderr: "", code: 0, timedOut: false };
+  };
+  try {
+    const handle = await router.provision("personal:alice");
+    const commands = Array.from({ length: parallel }, (_, i) => router.run(handle, `command ${i}`));
+    try {
+      await allRunning.promise;
+      assert.equal(sessions.held(), 0);
+    } finally {
+      gate.resolve();
+    }
+    assert.equal((await Promise.all(commands)).length, parallel);
+  } finally {
+    await sessions.close();
+  }
 });
 
 test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
@@ -1023,11 +1109,11 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
   const handle = await router.provision("personal:alice", { sandboxId: job.id });
   assert.equal(handle.resourceId, job.id);
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => s.id),
+    (await jobComputers(resources)).map((s) => s.id),
     [job.id],
   );
   await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   await assert.rejects(router.provision("personal:alice", { sandboxId: job.id }), /sandbox not found/);
 });
 
@@ -1037,12 +1123,12 @@ test("retiring a job computer is skipped when its state moved on, and its backin
   assert.ok(job.backingScopeId.startsWith("job-"));
   await resources.retireJobComputer(job.id, "provisioning");
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => s.id),
+    (await jobComputers(resources)).map((s) => s.id),
     [job.id],
     "a box that became ready since the sweep looked is left alone",
   );
   await resources.retireJobComputer(job.id, "ready");
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   const room = await resources.create("alice", "personal:alice", "local", "room");
   assert.ok(room.backingScopeId.startsWith("sandbox-"));
 });
@@ -1059,11 +1145,11 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
   await assert.rejects(resources.retireJobComputer(job.id, "ready"), /provider unavailable/);
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => [s.id, s.state, Boolean(s.error)]),
+    (await jobComputers(resources)).map((s) => [s.id, s.state, Boolean(s.error)]),
     [[job.id, "retired", true]],
   );
   await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   await assert.rejects(resources.get(job.id), /sandbox not found/);
   const { resources: cannotRetire } = fixture((backend) => {
     delete backend.destroyScope;
@@ -1072,4 +1158,166 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
     cannotRetire.create("alice", "personal:alice", "local", "background job", undefined, true),
     /need a computer that local can retire/,
   );
+});
+
+const shellRun = (backend: Sandbox, stdoutOf?: (command: string) => string) => {
+  backend.run = async (_handle, command) => {
+    if (stdoutOf) return { stdout: stdoutOf(command), stderr: "", code: 0, timedOut: false };
+    const r = spawnSync("sh", ["-c", command], { encoding: "utf8" });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.status ?? -1, timedOut: false };
+  };
+};
+
+test("every resource-bound command reports the computer's load without disturbing its output or exit code", async () => {
+  const { router, options } = fixture((backend) => shellRun(backend));
+  const handle = await router.provision("personal:alice");
+  const r = await router.run(handle, "printf 'no newline'; exit 3");
+  assert.equal(r.stdout, "no newline");
+  assert.equal(r.code, 3);
+  assert.ok(r.load && r.load.memTotalMb > 0 && r.load.diskTotalGb > 0 && r.load.load1 >= 0);
+  assert.deepEqual(await options.loads.get(handle.resourceId!), r.load);
+});
+
+test("a computer without an io pressure gauge reports it unavailable rather than a number", async () => {
+  const { router } = fixture((backend) =>
+    shellRun(backend, () => "out\n\n__QM_LOAD__ - 0.42 2048 8192 10485760 104857600\n"),
+  );
+  const r = await router.run(await router.provision("personal:alice"), "true");
+  assert.equal(r.stdout, "out\n");
+  assert.equal(r.load?.ioFull60, null);
+  assert.deepEqual(
+    {
+      load1: r.load?.load1,
+      mem: [r.load?.memUsedMb, r.load?.memTotalMb],
+      disk: [r.load?.diskUsedGb, r.load?.diskTotalGb],
+    },
+    { load1: 0.42, mem: [2048, 8192], disk: [10, 100] },
+  );
+});
+
+test("a garbled load line is dropped without costing the command its output", async () => {
+  const { router } = fixture((backend) => shellRun(backend, () => "survived\n__QM_LOAD__ 5 x\n"));
+  const r = await router.run(await router.provision("personal:alice"), "true");
+  assert.equal(r.stdout, "survived");
+  assert.equal(r.load, undefined);
+});
+
+test("output a background job prints after the load line, and an unterminated heredoc, survive the probe", async () => {
+  const { router } = fixture((backend) => shellRun(backend));
+  const handle = await router.provision("personal:alice");
+  const late = await router.run(handle, "(sleep 0.3; echo LATE) & echo early");
+  assert.equal(late.stdout, "early\nLATE\n");
+  assert.ok(late.load);
+  const heredoc = await router.run(handle, "cat <<EOF\nhi");
+  assert.equal(heredoc.stdout.trim(), "hi");
+  assert.equal(heredoc.code, 0);
+});
+
+test("load samples are written at most once per ten seconds per computer", async (t) => {
+  const { router, options } = fixture((backend) => shellRun(backend, () => "\n__QM_LOAD__ 1 1 1 2 1 2\n"));
+  const handle = await router.provision("personal:alice");
+  const puts: number[] = [];
+  const put = options.loads.put.bind(options.loads);
+  options.loads.put = async (id, sample) => {
+    puts.push(sample.sampledAt);
+    await put(id, sample);
+  };
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  await router.run(handle, "true");
+  t.mock.timers.tick(5_000);
+  await router.run(handle, "true");
+  t.mock.timers.tick(6_000);
+  await router.run(handle, "true");
+  assert.deepEqual(puts, [1_000_000, 1_011_000]);
+});
+
+test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
+  let io = "88";
+  const events: string[] = [];
+  const f = fixture((backend) => shellRun(backend, () => `\n__QM_LOAD__ ${io} 25 1 2 1 2\n`));
+  const router = createSandboxRouter({
+    backends: { local: f.backend },
+    defaultBackend: "local",
+    resources: f.resources,
+    onError: (e) => void events.push(e.code),
+  });
+  const handle = await router.provision("personal:alice");
+  await router.run(handle, "a");
+  await router.run(handle, "b");
+  assert.deepEqual(events, ["io_pressure_high"]);
+  io = "5";
+  await router.run(handle, "c");
+  io = "88";
+  await router.run(handle, "d");
+  assert.deepEqual(events, ["io_pressure_high", "io_pressure_high"]);
+});
+
+test("the Sandboxes line counts the asking turn plus the runs holding the default and stays quiet when nothing is notable", async () => {
+  const { router, resources, options } = fixture((backend) =>
+    shellRun(backend, () => "\n__QM_LOAD__ 62.4 7.5 3072 8192 52428800 104857600\n"),
+  );
+  const handle = await router.provision("personal:alice");
+  const id = handle.resourceId!;
+  await resources.hold(id, "run-1");
+  await options.loads.put(id, {
+    sampledAt: Date.now(),
+    ioFull60: 10,
+    load1: 0.5,
+    memUsedMb: 1024,
+    memTotalMb: 8192,
+    diskUsedGb: 10,
+    diskTotalGb: 100,
+  });
+  assert.equal(await defaultSandboxLoadLine(resources, "personal:alice", "run-1"), "");
+  await resources.hold(id, "run-2");
+  await router.run(handle, "true");
+  const name = (await resources.get(id)).name || id.slice(0, 8);
+  assert.equal(
+    await defaultSandboxLoadLine(resources, "personal:alice", "run-3"),
+    `Sandboxes: default "${name}" (local) — 3 sessions active, io 62% saturated, load 7.5, mem 3.0/8.0 GB, disk 50% full (sampled 0s ago). Scratch: available.`,
+  );
+});
+
+test("a single session still sees the line when the disk is nearly full, without an io gauge, and with a stale sample", () => {
+  const resource = { id: "abcdef123456", name: "", backend: "modal" as const, holders: ["run-1"] };
+  const sample = {
+    sampledAt: 0,
+    ioFull60: null,
+    load1: 1.2,
+    memUsedMb: 512,
+    memTotalMb: 4096,
+    diskUsedGb: 90,
+    diskTotalGb: 100,
+  };
+  assert.equal(
+    sandboxLoadLine(resource, sample, 5 * 60_000),
+    'Sandboxes: default "abcdef12" (modal) — 1 session active, load 1.2, mem 0.5/4.0 GB, disk 90% full (stale, sampled 5m ago). Scratch: available.',
+  );
+  assert.equal(sandboxLoadLine(resource, { ...sample, diskUsedGb: 20 }, 5 * 60_000), "");
+});
+
+test("the recorded load sample takes mem and disk totals from the created size, falling back to the kernel's", async () => {
+  const hostLine = "\n__QM_LOAD__ - 0.00 1540 463713 1048584 536870912\n";
+  const kernel = fixture((backend) => shellRun(backend, () => hostLine));
+  const bare = await kernel.router.provision("personal:alice");
+  await kernel.router.run(bare, "true");
+  const fallback = await kernel.resources.load(bare.resourceId!);
+  assert.deepEqual([fallback?.memTotalMb, fallback?.diskTotalGb], [463713, 512]);
+
+  const sized = fixture(
+    (backend) => {
+      shellRun(backend, () => hostLine);
+      backend.profile.spec = { memoryMb: 2048, diskGb: 10 };
+    },
+    ["personal:alice", "personal:bob"],
+  );
+  const handle = await sized.router.provision("personal:alice");
+  await sized.router.run(handle, "true");
+  const sample = await sized.resources.load(handle.resourceId!);
+  assert.deepEqual([sample?.memUsedMb, sample?.memTotalMb, sample?.diskTotalGb], [1540, 2048, 10]);
+
+  const resized = await sized.router.provision("personal:bob");
+  await sized.options.records.update(resized.resourceId!, (current) => ({ ...current, memoryGb: 8 }));
+  await sized.router.run(resized, "true");
+  assert.equal((await sized.resources.load(resized.resourceId!))?.memTotalMb, 8192);
 });

@@ -3,6 +3,7 @@ import type { ScopeId } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
 import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS memory_facts(
@@ -73,12 +74,13 @@ function fact(row: Row): MemoryFact {
     sources: (row.sources as string[] | null) ?? [],
     sourceUnknown: row.source_unknown === true,
     ...(row.author ? { author: String(row.author) } : {}),
+    ...(row.session_id ? { sessionId: String(row.session_id) } : {}),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
 }
 
-const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, created_at, updated_at
+const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at
   FROM memory_facts WHERE scope_id = $1 AND deleted_at IS NULL ORDER BY id`;
 
 export const MEMORY_FACTS_MIGRATIONS = [
@@ -103,6 +105,11 @@ export const MEMORY_FACTS_MIGRATIONS = [
       "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
     ],
   },
+  ...tenantTables("memory/facts/0003-tenants", [{ table: "memory_facts", primaryKey: "id" }]),
+  {
+    id: "memory/facts/0004-session-id",
+    statements: ["ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS session_id TEXT"],
+  },
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
@@ -113,9 +120,19 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
       list: async () => (await client.query(LIVE, [scopeId])).rows.map(fact),
       async insert(f) {
         await client.query(
-          `INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, author, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [scopeId, f.text, f.sensitivity, f.sources, f.sourceUnknown, f.author ?? null, f.createdAt, f.updatedAt],
+          `INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            scopeId,
+            f.text,
+            f.sensitivity,
+            f.sources,
+            f.sourceUnknown,
+            f.author ?? null,
+            f.sessionId ?? null,
+            f.createdAt,
+            f.updatedAt,
+          ],
         );
       },
       async update(id, patch, at) {

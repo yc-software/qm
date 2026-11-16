@@ -1,12 +1,16 @@
 import { resolveMentions } from "./mrkdwn.ts";
 export { resolveMentions } from "./mrkdwn.ts";
-import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
+import { encodeTs } from "./reactions.ts";
+import { summarizeReactions, type ReactionTally } from "../surfaces/reactions.ts";
 import {
   buildContextWindow as buildSurfaceContextWindow,
   clipText,
   compareTs as compareSlackTimestamps,
+  detectInputs,
   epochTsTime,
+  MAX_RECENT_MESSAGES,
 } from "../surfaces/context-window.ts";
+export { MAX_RECENT_MESSAGES } from "../surfaces/context-window.ts";
 
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
@@ -34,8 +38,6 @@ export interface RecentMessage {
 }
 
 const MAX_CONTEXT_MESSAGE_CHARS = 600;
-export const MAX_RECENT_MESSAGES = 20;
-const MAX_RECENT_MESSAGE_CHARS = 300;
 const MAX_TURN_MESSAGE_CHARS = 4000;
 
 export function recentWindow(
@@ -79,22 +81,21 @@ function arrangeForDisplay(messages: readonly RecentMessage[]): Array<{ message:
 
 export interface ConversationView {
   contextNote?: string;
-  channel: { name?: string; kind: "dm" | "channel" | "group"; isPrivate?: boolean };
+  channel: { kind: "dm" | "channel" | "group"; isPrivate?: boolean };
   messages: readonly RecentMessage[];
-  here: { kind: "thread"; youOpenedIt: boolean; starterName?: string; openerText?: string } | { kind: "top-level" };
-  omittedFiles: ReadonlyArray<{ name: string; reason: "too-big" | string }>;
+  here: { kind: "thread"; youOpenedIt: boolean; openerText?: string } | { kind: "top-level" };
   nameById?: ReadonlyMap<string, string>;
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
   text: string;
   files?: string[];
@@ -109,7 +110,7 @@ export interface RenderedConversation {
   detectOpener?: string;
 }
 
-const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => clipText(t, max);
+const clipMessage = (t: string, max: number): string => clipText(t, max);
 
 export const formatSlackTs = epochTsTime;
 
@@ -136,7 +137,7 @@ export function renderConversationView(view: ConversationView): RenderedConversa
   const rawTurns: ConversationTurn[] = display.map(({ message: m, isReply }) => {
     const text = messageTurnText(m, isReply, view.nameById);
     if (m.isSelf) return { role: "assistant", text };
-    return { role: "user", name: m.name || "someone", text };
+    return { role: m.isBot ? "bot" : "user", name: m.name || "someone", text };
   });
   const priorTurns = mergeConsecutiveTurns(rawTurns);
 
@@ -144,9 +145,11 @@ export function renderConversationView(view: ConversationView): RenderedConversa
     .map(({ message: m }) => {
       const text = clipMessage(resolveMentions(m.text ?? "", view.nameById), MAX_TURN_MESSAGE_CHARS);
       if (!text && !m.files?.length) return undefined;
+      let role: OverheardMessage["role"] = m.isBot ? "bot" : "user";
+      if (m.isSelf) role = "self";
       return {
         ts: m.ts,
-        role: (m.isSelf ? "self" : "user") as "user" | "self",
+        role,
         ...(m.isSelf ? {} : { name: m.name || "someone" }),
         text,
         ...(m.files?.length ? { files: m.files } : {}),
@@ -154,43 +157,39 @@ export function renderConversationView(view: ConversationView): RenderedConversa
     })
     .filter((m): m is OverheardMessage => m !== undefined);
 
-  let where = `You are in ${view.channel.name ? `#${view.channel.name}` : "a channel"}${view.channel.isPrivate ? " (private)" : ""}.`;
+  let where = `You are in a channel${view.channel.isPrivate ? " (private)" : ""}.`;
   if (view.channel.kind === "dm") where = "This is a direct message.";
   else if (view.channel.kind === "group") where = "This is a group direct message.";
   let here: string;
   if (view.here.kind === "top-level") here = "You are replying to a top-level message (not in a thread).";
   else if (view.here.youOpenedIt) here = "You are replying in a thread you started.";
-  else here = `You are replying in a thread${view.here.starterName ? ` @${view.here.starterName} started` : ""}.`;
-  const omittedLine = view.omittedFiles.length
-    ? "Files too big to view this turn: " + view.omittedFiles.map((f) => f.name).join(", ") + "."
-    : "";
+  else here = "You are replying in a thread.";
 
-  const header = [omittedLine, where, here, view.contextNote].filter(Boolean).join(" ");
+  const header = [where, here, view.contextNote].filter(Boolean).join(" ");
 
-  const detectContext = msgs
-    .filter((m) => !m.isBot && !m.isSelf && !m.isTrigger)
-    .map((m) => `${m.name || "someone"}: ${clipMessage(resolveMentions(m.text ?? "", view.nameById))}`)
-    .join("\n");
-  const detectOpener =
-    view.here.kind === "thread" && view.here.youOpenedIt
-      ? clipMessage(view.here.openerText ?? "") || undefined
-      : undefined;
+  const detect = detectInputs(
+    msgs.map((m) => ({ ...m, text: resolveMentions(m.text ?? "", view.nameById) })),
+    view.here.kind === "thread" && view.here.youOpenedIt ? view.here.openerText : undefined,
+  );
 
-  return { header, priorTurns, overheard, allowedTs, detectContext, ...(detectOpener ? { detectOpener } : {}) };
+  return { header, priorTurns, overheard, allowedTs, ...detect };
 }
 
 export function mergeConsecutiveTurns(turns: readonly ConversationTurn[]): ConversationTurn[] {
   const out: ConversationTurn[] = [];
-  const inlineName = (t: ConversationTurn): string => (t.role === "user" && t.name ? `${t.name}: ${t.text}` : t.text);
+  const inlineName = (t: ConversationTurn): string =>
+    t.role !== "assistant" && t.name ? `${t.name}: ${t.text}` : t.text;
   for (const t of turns) {
     const prev = out[out.length - 1];
     if (!prev || prev.role !== t.role) {
       out.push(
-        t.role === "user" && t.name ? { role: "user", name: t.name, text: t.text } : { role: t.role, text: t.text },
+        t.role !== "assistant" && t.name
+          ? { role: t.role, name: t.name, text: t.text }
+          : { role: t.role, text: t.text },
       );
       continue;
     }
-    if (prev.role === "user" && prev.name !== undefined) {
+    if (prev.role !== "assistant" && prev.name !== undefined) {
       prev.text = inlineName(prev);
       delete prev.name;
     }

@@ -1,4 +1,4 @@
-import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
+import type { Delivery, DeliveryProvenance, Destination, IncomingAttachment, OutgoingAttachment } from "../types.ts";
 import { scopeId as makeScopeId } from "../types.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { ChannelResolution, GroupResolution, RecipientResolution } from "../directory/directory-store.ts";
@@ -18,6 +18,7 @@ export interface SurfaceContextQuery {
   searchAll?: string;
   viewerToken?: string;
   file?: { ts: string; threadTs?: string; name?: string };
+  fileIds?: string[];
   openGroup?: { participants: string[] };
   syncDirectory?: boolean;
 }
@@ -29,7 +30,8 @@ export interface SurfaceContextResult {
   note?: string;
   selfTs?: string[];
   liveSearch?: "unconfigured" | "unconnected";
-  file?: { blobId: string; name: string; mimetype?: string; sizeBytes: number; author?: string };
+  attachments?: IncomingAttachment[];
+  issues?: string[];
   group?: { groupId: string };
 }
 

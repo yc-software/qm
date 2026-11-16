@@ -51,7 +51,7 @@ const directory = {
 const deps = {
   directory,
   identity: { classify: (id: string) => ({ type: id.startsWith("ext") ? "external" : "internal" }) },
-  teams: { isMember: async (id: string, team: string) => id === "alice@x.com" && team === "eng" },
+  teams: { isMember: async (_tenant: unknown, id: string, team: string) => id === "alice@x.com" && team === "eng" },
   sessions: {
     participantScopes: async (id: string) =>
       id === "bob@x.com" ? [{ scopeId: scopeId("channel", "unknown") }, { scopeId: scopeId("group", "gunknown") }] : [],

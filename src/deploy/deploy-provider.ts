@@ -1,30 +1,28 @@
-import type { Deployment, DeployEndpoint, DeploymentVersion } from "./deploy-store.ts";
+import type { PublishedApp, DeployEndpoint, AppVersion } from "./deploy-store.ts";
 
 export type { DeployEndpoint };
 
 export interface DeployProfile {
   managedScaleToZero: boolean;
-  inPlaceReconcile?: boolean;
   dataDir?: string;
   maxAppBytes?: number;
 }
 
-export interface DeployReconcileInput {
-  gitBundle?: Uint8Array;
-  changedPaths: string[];
+interface DeployLiveEdit {
+  files: Array<{ path: string; data: Uint8Array }>;
   deletedPaths: string[];
-  allPaths: string[];
+  restart: boolean;
 }
 
 export interface DeployProvider {
   readonly profile: DeployProfile;
-  apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint>;
-  reconcile?(d: Deployment, version: DeploymentVersion, input: DeployReconcileInput): Promise<DeployEndpoint>;
-  destroy(d: Deployment): Promise<void>;
-  setAlwaysOn?(d: Deployment, alwaysOn: boolean): Promise<void>;
-  resolveEndpoint?(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint | null>;
-  rotationDue?(d: Deployment): Promise<boolean>;
-  park?(d: Deployment): Promise<void>;
-  /** Recent output from the running app (entrypoint stdout+stderr), newest last. */
-  logs?(d: Deployment, opts: { tailLines: number }): Promise<string | null>;
+  apply(d: PublishedApp, version: AppVersion): Promise<DeployEndpoint>;
+  reconcile?(d: PublishedApp, version: AppVersion, gitBundle: Uint8Array): Promise<DeployEndpoint>;
+  liveEdit?(d: PublishedApp, version: AppVersion, edit: DeployLiveEdit): Promise<boolean>;
+  destroy(d: PublishedApp): Promise<void>;
+  setAlwaysOn?(d: PublishedApp, alwaysOn: boolean): Promise<void>;
+  resolveEndpoint?(d: PublishedApp, version: AppVersion): Promise<DeployEndpoint | null>;
+  rotationDue?(d: PublishedApp): Promise<boolean>;
+  park?(d: PublishedApp): Promise<void>;
+  logs?(d: PublishedApp, opts: { tailLines: number }): Promise<string | null>;
 }

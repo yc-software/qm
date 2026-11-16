@@ -107,7 +107,6 @@ export interface ChatSurface {
   setTurnRuntime(runtime: TurnRuntime | null): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
-  hasUnresolvedApproval(): boolean;
   resolveCommandApproval(decision: ApprovalDecision): void;
   approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
   notePendingSessionOnSend(): void;
@@ -139,6 +138,8 @@ interface ComposerState {
   pasteView: { id: string; text: string; initial: string; dirty: boolean } | null;
 }
 
+export type SteeringRun = QueuedRun & { attachments?: Attachment[] };
+
 export interface ComposerSurface {
   composerApprovalPanel(approvals: PendingApproval[], resolve?: (decision: ApprovalDecision) => void): TemplateResult;
   submit(instruction?: string): Promise<void>;
@@ -146,7 +147,7 @@ export interface ComposerSurface {
   state: ComposerState;
   composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;
   queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
-  waitingSteers(agent: Agent): QueuedRun[];
+  waitingSteers(agent: Agent): SteeringRun[];
   queuedRunsFor(threadRef: string | null): QueuedRun[];
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
@@ -154,6 +155,8 @@ export interface ComposerSurface {
   fillSuggestedPrompt(prompt: string, agent: Agent): void;
   addAnnotations(text: string, files: File[], annotationId?: string, remove?: boolean): Promise<boolean>;
   sendSuggestedPrompt(prompt: string, agent: Agent): Promise<void>;
+  readyToSend(): boolean;
+  sendText(text: string, agent: Agent): Promise<void>;
   resizeComposer(): void;
   currentModelOption(): ModelOption | undefined;
   followsDefault(): boolean;

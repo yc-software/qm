@@ -5,6 +5,8 @@ export interface GoalStripState {
   createdAt: number;
 }
 
+export const GOAL_RESUME_PROMPT = "Continue the goal.";
+
 export function goalFloorLabel(floor: Record<string, unknown> | null): string | null {
   if (!floor || typeof floor !== "object") return null;
   const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);

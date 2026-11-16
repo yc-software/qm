@@ -24,10 +24,12 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     "localStorage",
     "navigator",
     "HTMLElement",
+    "Element",
     "Node",
     "DOMParser",
     "CustomEvent",
     "Event",
+    "MouseEvent",
     "customElements",
   ])
     Object.defineProperty(globalThis, key, {

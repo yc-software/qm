@@ -10,7 +10,6 @@ import {
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { DurableMap } from "../src/persistence/durable-map.ts";
-import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
@@ -125,7 +124,7 @@ test("disconnect revokes connector grants so reconnect does not resurrect sharin
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "second" });
 
   assert.equal((await keychain.getGrant(grant.id))?.status, "revoked");
-  assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await keychain.grantsForScope("channel:C1", { includePersonGrants: true }), []);
 });
 
 test("connector token refresh: concurrent callers single-flight; connection metadata survives the rewrite", async () => {
@@ -326,7 +325,7 @@ test("disconnect revokes connector grants so reconnect cannot restore old access
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "second" });
 
   assert.equal((await keychain.getGrant(grant.id))?.status, "revoked");
-  assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await keychain.grantsForScope("channel:C1", { includePersonGrants: true }), []);
 });
 
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
@@ -349,51 +348,6 @@ test("connector tokens are hidden from keychain listings and own-credential mate
   const connector = (await creds.all()).find((c) => c.managed === "connector")!;
   assert.equal(await keychain.remove("U1", connector.id), false);
   assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "tok");
-});
-
-test("oauthRevoke: a capability token disconnects its own connector, but not a non-member's", async () => {
-  const deleted: Array<{ host: string; principalId: string }> = [];
-  const deps = {
-    connectorTokens: {
-      deleteConnectorToken: async (host: string, principalId: string) => {
-        deleted.push({ host, principalId });
-      },
-    },
-  } as unknown as Parameters<typeof oauthRevoke>[0]["deps"];
-  const call = (capability: unknown, body: unknown) => {
-    const out: { status?: number; body?: any } = {};
-    const res = {
-      getHeader() {},
-      writeHead(s: number) {
-        out.status = s;
-      },
-      end(d?: string) {
-        out.body = d ? JSON.parse(d) : undefined;
-      },
-    };
-    return oauthRevoke({ res, deps, body, capability } as unknown as Parameters<typeof oauthRevoke>[0]).then(() => out);
-  };
-  const cap = (actorId: string, members: string[] = []) => ({
-    actorId,
-    scopeId: `personal:${actorId}`,
-    keychainMembers: members.map((id) => ({ id })),
-    exp: 9_999_999_999,
-  });
-
-  deleted.length = 0;
-  const self = await call(cap("U1"), { provider: "google" });
-  assert.equal(self.status, 200);
-  assert.equal(self.body.principalId, "U1");
-  assert.ok(deleted.length > 0 && deleted.every((d) => d.principalId === "U1"));
-
-  const member = await call(cap("U1", ["U2"]), { provider: "google", principalId: "U2" });
-  assert.equal(member.status, 200);
-  assert.equal(member.body.principalId, "U2");
-
-  deleted.length = 0;
-  const stranger = await call(cap("U1"), { provider: "google", principalId: "U9" });
-  assert.equal(stranger.status, 400);
-  assert.equal(deleted.length, 0);
 });
 
 test("operator token fallback: an empty per-user secret falls through to the host-wide token", async () => {

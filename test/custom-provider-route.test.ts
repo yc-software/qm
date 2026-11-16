@@ -61,7 +61,6 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     return new Response(null, { status: 200 });
   });
   try {
-    // Register (validates against the endpoint's /models).
     const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
       method: "PUT",
       headers: ADMIN,
@@ -73,21 +72,17 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     assert.equal(putBody.status.hasKey, true);
     assert.equal(JSON.stringify(putBody).includes("sk-acme-secret"), false);
 
-    // The runtime registry serves the model immediately.
     assert.equal(String(resolveModel("custom/acme-gateway/acme-large")?.provider), "acme-gateway");
 
-    // List never leaks the key.
     const list = await fetch(`${srv.base}/v1/admin/custom-providers`, { headers: ADMIN });
     assert.equal(list.status, 200);
     const listBody = await list.text();
     assert.equal(listBody.includes("sk-acme-secret"), false);
     assert.ok(listBody.includes("acme-gateway"));
 
-    // Non-admin gets refused.
     const denied = await fetch(`${srv.base}/v1/admin/custom-providers`, { headers: USER });
     assert.notEqual(denied.status, 200);
 
-    // Delete disables and clears the registry.
     const del = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
       method: "DELETE",
       headers: ADMIN,
@@ -199,7 +194,6 @@ test("bad specs are refused with a reason", async () => {
       assert.equal(res.status, 400);
       assert.match(((await res.json()) as { message: string }).message, reason);
     }
-    // Reserved slug via the path.
     const reserved = await fetch(`${srv.base}/v1/admin/custom-providers/openai`, {
       method: "PUT",
       headers: ADMIN,

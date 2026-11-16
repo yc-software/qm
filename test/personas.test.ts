@@ -36,12 +36,13 @@ function setup() {
   );
   const personas = built.app.personas!;
   const enable = (who: string) => built.featureFlags.setEnabled("personas", scopeId("personal", who), true, "admin");
-  const sysprompt = async (who: string, conversation: TurnRequest["conversation"]) => {
+  const sysprompt = async (who: string, conversation: TurnRequest["conversation"], botActor?: true) => {
     const result = await built.app.turn({
       surface: "test",
       actor: { externalId: who },
       conversation,
       text: "!sysprompt",
+      ...(botActor ? { botActor } : {}),
     });
     assert.equal(result.status, "ok");
     const session = await built.sessions.get(result.sessionId!);
@@ -172,7 +173,7 @@ test("a persona conversation stays private to the people in it, even from the pe
   );
   const bobChat = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:with-ada" });
   ok(await personas.assign(BOB, (await built.sessions.get(bobChat.sessionId))!, ada.id));
-  assert.equal(await built.app.getSessionForViewer(bobChat.sessionId, ALICE), null);
+  assert.equal(await built.app.getSessionForViewer(bobChat.sessionId, { actorId: ALICE }), null);
   const aliceList = await built.app.listSessionPage(ALICE, { limit: 50, status: "active" });
   assert.ok(!aliceList.sessions.some((session) => session.id === bobChat.sessionId));
   const bobList = await built.app.listSessionPage(BOB, { limit: 50, status: "active" });
@@ -198,7 +199,7 @@ test("skills written into a persona show for everyone with a role on it, and nob
   });
   assert.equal(skill?.scopeId, scopeId("persona", ada.id));
   const sees = async (who: string) =>
-    (await built.app.listVisibleSkills(who)).some((row) => row.skill?.id === skill!.id);
+    (await built.app.listVisibleSkills(who, false)).some((row) => row.skill?.id === skill!.id);
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);
@@ -277,6 +278,30 @@ test("credentials attached by an owner reach every turn that uses the persona, a
 
   ok(await personas.remove(ALICE, ada.id));
   assert.ok(!(await sysprompt(BOB, dm)).reply.includes(handle));
+});
+
+test("credentials attached to a persona reach a Slack bot's turns that use it", async () => {
+  const { built, personas, enable, sysprompt } = setup();
+  const BOT = "U_RELEASEBOT";
+  for (const who of [ALICE, BOT]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOT), role: "read" },
+    ]),
+  );
+  const credential = await built.keychain!.save({
+    ownerId: ALICE,
+    service: "acme",
+    secret: "s3cret",
+    envKey: "ACME_TOKEN",
+  });
+  ok(await personas.attachCredential(ALICE, ada.id, credential.id));
+  const dm = { kind: "dm" as const, threadRef: "dm:U_RELEASEBOT:creds" };
+  const opened = await sysprompt(BOT, dm, true);
+  ok(await personas.assign(BOT, (await built.sessions.get(opened.sessionId))!, ada.id));
+  assert.ok((await sysprompt(BOT, dm, true)).reply.includes(credentialHandle(credential)));
 });
 
 test("linking a sign-in keeps persona authorship and grants with the person", async () => {
@@ -420,7 +445,7 @@ test("what a persona conversation posts carries the persona, so Slack can name i
     scopeId: opened.scopeId,
     isCurrent: async () => true,
   });
-  const computer = await computers.create(ALICE, opened.scopeId, built.sandboxResources.defaultBackend());
+  const computer = await computers.create(ALICE, opened.scopeId, await built.sandboxResources.defaultBackend());
   await computers.setDefault(ALICE, opened.scopeId, computer.id);
   const run = async () => {
     const result = await built.app.turn({
@@ -482,7 +507,7 @@ test("a persona pinned in a channel is worn by every conversation there until it
   const channel = { scopeId: "channel:C_PIN", role: "read" as const };
   const thread = (n: number) => ({ kind: "channel" as const, channelRef: "C_PIN", threadRef: `channel:C_PIN:t${n}` });
 
-  assert.equal((await sysprompt(CAROL, thread(1))).reply.includes("## Persona"), false);
+  assert.equal((await sysprompt(CAROL, thread(1))).reply.includes("## Persona:"), false);
   assert.equal(
     (await personas.setAccess(ALICE, ada.id, [{ ...owner, pinned: true }])).status,
     "invalid",
@@ -502,7 +527,11 @@ test("a persona pinned in a channel is worn by every conversation there until it
   ok(await personas.setAccess(ALICE, bea.id, [owner, channel]));
 
   ok(await personas.setAccess(ALICE, ada.id, [owner, channel]));
-  assert.equal((await sysprompt(CAROL, thread(3))).reply.includes("## Persona"), false, "unpinned");
+  assert.equal((await sysprompt(CAROL, thread(3))).reply.includes("## Persona:"), false, "unpinned");
   ok(await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]));
   assert.match((await sysprompt(CAROL, thread(4))).reply, /## Persona: Bea/);
+
+  ok(await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "group:G_PIN", role: "read", pinned: true }]));
+  const group = { kind: "group" as const, channelRef: "G_PIN", threadRef: "grp:G_PIN:t1" };
+  assert.match((await sysprompt(CAROL, group)).reply, /## Persona: Ada/);
 });

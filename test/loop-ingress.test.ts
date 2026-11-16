@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHmac } from "node:crypto";
-import { conversationEvent, createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
+import {
+  conversationChanged,
+  createLoopIngress,
+  type LoopIngress,
+  type IngressDelivery,
+} from "../src/loops/ingress.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
@@ -9,6 +14,7 @@ import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 async function world() {
   const sources = testMap<LoopIngress>();
@@ -32,6 +38,7 @@ async function world() {
     items,
     outputs: createLoopOutputStore(testMap()),
     lock: testAdvisoryLock(),
+    tenants: { gmailTenants: async () => [TEST_TENANT] },
     fire: {
       fire: async (
         loopId: string,
@@ -447,7 +454,7 @@ test("revoking rollout blocks new deliveries and processing already queued work"
   await assert.rejects(denied.setEnabled(w.loop.id, source.id, true), /not enabled/);
 });
 
-test("conversation events reopen a known item for others' messages, skip the owner's on a closed one, and never invent one", async () => {
+test("conversation changes reopen a known item once the source moves, ignore stale ones, and never invent one", async () => {
   const w = await world();
   await w.items.ingest([
     {
@@ -464,9 +471,8 @@ test("conversation events reopen a known item for others' messages, skip the own
     },
   ]);
   const [item] = await w.items.byLoop(w.loop.id);
-  await w.items.recordAction(item!.id, { kind: "dismissed", outcome: "dismissed" });
-  const event = (sourceKey: string, author: "owner" | "other", at: number) =>
-    conversationEvent({ loopId: w.loop.id, sourceKey }, { author, at, text: author, from: "Bob" });
+  await w.items.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
+  const changed = (sourceKey: string, at: number) => conversationChanged({ loopId: w.loop.id, sourceKey }, at);
   const until = async (done: () => Promise<boolean>) => {
     for (let i = 0; i < 100 && !(await done()); i++) {
       await w.ingress.maintain();
@@ -474,27 +480,25 @@ test("conversation events reopen a known item for others' messages, skip the own
     }
   };
   const settled = () => until(async () => (await w.deliveries.all()).every((d) => d.completedAt));
-  assert.equal(
-    await w.ingress.enqueueConversation(w.loop, [event("thread-1", "owner", 1500), event("unknown", "other", 1500)]),
-    true,
-  );
+  assert.equal(await w.ingress.enqueueConversation(w.loop, [changed("thread-1", 900), changed("unknown", 1500)]), true);
   await settled();
   assert.deepEqual(await w.ingress.list(w.loop.id), []);
   assert.equal((await w.items.byLoop(w.loop.id)).length, 1);
   assert.equal((await w.items.get(item!.id))!.status, "skipped");
+  assert.equal((await w.items.get(item!.id))!.sourceAt, 1000);
   assert.equal(w.fires.length, 0);
 
-  await w.ingress.enqueueConversation(w.loop, [event("thread-1", "other", 2000)]);
+  await w.ingress.enqueueConversation(w.loop, [changed("thread-1", 2000)]);
   await until(async () => w.fires.length > 0);
   const after = (await w.items.get(item!.id))!;
   assert.equal(after.sourceAt, 2000);
   assert.equal(after.sourceSummary, "Can you send the deck?");
+  assert.equal(after.source, "gmail");
   assert.equal(after.sourcePayload?.title, "Deck");
-  assert.deepEqual(after.sourcePayload?.latestEvent, { author: "other", at: 2000, from: "Bob" });
-  assert.equal(after.sourcePayload?.snippet, "other");
+  assert.equal(after.sourcePayload?.snippet, "Can you send the deck?");
   assert.equal(w.fires.length, 1);
 
-  await w.ingress.enqueueConversation(w.loop, [event("thread-1", "other", 2000)]);
+  await w.ingress.enqueueConversation(w.loop, [changed("thread-1", 2000)]);
   assert.equal((await w.deliveries.all()).length, 2);
   const [source] = (await w.sources.all()).filter((s) => s.kind === "conversation");
   assert.equal((await w.ingress.receive(source!.id, request("webhook", "x", {}))).status, 404);
@@ -512,7 +516,7 @@ test("conversation events are not queued for owners outside the rollout", async 
   assert.equal((await w.deliveries.all()).length, 0);
 });
 
-test("Gmail sent mail becomes an owner event on known threads only", async () => {
+test("Gmail sent mail bumps the known thread instead of creating a card", async () => {
   const fetchImpl: typeof fetch = async (input) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith("profile")) return Response.json({ emailAddress: "alice@example.com", historyId: "5" });
@@ -546,51 +550,8 @@ test("Gmail sent mail becomes an owner event on known threads only", async () =>
     dedupeKey: "thread-1",
     sourceAt: 2000,
     merge: true,
-    sourcePayload: { latestEvent: { author: "owner", at: 2000, text: "Here you go" } },
+    sourcePayload: {},
   });
   assert.equal(entries[1].merge, undefined);
   assert.equal(entries[1].sourcePayload.snippet, "Thanks!");
-});
-
-test("the events route queues owner and other messages for known conversations and rejects outsiders", async () => {
-  const w = await world();
-  await w.items.ingest([
-    { loopId: w.loop.id, dedupeKey: "t1", source: "gmail", sourceAt: 1000, sourcePayload: { snippet: "Ask" } },
-  ]);
-  const route = loopIngressRoutes.find((route) => "path" in route && route.path === "/v1/loops/:id/events")!;
-  const call = async (actor: string | null, body: unknown) => {
-    let status = 0;
-    await route.handle({
-      params: { id: w.loop.id },
-      url: new URL("http://local?principalId=alice"),
-      actor: actor ? { p: actor } : null,
-      capability: null,
-      body,
-      deps: { loops: { store: w.loops }, loopIngress: w.ingress, featureFlags: { enabled: async () => true } },
-      app: {
-        samePerson: async (a: string, b: string) => a === b,
-        membershipControlsScope: async () => false,
-        managesScope: async () => false,
-      },
-      res: {
-        getHeader: () => undefined,
-        writeHead: (value: number) => {
-          status = value;
-        },
-        end: () => {},
-      },
-    } as unknown as ApiCtx);
-    return status;
-  };
-  const event = { sourceKey: "t1", author: "owner", at: 2000, text: "Done" };
-  assert.equal(await call("mallory", { events: [event] }), 403);
-  assert.equal(await call("alice", { events: [{ ...event, author: "bot" }] }), 400);
-  assert.equal(await call("alice", { events: [] }), 400);
-  assert.equal(await call("alice", { events: [event] }), 202);
-  for (let i = 0; i < 100 && !w.fires.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
-  const [item] = await w.items.byLoop(w.loop.id);
-  assert.equal(item!.sourceAt, 2000);
-  assert.equal(item!.sourcePayload?.snippet, "Ask");
-  assert.deepEqual(item!.sourcePayload?.latestEvent, { author: "owner", at: 2000, text: "Done" });
-  assert.equal(w.fires.length, 1);
 });

@@ -5,7 +5,9 @@ import { WEBHOOK_CLAIM_MS, webhookSender, webhookSigningKey } from "../src/deliv
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { Delivery } from "../src/types.ts";
+import { withTenant } from "../src/tenants/context.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the webhook delivery tests";
 
@@ -23,8 +25,7 @@ const enqueuer = (store: ReturnType<typeof createPostgresDeliveryStore>) => (tar
 test("only the oldest row of each conversation is claimed, and not while one is out", { skip }, async () => {
   const store = createPostgresDeliveryStore(testDatabaseUrl());
   const enqueue = enqueuer(store);
-  const claim = async () =>
-    (await store.claimPending("webhook", 300, { oldestPerConversation: true })).map((d) => d.text);
+  const claim = async () => (await store.claimDue("webhook", 300)).map((d) => d.text).sort();
   const a1 = await enqueue("a", "a1");
   await enqueue("a", "a2");
   await enqueue("b", "b1");
@@ -71,7 +72,7 @@ test(
       release();
       await until(() => sent.includes("slow2"));
       assert.ok(sent.indexOf("slow1") < sent.indexOf("slow2"));
-      assert.deepEqual(await store.pending("webhook"), []);
+      await until(async () => (await store.pending("webhook")).length === 0);
       assert.equal((await store.get(refused.id))?.failedReason, "receiver returned HTTP 422");
     } finally {
       release();
@@ -97,13 +98,14 @@ test("the webhook sender signs with a key core does not accept and reports refus
     createdAt: 0,
     deliveredAt: null,
   } satisfies Delivery;
-  assert.equal(await send(d), undefined);
+  const post = () => withTenant(TEST_TENANT, (tenant) => send(d, tenant));
+  assert.equal(await post(), undefined);
   const req = requests[0]!;
   const body = await req.text();
   const ts = Number(req.headers.get("x-timestamp"));
   const canonical = `POST\n/qm?v=1\n${body}`;
   assert.equal(req.headers.get("x-signature"), signRequest(webhookSigningKey(secret), ts, canonical));
   assert.notEqual(req.headers.get("x-signature"), signRequest(secret, ts, canonical));
-  assert.deepEqual(await send(d), { refused: "receiver returned HTTP 422: binding unknown" });
-  await assert.rejects(send(d), /HTTP 401/, "an auth failure is retried, not refused");
+  assert.deepEqual(await post(), { refused: "receiver returned HTTP 422: binding unknown" });
+  await assert.rejects(post(), /HTTP 401/, "an auth failure is retried, not refused");
 });

@@ -5,6 +5,7 @@ import pg from "pg";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
 
 const url = process.env.DATABASE_URL;
@@ -330,6 +331,7 @@ test("vectors stored before the sketch column are backfilled and ranked", { skip
   await admin.query(`CREATE DATABASE ${name}`);
   const fresh = new URL(url!);
   fresh.pathname = `/${name}`;
+  await seedTestTenant(fresh.toString());
   const client = new pg.Client({ connectionString: fresh.toString() });
   const index = createPostgresVectorStore(fresh.toString());
   t.after(async () => {

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { testMap } from "./support/test-database.ts";
 
 test("explicit self-recipient remains in shared history without waking itself", async () => {
@@ -42,7 +43,7 @@ test("a swarm turn resumed after a shutdown hand-back keeps its dispatch provena
   await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
   await f.service.sweep();
   const run = (await f.runs.list()).find((item) => item.request.swarm)!;
-  assert.ok(await f.service.binding({ ...run.request, runId: run.id, resumeCause: { kind: "shutdown" } }));
+  assert.ok(await f.service.binding(testTenant, { ...run.request, runId: run.id, resumeCause: { kind: "shutdown" } }));
 });
 test("settings validate shape before creating a swarm", async () => {
   for (const settings of [
@@ -83,6 +84,7 @@ test("provider default is pinned before retries and child provisioning, with no 
   const f = await swarmFixture();
   const options: Parameters<typeof createSandboxResources>[0] = {
     records: f.records,
+    loads: testMap(),
     defaults: testMap(),
     backends: { aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "aws",
@@ -110,6 +112,7 @@ test("selected scope computer determines new worker provider, but its private di
   const f = await swarmFixture();
   const sandboxes = createSandboxResources({
     records: f.records,
+    loads: testMap(),
     defaults: testMap(),
     backends: { modal: f.backend, aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "modal",

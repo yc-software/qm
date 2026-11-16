@@ -9,20 +9,18 @@ import {
   type SlackFile,
   MAX_RECENT_MESSAGES,
   decodeSlackEntities,
-  isOversize,
   recentWindow,
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
+import { isBotAuthored, slackFileName } from "./message-gating.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;
 export const MAX_NAME_LOOKUPS = 10;
 const RECENT_KEEP_SUBTYPES = new Set(["file_share", "bot_message", "thread_broadcast"]);
-
-export const slackFileName = (f: SlackFile): string => f.name || f.title || f.id || "file";
 
 export function reactionTallies(raw: unknown): ReactionTally[] {
   if (!Array.isArray(raw)) return [];
@@ -51,7 +49,6 @@ export interface ConversationSerializer {
     },
     ctx: {
       audience: ActorAssertion[];
-      channelName?: string;
       isPrivate?: boolean;
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
@@ -143,7 +140,7 @@ export function createConversationSerializer(deps: {
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
         text: decodeSlackEntities(content.text.trim()),
         ...(m.ts === triggerTs ? { isTrigger: true } : {}),
-        ...(m.bot_id ? { isBot: true } : {}),
+        ...(isBotAuthored(m) ? { isBot: true } : {}),
         ...(isSelfMessage(m) ? { isSelf: true } : {}),
         ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
         ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
@@ -165,7 +162,6 @@ export function createConversationSerializer(deps: {
     },
     ctx: {
       audience: ActorAssertion[];
-      channelName?: string;
       isPrivate?: boolean;
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
@@ -175,7 +171,6 @@ export function createConversationSerializer(deps: {
       channel: { kind: ctx.kind ?? inc.kind },
       messages: [],
       here: inc.threadTs ? { kind: "thread", youOpenedIt: false } : { kind: "top-level" },
-      omittedFiles: [],
     };
     if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
 
@@ -207,30 +202,22 @@ export function createConversationSerializer(deps: {
       const youOpenedIt = Boolean(
         root && ((root.user && root.user === ids.botUserId) || (ids.ownBotId !== "" && root.bot_id === ids.ownBotId)),
       );
-      const starterName = root && !youOpenedIt ? messageAuthorName(root, nameById, new Map()) : undefined;
       here = {
         kind: "thread",
         youOpenedIt,
-        ...(starterName ? { starterName } : {}),
         ...(youOpenedIt && root?.text ? { openerText: decodeSlackEntities(String(root.text).trim()) } : {}),
       };
     } else {
       here = { kind: "top-level" };
     }
 
-    const omittedFiles = inc.files
-      .filter((f) => isOversize(f))
-      .map((f) => ({ name: slackFileName(f), reason: "too-big" as const }));
-
     const view: ConversationView = {
       channel: {
-        ...(ctx.channelName ? { name: ctx.channelName } : {}),
         kind: ctx.kind ?? inc.kind,
         ...(ctx.isPrivate !== undefined ? { isPrivate: ctx.isPrivate } : {}),
       },
       messages,
       here,
-      omittedFiles,
       nameById,
       ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };

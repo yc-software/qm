@@ -12,30 +12,18 @@ export const FEATURES = {
     label: "Personas",
     hint: "Lets the selected people create, share and chat with personas: reusable agents with their own instructions, skills and credentials.",
   },
-  persistent_subagents: {
-    label: "Persistent subagents",
-    personalOnly: true,
-    hint: "Persistent subagents are available for personal scopes only.",
-  },
-  responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
-    hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
+    hint: "Shows a live activity card in Slack threads: the current step, background work, monitors and subagents, with a link to the web conversation. The card disappears once the reply has landed. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off removes open cards.",
   },
-  descriptive_session_titles: {
-    label: "Descriptive session titles",
+  next_prompt_suggestions: {
+    label: "Next-message suggestions (experimental)",
     personalOnly: true,
-    hint: "Titles the selected people's new conversations with a short summary of what they asked, anchored on a name or distinctive word, written by a stronger model. Regenerating a title uses it too.",
+    hint: "After each reply in the web app, predicts the selected people's likely next message and shows it in their empty composer; Tab fills it in. Each suggestion is one extra model call on their conversation. Turning it on applies on their next page load.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
-  sidebar_last_message_titles: {
-    label: "Sidebar titles from last message (experimental)",
-    personalOnly: true,
-    hint: "Titles each sidebar chat with the last message sent in it and shows the usual title beneath. In shared chats that message may be from someone else. Applies on the next sidebar refresh.",
-  },
-  swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },
   ui_canvas: {
     label: "UI canvas and UI state (agent code runs in the page)",

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
+import { claimRows } from "../tenants/claim.ts";
 import type { ScopeId } from "../types.ts";
 import type { LlmRequestRecord, NewLlmRequest, SessionStore } from "./session-store.ts";
 import { promptEnvelopeBody } from "./session-store.ts";
@@ -28,16 +29,27 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
 export function createLlmCaptures(deps: {
   db: PgPool;
   now: () => number;
-}): Pick<SessionStore, "recordLlmRequest" | "listLlmRequests" | "purgeLlmCaptures"> {
+}): Pick<SessionStore, "recordLlmRequest" | "listLlmRequests" | "listLlmRequestsForTurns" | "purgeLlmCaptures"> {
   const { db, now } = deps;
-  const { q, query } = db;
+  const { q } = db;
+  async function readRequests(condition: string, args: unknown[], omitRequest = false): Promise<LlmRequestRecord[]> {
+    const cols = omitRequest
+      ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.usage_json, r.transport_json"
+      : "r.*, e.body AS prompt_body";
+    const from = omitRequest
+      ? "session_llm_requests r"
+      : "session_llm_requests r LEFT JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash";
+    return (await q(`SELECT ${cols} FROM ${from} WHERE ${condition} ORDER BY r.created_at ASC, r.step ASC`, args)).map(
+      rowToLlmRequest,
+    );
+  }
   return {
     async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
       if (envelope) {
         await q(
           `INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3)
-           ON CONFLICT (hash) DO UPDATE SET created_at = EXCLUDED.created_at
+           ON CONFLICT (tenant_id, hash) DO UPDATE SET created_at = EXCLUDED.created_at
             WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
         );
@@ -76,12 +88,6 @@ export function createLlmCaptures(deps: {
     },
 
     async listLlmRequests(sessionId, opts): Promise<LlmRequestRecord[]> {
-      const cols = opts?.omitRequest
-        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.usage_json, r.transport_json"
-        : "r.*, e.body AS prompt_body";
-      const from = opts?.omitRequest
-        ? "session_llm_requests r"
-        : "session_llm_requests r LEFT JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash";
       const conds = ["r.session_id = $1"];
       const args: unknown[] = [sessionId];
       const turnSeqs = opts?.turnSeqs;
@@ -95,26 +101,26 @@ export function createLlmCaptures(deps: {
       } else if (opts?.orphans) {
         conds.push("r.turn_seq IS NULL");
       }
-      const rows = await q(
-        `SELECT ${cols} FROM ${from} WHERE ${conds.join(" AND ")} ORDER BY r.created_at ASC, r.step ASC`,
-        args,
+      return readRequests(conds.join(" AND "), args, opts?.omitRequest);
+    },
+
+    async listLlmRequestsForTurns(turns) {
+      if (!turns.length) return [];
+      return readRequests(
+        `EXISTS (SELECT 1 FROM jsonb_to_recordset($1::jsonb)
+        AS wanted("sessionId" text, "turnSeq" bigint)
+        WHERE r.session_id = wanted."sessionId" AND r.turn_seq = wanted."turnSeq")`,
+        [JSON.stringify(turns)],
       );
-      return rows.map(rowToLlmRequest);
     },
 
     async purgeLlmCaptures(cutoff, opts) {
       const deadline = opts?.deadline ?? Infinity;
       let envelopes = 0;
       while (Date.now() < deadline && !opts?.stop?.()) {
-        const deleted = await query(
-          `DELETE FROM llm_prompt_envelopes
-            WHERE hash IN (SELECT hash FROM llm_prompt_envelopes WHERE created_at < $1
-                            ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
-              AND created_at < $1`,
-          [cutoff, LLM_CAPTURE_PURGE_BATCH],
-        );
-        envelopes += deleted.rowCount;
-        if (deleted.rowCount < LLM_CAPTURE_PURGE_BATCH) break;
+        const deleted = await claimRows(db, "claim_purged_envelopes", [cutoff, LLM_CAPTURE_PURGE_BATCH]);
+        envelopes += deleted.length;
+        if (deleted.length < LLM_CAPTURE_PURGE_BATCH) break;
       }
       return envelopes;
     },

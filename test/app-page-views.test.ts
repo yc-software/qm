@@ -50,7 +50,7 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
   });
 }
 
-async function agent(log: AppPageViewLog) {
+async function agent(log: Pick<AppPageViewLog, "record">) {
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end("UPSTREAM OK");
@@ -58,10 +58,11 @@ async function agent(log: AppPageViewLog) {
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const backings = testDeployBackings();
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore(testDeployBackings()),
+    deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
@@ -75,7 +76,7 @@ async function agent(log: AppPageViewLog) {
     deploy,
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await app.deploy({
@@ -91,7 +92,7 @@ async function agent(log: AppPageViewLog) {
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
-    appPageViews: log,
+    appPageViews: { ...log, lastViews: async () => new Map() },
   });
   server.listen(0);
   return {
@@ -148,7 +149,7 @@ test("page loads of a published app are recorded with viewer, auth mode and requ
     await settle();
     assert.equal(views.length, 1, "denied and signed-out requests that never reach the app are not recorded");
 
-    await h.app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    await h.app.setAppPublic("mysite", true, { createdBy: "alice@example.com" });
     await get(h.port, "/", { Accept: "text/html", "x-qm-client-ip": "198.51.100.9" });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("mallory@example.com") });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("guest@example.org", true) });

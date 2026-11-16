@@ -171,6 +171,7 @@ test("new output wakes the agent as a first-class live turn in the arming conver
   assert.match(h.calls[0]?.text ?? "", /watching background job p-1/);
   assert.equal(automationOrigin(h.calls[0])?.screenData, "compiling...\n");
   assert.doesNotMatch(automationOrigin(h.calls[0])?.screenData ?? "", /Act on this|watching background job/);
+  assert.equal(automationOrigin(h.calls[0])?.ownerFire, undefined, "a job-watch wake is not its owner's fire");
   assert.equal(h.calls[0]?.surfaceTools, true);
   assert.equal(h.calls[0]?.addressed, true);
   assert.deepEqual(automationOrigin(h.calls[0])?.destination, {

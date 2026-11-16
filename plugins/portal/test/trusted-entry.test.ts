@@ -67,12 +67,12 @@ test("state and cookie binding are checked before claims or network access", asy
   const url = new URL("https://portal.example.com/auth/trusted/callback?code=test&state=wrong");
   await assert.rejects(entry.finish(start.cookie, url), /Invalid trusted login state/);
   url.searchParams.set("state", new URL(start.location).searchParams.get("state")!);
-  await assert.rejects(entry.finish(null, url), /Invalid trusted login state/);
+  await assert.rejects(entry.finish(null, url), /Trusted login cookie missing or expired/);
   const other = createTrustedEntry(
     trustedEntryConfig(env, "https://portal.example.com")!,
     "different-session-secret",
     async () => true,
   );
-  await assert.rejects(other.finish(start.cookie, url), /Invalid trusted login state/);
+  await assert.rejects(other.finish(start.cookie, url), /Trusted login cookie missing or expired/);
   assert.equal(claims, 0);
 });

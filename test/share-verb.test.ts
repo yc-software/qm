@@ -21,6 +21,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 const ORG = "default-org";
 
@@ -80,11 +81,11 @@ function fakeApp(state: FakeState): App {
     artifactGrantPermission: async () => null,
     membershipControlsScope: async () => false,
     managesScope: async () => false,
-    async grant(g: Grant) {
-      await state.acl.grant(g, authorOfGrant(state, g.ownerScopeId, g.ref));
+    async grant(t: Tenant, g: Grant) {
+      await state.acl.grant(t, g, authorOfGrant(state, g.ownerScopeId, g.ref));
     },
-    async revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string) {
-      await state.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, authorOfGrant(state, ownerScopeId, ref));
+    async revokeGrant(t: Tenant, ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string) {
+      await state.acl.revoke(t, ownerScopeId, ref, granteeScopeId, revokedBy, authorOfGrant(state, ownerScopeId, ref));
     },
     async moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string) {
       if (type !== "skill" && type !== "deploy")
@@ -374,6 +375,31 @@ test("a member of a shared home (private channel/group) can share it even if the
   assert.equal(grants[0]!.grantedBy, "U2", "the sharing member is recorded, not the creator");
 });
 
+test("a Slack bot's turn can't share a private channel's artifact it didn't create", async () => {
+  const state = await ownerState();
+  state.privateChannels.add("C1");
+  state.artifacts["skill:CS"] = {
+    type: "skill",
+    id: "CS",
+    ownerScopeId: scopeId("channel", "C1"),
+    createdBy: "U1",
+    grantRef: "skill:CS",
+  };
+  state.scopesByPrincipal["release-bot"] = [
+    scopeId("personal", "release-bot"),
+    scopeId("org", ORG),
+    scopeId("channel", "C1"),
+    scopeId("group", "G9"),
+  ];
+  const svc = createControlService(fakeApp(state));
+  const r = await svc.shareArtifact(
+    { type: "skill", id: "CS", scope: scopeId("group", "G9") },
+    { ...cap("release-bot", scopeId("channel", "C1")), botActor: true },
+  );
+  assert.equal(r.ok ? "" : r.code, "forbidden");
+  assert.deepEqual(await grantsOf(state), []);
+});
+
 test("an author who LEFT a private channel can no longer share its artifact (parity with canManageSkill — membership, not authorship)", async () => {
   const state = await ownerState();
   state.privateChannels.add("C1");
@@ -462,11 +488,11 @@ test("an unknown artifact is a not_found; a bad scope id is a bad_request; an un
   assert.equal(missing.ok, false);
   if (!missing.ok) {
     assert.equal(missing.code, "not_found");
-    assert.match(missing.message, /POST \/v1\/files\/uploads/);
+    assert.match(missing.message, /GET \/v1\/files\/upload-client/);
   }
   const path = await svc.shareArtifact({ type: "file", id: "artifacts/F1/doc.md", scope: "org" }, cap("U1"));
   assert.equal(path.ok, false);
-  if (!path.ok) assert.match(path.message, /POST \/v1\/files\/uploads/);
+  if (!path.ok) assert.match(path.message, /GET \/v1\/files\/upload-client/);
 
   const badScope = await svc.shareArtifact({ type: "file", id: "F1", scope: "not-a-scope" }, cap("U1"));
   assert.equal(badScope.ok, false);

@@ -2,15 +2,20 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, test } from "node:test";
+import { Type } from "typebox";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
+import { configurePublicFetch } from "../src/util/network.ts";
 
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 const DROP_BLOCK = { prefix_mismatch_behavior: "drop_block" };
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => {
+  setCustomProviders([]);
+  configurePublicFetch(new Set());
+});
 
 type Seen = { headers: IncomingHttpHeaders; body: Record<string, unknown> };
 
@@ -54,6 +59,7 @@ async function fakeAnthropic(): Promise<{ url: string; seen: Seen[]; close: () =
 }
 
 function register(baseUrl: string, models: Array<{ id: string; reasoning?: boolean }>, protocol = "anthropic"): void {
+  configurePublicFetch(new Set([new URL(baseUrl).origin]), () => false);
   setCustomProviders([
     { id: "direct", name: "Direct", protocol: protocol as "anthropic", baseUrl, models: models.map((m) => ({ ...m })) },
   ]);
@@ -82,6 +88,7 @@ function replayContext(model: Model<Api>, firstPrompt: string): Context {
   };
   return {
     systemPrompt: "terse",
+    tools: [{ name: "lookup", description: "Look something up.", parameters: Type.Object({}) }],
     messages: [
       { role: "user", content: firstPrompt, timestamp: Date.now() },
       prior,
@@ -91,14 +98,14 @@ function replayContext(model: Model<Api>, firstPrompt: string): Context {
 }
 
 async function send(model: Model<Api>, reasoning?: "high"): Promise<void> {
-  const runtime = await buildModelRuntime({ direct: "sk-direct" });
+  const runtime = await buildModelRuntime({ direct: "sk-direct" }, undefined, "turn", "long");
   const reply = await runtime
     .streamSimple(model, replayContext(model, "rewritten context: what is 17*23?"), reasoning ? { reasoning } : {})
     .result();
   assert.equal(reply.stopReason, "stop", reply.errorMessage);
 }
 
-test("a custom anthropic model of a known adaptive model sends thinking binding even with reasoning off", async () => {
+test("a custom anthropic model of a known adaptive model sends thinking binding even with reasoning off and caches only system and tools for an hour", async () => {
   const upstream = await fakeAnthropic();
   try {
     register(upstream.url, [{ id: "claude-opus-5-5" }]);
@@ -111,6 +118,13 @@ test("a custom anthropic model of a known adaptive model sends thinking binding 
     assert.deepEqual(call.body.thinking, { type: "adaptive", display: "summarized", block_binding: DROP_BLOCK });
     const replayed = (call.body.messages as Array<{ content: unknown }>)[1]!.content as Array<{ type: string }>;
     assert.equal(replayed[0]!.type, "thinking");
+    const breakpoint = (blocks: unknown) => (blocks as Array<{ cache_control?: object }>).at(-1)!.cache_control;
+    const hour = { type: "ephemeral", ttl: "1h" };
+    assert.deepEqual(breakpoint(call.body.system), hour);
+    assert.deepEqual(breakpoint(call.body.tools), hour);
+    assert.deepEqual(breakpoint((call.body.messages as Array<{ content: unknown }>).at(-1)!.content), {
+      type: "ephemeral",
+    });
   } finally {
     upstream.close();
   }

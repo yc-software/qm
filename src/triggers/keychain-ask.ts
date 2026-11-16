@@ -1,4 +1,4 @@
-import { cronTriggerAuthority } from "../cron/authority.ts";
+import { ownerAuthored, cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { Destination, ScopeId } from "../types.ts";
@@ -9,6 +9,7 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { isTransientFailure } from "../core/turn-error.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { samePerson } from "../directory/person.ts";
+import { withTenant } from "../tenants/context.ts";
 
 function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
   if (ask.status === "approved") {
@@ -57,10 +58,17 @@ export async function fireAskResolution(
   }
   const destination = cron ? cron.destination : ask.requesterDestination;
   const outcome = await runTrigger(deps, {
-    ...cronTriggerAuthority(cron ?? { owner: ask.requesterId, ownerScopeId: ask.requesterScopeId }),
+    ...cronTriggerAuthority(
+      cron ?? {
+        owner: ask.requesterId,
+        ownerScopeId: ask.requesterScopeId,
+        ...(ask.botActor ? { botActor: true } : {}),
+      },
+    ),
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
+    ...(cron ? { ownerFire: ownerAuthored(cron) } : {}),
     ...(cron?.runtime ? { runtime: cron.runtime } : {}),
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),
@@ -96,6 +104,7 @@ export interface DropResolution {
   credentialHandle?: string;
   granted: boolean;
   pendingSiblings?: string[];
+  botActor?: boolean;
 }
 
 function dropResolutionInput(drop: DropResolution): string {
@@ -127,6 +136,7 @@ export async function fireDropResolution(deps: TriggerDeps, drop: DropResolution
     input: dropResolutionInput(drop),
     fireKey: `drop:${drop.id}`,
     surface: "secret-drop",
+    ...(drop.botActor ? { botActor: true } : {}),
     ...(drop.destination ? { destination: drop.destination } : {}),
     ...(drop.threadRef ? { threadRef: drop.threadRef } : {}),
   }).catch((error: unknown): TriggerOutcome => {
@@ -151,22 +161,23 @@ export function createAskExpirySweep(deps: {
   auditLog?: AuditLog;
 }): (now: number) => Promise<void> {
   return async (now) => {
-    for (const ask of await deps.keychain.unnotifiedResolvedAsks(now)) {
-      if (ask.status === "expired") {
-        deps.auditLog?.record({
-          at: now,
-          principalId: ask.ownerId,
-          action: "keychain.ask.expire",
-          resource: ask.id,
-          scopeLabel: ask.requesterScopeId,
-        });
-      }
-      try {
-        await deps.fire(ask);
-        await deps.keychain.markAskNotified(ask.id, ask.status);
-      } catch (e) {
-        swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
-      }
-    }
+    for (const ask of await deps.keychain.unnotifiedResolvedAsks(now))
+      await withTenant(ask.tenantId, async (tenant) => {
+        if (ask.status === "expired") {
+          deps.auditLog?.record(tenant, {
+            at: now,
+            principalId: ask.ownerId,
+            action: "keychain.ask.expire",
+            resource: ask.id,
+            scopeLabel: ask.requesterScopeId,
+          });
+        }
+        try {
+          await deps.fire(ask);
+          await deps.keychain.markAskNotified(ask.id, ask.status);
+        } catch (e) {
+          swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
+        }
+      });
   };
 }

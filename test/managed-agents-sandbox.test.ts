@@ -242,8 +242,9 @@ test("with a home backup store, restart backs up the home and replaces the sessi
   assert.equal((await sandbox.run(again, "cat ~/kept.txt")).stdout.trim(), "after");
 });
 
-test("a failed home snapshot retries on the next teardown", async () => {
+test("a failed home snapshot is reported once and waits out the interval before it retries", async () => {
   const uploads: number[] = [];
+  const failures: string[] = [];
   const snapshots: HomeSnapshotStore = {
     open: async () => null,
     put: async () => undefined,
@@ -252,13 +253,14 @@ test("a failed home snapshot retries on the next teardown", async () => {
       throw new Error("snapshot upload failed");
     },
   };
-  sandbox = make({ snapshots });
+  sandbox = make({ snapshots, onError: (e: { code: string }) => failures.push(e.code) });
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const again = await sandbox.provision(scope);
   await sandbox.teardown(again);
   assert.equal(fake.checkpointCalls().length, 0);
-  assert.equal(uploads.length, 2);
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(failures, ["teardown_snapshot_failed"]);
 });
 
 test("teardown pauses the session and the next provision resumes it", async () => {
@@ -273,6 +275,22 @@ test("teardown pauses the session and the next provision resumes it", async () =
   const r = await sandbox.run(again, "cat kept.txt");
   assert.match(r.stdout, /hi/);
   assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+test("resuming a session whose pause failed clears the stale pause error", async () => {
+  const store = testMap<StoredManagedAgentsSandbox>();
+  const create = async (options: Parameters<typeof fake.client.create>[0]) => ({
+    ...(await fake.client.create(options)),
+    pause: async () => Promise.reject(new Error("provider pause unavailable")),
+  });
+  const first = make({ client: { ...fake.client, create }, store });
+  for (const next of [first, make({ client: { ...fake.client, create }, store })]) {
+    await assert.rejects(first.teardown(await first.provision(scope)), /pause unavailable/);
+    await next.computerStatus?.(scope);
+    await next.provision(scope);
+    const stored = await store.get(scope);
+    assert.deepEqual([stored?.preservationState, stored?.preservationError], ["running", undefined]);
+  }
 });
 
 test("keepWarm teardown leaves the session running for background work", async () => {
@@ -412,7 +430,7 @@ test("session status wire values map onto backend states", () => {
 
 const awsCredential = (value: string) => ({
   files: [{ path: ".aws/credentials", contentBase64: Buffer.from(value).toString("base64") }],
-  save: async (): Promise<void> => {},
+  save: async (): Promise<string[]> => [],
 });
 
 test("the guest refuses a transfer outside the workspace, the way the platform does", async () => {

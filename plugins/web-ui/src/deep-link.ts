@@ -18,8 +18,7 @@ export function deepLinkPath(
     return `${b}/contexts?scope=${encodeURIComponent(contextScope)}`;
   }
   if (view !== "chats") {
-    const pathView = view === "deploys" ? "apps" : view;
-    return `${b}/${encodeURIComponent(pathView)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
+    return `${b}/${encodeURIComponent(view)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
   }
   if (itemId) throw new Error("the chats view is addressed by session, not by item id");
   return sessionId ? `${b}/s/${encodeURIComponent(sessionId)}` : `${b}/`;
@@ -59,7 +58,6 @@ export function parseDeepLink(
   const requestedView = params.get("view") ?? viewFor();
   let view = requestedView;
   if (view === "connectors") view = "keychain";
-  else if (view === "apps") view = "deploys";
   const itemFor = (): string | null => {
     if (sessionRoute) return null;
     if (pathView === "projects" && projectKind && projectItem) return `${projectKind}:${projectItem}`;
@@ -77,7 +75,6 @@ export function sessionLink(origin: string, base: string, sessionId: string, seq
   return `${origin}${deepLinkPath(base, "chats", sessionId)}${suffix}`;
 }
 
-/** The session a same-app link points at (`/s/<id>`, optionally `?seq=N`), or null for anything else. */
 export function sessionLinkTarget(
   href: string,
   origin: string,
@@ -96,7 +93,6 @@ export function sessionLinkTarget(
   return { session: linked.session, seq: messageLinkSeq(url.search) };
 }
 
-/** True for an unmodified left click — the case an in-app link should handle itself (SPA nav). Modified clicks (cmd/ctrl/shift/alt, middle-click) fall through to the browser so "open in new tab" works. */
 export function isPlainLeftClick(e: MouseEvent): boolean {
   return !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
 }

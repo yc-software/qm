@@ -7,7 +7,7 @@ import { shownFacts } from "../memory/recall-delta.ts";
 import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { entitledScopes } from "./context-filter.ts";
+import { entitledScopes, loadsScopeContext } from "./context-filter.ts";
 import { swallowAs } from "../util/errors.ts";
 import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
@@ -21,8 +21,10 @@ import { type Resolution, type ScopeId, type Principal } from "../types.ts";
 import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
 import type { CurrentScopeMembers } from "./scope-membership.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
+  tenant: Tenant;
   resolution: Resolution;
   audienceScopeId?: ScopeId;
   external?: boolean;
@@ -30,6 +32,8 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   acl: Pick<AclStore, "sharedOfKindForAudience">;
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
+  botActor: boolean;
+  ownScopeBotWork: boolean;
   notebookOnly?: boolean;
   memory: MemoryService;
   files: FileArtifactStore;
@@ -62,7 +66,7 @@ export async function resolveTurnContext(input: ContextInput) {
       : undefined;
   const recordRead = (scope: ScopeId, resource: string) => {
     if (!sharingSources.includes(scope)) return;
-    input.auditLog?.record({
+    input.auditLog?.record(input.tenant, {
       at: Date.now(),
       principalId: input.actor.id,
       action: "sharing.cross_context_read",
@@ -76,7 +80,7 @@ export async function resolveTurnContext(input: ContextInput) {
     targetScope: input.targetScope,
     nativeScopes: baseRecallScopes,
     audience: input.audience,
-    open: resolution.sharingPosture === "open",
+    open: resolution.sharingPosture === "open" && !input.botActor,
     ...(input.notebookOnly ? { notebookOnly: true } : {}),
     config: input.config,
     isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,
@@ -115,6 +119,7 @@ export async function resolveTurnContext(input: ContextInput) {
       disclosedFacts?: Promise<ReadonlyMap<ScopeId, readonly MemoryFact[]>>,
       report?: MemoryRecallContext["report"],
       text?: string,
+      sessionId?: string,
     ) =>
       tracePhase(
         "turn.memory_recall",
@@ -129,6 +134,7 @@ export async function resolveTurnContext(input: ContextInput) {
               maxChars: RECALL_MAX_CHARS,
               ...(disclosedFacts ? { disclosedFacts } : {}),
               ...(report ? { report } : {}),
+              ...(sessionId ? { sessionId } : {}),
             },
             memoryLabels,
           ),
@@ -139,10 +145,12 @@ export async function resolveTurnContext(input: ContextInput) {
       limit = 20,
       scope?: ScopeId,
       report?: MemoryRecallContext["report"],
+      sessionId?: string,
     ): Promise<string[] | null> => {
       const hits = await searchNotebooks(memory, read, query, limit, scope, {
         ...reader,
         ...(report ? { report } : {}),
+        ...(sessionId ? { sessionId } : {}),
       });
       if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");
       return hits;
@@ -165,17 +173,18 @@ export async function resolveTurnContext(input: ContextInput) {
           ...sharingSources,
           ...(!input.external ? [resolution.orgScopeId] : []),
         ]),
-      ];
+      ].filter((scope) => loadsScopeContext(input.actor.id, scope, input.ownScopeBotWork));
       const grantedSkills: GrantedSkillRef[] = input.external
         ? []
         : (
             await input.acl
               .sharedOfKindForAudience(
+                input.tenant,
                 "skill",
                 input.audience,
                 input.targetScope,
                 resolution.orgScopeId,
-                entitledScopes,
+                entitledScopes(input.ownScopeBotWork),
               )
               .catch(swallowAs("context: skill grants for audience", []))
           ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));

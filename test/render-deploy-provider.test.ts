@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import {
   createRenderDeployProvider,
   type RenderDeployProviderOptions,
   type StoredRenderDeploy,
 } from "../src/deploy/render-deploy-provider.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
-import { fakeDeployment } from "./support/fake-render.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
+import { fakeApp } from "./support/fake-render.ts";
 import { testMap } from "./support/test-database.ts";
 
 const sha = "a".repeat(40);
 const readyProbes = 40;
+const clockStart = Date.UTC(2026, 0, 1) - performance.now();
+mock.method(Date, "now", () => Math.floor(clockStart + performance.now()));
 const writePaths = {
   environment: "/environments",
   create: "/services",
@@ -49,18 +51,16 @@ function fixture(appRegion?: string) {
   const credentialCalls: string[] = [];
   let savedRegionBeforeCreate: string | undefined;
   const artifacts = {
-    prepare: async (d: Deployment, v: Deployment["versions"][number]) => {
+    prepare: async (d: PublishedApp, v: PublishedApp["versions"][number]) => {
       credentialCalls.push("prepare");
       return {
-        url: `https://core.example/v1/deployments/${d.id}/git`,
+        url: `https://core.example/v1/apps/${d.id}/git`,
         token: "source-token",
         commit: v.commit ?? sha,
         entrypoint: v.entrypoint,
       };
     },
-    revoke: async () => {
-      credentialCalls.push("revoke");
-    },
+    revoke: async () => void credentialCalls.push("revoke"),
     authorizes: async () => false,
   };
   const response = (value: unknown, status = 200) =>
@@ -102,7 +102,7 @@ function fixture(appRegion?: string) {
       }
       if (url.hostname === "qm-private") {
         const token = new Headers(init?.headers).get("x-qm-render-app-token");
-        const raw = (await store.get(deployment.id))!.token;
+        const raw = (await store.get(publishedApp.id))!.token;
         if (token === raw) return new Response(null, { status: 403 });
         const nonce = readinessNonce === undefined ? manifestNonce : readinessNonce;
         return readinessResponse(
@@ -114,7 +114,7 @@ function fixture(appRegion?: string) {
       if (path === "/projects/prj-test") return response({ owner: { id: "tea-test" } });
       if (path.startsWith("/environments?")) return response(environment ? [{ environment }] : []);
       if (path === "/environments" && method === "POST") {
-        savedRegionBeforeCreate = (await store.get(deployment.id))?.appRegion;
+        savedRegionBeforeCreate = (await store.get(publishedApp.id))?.appRegion;
         environment = { ...body, id: "env-app" };
         return response(environment);
       }
@@ -155,7 +155,7 @@ function fixture(appRegion?: string) {
         return response(body);
       }
       if (path.startsWith("/services/srv-app/deploys?") && method === "GET") {
-        const pending = (await store.get(deployment.id))?.pending;
+        const pending = (await store.get(publishedApp.id))?.pending;
         if (foreignDeployAfterSnapshot && pending && !pending.deployId) {
           deploys.unshift({ id: `dep-${deploys.length}`, status: "live", commit: { id: foreignDeployAfterSnapshot } });
           foreignDeployAfterSnapshot = undefined;
@@ -171,8 +171,8 @@ function fixture(appRegion?: string) {
         return response(deploys.find((deploy) => path.endsWith(deploy.id)));
       if (path === "/services/srv-app/deploys" && method === "POST") {
         if (service.suspended === "suspended") return response({ message: "cannot deploy suspended service" }, 400);
-        const deploymentId = activeEnv.find((row) => row.key === "QM_DEPLOYMENT_ID").value;
-        assert.equal((await store.get(deploymentId))?.pending?.readinessNonce, manifestNonce);
+        const appId = activeEnv.find((row) => row.key === "QM_DEPLOYMENT_ID").value;
+        assert.equal((await store.get(appId))?.pending?.readinessNonce, manifestNonce);
         const deploy = { id: `dep-${deploys.length}`, status: outcome, commit: { id: builtCommit ?? body.commitId } };
         for (const previous of deploys)
           if (previous.status === "live" && outcome === "live") previous.status = "deactivated";
@@ -209,7 +209,7 @@ function fixture(appRegion?: string) {
     },
   };
   const provider = createRenderDeployProvider(options);
-  const deployment = fakeDeployment([
+  const publishedApp = fakeApp([
     { version: 1, createdAt: 1, entrypoint: "node app.js", snapshotDir: "/unused", commit: sha },
   ]);
   return {
@@ -218,7 +218,7 @@ function fixture(appRegion?: string) {
     provider,
     logs,
     data,
-    deployment,
+    deployment: publishedApp,
     failNextRequest(method: string, path: string, status?: number, times = 1, headers?: Record<string, string>) {
       failure = { method, path, status, times, ...(headers ? { headers } : {}) };
     },
@@ -828,10 +828,10 @@ test("Render waits for the new instance nonce through old responses, lost deploy
   assert.notEqual(pending.pending!.readinessNonce, firstNonce);
   assert.equal(pending.pending!.readinessNonce, f.manifestNonce);
   assert.equal(f.credentialCalls.includes("revoke"), false);
-  assert.equal(await f.provider.resolveEndpoint!(d, v1), null);
+  assert.deepEqual(await f.provider.resolveEndpoint!(d, v1), endpoint, "visitors keep reaching the live version");
   f.readinessNonce = null;
   const restarted = f.restart(sha);
-  assert.equal(await restarted.resolveEndpoint!(d, v1), null);
+  assert.deepEqual(await restarted.resolveEndpoint!(d, v1), endpoint);
   await assert.rejects(restarted.apply(d, v2), /unconfirmed deployment/);
   assert.equal((await f.store.get(d.id))!.pending!.readinessNonce, pending.pending!.readinessNonce);
   f.readinessNonce = undefined;

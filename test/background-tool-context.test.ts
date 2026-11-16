@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
@@ -45,6 +46,7 @@ function ctxFor(extra: Partial<ToolContextDeps>) {
   const scope = scopeId("personal", "U1");
   const policy: CommandPolicy = extra.commandPolicy?.() ?? { mode: "denylist", rules: [] };
   return createToolContext({
+    tenant: testTenant,
     sandbox: {} as unknown as Sandbox,
     provision: async () => handle,
     writableScopeId: scope,

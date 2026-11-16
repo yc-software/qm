@@ -282,7 +282,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
         Response.json({ status: "done", result: { status: "pending_approval", pendingApprovals: pending } }),
       );
       await until(() => !chat.state.agent!.state.isStreaming && !!host.querySelector(".approval-btn"));
-      assert.equal(host.querySelector("textarea"), null);
+      assert.ok(host.querySelector("textarea"), "the composer stays open beside the card");
       decision = deferred<Response>();
       click("Deny");
       await until(() => requests.some((r) => r.path === "/api/approvals/a2"));

@@ -4,12 +4,7 @@ import { Shuffle } from "lucide";
 import { api, type ProjectIcon } from "./core-bridge";
 import { EMOJI_ROWS, filterEmoji, type EmojiRow } from "./emoji-picker";
 import { icon } from "./icons";
-import { errMessage } from "../../chassis/src/errors";
-
-/**
- * Project icons: one Unicode emoji or a workspace custom emoji. Standard emoji come from the shared
- * emoji table; custom emoji from the catalog the Slack surface publishes (`/api/custom-emoji`).
- */
+import { errMessage, swallow } from "../../chassis/src/errors";
 
 interface PickerItem {
   icon: ProjectIcon;
@@ -39,7 +34,6 @@ function loadCustomEmoji(): Promise<void> {
       customEmoji = body.emoji ?? {};
     })
     .catch((e: unknown) => {
-      // Custom icons render blank until the catalog loads; keep the reason, retry on the next use.
       console.error("custom emoji catalog failed to load", errMessage(e));
       customEmoji = {};
       customLoad = null;
@@ -55,7 +49,6 @@ function customUrl(name: string): string | null {
   return customEmoji?.[name] ?? null;
 }
 
-/** The icon glyph for a project, or `null` when it has none (callers fall back to the folder). */
 export function projectIconTpl(value: ProjectIcon | undefined, size = 16): TemplateResult | null {
   if (!value) return null;
   const style = `--project-icon-size:${size}px`;
@@ -139,8 +132,8 @@ function rememberRecent(value: ProjectIcon): void {
       RECENT_KEY,
       JSON.stringify([value, ...readRecent().filter((v) => !sameIcon(v, value))].slice(0, RECENT_MAX)),
     );
-  } catch {
-    // Recents are a convenience; private mode or a full quota just skips them.
+  } catch (error) {
+    swallow("web-ui: remember recent icon", error);
   }
 }
 
@@ -164,7 +157,6 @@ function sections(query: string): PickerSection[] {
 interface PickerOptions {
   anchor: HTMLElement;
   current: ProjectIcon | undefined;
-  /** Saves the choice; resolves to an error message to show in the picker, or null on success. */
   onPick: (value: ProjectIcon | null) => Promise<string | null>;
 }
 

@@ -12,6 +12,7 @@ import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
+import { KeychainError } from "../src/credentials/keychain.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -29,6 +30,8 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
+import type { Run } from "../src/runs/run-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
@@ -233,6 +236,12 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       owner,
     );
   const linkToken = (formPath: string) => new URL(formPath, "http://x").searchParams.get("t");
+  const botCap = async (botId: string) => {
+    const conversation = { kind: "channel", threadRef: `ch:C1:${botId}`, channelRef: "C1" } as const;
+    await built.app.turn({ surface: "test", actor: { externalId: botId }, conversation, text: "hi", botActor: true });
+    const members = [{ id: botId, type: "internal" as const }];
+    return capFor(botId, scopeId("channel", "C1"), { botActor: true, liveActor: true, members });
+  };
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
@@ -249,10 +258,12 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       keychain: built.keychain,
       secretDrops: built.secretDrops,
       deliveries: built.deliveries,
+      admin: built.admin,
       auditLog: built.auditLog,
       runs: built.runs,
       signals: built.signals,
       identity: built.identity,
+      fireDropResolution: built.fireDropResolution!,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -343,7 +354,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.equal(credential.service, "stripe");
     assert.equal(credential.ownerId, "U_A");
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"), { includePersonGrants: true });
     const g = grants.find((x) => x.credential.id === credential.id);
     assert.ok(g, "a standing grant for the asking channel was minted on redeem");
     const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
@@ -429,6 +440,28 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.equal((await redeem(dropId, { secret: "sk_outage" }, "U_A", linkToken(formPath))).status, 200);
   });
 
+  it("a keychain save failure leaves the drop link usable for a retry", async () => {
+    const minted = await post(
+      "/v1/keychain/drops",
+      { service: "save-fail", purpose: "survive a save failure" },
+      await capFor("U_B"),
+    );
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const keychain = built.keychain! as unknown as Record<string, unknown>;
+    const save = keychain.save;
+    keychain.save = async () => {
+      throw new KeychainError(503, "keychain unavailable");
+    };
+    try {
+      assert.equal((await redeem(dropId, { secret: "sk_retry" }, "U_B", linkToken(formPath))).status, 503);
+      assert.ok((await built.secretDrops.peek(dropId)).ok);
+    } finally {
+      keychain.save = save;
+    }
+    assert.equal((await redeem(dropId, { secret: "sk_retry" }, "U_B", linkToken(formPath))).status, 200);
+    assert.ok(!(await built.secretDrops.peek(dropId)).ok);
+  });
+
   it("an agent-declared fields[] drop renders each input, saves them all, and materializes them in order", async () => {
     const fields = [
       { key: "DOORDASH_EMAIL", label: "Email", secret: false },
@@ -466,7 +499,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       { envKey: "DOORDASH_PASSWORD", secret: true },
     ]);
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"), { includePersonGrants: true });
     const g = grants.find((x) => x.credential.id === credential.id);
     const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
     assert.ok(m.kind === "env");
@@ -623,28 +656,68 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.ok(!html.includes(t), "the token itself is never embedded in the page body");
   });
 
+  it("a drop a Slack bot's turn mints resumes as the bot's work", async () => {
+    const threadRef = "dm:release-bot";
+    const minted = await post(
+      "/v1/keychain/drops",
+      { service: "release-signing", purpose: "sign the release" },
+      await capFor("B-RELEASE", scopeId("personal", "B-RELEASE"), { botActor: true, liveActor: true, threadRef }),
+    );
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const dm = { kind: "dm", threadRef } as const;
+    await built.app.turn({ surface: "test", actor: { externalId: "B-RELEASE" }, conversation: dm, text: "note" });
+    assert.equal((await redeem(dropId, { secret: "sig" }, "B-RELEASE", linkToken(formPath))).status, 200);
+    let run: Run | undefined;
+    await settle(
+      async () => (run = (await built.runs.list({ threadRef })).find((r) => r.request.botActor))?.status === "done",
+    );
+    assert.deepEqual([run?.request.botActor, run?.result?.status], [true, "silent"]);
+    assert.equal((await built.sessions.getByThread(threadRef))?.spawnMeta?.botActor, undefined);
+  });
+
   it("a live bot attestation survives mint and private-scope redemption", async () => {
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: true }],
       [{ channelId: "C1", principalId: "U_A" }],
     );
-    const members = [{ id: "B-LEGACY", type: "internal" as const }];
     const minted = await post(
       "/v1/keychain/drops",
       { service: "botsvc", purpose: "bot credential" },
-      await capFor("B-LEGACY", scopeId("channel", "C1"), {
-        botActor: true,
-        liveActor: true,
-        members,
-      }),
+      await botCap("B-LEGACY"),
     );
     assert.equal(minted.status, 200);
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
     const token = await verifyCapabilityToken(linkToken(formPath)!, SECRET);
     assert.equal(token?.botActor, true);
     assert.equal(token?.liveActor, true);
-    assert.deepEqual(token?.members, members);
+    assert.deepEqual(token?.members, [{ id: "B-LEGACY", type: "internal" }]);
     assert.equal((await redeem(dropId, { secret: "bot-secret" }, "B-LEGACY", linkToken(formPath))).status, 200);
+  });
+
+  it("a credential a person drops into a channel is offered to a bot's turns there only when the bot asked for it", async () => {
+    const room = scopeId("channel", "C1");
+    const dropInto = async (cap: string, service: string, owner: string) => {
+      const minted = await post("/v1/keychain/drops", { service, purpose: "deploy" }, cap);
+      assert.equal(minted.status, 200);
+      const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+      const res = await redeem(dropId, { secret: `${service}-secret` }, owner, linkToken(formPath));
+      assert.equal(res.status, 200);
+      return ((await res.json()) as { credential: { id: string } }).credential.id;
+    };
+    const personal = await dropInto(await capFor("U_A", room), "persondeploy", "U_A");
+    const asked = await dropInto(await botCap("B-DEPLOY"), "botdeploy", "B-DEPLOY");
+    const offered = async (includePersonGrants: boolean) =>
+      (await built.keychain!.grantsForScope(room, { includePersonGrants })).map(({ credential }) => credential.id);
+    assert.ok((await offered(true)).includes(personal));
+    assert.ok(!(await offered(false)).includes(personal));
+    assert.ok((await offered(false)).includes(asked));
+  });
+
+  it("bot work in a person's name can't mint a secret drop", async () => {
+    await built.users.record({ id: "U_A", source: "turn", at: Date.now() });
+    const cap = await capFor("U_A", scopeId("personal", "U_A"), { botActor: true, liveActor: true });
+    const minted = await post("/v1/keychain/drops", { service: "deploy", purpose: "deploy" }, cap);
+    assert.equal(minted.status, 403);
   });
 });
 

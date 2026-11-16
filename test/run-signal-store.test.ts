@@ -66,16 +66,24 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
     ["abort"],
     "terminal completion consumes the stop",
   );
-  assert.deepEqual(await store.pendingRunIds(), [], "the stop does not outlive the run's terminal completion");
+  assert.deepEqual(
+    (await store.pendingRuns()).map((run) => run.id),
+    [],
+    "the stop does not outlive the run's terminal completion",
+  );
 });
 
-test("startSignalPoll: a stop waiting behind a slow steer is delivered first", async () => {
+test("startSignalPoll: a stop sent before the poll starts is delivered at once, and the next drain puts it ahead of a slow steer", async () => {
   const store = signalStore();
+  let rings = 0;
+  const stopCounting = store.onSignal("r-order", () => void rings++);
+  await until(() => rings === 1);
   const order: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
   await store.send("r-order", { kind: "steer", text: "screen me slowly" });
   await store.send("r-order", { kind: "abort" });
+  await until(() => rings >= 3);
   const stop = startSignalPoll(
     store,
     "r-order",
@@ -89,12 +97,44 @@ test("startSignalPoll: a stop waiting behind a slow steer is delivered first", a
     { intervalMs: 60_000 },
   );
   try {
-    await until(() => order.length === 2, 500);
-    assert.deepEqual(order, ["abort", "steer"]);
+    await until(() => order.length >= 1);
+    await sleep(50);
+    assert.deepEqual(order, ["abort"], "starting the poll delivers the waiting stop and leaves the steer queued");
+    await store.send("r-order", { kind: "client_result", callId: "doorbell" });
+    await until(() => order.includes("steer"));
+    assert.deepEqual(order, ["abort", "abort", "steer"], "the drain delivers the stop before the slow steer");
   } finally {
     release();
     await stop();
+    stopCounting();
   }
+});
+
+test("startSignalPoll: stopping the poll waits for a stop check that is still in flight", async () => {
+  const store = signalStore();
+  await store.send("r-late", { kind: "abort" });
+  const slow: RunSignalStore = {
+    ...store,
+    pending: async (runId) => {
+      await sleep(100);
+      return store.pending(runId);
+    },
+  };
+  let aborts = 0;
+  const stop = startSignalPoll(
+    slow,
+    "r-late",
+    { onSteer: async () => {}, onAbort: async () => void aborts++ },
+    { intervalMs: 60_000 },
+  );
+  await stop();
+  const deliveredBeforeStopReturned = aborts;
+  await sleep(250);
+  assert.deepEqual(
+    [deliveredBeforeStopReturned, aborts],
+    [1, 1],
+    "the stop is delivered before the poll reports stopped, and nothing runs afterwards",
+  );
 });
 
 test("startSignalPoll: a stop that arrives during a steer's intake goes ahead of the next steer", async () => {
@@ -158,7 +198,10 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
     await stop();
   }
   await store.takePending("r1");
-  assert.deepEqual(await store.pendingRunIds(), []);
+  assert.deepEqual(
+    (await store.pendingRuns()).map((run) => run.id),
+    [],
+  );
 });
 
 test("startSignalPoll: a stop whose delivery throws is retried on the next drain instead of being lost", async () => {
@@ -377,14 +420,14 @@ test("store: pending retains steers until acknowledged and leaves aborts for ter
       ["abort"],
       "steers are consumed exactly once; the abort is never consumed by a live drain",
     );
-    assert.ok((await store.pendingRunIds()).includes(runId));
+    assert.ok((await store.pendingRuns()).map((run) => run.id).includes(runId));
     assert.deepEqual(
       (await store.takePending(runId)).map((s) => s.kind),
       ["abort"],
       "the terminal drain is what consumes the abort",
     );
     assert.deepEqual(await store.pending(runId), []);
-    assert.ok(!(await store.pendingRunIds()).includes(runId), "nothing outlives the terminal drain");
+    assert.ok(!(await store.pendingRuns()).map((run) => run.id).includes(runId), "nothing outlives the terminal drain");
   } finally {
     await store.close?.();
   }
@@ -416,11 +459,11 @@ test("store: pendingRunIds lists unconsumed runs; prune deletes only old consume
   try {
     await store.send(a, { kind: "steer", text: "x" });
     await store.send(b, { kind: "steer", text: "y" });
-    const pending = await store.pendingRunIds();
+    const pending = (await store.pendingRuns()).map((run) => run.id);
     assert.ok(pending.includes(a) && pending.includes(b));
     await store.takePending(a);
     await store.prune(0);
-    const after = await store.pendingRunIds();
+    const after = (await store.pendingRuns()).map((run) => run.id);
     assert.ok(!after.includes(a), "consumed and pruned");
     assert.ok(after.includes(b), "unconsumed survives any prune");
     assert.equal((await store.takePending(b)).length, 1, "the surviving signal is intact");

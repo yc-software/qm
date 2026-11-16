@@ -17,6 +17,7 @@ const SUMMARY_INSTRUCTIONS = [
   "Keep goals, constraints, decisions, open tasks, and facts that cannot be re-derived inline.",
   "Preserve necessary facts from tool results inline. For details that can be re-derived, cite the tool call.",
   "Preserve timestamps on time-sensitive facts. An interrupted tool call has an unknown outcome.",
+  "Newer entries will follow this summary, so date open tasks by when they were raised instead of calling them latest or current.",
   "Name every shared file listed as (files: name [file id]) with its file id; its contents are no longer inline.",
   "Do not include secrets or credentials. Keep the summary under 8,000 characters.",
 ].join("\n");
@@ -30,7 +31,7 @@ export async function summarizeHistory(history: Item[], model: Model<Api>, strea
   const text = await generateSummary(
     [{ role: "user", content: compactTranscript(messages), timestamp: messages.at(-1)?.createdAt ?? 0 }],
     model,
-    10_000,
+    Number.POSITIVE_INFINITY,
     undefined,
     undefined,
     undefined,
@@ -38,9 +39,23 @@ export async function summarizeHistory(history: Item[], model: Model<Api>, strea
     previousSummary?.text,
     "low",
     async (summaryModel, context, options) => {
-      const stream = await streamFn(summaryModel, context, options);
+      let sentCap: number | undefined;
+      const stream = await streamFn(summaryModel, context, {
+        ...options,
+        onPayload: async (payload, payloadModel) => {
+          const transformed = options?.onPayload ? await options.onPayload(payload, payloadModel) : undefined;
+          sentCap = outputCap(transformed === undefined ? payload : transformed);
+          return transformed;
+        },
+      });
       const result = await stream.result();
       if (result.stopReason === "error") throw providerTurnError(result);
+      if (result.stopReason === "length") {
+        const reasoning = result.usage.reasoning ?? "not reported";
+        throw new Error(
+          `Compaction did not complete (length): the summary hit the ${sentCap ?? options?.maxTokens}-token output limit (output tokens ${result.usage.output}, reasoning tokens ${reasoning})`,
+        );
+      }
       if (result.stopReason !== "stop") {
         throw new Error(
           `Compaction did not complete (${result.stopReason}): ${result.errorMessage ?? "incomplete summary"}`,
@@ -50,4 +65,13 @@ export async function summarizeHistory(history: Item[], model: Model<Api>, strea
     },
   );
   return validateCompactSummary(text);
+}
+
+function outputCap(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const p = payload as Record<string, unknown>;
+  const config = p.generationConfig as Record<string, unknown> | undefined;
+  for (const cap of [p.max_tokens, p.max_output_tokens, p.max_completion_tokens, config?.maxOutputTokens])
+    if (typeof cap === "number") return cap;
+  return undefined;
 }

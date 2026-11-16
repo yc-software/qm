@@ -20,6 +20,7 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const gateway = {
   url: "https://gateway.test",
@@ -152,7 +153,6 @@ test("every helper call keeps its work's context and names its own purpose", asy
   const requests = recordRequests(t);
   const harness = createAgent({
     routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }),
-    detectModelId: "claude-haiku-4-5",
     titleModelId: "claude-haiku-4-5",
     judgeModelId: "claude-haiku-4-5",
   });
@@ -246,7 +246,6 @@ async function gatewayApp(
   const config = testConfig({
     modelId: "claude-haiku-4-5",
     titleModelId: "claude-haiku-4-5",
-    detectModelId: "claude-haiku-4-5",
     judgeModelId: "claude-haiku-4-5",
     ...overrides,
     modelGateway: { ...(overrides.modelGateway ?? gateway), url },
@@ -432,8 +431,9 @@ test("decision rules on the gateway carry the same keyed actor as the turn they 
   const { actorKey: _actorKey, ...envGateway } = gateway;
   const { built, sent } = await gatewayApp(t, { modelGateway: envGateway });
   const by = { actorId: "admin@example.com" };
-  await built.decisions!.saveProvider({ id: "gw", protocol: "chat-completions" }, by);
+  await built.decisions!.saveProvider(tenant, { id: "gw", protocol: "chat-completions" }, by);
   await built.decisions!.saveRule(
+    tenant,
     {
       id: "router",
       hook: "turn_start",

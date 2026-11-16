@@ -12,17 +12,15 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { orgId } from "../src/config.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const cap: CapabilityClaims = {
-  runId: "test-run",
+  ...liveRunClaims("alice"),
   sessionId: "test-session",
-  threadRef: "test-thread",
-  runAttempt: 1,
-  runLeaseToken: "test-lease",
   actorId: "alice",
   scopeId: "personal:alice",
   ownerConnections: true,
-  liveActor: true,
   exp: Date.now() + 60_000,
 };
 const alice = composioUserId(orgId(), "alice");
@@ -50,17 +48,10 @@ async function fixture() {
   const deps: Partial<ServerDeps> = {
     keychain,
     serviceCreds: keychain,
-    auditLog: { record: (e: { action: string }) => audits.push(e.action) } as unknown as ServerDeps["auditLog"],
-    runs: {
-      get: async () => ({
-        status: "running",
-        sessionId: "test-thread",
-        attempts: 1,
-        leaseToken: "test-lease",
-        leaseExpiresAt: Date.now() + 60_000,
-        request: { actor: { id: "alice" } },
-      }),
-    } as unknown as ServerDeps["runs"],
+    auditLog: {
+      record: (_t: unknown, e: { action: string }) => audits.push(e.action),
+    } as unknown as ServerDeps["auditLog"],
+    runs: liveRunStore(),
     composioFetch: (async (input, init) => {
       calls.push({
         url: String(input),
@@ -96,6 +87,7 @@ async function fixture() {
     const ctx = {
       deps,
       res,
+      tenant: testTenant,
       url: new URL("/v1/composio/proxy", "http://localhost"),
       body,
       capability: "capability" in options ? options.capability : cap,

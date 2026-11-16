@@ -61,6 +61,7 @@ const SENT_PREFIX = "[canvas] ";
 
 const loaded = new Map<string, CanvasRecord | null>();
 const loading = new Map<string, { dirty: boolean }>();
+const mutating = new Map<string, number>();
 const panels = new Map<string, Panel>();
 const handoff = new Map<string, UiCanvasApi>();
 const waiting = new Map<string, Set<Owner>>();
@@ -126,6 +127,7 @@ function load(sessionId: string, owner?: Owner): void {
     })
     .then((canvas) => {
       loading.delete(sessionId);
+      if (mutating.has(sessionId)) return;
       if (state.dirty) return load(sessionId);
       if (canvas === undefined) return void waiting.delete(sessionId);
       loaded.set(sessionId, canvas);
@@ -321,13 +323,20 @@ async function update(panel: Panel, change: { pinned?: boolean; dismiss?: true }
     loaded.set(panel.sessionId, panel.canvas);
     drawHead(panel);
   }
-  await api(`/api/ui-canvas/${encodeURIComponent(panel.sessionId)}`, {
+  const { sessionId, owner } = panel;
+  mutating.set(sessionId, (mutating.get(sessionId) ?? 0) + 1);
+  await api(`/api/ui-canvas/${encodeURIComponent(sessionId)}`, {
     method: "POST",
     body: JSON.stringify(change),
-  }).catch((error: unknown) => {
-    reportHandledError("ui_canvas_update", error);
-    load(panel.sessionId);
-  });
+  })
+    .catch((error: unknown) => reportHandledError("ui_canvas_update", error))
+    .finally(() => {
+      const left = (mutating.get(sessionId) ?? 1) - 1;
+      if (left) return void mutating.set(sessionId, left);
+      mutating.delete(sessionId);
+      waiting.set(sessionId, (waiting.get(sessionId) ?? new Set()).add(owner));
+      load(sessionId);
+    });
 }
 
 async function sendFromCanvas(panel: Panel, text: string): Promise<boolean> {

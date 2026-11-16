@@ -7,11 +7,21 @@ import {
   MAX_CANDIDATES,
   groupParticipantsKey,
   normDirectoryQuery,
+  type ChannelMembershipFacts,
   type DirectoryChannel,
   type DirectoryMember,
   type DirectoryStore,
+  type ScopeMembershipFacts,
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
+import {
+  EMAIL_USER_TENANTS,
+  PRINCIPAL_ADMIN_TENANTS,
+  PRINCIPAL_TENANTS,
+  PRINCIPAL_USER_TENANTS,
+} from "../tenants/lookup.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { withTenant } from "../tenants/context.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -99,9 +109,10 @@ function memberRow(r: Record<string, unknown>): DirectoryMember {
     type: r.type as PrincipalType,
     ...(r.slack_id ? { slackId: r.slack_id as string } : {}),
     ...(r.avatar_url ? { avatarUrl: r.avatar_url as string } : {}),
+    ...(typeof r.is_bot === "boolean" ? { isBot: r.is_bot } : {}),
   };
 }
-const MEMBER_COLS = "principal_id, display_name, type, slack_id, avatar_url";
+const MEMBER_COLS = "principal_id, display_name, type, slack_id, avatar_url, is_bot";
 function channelRow(r: Record<string, unknown>): DirectoryChannel {
   return {
     channelId: r.channel_id as string,
@@ -117,13 +128,156 @@ export const DIRECTORY_MIGRATIONS = [
     expectedChecksum: "e8dcd5c2a3a8fcba7b1c14db1d1aceb57ca7ef6e1c7366ace6df65043f731198",
     statements: [BASE_SCHEMA],
   },
+  ...tenantTables("directory/store/0007-tenants", [
+    { table: "directory_members", primaryKey: "org_id, principal_id" },
+    { table: "directory_channels", primaryKey: "org_id, channel_id" },
+    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
+    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
+    { table: "directory_groups", primaryKey: "org_id, group_id" },
+    { table: "directory_sync", primaryKey: "org_id" },
+    { table: "directory_meta", primaryKey: "org_id" },
+  ]),
+  {
+    id: "directory/store/0008-tenants-for-email",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$
+      SELECT DISTINCT m.tenant_id FROM directory_members m
+       WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+    $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
+  },
+  PRINCIPAL_TENANTS,
+  PRINCIPAL_ADMIN_TENANTS,
+  {
+    id: "directory/store/0009-tenants-for-email-admins",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$ BEGIN
+      RETURN QUERY
+        SELECT m.tenant_id FROM directory_members m
+         WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+        UNION
+        SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email);
+    END $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
+  },
+  PRINCIPAL_USER_TENANTS,
+  EMAIL_USER_TENANTS,
+  {
+    id: "directory/store/0011-group-surface",
+    statements: [
+      "ALTER TABLE directory_groups ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+      "ALTER TABLE directory_groups ALTER COLUMN surface DROP DEFAULT",
+    ],
+  },
+  {
+    id: "directory/store/0012-member-is-bot",
+    statements: ["ALTER TABLE directory_members ADD COLUMN is_bot BOOLEAN"],
+  },
+  {
+    id: "directory/store/0013-member-slack-id-index",
+    statements: [
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS directory_members_slack_id ON directory_members (org_id, slack_id)",
+    ],
+  },
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
 
+function channelMembershipOf(row: Record<string, unknown>): boolean | undefined {
+  if (row.roster_known !== true) return undefined;
+  return row.member === true || row.is_private === true ? row.member === true : undefined;
+}
+
+function groupMembershipOf(row: Record<string, unknown>): boolean | undefined {
+  if (row.member === true) return true;
+  if (row.listed !== true) return row.synced === true ? false : undefined;
+  return row.roster_known === true ? false : undefined;
+}
+
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
+
+  async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
+    if (!principalIds.length) return new Map();
+    const emails = principalIds.map(foldPrincipalId).filter((id) => id.includes("@"));
+    const rows = (
+      await q(
+        `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1
+        AND (principal_id = ANY($2::text[]) OR lower(principal_id) = ANY($3::text[]))`,
+        [orgId, principalIds, emails],
+      )
+    ).map(memberRow);
+    return new Map(
+      principalIds.flatMap((id) => {
+        const key = foldPrincipalId(id);
+        const row =
+          rows.find((member) => member.principalId === id) ??
+          (key.includes("@") ? rows.find((member) => member.principalId.toLowerCase() === key) : undefined);
+        return row ? [[id, row]] : [];
+      }),
+    );
+  }
+
+  async function channelMemberships(
+    channelIds: readonly string[],
+    principalId: string,
+  ): Promise<Map<string, ChannelMembershipFacts>> {
+    if (!channelIds.length) return new Map();
+    const rows = await q(
+      `SELECT ids.channel_id, c.is_private, c.roster_known,
+         EXISTS (
+           SELECT 1 FROM directory_channel_members m
+           WHERE m.org_id = $1 AND m.channel_id = ids.channel_id AND m.principal_id = ANY($3::text[])
+         ) AS member
+       FROM unnest($2::text[]) AS ids(channel_id)
+       LEFT JOIN directory_channels c ON c.org_id = $1 AND c.channel_id = ids.channel_id`,
+      [orgId, [...new Set(channelIds)], rosterIds(principalId)],
+    );
+    return new Map(
+      rows.map((row) => [
+        row.channel_id as string,
+        {
+          member: row.member === true,
+          membership: channelMembershipOf(row),
+          isPrivate: (row.is_private as boolean | null) ?? undefined,
+        },
+      ]),
+    );
+  }
+
+  async function groupMemberships(
+    groupIds: readonly string[],
+    principalId: string,
+  ): Promise<Map<string, ScopeMembershipFacts>> {
+    if (!groupIds.length) return new Map();
+    const rows = await q(
+      `SELECT ids.group_id, g.group_id IS NOT NULL AS listed, COALESCE(g.roster_known, FALSE) AS roster_known,
+         EXISTS (
+           SELECT 1 FROM directory_group_members m
+           WHERE m.org_id = $1 AND m.group_id = ids.group_id AND m.principal_id = ANY($3::text[])
+         ) AS member,
+         EXISTS (SELECT 1 FROM directory_sync WHERE org_id = $1 AND groups_hash IS NOT NULL) AS synced
+       FROM unnest($2::text[]) AS ids(group_id)
+       LEFT JOIN directory_groups g ON g.org_id = $1 AND g.group_id = ids.group_id`,
+      [orgId, [...new Set(groupIds)], rosterIds(principalId)],
+    );
+    return new Map(
+      rows.map((row) => [row.group_id as string, { member: row.member === true, membership: groupMembershipOf(row) }]),
+    );
+  }
 
   async function pick<T>(
     query: string,
@@ -168,7 +322,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     if (!groupIds.length) return rosters;
     const rows = await q(
       `SELECT group_row.group_id, roster.principal_id AS roster_principal_id,
-              member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url
+              member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url, member.is_bot
        FROM directory_groups group_row
        JOIN directory_group_members roster
          ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
@@ -188,6 +342,30 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return rosters;
   }
 
+  async function branded(rows: Record<string, unknown>[]) {
+    const found = await Promise.all(
+      rows.map(({ id }) =>
+        withTenant(String(id), async () => {
+          const [tenant] = await q(
+            `SELECT settings->>'brandName' AS brand, qm_tenant_handle(settings) AS handle,
+                    id IN (SELECT qm_serving_tenants()) AS serving
+               FROM tenants WHERE id = $1`,
+            [id],
+          );
+          if (tenant?.serving !== true) return [];
+          return [
+            {
+              id: String(id),
+              ...(typeof tenant.brand === "string" ? { brandName: tenant.brand } : {}),
+              ...(typeof tenant.handle === "string" ? { handle: tenant.handle } : {}),
+            },
+          ];
+        }),
+      ),
+    );
+    return found.flat();
+  }
+
   return {
     ...createDirectorySync({ q, pool, orgId }),
     async meta() {
@@ -195,13 +373,45 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
     },
 
-    async channelMember(channelId, principalId) {
-      const rows = await q(
-        `SELECT 1 FROM directory_channel_members
-         WHERE org_id = $1 AND channel_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1`,
-        [orgId, channelId, rosterIds(principalId)],
+    async tenantsForEmail(email) {
+      const rows = await q("SELECT tenant_id::text AS id FROM qm_tenants_for_email($1) ORDER BY tenant_id", [email]);
+      return branded(rows);
+    },
+
+    async tenantsForPrincipal(principal) {
+      const rows = await q("SELECT tenant::text AS id FROM qm_tenants_for_principal($1) tenant ORDER BY tenant", [
+        principal,
+      ]);
+      return branded(rows);
+    },
+
+    async tenantForAppHandle(handle) {
+      const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
+      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+    },
+
+    async setAppHandle(handle) {
+      try {
+        await q("SELECT qm_set_tenant_handle($1)", [handle]);
+        return "ok";
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") return "taken";
+        throw error;
+      }
+    },
+
+    async trustedClientFor(tenant) {
+      const [row] = await withTenant(tenant, () =>
+        q("SELECT settings->'oidcClient' AS client FROM tenants WHERE id = $1", [tenant]),
       );
-      return rows.length > 0;
+      const client = row?.client as { clientId?: unknown; clientSecret?: unknown } | null | undefined;
+      return typeof client?.clientId === "string" && typeof client.clientSecret === "string"
+        ? { clientId: client.clientId, clientSecret: client.clientSecret }
+        : undefined;
+    },
+
+    async channelMember(channelId, principalId) {
+      return (await channelMemberships([channelId], principalId)).get(channelId)?.member === true;
     },
 
     async rosterCoversAudience(channelId) {
@@ -226,19 +436,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     async channelMembership(channelId, principalId) {
-      const rows = await q(
-        `SELECT EXISTS (
-           SELECT 1 FROM directory_channel_members
-           WHERE org_id = $1 AND channel_id = $2 AND principal_id = ANY($3::text[])
-         ) AS member,
-         (SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS is_private,
-         (SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS roster_known`,
-        [orgId, channelId, rosterIds(principalId)],
-      );
-      const member = rows[0]?.member === true;
-      if (rows[0]?.roster_known !== true) return undefined;
-      return member || rows[0]?.is_private === true ? member : undefined;
+      return (await channelMemberships([channelId], principalId)).get(channelId)?.membership;
     },
+
+    channelMemberships,
 
     async channelPrivacy(channelId) {
       const rows = await q("SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2 LIMIT 1", [
@@ -248,49 +449,30 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
     },
 
-    async resolveGroupByParticipants(participants) {
+    async resolveGroupByParticipants(participants, surface) {
       const key = groupParticipantsKey(participants);
       if (!key) return { kind: "none" };
       const rows = await q(
-        `SELECT group_id FROM directory_group_members
-         WHERE org_id = $1
-         GROUP BY group_id
-         HAVING string_agg(DISTINCT principal_id, ',' ORDER BY principal_id) = $2
+        `SELECT m.group_id FROM directory_group_members m
+         JOIN directory_groups g ON g.org_id = m.org_id AND g.group_id = m.group_id AND g.surface = $3
+         WHERE m.org_id = $1
+         GROUP BY m.group_id
+         HAVING string_agg(DISTINCT m.principal_id, ',' ORDER BY m.principal_id) = $2
          LIMIT 1`,
-        [orgId, key],
+        [orgId, key, surface],
       );
       return rows.length ? { kind: "one", groupId: rows[0]!.group_id as string } : { kind: "none" };
     },
 
     async groupMember(groupId, principalId) {
-      const rows = await q(
-        "SELECT 1 FROM directory_group_members WHERE org_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1",
-        [orgId, groupId, rosterIds(principalId)],
-      );
-      return rows.length > 0;
+      return (await groupMemberships([groupId], principalId)).get(groupId)?.member === true;
     },
 
     async groupMembership(groupId, principalId) {
-      const rows = await q(
-        `SELECT EXISTS (
-           SELECT 1 FROM directory_group_members
-           WHERE org_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[])
-         ) AS member,
-         EXISTS (
-           SELECT 1 FROM directory_groups WHERE org_id = $1 AND group_id = $2
-         ) AS listed,
-         COALESCE((
-           SELECT roster_known FROM directory_groups WHERE org_id = $1 AND group_id = $2
-         ), FALSE) AS roster_known,
-         EXISTS (
-           SELECT 1 FROM directory_sync WHERE org_id = $1 AND groups_hash IS NOT NULL
-         ) AS synced`,
-        [orgId, groupId, rosterIds(principalId)],
-      );
-      if (rows[0]?.member === true) return true;
-      if (rows[0]?.listed !== true) return rows[0]?.synced === true ? false : undefined;
-      return rows[0]?.roster_known === true ? rows[0]?.member === true : undefined;
+      return (await groupMemberships([groupId], principalId)).get(groupId)?.membership;
     },
+
+    groupMemberships,
 
     async listGroupsFor(principalId) {
       const rows = await q(
@@ -304,7 +486,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       if (kind === "group") return (await readGroupRosters([id])).get(id);
       const rows = await q(
         `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
-                member.principal_id, member.display_name, member.type, member.slack_id
+                member.principal_id, member.display_name, member.type, member.slack_id, member.is_bot
          FROM directory_channels channel
          LEFT JOIN directory_channel_members roster
            ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id
@@ -346,15 +528,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.map(channelRow);
     },
 
+    getMany,
     async get(principalId) {
-      const key = foldPrincipalId(principalId);
-      const rows = await q(
-        `SELECT ${MEMBER_COLS} FROM directory_members
-         WHERE org_id = $1 AND (principal_id = $2 OR ($3 AND lower(principal_id) = $4))
-         ORDER BY (principal_id = $2) DESC LIMIT 1`,
-        [orgId, principalId, key.includes("@"), key],
-      );
-      return rows.length ? memberRow(rows[0]!) : null;
+      return (await getMany([principalId])).get(principalId) ?? null;
     },
 
     async getBySlackId(slackId) {

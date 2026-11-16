@@ -1,13 +1,8 @@
 import type { RuntimeChoice } from "./agent.ts";
 import type { RuntimeService } from "./runtime-types.ts";
 import type { App } from "../api/app.ts";
-import {
-  runtimeConfigBody,
-  validateRuntimeChoice,
-  webuiModelEnabled,
-  type RuntimeDeps,
-} from "../api/runtime-config.ts";
-import { livePersonCapability } from "../api/artifact-share.ts";
+import { runtimeConfigBody, validateRuntimeChoice, type RuntimeDeps } from "../api/runtime-config.ts";
+import { personAtKeyboard } from "../api/artifact-share.ts";
 import { parseScopeId } from "../types.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
@@ -49,8 +44,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
       };
     const lifetime = request.lifetime ?? "task";
     const cronTask = cronFire && claims.triggered === true && !claims.botActor && lifetime === "task";
-    if (!cronTask && (!livePersonCapability(claims) || claims.triggered || claims.botActor))
-      return { ok: false, error: "live_actor_required" };
+    if (!cronTask && !personAtKeyboard(claims)) return { ok: false, error: "live_actor_required" };
     const candidates = snapshot.models;
     let modelId = request.model ?? active.modelId;
     if (!candidates.includes(modelId)) {
@@ -67,7 +61,6 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
         };
       modelId = matches[0]!;
     }
-    if (!(await webuiModelEnabled({ deps }, modelId, purpose))) return { ok: false, error: "model_not_enabled" };
     const choice: RuntimeChoice = {
       modelId,
       effortLevel: request.effort ?? active.effortLevel ?? "auto",

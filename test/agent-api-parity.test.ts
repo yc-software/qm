@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderAgentApis } from "../src/api/agent-api-catalog.ts";
-import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -16,10 +15,11 @@ function advertised(): Array<{ method: string; path: string }> {
       { swarmsEnabled: true, personasEnabled: true },
     ),
     renderAgentApis(
-      { ...base, grants: [...UNATTENDED_ADMIN_GRANTS] },
-      { isAdmin: false },
-      { swarmsEnabled: false, personasEnabled: false },
+      { ...base, liveActor: true, triggered: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
+      { isAdmin: true },
+      { swarmsEnabled: true, personasEnabled: true },
     ),
+    renderAgentApis({ ...base }, { isAdmin: false }, { swarmsEnabled: false, personasEnabled: false }),
   ];
   return listings.flatMap((listing) =>
     listing.endpoints.flatMap(({ method, path }) => {
@@ -44,4 +44,13 @@ test("every endpoint the agent API catalog advertises is served by a route an ag
       : [`${method} ${path} (${found ? String(found.route.auth) : "no route"})`];
   });
   assert.deepEqual(unreachable, []);
+});
+
+test("a q filter narrows the catalog to matching families with their usage notes", () => {
+  const args = [{ ...base }, { isAdmin: false }, { swarmsEnabled: false, personasEnabled: false }] as const;
+  const all = renderAgentApis(...args);
+  const files = renderAgentApis(...args, "Files upload");
+  assert.ok(files.endpoints.length > 0 && files.endpoints.length < all.endpoints.length);
+  assert.ok(files.endpoints.some((e) => e.path === "/v1/files/upload-client"));
+  assert.ok(files.guidance.some((g) => g.includes("upload-client")));
 });

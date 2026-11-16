@@ -35,7 +35,6 @@ test("claude-haiku-5-5 wire requests bind adaptive thinking at every effort and 
     assert.deepEqual(request.body.output_config, { effort });
     assert.equal(request.body.temperature, undefined);
   }
-  // Without an effort the API default (medium) applies, where Haiku 5.5 accepts thinking off.
   await probeModel(model, { anthropic: "sk-offline-test-key" }, AbortSignal.timeout(10_000), false);
   const probe = requests.at(-1)!;
   assert.deepEqual(probe.body.thinking, { type: "disabled" });

@@ -7,6 +7,8 @@ export interface TriggerBase {
   owner: string;
   createdBy: string;
   ownerConsentedAt?: number;
+  botActor?: boolean;
+  taskAuthor?: "automation";
   destination?: Destination;
   enabled: boolean;
   createdAt: number;
@@ -56,7 +58,6 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  unattendedGrants?: string[];
   sessionRef?: string;
   script?: CronScript;
 
@@ -64,7 +65,7 @@ export interface Cron extends TriggerBase {
 }
 
 interface WebhookVerification {
-  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
+  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear" | "token" | "standard-webhooks";
   secret?: string;
 }
 

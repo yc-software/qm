@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
-// Core images copy only the cli/src files named in deploy/core/Dockerfile. If core reaches any other
-// cli/src file at runtime, the image fails at startup, so pin the import closure here.
 const root = resolve(import.meta.dirname, "..");
 
 const runtimeImports = (file: string): string[] =>
