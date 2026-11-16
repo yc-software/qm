@@ -149,7 +149,7 @@ export async function resolveSandbox(opts: {
       );
     let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!apiUrl) {
-      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      apiUrl = await opts.tunnel();
       if (!apiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
