@@ -41,11 +41,11 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
-export function personaTurnState(turn: { input: string; surfaceName: string; scopeLabel: string }): string {
+export function personaTurnState(turn: { input: string; surfaceName: string; conversation: string }): string {
   return [
     "Turn context:",
     `- surface: ${turn.surfaceName}`,
-    `- scope: ${turn.scopeLabel.split(":")[0]}`,
+    `- conversation: ${turn.conversation}`,
     "",
     "Latest message:",
     turn.input,
@@ -171,7 +171,7 @@ export function createReplyCheck(
 }
 
 export type PersonaRouter = (
-  turn: DecisionTurn & { actorId: string; input: string; surfaceName: string },
+  turn: DecisionTurn & { actorId: string; input: string; surfaceName: string; conversation: string },
 ) => Promise<PersonaForTurn | undefined>;
 
 export function createPersonaRouter(

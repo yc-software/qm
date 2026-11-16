@@ -70,6 +70,30 @@ A session's `persona_id` is set from the Personas page ("Chat") or by the agent
 (`PUT /v1/sessions/:id/persona`). A conversation in a channel or group with a pinned persona
 and no persona of its own wears the pinned one; the `## Persona` block then says it was pinned
 and how to change that.
+
+An org admin can also route conversations to personas with a decision rule on the `persona`
+hook (Settings → Decision rules). Its options are `keep` or `use_persona` with a `persona` id,
+and its `onError` must be a `keep` option. The hook runs on a person's message in a conversation
+that has no persona of its own and no pinned one; its state is the surface, the conversation kind
+(`dm`, `group` or `channel`) and the message, so "only in DMs" and which personas exist are part
+of the rule's question and options. When the enforcing rule picks a persona the sender holds a
+role on, the conversation keeps it, the turn wears it, and the `## Persona` block names the rule
+and how to switch. Otherwise the turn goes on without one. Example:
+
+```json
+{
+  "id": "route-research",
+  "hook": "persona",
+  "question": "Is this direct message addressed to the Research persona, by name or as a research request?",
+  "options": {
+    "keep": { "description": "Not a DM, or not for Research", "action": "keep" },
+    "research": { "description": "A DM for Research", "action": "use_persona", "persona": "<persona id>" }
+  },
+  "model": { "provider": "gateway", "model": "<decision model>" },
+  "mode": "enforce",
+  "onError": "keep"
+}
+```
 A turn without a persona, from a person with personas enabled, gets a short `## Personas`
 context block saying what personas do and where the API is, so the agent can offer one. There is no lock: the channel's own instructions and skills
 still apply, and anyone may still pick another persona for one conversation. On each turn,

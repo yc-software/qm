@@ -572,6 +572,7 @@ test("a persona decision rule routes a conversation without one to the persona i
   const first = await sysprompt(ALICE, dm);
   assert.match(first.reply, /## Persona: Ada[\s\S]*route-ada/);
   assert.equal((await built.sessions.get(first.sessionId))?.personaId, ada.id);
+  assert.match(states[0]!, /conversation: dm/);
   const second = await sysprompt(ALICE, dm);
   assert.match(second.reply, /## Persona: Ada/);
   assert.equal(second.reply.includes("route-ada"), false);

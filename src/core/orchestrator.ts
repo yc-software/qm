@@ -801,6 +801,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(input.runId ? { runId: input.runId } : {}),
                 input: input.text,
                 surfaceName: input.surface ?? "slack",
+                conversation: conversation.kind,
               }).catch(swallowAs("orchestrator: persona routing", undefined)),
             )) ?? conversationPersona)
           : conversationPersona;
