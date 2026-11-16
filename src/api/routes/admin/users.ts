@@ -168,12 +168,13 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     audit(ctx, { principalId: actor.id, action: grantChange, resource: `${email}/org_admin`, scopeLabel: scope });
   const created = existing === undefined;
   const readmitted = existing !== undefined && !externalMemberActive(existing, now);
+  const sendInvite = teammate || created || readmitted || b.resendInvite === true;
   const member: ExternalMember = {
     email,
     role: teammate && holdsGrant ? "org_admin" : role,
     expiresAt: expiry.value ?? null,
     ...(teammate ? { kind: "teammate" as const } : {}),
-    inviteId: randomUUID(),
+    inviteId: sendInvite || !existing?.inviteId ? randomUUID() : existing.inviteId,
     invitedBy: existing?.invitedBy ?? actor.id,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -204,7 +205,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   )}`;
   let emailSent = false;
   let emailProblem: string | undefined;
-  if (teammate || created || readmitted || b.resendInvite === true) {
+  if (sendInvite) {
     if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
     else {
       const branding = await resolveBranding(deps.config, scope, deps.brandingDefault);

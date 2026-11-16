@@ -156,6 +156,7 @@ test("inviting an external user stores the record, lists it as active, audits, a
     const updated: any = await again.json();
     assert.equal(updated.created, false);
     assert.equal(updated.member.createdAt, d.member.createdAt);
+    assert.equal(updated.member.inviteId, d.member.inviteId, "an update keeps the emailed link valid");
     assert.equal(updated.emailSent, false);
     assert.equal(updated.emailProblem, undefined, "an update does not retry the invitation email");
 
