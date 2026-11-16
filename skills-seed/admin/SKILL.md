@@ -227,7 +227,8 @@ and `source`; session and turn counts add up activity across all of the user's s
 ## External users
 
 Outside collaborators, admitted by email with a role and an expiry. Until it lapses they
-count as members everywhere, including as guests in the org's Slack. The invitation email
+count as members everywhere, including as guests in the org's Slack (Slack picks up a new
+invitation within about ten minutes). The invitation email
 carries a single-use sign-in link, so they don't need an account the sign-in provider
 accepts; a resend issues a fresh link. Listed alongside the roster:
 
