@@ -358,7 +358,7 @@ describe("runTrigger: a turn abandoned while still queued leaves the fire retrya
         surface: "cron",
         threadRef: "cron:c8:manual:1",
         destination: toChannel,
-        redrivesHandOff: true,
+        onQueued: "redrive",
         errorNotice: (s: string) => `⚠️ could not run: ${s}`,
       }),
       /still waiting to finish when this process shut down/,

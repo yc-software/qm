@@ -323,7 +323,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           threadRef,
           surface: "cron",
           ownerFire: ownerAuthored(cron),
-          redrivesHandOff: true,
+          onQueued: "redrive",
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
