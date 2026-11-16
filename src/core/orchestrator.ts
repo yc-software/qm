@@ -787,29 +787,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
-      const chosenPersona = storedSession?.personaId ?? input.personaId;
-      const conversationPersona =
-        external || !deps.personas ? null : await deps.personas.forTurn(chosenPersona, actor.id, scopeId);
       const personaTurn =
-        typeof conversationPersona === "string" &&
-        !chosenPersona &&
-        isPersonAuthored(input.origin.kind) &&
-        !sessionTurn &&
-        !input.botActor &&
-        deps.routePersona
-          ? ((await tracePhase("turn.decision", () =>
-              deps.routePersona!({
-                tenant,
-                actorId: actor.id,
-                scopeLabel: scopeId,
-                ...(storedSession ? { sessionId: storedSession.id } : {}),
-                ...(input.runId ? { runId: input.runId } : {}),
-                input: input.text,
-                surfaceName: input.surface ?? "slack",
-                conversation: conversation.kind,
-              }).catch(swallowAs("orchestrator: persona routing", undefined)),
-            )) ?? conversationPersona)
-          : conversationPersona;
+        external || !deps.personas
+          ? null
+          : await deps.personas.forTurn(
+              storedSession?.personaId ?? input.personaId,
+              actor.id,
+              scopeId,
+              personConversationTurn && deps.routePersona
+                ? () =>
+                    tracePhase("turn.decision", () =>
+                      deps.routePersona!({
+                        tenant,
+                        actorId: actor.id,
+                        scopeLabel: scopeId,
+                        ...(storedSession ? { sessionId: storedSession.id } : {}),
+                        ...(input.runId ? { runId: input.runId } : {}),
+                        input: input.text,
+                        surfaceName: input.surface ?? "slack",
+                        conversation: conversation.kind,
+                      }).catch(swallowAs("orchestrator: persona routing", undefined)),
+                    )
+                : undefined,
+            );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];

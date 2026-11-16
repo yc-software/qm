@@ -10,7 +10,6 @@ import {
   type DecisionRule,
 } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
-import type { PersonaForTurn, PersonaService } from "../personas/persona-service.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Tenant } from "../tenants/context.ts";
 
@@ -170,19 +169,13 @@ export function createReplyCheck(
 }
 
 export type PersonaRouter = (
-  turn: DecisionTurn & { actorId: string; input: string; surfaceName: string; conversation: string },
-) => Promise<PersonaForTurn | undefined>;
+  turn: DecisionTurn & { input: string; surfaceName: string; conversation: string },
+) => Promise<{ personaId: string; ruleId: string } | undefined>;
 
-export function createPersonaRouter(
-  decide: ReturnType<typeof createDecisionHooks>,
-  personas: Pick<PersonaService, "forTurn">,
-): PersonaRouter {
+export function createPersonaRouter(decide: ReturnType<typeof createDecisionHooks>): PersonaRouter {
   return async (turn) => {
     const decision = await decide("persona", personaTurnState(turn), turn);
-    if (!decision?.persona) return undefined;
-    const routed = await personas.forTurn(decision.persona, turn.actorId, turn.scopeLabel);
-    if (!routed || typeof routed !== "object") return undefined;
-    return { ...routed, routedBy: decision.ruleId };
+    return decision?.persona ? { personaId: decision.persona, ruleId: decision.ruleId } : undefined;
   };
 }
 

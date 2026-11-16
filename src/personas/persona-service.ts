@@ -68,6 +68,7 @@ export interface PersonaService {
     personaId: string | undefined,
     actorId: string,
     contextScope: ScopeId,
+    route?: () => Promise<{ personaId: string; ruleId: string } | undefined>,
   ): Promise<PersonaForTurn | string | null>;
 }
 
@@ -283,7 +284,7 @@ export function createPersonaService(deps: {
       await deps.sessions.setPersona(session.id, personaId);
       return { status: "ok", value: { ...persona, role: held } };
     },
-    async forTurn(personaId, actorId, contextScope) {
+    async forTurn(personaId, actorId, contextScope, route) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
       let pinned = false;
@@ -291,13 +292,25 @@ export function createPersonaService(deps: {
         personaId = (await store.pinnedIn(contextScope)) ?? undefined;
         pinned = Boolean(personaId);
       }
-      if (!personaId) return PERSONAS_HINT;
+      let routedBy: string | undefined;
+      if (!personaId) {
+        const routed = await route?.();
+        if (!routed) return PERSONAS_HINT;
+        ({ personaId, ruleId: routedBy } = routed);
+      }
       const persona = await store.get(personaId);
+      const held = persona ? await role(actorId, personaId, contextScope) : null;
+      if (routedBy && !held)
+        return `The decision rule ${routedBy} picked ${persona ? `the persona "${persona.name}", which the sender has no access to` : `persona ${personaId}, which does not exist`}, so this turn runs without one. ${PERSONAS_HINT}`;
       if (!persona) return "This conversation's persona was deleted, so this turn runs without one.";
-      const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
+      return {
+        persona,
+        scope: personaScope(personaId),
+        ...(pinned ? { pinned: true } : {}),
+        ...(routedBy ? { routedBy } : {}),
+      };
     },
   };
 }

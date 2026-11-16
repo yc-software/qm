@@ -89,7 +89,8 @@ that has no persona of its own and no pinned one; its state is the surface, the 
 (`dm`, `group` or `channel`) and the message, so "only in DMs" and which personas exist are part
 of the rule's question and options. When the enforcing rule picks a persona the sender holds a
 role on, the conversation keeps it, the turn wears it, and that turn's context names the rule and
-how to switch. Otherwise the turn goes on without one. Example:
+how to switch. If the sender has no role on it or it no longer exists, the turn goes on without
+one and its `## Personas` block says which rule picked what. Example:
 
 ```json
 {

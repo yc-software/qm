@@ -3,10 +3,13 @@ const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
   turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
-  turn_end: { actions: ["keep", "retry", "prod"], decide: "most_confident" },
-  persona: { actions: ["keep", "use_persona"], decide: "most_confident" },
+  turn_end: { actions: ["keep", "retry", "prod"], decide: "most_confident", keepOnError: true },
+  persona: { actions: ["keep", "use_persona"], decide: "most_confident", keepOnError: true },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
-} as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
+} as const satisfies Record<
+  string,
+  { actions: readonly string[]; decide: "most_restrictive" | "most_confident"; keepOnError?: true }
+>;
 export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
 type DecisionAction<H extends DecisionHook = DecisionHook> = (typeof DECISION_HOOK_POINTS)[H]["actions"][number];
 const DECISION_HOOKS = Object.keys(DECISION_HOOK_POINTS) as DecisionHook[];
@@ -185,7 +188,7 @@ export function parseDecisionRule(
   if (count < 2 || count > MAX_OPTIONS) return { error: `${r.id}: needs 2 to ${MAX_OPTIONS} options` };
   if (typeof r.onError !== "string" || !Object.hasOwn(options, r.onError))
     return { error: `${r.id}: onError must name one of its options` };
-  if ((r.hook === "turn_end" || r.hook === "persona") && options[r.onError]!.action !== "keep")
+  if ("keepOnError" in DECISION_HOOK_POINTS[r.hook as DecisionHook] && options[r.onError]!.action !== "keep")
     return { error: `${r.id}: onError must name a keep option; a classifier failure must not change the turn` };
   const m = (r.model ?? {}) as Record<string, unknown>;
   if (typeof m.provider !== "string" || !providers.some((p) => p.id === m.provider))

@@ -580,5 +580,6 @@ test("a persona decision rule routes a conversation without one to the persona i
 
   const bob = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:routed" });
   assert.equal(bob.reply.includes("## Persona:"), false, "no role on the persona, so no routing");
+  assert.match(bob.reply, /route-ada picked the persona "Ada"/);
   assert.equal((await built.sessions.get(bob.sessionId))?.personaId, undefined);
 });
