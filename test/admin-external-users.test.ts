@@ -270,6 +270,9 @@ test("an address that already belongs to an org member cannot be invited", async
     assert.deepEqual((await roster(s.base)).externalUsers, []);
 
     assert.equal((await invite(s.base, { email: "pat@partner.example", expiresAt })).status, 200);
+    await s.built.directory.replace([{ principalId: "pat@partner.example", displayName: "Pat", type: "internal" }]);
+    const resend = await invite(s.base, { email: "pat@partner.example", expiresAt, resendInvite: true });
+    assert.equal(resend.status, 200, "an invited guest synced into the directory can still be re-invited");
     await s.built.admin.createGrant(tenant, alice, {
       principalId: "pat@partner.example",
       role: "org_admin",
