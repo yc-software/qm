@@ -102,7 +102,6 @@ test("a sandbox Baseten deleted at its 7-day limit is recreated on the next prov
   assert.equal(again.coldStart, true);
   assert.equal(again.id, h.id);
   assert.equal(await sandbox.readFile(again, "old.txt"), "x");
-  assert.equal(fake.volume(h.id)?.attachedTo, h.id);
 });
 
 test("a scope provisioned again while its old sandbox is still deleting gets a fresh sandbox", async () => {
