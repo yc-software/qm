@@ -8,7 +8,8 @@ import {
 } from "./pi-models.ts";
 import { customModelCatalog } from "./custom-providers.ts";
 import { readBoundedText } from "../util/bytes.ts";
-import { swallow } from "../util/errors.ts";
+import { swallow, withRequestId } from "../util/errors.ts";
+import { LRUCache } from "lru-cache";
 
 export interface ModelCatalogEntry {
   id: string;
@@ -24,33 +25,33 @@ const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_TTL_MS = 30_000;
 
 export function createCatalogCache<T>(label: string, load: () => Promise<T>) {
-  let value: T | undefined;
-  let expiresAt = 0;
-  let inFlight: Promise<void> | undefined;
-  const refresh = () =>
-    (inFlight ??= load()
-      .then(
-        (loaded) => {
-          value = loaded;
-          expiresAt = Date.now() + CACHE_TTL_MS;
-        },
-        (error: unknown) => {
-          swallow(label, error);
-          expiresAt = Date.now() + FAILURE_TTL_MS;
-        },
-      )
-      .finally(() => {
-        inFlight = undefined;
-      }));
-  const cached = () => {
-    if (Date.now() >= expiresAt) void refresh();
-    return { value, refreshing: Boolean(inFlight) };
-  };
+  let refreshing = false;
+  const cache = new LRUCache<"catalog", { value?: T }>({
+    max: 1,
+    ttl: CACHE_TTL_MS,
+    ttlResolution: 0,
+    allowStale: true,
+    perf: { now: () => Date.now() },
+    fetchMethod: async (_key, stale, { options }) => {
+      refreshing = true;
+      try {
+        return { value: await load() };
+      } catch (error) {
+        swallow(label, error);
+        options.ttl = FAILURE_TTL_MS;
+        return { ...stale };
+      } finally {
+        refreshing = false;
+      }
+    },
+  });
   return {
-    cached,
+    cached() {
+      void cache.fetch("catalog");
+      return { value: cache.peek("catalog")?.value, refreshing };
+    },
     async get(): Promise<T | undefined> {
-      if (!expiresAt) await refresh();
-      return cached().value;
+      return (await cache.fetch("catalog"))?.value;
     },
   };
 }
@@ -96,8 +97,18 @@ export async function fetchCatalogData(
   label: string,
   headers?: Record<string, string>,
 ): Promise<unknown[]> {
-  const response = await fetcher(url, { ...(headers ? { headers } : {}), signal: AbortSignal.timeout(5_000) });
-  if (!response.ok) throw new Error(`${label} returned ${response.status}`);
+  const response = await fetcher(url, {
+    ...(headers ? { headers } : {}),
+    signal: AbortSignal.timeout(5_000),
+    redirect: "error",
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw Object.assign(
+      new Error(withRequestId(`${label} returned HTTP ${response.status} ${detail}`.trim(), response.headers)),
+      { status: response.status },
+    );
+  }
   const body = JSON.parse(
     await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error(`${label} is too large`)),
   ) as {

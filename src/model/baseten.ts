@@ -70,7 +70,8 @@ export function createBasetenCatalog(apiKey: string, fetcher: typeof fetch = fet
         return false;
       }
     });
-    return valid.length ? spec(valid) : undefined;
+    if (!valid.length) throw new Error(`Baseten model list has no usable models among ${models.length} tool-capable`);
+    return spec(valid);
   });
   const adminOwnsId = (enabled: readonly CustomProviderSpec[]): boolean =>
     enabled.some((p) => p.id === BASETEN_PROVIDER_ID);

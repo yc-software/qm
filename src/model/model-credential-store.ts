@@ -148,11 +148,6 @@ export function createCustomProviderStore(input: {
         .sort((a, b) => a.id.localeCompare(b.id));
     },
 
-    async resolveKey(id: string): Promise<string | null> {
-      const saved = await input.backing.get(id);
-      return saved && !saved.disabled && saved.apiKeyEnc ? openKey(saved.apiKeyEnc) : null;
-    },
-
     async enabledWithKeys(): Promise<{ enabled: CustomProviderSpec[]; keys: Record<string, string> }> {
       const enabled = (await input.backing.all()).filter((p) => !p.disabled);
       const keys: Record<string, string> = {};
