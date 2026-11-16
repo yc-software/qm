@@ -54,7 +54,7 @@ const snapshot = {
   name: "qm-test",
   sandboxGroupId: "sbg-test",
   sourceSandboxId: "sbx-test",
-  kind: "filesystem",
+  kind: "runtime",
   status: "available",
   plan: "standard",
   requestedAt: "2026-09-12T00:00:00Z",
@@ -134,7 +134,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
     },
   });
   requests.splice(0);
-  const saved = await client.createSnapshot(info.id, "qm-test");
+  const saved = await client.createSnapshot(info.id, "qm-test", "runtime");
   assert.equal(saved.id, snapshot.id);
   assert.equal(saved.sandboxGroupId, snapshot.sandboxGroupId);
   assert.equal(saved.status, "available");
@@ -143,7 +143,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
   assert.deepEqual(await client.getSnapshot(saved), saved);
   await client.deleteSnapshot(saved);
   const { expiresAt, ...snapshotBody } = requests[0]!.body as unknown as { expiresAt: string };
-  assert.deepEqual(snapshotBody, { kind: "filesystem", name: "qm-test" });
+  assert.deepEqual(snapshotBody, { kind: "runtime", name: "qm-test" });
   assert.ok(Date.parse(expiresAt) - Date.now() > 9 * 365 * 86400_000);
   assert.deepEqual(requests.slice(1), [
     { method: "GET", path: "/v1/sandbox-groups/sbg-test/snapshots/snp-test" },
@@ -395,13 +395,13 @@ test("Render SDK adapter retries sandbox and checkpoint creation only on 429", a
   const attempts = scriptedApi(t, failures);
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   assert.equal((await client.create({ lifetimeSec: 86400 })).id, "sbx-test");
-  assert.equal((await client.createSnapshot("sbx-test", "qm-test")).id, "snp-test");
+  assert.equal((await client.createSnapshot("sbx-test", "qm-test", "runtime")).id, "snp-test");
   assert.equal(attempts("POST /v1/sandboxes"), 2);
   assert.equal(attempts("POST /v1/sandboxes/sbx-test/snapshots"), 2);
   failures.set("POST /v1/sandboxes", [503]);
   failures.set("POST /v1/sandboxes/sbx-test/snapshots", [503]);
   await assert.rejects(client.create({ lifetimeSec: 86400 }), /injected 503/);
-  await assert.rejects(client.createSnapshot("sbx-test", "qm-test"), /injected 503/);
+  await assert.rejects(client.createSnapshot("sbx-test", "qm-test", "runtime"), /injected 503/);
   assert.equal(attempts("POST /v1/sandboxes"), 3);
   assert.equal(attempts("POST /v1/sandboxes/sbx-test/snapshots"), 3);
 });
@@ -497,7 +497,7 @@ test(
     const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
     await assert.rejects(client.create({ lifetimeSec: 86400 }), { name: "TimeoutError" });
     await cleaned.sandbox.promise;
-    await assert.rejects(client.createSnapshot("sbx-test", "qm-test"), { name: "TimeoutError" });
+    await assert.rejects(client.createSnapshot("sbx-test", "qm-test", "runtime"), { name: "TimeoutError" });
     await cleaned.checkpoint.promise;
     assert.deepEqual(deletes, ["available"]);
   },

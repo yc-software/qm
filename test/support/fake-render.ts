@@ -1,4 +1,4 @@
-import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
+import { SandboxSnapshotNotFoundError, type SandboxSnapshotKind } from "@renderinc/sdk";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
@@ -58,7 +58,7 @@ export function createFakeRender() {
   const labels = new Map<string, { name?: string; createdAtMs: number }>();
   const allowlists = new Map<string, string[]>();
   const snapshots = new Map<string, RenderSnapshot>();
-  const snapshotSources = new Map<string, { sandboxId: string; name: string; requestedAtMs: number }>();
+  const snapshotSources = new Map<string, { sandboxId: string; name: string; kind: string; requestedAtMs: number }>();
   const images = new Map<string, RenderImage & { name: string; source: string }>();
   const goldens = new Map<string, RenderSnapshot>();
   const registry = new Map<string, string>();
@@ -212,7 +212,7 @@ export function createFakeRender() {
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, data);
     },
-    async createSnapshot(id, name) {
+    async createSnapshot(id, name, kind) {
       requireRunning(id);
       if (checkpointError) throw checkpointError;
       const snapshotId = `snp-${snapshots.size + deleted.length + 1}`;
@@ -225,7 +225,7 @@ export function createFakeRender() {
       };
       cpSync(home(id), join(root, snapshotId), { recursive: true });
       snapshots.set(snapshotId, snapshot);
-      snapshotSources.set(snapshotId, { sandboxId: id, name, requestedAtMs: snapshot.capturedAtMs! });
+      snapshotSources.set(snapshotId, { sandboxId: id, name, kind, requestedAtMs: snapshot.capturedAtMs! });
       if (loseCheckpointReply) {
         snapshot.status = loseCheckpointReply;
         loseCheckpointReply = undefined;
@@ -353,7 +353,7 @@ export function serveFakeRenderApi(
     name: fake.snapshotSource(snapshot.id)?.name ?? null,
     sandboxGroupId: snapshot.sandboxGroupId,
     sourceSandboxId: fake.snapshotSource(snapshot.id)?.sandboxId ?? "sbx-source",
-    kind: "filesystem",
+    kind: fake.snapshotSource(snapshot.id)?.kind ?? "runtime",
     status: snapshot.status,
     plan: "starter",
     requestedAt: new Date().toISOString(),
@@ -433,8 +433,10 @@ export function serveFakeRenderApi(
       });
     }
     if ((match = /^\/sandboxes\/([^/]+)\/snapshots$/.exec(path)) && request.method === "POST") {
-      const body = (await request.json()) as { name: string };
-      return Response.json(snapshotJson(await fake.client.createSnapshot(match[1]!, body.name)), { status: 201 });
+      const body = (await request.json()) as { name: string; kind: SandboxSnapshotKind };
+      return Response.json(snapshotJson(await fake.client.createSnapshot(match[1]!, body.name, body.kind)), {
+        status: 201,
+      });
     }
     const group = () => ({
       id: "sbg-test",

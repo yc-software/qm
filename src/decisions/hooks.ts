@@ -39,6 +39,17 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
+function personaTurnState(turn: { input: string; surfaceName: string; conversation: string }): string {
+  return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName}`,
+    `- conversation: ${turn.conversation}`,
+    "",
+    "Latest message:",
+    turn.input,
+  ].join("\n");
+}
+
 export function replyFacts(reply: string): string[] {
   const blocks = marked.lexer(reply);
   const paragraphs = blocks.filter((block) => block.type === "paragraph").length;
@@ -83,7 +94,7 @@ export interface DecisionTurn {
   tenant: Tenant;
   actorId?: string;
   scopeLabel: string;
-  sessionId: string;
+  sessionId?: string;
   runId?: string;
   cancel?: AbortSignal;
 }
@@ -103,7 +114,7 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
         status: result.error ? "error" : result.action,
         detail: JSON.stringify({
           hook,
-          sessionId: turn.sessionId,
+          ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
           ...(turn.runId ? { runId: turn.runId } : {}),
           ...result,
         }),
@@ -154,6 +165,17 @@ export function createReplyCheck(
           : undefined;
       },
     };
+  };
+}
+
+export type PersonaRouter = (
+  turn: DecisionTurn & { input: string; surfaceName: string; conversation: string },
+) => Promise<{ personaId: string; ruleId: string } | undefined>;
+
+export function createPersonaRouter(decide: ReturnType<typeof createDecisionHooks>): PersonaRouter {
+  return async (turn) => {
+    const decision = await decide("persona", personaTurnState(turn), turn);
+    return decision?.persona ? { personaId: decision.persona, ruleId: decision.ruleId } : undefined;
   };
 }
 

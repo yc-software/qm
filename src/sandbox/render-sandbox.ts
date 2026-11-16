@@ -1,5 +1,5 @@
 import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
-import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
+import { SandboxSnapshotNotFoundError, type SandboxSnapshotKind } from "@renderinc/sdk";
 import { randomUUID } from "node:crypto";
 import { orgId } from "../config.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -39,6 +39,7 @@ import type { RenderBase } from "./render-base.ts";
 import {
   RENDER_COMPUTER_LIFETIME_SEC,
   RENDER_IDLE_STOP_MS,
+  RENDER_BASE_TOOLS,
   RENDER_SANDBOX_TTL_SEC,
   renderEgressAllowlist,
 } from "./render-limits.ts";
@@ -116,6 +117,12 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   const egressCurrent = (info: RenderLiveSandbox): boolean =>
     JSON.stringify(info.egressAllowlist?.toSorted()) === JSON.stringify(egressAllowlist);
   const scratch = new Map<string, RenderSandboxInfo>();
+  let baseTools: readonly string[] | undefined;
+  const readyGolden = async (onStatus?: (text: string) => void) => {
+    const golden = await goldens.ready(onStatus);
+    baseTools = golden.tools;
+    return golden;
+  };
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
   let sandboxName: Promise<string> | undefined;
   const nameSandbox = (): Promise<string> =>
@@ -297,14 +304,15 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     scope: string,
     stored: StoredRenderSandbox,
     active?: boolean,
+    kind: SandboxSnapshotKind = "runtime",
   ): Promise<StoredRenderSandbox> {
-    if (active === undefined) return checkpoint(scope, stored, await hasLiveProcesses(stored.sandboxId));
+    if (active === undefined) return checkpoint(scope, stored, await hasLiveProcesses(stored.sandboxId), kind);
     stored = await cleanupRetired(scope, stored);
     if (!active) stored = (await store.merge(scope, { homeDirty: false })) ?? stored;
     let snapshot: RenderSnapshot | undefined;
     let saved: StoredRenderSandbox;
     try {
-      snapshot = await client.createSnapshot(stored.sandboxId, nameFor(scope));
+      snapshot = await client.createSnapshot(stored.sandboxId, nameFor(scope), kind);
       const staged = await store.merge(scope, { retiredResources: retire(stored, { checkpoint: snapshot }) });
       if (!staged) throw new Error(`Render sandbox checkpoint lost its scope: ${scope}`);
       const available = await waitCheckpoint(snapshot);
@@ -372,6 +380,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     stored: StoredRenderSandbox | null,
     info: RenderSandboxInfo | null,
     onStatus?: (text: string) => void,
+    kind: SandboxSnapshotKind = "runtime",
   ): Promise<{ coldStart: boolean }> {
     let snapshotId: string | undefined;
     if (stored) {
@@ -379,7 +388,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         const running = stored;
         await store.merge(scope, FENCE);
         stored = await reopenOnFailure(scope, async () => {
-          const saved = await checkpoint(scope, running, false);
+          const saved = await checkpoint(scope, running, false, kind);
           await client.terminate(info.id);
           return saved;
         });
@@ -402,7 +411,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         );
       }
     }
-    const source = stored ? { ref: stored.baseImage, snapshotId: snapshotId! } : await goldens.ready(onStatus);
+    const source = stored ? { ref: stored.baseImage, snapshotId: snapshotId! } : await readyGolden(onStatus);
     onStatus?.(stored ? "Restoring your computer…" : "Starting your computer…");
     await start(scope, stored, source).catch(async (error: unknown) => {
       if (stored?.stopping)
@@ -577,7 +586,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     async recreateScratch(name) {
       const temporary = await client.create({
         name: await nameSandbox(),
-        snapshotId: (await goldens.ready()).snapshotId,
+        snapshotId: (await readyGolden()).snapshotId,
         lifetimeSec: RENDER_SANDBOX_TTL_SEC,
         ...egress,
       });
@@ -623,7 +632,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       processSessions: true,
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
-        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
+        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; it resumes from its last checkpoint with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         cpus: 2,
         memoryMb: 4096,
@@ -631,27 +640,18 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         homeDir,
         workdir: base.workspaceDir,
         get tools() {
-          return visibleTools([
-            "git",
-            "curl",
-            "wget",
-            "jq",
-            "unzip",
-            "gnupg",
-            "python3",
-            "gh",
-            "aws (CLI v2)",
-            ...(opts.extraTools ?? []),
-          ]);
+          return visibleTools([...(baseTools ?? []), ...(opts.extraTools ?? [])]);
         },
         get notInstalled() {
-          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+          const probed = baseTools;
+          const missing = probed ? RENDER_BASE_TOOLS.map(([label]) => label).filter((l) => !probed.includes(l)) : [];
+          return visibleNotInstalled(missing, opts.extraTools ?? []);
         },
       },
     },
     async provision(scope, options) {
       const name = options?.scratch ? sandboxScopeName(`${prefix}-scratch`, options.scratch.key) : nameFor(scope);
-      await goldens.ready(options?.onStatus);
+      await readyGolden(options?.onStatus);
       return withLifecycle(name, async () => {
         if (options?.scratch) {
           const temporary = await scratchStore.get(name);
@@ -728,10 +728,16 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     async restartComputer(scope) {
       const name = nameFor(scope);
       await withLifecycle(name, async () => {
-        const stored = await store.get(scope);
+        let stored = await store.get(scope);
         if (!stored) return;
-        const info = await client.get(stored.sandboxId);
-        await replace(scope, stored, info);
+        let info = await client.get(stored.sandboxId);
+        if (info?.status !== "running") {
+          await replace(scope, stored, info);
+          stored = await store.get(scope);
+          if (!stored) return;
+          info = await client.get(stored.sandboxId);
+        }
+        await replace(scope, stored, info, undefined, "filesystem");
       });
     },
     async reapDeepIdle(idleMs) {
