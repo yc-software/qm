@@ -128,7 +128,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if (role !== "member" && role !== "org_admin") return bad("role must be member or org_admin");
   const expiry = normalizeInboundExpiresAt(endOfDayUtc(b.expiresAt));
   if (!expiry.ok) return bad(expiry.message);
-  if (teammate && (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe))
+  if (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe)
     return sendJson(res, 503, {
       error: "not_configured",
       message: "Invitation sign-in requires a portal and durable token storage.",
@@ -187,30 +187,25 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     resource: email,
     scopeLabel: scope,
   });
-  const linkSignIn = Boolean(deps.portalUrl && deps.portalIdentitySecret && deps.replayDedupe);
-  const signInUrl = linkSignIn
-    ? `${trimTrailingSlashes(deps.portalUrl!)}/auth/invite#token=${encodeURIComponent(
-        await mintSignedPayload(
-          {
-            purpose: "teammate-invite",
-            inviteId: member.inviteId,
-            email,
-            org: scope,
-            aud: trimTrailingSlashes(deps.portalUrl!),
-            iat: now,
-            exp: now + 24 * 60 * 60 * 1000,
-            jti: randomUUID(),
-          },
-          deps.portalIdentitySecret!,
-        ),
-      )}`
-    : signInUrlOf(deps);
+  const signInUrl = `${trimTrailingSlashes(deps.portalUrl)}/auth/invite#token=${encodeURIComponent(
+    await mintSignedPayload(
+      {
+        purpose: "invite",
+        inviteId: member.inviteId,
+        email,
+        org: scope,
+        aud: trimTrailingSlashes(deps.portalUrl),
+        iat: now,
+        exp: now + 24 * 60 * 60 * 1000,
+        jti: randomUUID(),
+      },
+      deps.portalIdentitySecret,
+    ),
+  )}`;
   let emailSent = false;
   let emailProblem: string | undefined;
   if (teammate || created || readmitted || b.resendInvite === true) {
     if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
-    else if (!signInUrl)
-      emailProblem = "no sign-in URL is configured on core (set PUBLIC_WEB_URL) — share the portal address by hand";
     else {
       const branding = await resolveBranding(deps.config, scope, deps.brandingDefault);
       try {
@@ -222,7 +217,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
             invitedBy: actor.id,
             signInUrl,
             expiresAt: member.expiresAt,
-            magicLink: linkSignIn,
+            magicLink: true,
           }),
         });
         emailSent = true;
@@ -237,7 +232,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     created,
     emailSent,
     ...(emailProblem ? { emailProblem } : {}),
-    ...(!emailSent && signInUrl ? { signInUrl: ctx.capability ? signInUrlOf(deps) : signInUrl } : {}),
+    ...(emailSent ? {} : { signInUrl: ctx.capability ? signInUrlOf(deps) : signInUrl }),
   });
 }
 

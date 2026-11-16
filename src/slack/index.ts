@@ -105,7 +105,12 @@ export async function startSlackPlugin(
   const ACCOUNT_LABEL = cfg.accountId ?? "default";
   const ENVELOPE_REPLAY_SWEEP_MS = 60_000;
   const ENVELOPE_REPLAY_RETRY_NUM = 99;
-  const configuredActorGate = createActorGate(cfg.allowFrom);
+  const allowListed = createActorGate(cfg.allowFrom);
+  const configuredActorGate =
+    allowListed &&
+    ((actor: import("./identity.ts").ActorAssertion) =>
+      allowListed(actor) ||
+      (!actor.isExternalGuest && !actor.isBot && core.invitedExternal?.(actor.externalId) === true));
   const allowActor = cfg.externalAccess
     ? (actor: import("./identity.ts").ActorAssertion) =>
         !actor.isExternalGuest && !actor.isBot && (!configuredActorGate || configuredActorGate(actor))

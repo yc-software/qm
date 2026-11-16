@@ -10,6 +10,7 @@ import {
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideAppAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import { externalMemberActive } from "../identity/external-members.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
@@ -82,6 +83,7 @@ export interface SlackCoreClient {
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
+  invitedExternal?(email: string): boolean;
   ackEmojiOverride(): Promise<string[] | null>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
@@ -172,6 +174,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   const orgScope: ScopeId = scopeId("org", configOrgId());
 
   return {
+    invitedExternal: (email) => {
+      const member = deps.identity.externalMember(email);
+      return member !== undefined && externalMemberActive(member);
+    },
     decideAppAccess: (value, actor, approve) =>
       decideAppAccess(ambientTenant(), deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),

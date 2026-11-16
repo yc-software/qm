@@ -766,7 +766,7 @@ test("invitation redemption requires source authentication before consuming a va
     });
     const token = await mintSignedPayload(
       {
-        purpose: "teammate-invite",
+        purpose: "invite",
         org: ORG,
         aud: PORTAL,
         email,
