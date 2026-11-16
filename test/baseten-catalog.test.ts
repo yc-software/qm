@@ -126,7 +126,7 @@ test("a failed first fetch is retried within a minute, not after the full catalo
   }
 });
 
-test("a model whose output limit nears or fills its window still gets a quarter of it as compaction budget", () => {
+test("a model whose output limit fills its window gets half of it as compaction budget, at most the default", () => {
   setCustomProviders([
     {
       id: "baseten",
@@ -135,15 +135,13 @@ test("a model whose output limit nears or fills its window still gets a quarter 
       baseUrl: "https://inference.baseten.co/v1",
       models: [
         ...basetenCatalogModels(CATALOG.data),
-        { id: "almost-full", contextWindow: 100_000, maxTokens: 99_999 },
-        { id: "half-output", contextWindow: 100_000, maxTokens: 50_000 },
+        { id: "large-full", contextWindow: 400_000, maxTokens: 400_000 },
         { id: "small-output", contextWindow: 100_000, maxTokens: 20_000 },
       ],
     },
   ]);
-  assert.equal(contextTokenBudgetForModel("custom/baseten/zai-org/GLM-5.3"), Math.floor(202_752 / 4));
-  assert.equal(contextTokenBudgetForModel("custom/baseten/almost-full"), 25_000);
-  assert.equal(contextTokenBudgetForModel("custom/baseten/half-output"), 25_000);
+  assert.equal(contextTokenBudgetForModel("custom/baseten/zai-org/GLM-5.3"), Math.floor(202_752 / 2));
+  assert.equal(contextTokenBudgetForModel("custom/baseten/large-full"), 120_000);
   assert.equal(contextTokenBudgetForModel("custom/baseten/small-output"), 40_000);
 });
 
