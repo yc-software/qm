@@ -10,6 +10,8 @@ import {
   type DecisionRule,
 } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
+import type { PersonaForTurn, PersonaService } from "../personas/persona-service.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Tenant } from "../tenants/context.ts";
 
@@ -33,6 +35,17 @@ export function turnStartState(turn: {
     `- requested runtime: ${requested}`,
     `- model account: ${turn.runtimePinned ? "the user's own provider account, which serves only the requested runtime" : "company"}`,
     `- continued turn: ${turn.continueTurn ? "yes, resuming an interrupted turn" : "no"}`,
+    "",
+    "Latest message:",
+    turn.input,
+  ].join("\n");
+}
+
+export function personaTurnState(turn: { input: string; surfaceName: string; scopeLabel: string }): string {
+  return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName}`,
+    `- scope: ${turn.scopeLabel.split(":")[0]}`,
     "",
     "Latest message:",
     turn.input,
@@ -154,6 +167,25 @@ export function createReplyCheck(
           : undefined;
       },
     };
+  };
+}
+
+export type PersonaRouter = (
+  turn: DecisionTurn & { actorId: string; input: string; surfaceName: string },
+) => Promise<PersonaForTurn | undefined>;
+
+export function createPersonaRouter(
+  decide: ReturnType<typeof createDecisionHooks>,
+  personas: Pick<PersonaService, "forTurn">,
+  sessions: Pick<SessionStore, "setPersona">,
+): PersonaRouter {
+  return async (turn) => {
+    const decision = await decide("persona", personaTurnState(turn), turn);
+    if (!decision?.persona) return undefined;
+    const routed = await personas.forTurn(decision.persona, turn.actorId, turn.scopeLabel);
+    if (!routed || typeof routed !== "object") return undefined;
+    await sessions.setPersona(turn.sessionId, decision.persona);
+    return { ...routed, routedBy: decision.ruleId };
   };
 }
 
