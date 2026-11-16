@@ -8,7 +8,7 @@ both through Baseten's TypeScript SDK, `@basetenlabs/sandbox`.
 
 ## Build the image
 
-Baseten boots the QM sandbox base image (`fly/Dockerfile`) with the sandbox API server added as
+Baseten boots the QM sandbox base image (`fly/Dockerfile`, with the browser engine as in the released image) with the sandbox API server added as
 the entrypoint, so the agent gets the same tools as on the other backends. From a git checkout of
 the QM release you deploy, with `BASETEN_API_KEY` set:
 

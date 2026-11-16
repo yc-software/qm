@@ -21,7 +21,10 @@ if (existing?.status === "BUILT") {
   console.error(`${name} is already built`);
 } else {
   const dockerfile = [
-    git("show", "HEAD:fly/Dockerfile").toString().trimEnd(),
+    git("show", "HEAD:fly/Dockerfile")
+      .toString()
+      .trimEnd()
+      .replace(/^ARG INSTALL_BROWSER_ENGINE=0$/m, "ARG INSTALL_BROWSER_ENGINE=1"),
     `COPY --from=${SANDBOX_API} /sandbox-api /usr/local/bin/sandbox-api`,
     'ENTRYPOINT ["/usr/local/bin/sandbox-api"]',
     "CMD []",
