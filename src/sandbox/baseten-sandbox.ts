@@ -7,6 +7,7 @@ import {
   type Sandbox as BasetenBox,
   type SandboxInfo,
   type SandboxProcessInfo,
+  type VolumeInfo,
 } from "@basetenlabs/sandbox";
 import { sleep } from "../util/async.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -27,6 +28,7 @@ import { visibleNotInstalled, visibleTools, type ExecResult, type Sandbox } from
 
 const HOME_DIR = "/root";
 const MEMORY_MB = 8192;
+const HOME_VOLUME_GB = 10;
 const MAX_NAME_LENGTH = 49;
 const BLOCKING_REQUEST_MS = 60_000;
 const KILL_AFTER_SEC = 10;
@@ -53,6 +55,11 @@ export interface BasetenSandboxOptions extends BlobStagingOptions {
 }
 
 const notFound = (error: unknown): boolean => error instanceof SandboxApiError && error.status === 404;
+const orNull = <T>(request: Promise<T>): Promise<T | null> =>
+  request.catch((error: unknown) => {
+    if (notFound(error)) return null;
+    throw error;
+  });
 
 export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
   if (!opts.apiKey) throw new Error("SANDBOX_BACKEND=baseten requires BASETEN_API_KEY");
@@ -67,12 +74,35 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
   });
   const boxByName = new Map<string, BasetenBox>();
 
-  async function info(name: string): Promise<SandboxInfo | null> {
-    try {
-      return await client.getInfo({ name });
-    } catch (error) {
-      if (notFound(error)) return null;
-      throw error;
+  const info = (name: string): Promise<SandboxInfo | null> => orNull(client.getInfo({ name }));
+
+  async function homeVolume(name: string): Promise<VolumeInfo> {
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    for (;;) {
+      const volume =
+        (await orNull(client.volumes.getInfo({ name }))) ??
+        (await client.volumes.create({ name, size: `${HOME_VOLUME_GB}Gi` }));
+      if (volume.status === "DEPLOYED") return volume;
+      if (volume.status === "FAILED") throw new Error(`baseten volume ${name} failed to deploy`);
+      if (Date.now() > deadline)
+        throw new Error(
+          `baseten volume ${name}: not ready after ${READY_TIMEOUT_MS / 1000}s (status ${volume.status})`,
+        );
+      await sleep(POLL_MS);
+    }
+  }
+
+  async function deleteHomeVolume(name: string): Promise<void> {
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    for (;;) {
+      try {
+        await orNull(client.volumes.delete({ name }));
+        return;
+      } catch (error) {
+        const stillAttached = error instanceof SandboxApiError && error.status === 409;
+        if (!stillAttached || Date.now() > deadline) throw error;
+      }
+      await sleep(POLL_MS);
     }
   }
 
@@ -92,7 +122,7 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
     }
   }
 
-  function ensureSandbox(name: string, onStatus?: (text: string) => void): Promise<boolean> {
+  function ensureSandbox(name: string, withHome: boolean, onStatus?: (text: string) => void): Promise<boolean> {
     return opts.advisoryLock.withLock(`baseten-provision:${name}`, async () => {
       const current = await info(name);
       if (current?.status === "FAILED")
@@ -105,24 +135,30 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
       if (replace) {
         boxByName.delete(name);
         onStatus?.("Creating the sandbox…");
-        await client.create({ name, image, memory: MEMORY_MB, createIfNotExists: true });
+        const home = withHome ? await homeVolume(name) : null;
+        await client.create({
+          name,
+          image,
+          memory: MEMORY_MB,
+          createIfNotExists: true,
+          ...(home ? { region: home.region, volumes: [{ name, mountPath: HOME_DIR }] } : {}),
+        });
       }
       boxByName.set(name, await waitReady(name, replace ? await info(name) : current));
       return replace;
     });
   }
 
-  async function deleteInstance(name: string): Promise<void> {
+  async function deleteSandbox(name: string): Promise<void> {
     boxByName.delete(name);
-    try {
-      await client.delete({ name });
-    } catch (error) {
-      if (!notFound(error)) throw error;
-    }
+    await orNull(client.delete({ name }));
   }
 
   const lockedDelete = (name: string): Promise<void> =>
-    opts.advisoryLock.withLock(`baseten-provision:${name}`, () => deleteInstance(name));
+    opts.advisoryLock.withLock(`baseten-provision:${name}`, async () => {
+      await deleteSandbox(name);
+      await deleteHomeVolume(name);
+    });
 
   async function boxFor(name: string): Promise<BasetenBox> {
     const cached = boxByName.get(name);
@@ -216,14 +252,8 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
   const writeAbsBytes = (name: string, absPath: string, data: Uint8Array): Promise<void> =>
     onBox(name, (box) => box.fs.writeBytes({ path: absPath, content: data, permissions: "0644" }));
 
-  async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
-    try {
-      return await onBox(name, (box) => box.fs.readBytes({ path: absPath }));
-    } catch (error) {
-      if (notFound(error)) return null;
-      throw error;
-    }
-  }
+  const readAbsBytes = (name: string, absPath: string): Promise<Uint8Array | null> =>
+    orNull(onBox(name, (box) => box.fs.readBytes({ path: absPath })));
 
   const base = createExecSandboxBase({
     label: "baseten",
@@ -239,11 +269,11 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
     exec,
     writeAbsBytes,
     readAbsBytes,
-    ensureResident: async (name, onStatus) => ({ coldStart: await ensureSandbox(name, onStatus) }),
+    ensureResident: async (name, onStatus) => ({ coldStart: await ensureSandbox(name, true, onStatus) }),
     isProvisioned: (name) => boxByName.has(name),
     async recreateScratch(name) {
-      await lockedDelete(name);
-      await ensureSandbox(name);
+      await opts.advisoryLock.withLock(`baseten-provision:${name}`, () => deleteSandbox(name));
+      await ensureSandbox(name, false);
     },
     deleteInstance: lockedDelete,
     forgetInstance: (name) => boxByName.delete(name),
@@ -270,9 +300,10 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
       processSessions: true,
       egressEnforcement: "none",
       spec: {
-        os: "Debian 12 — Baseten sandbox from the QM sandbox base image (its disk is held in memory, so files count against its 8 GB; standby keeps the disk and running processes; Baseten deletes a sandbox 7 days after it was created and the next turn starts a fresh one, so publish durable work to git or Files)",
+        os: `Debian 12 — Baseten sandbox from the QM sandbox base image (home, with the workspace, is a ${HOME_VOLUME_GB} GB volume of this scope that survives Baseten deleting the sandbox 7 days after it was created; the rest of the disk is held in memory and starts fresh then; standby keeps running processes)`,
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         memoryMb: MEMORY_MB,
+        diskGb: HOME_VOLUME_GB,
         homeDir: HOME_DIR,
         workdir: base.workspaceDir,
         get tools() {

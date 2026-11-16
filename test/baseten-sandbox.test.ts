@@ -93,7 +93,7 @@ test("a process that ends without an exit code is reported with its status", asy
   );
 });
 
-test("a sandbox Baseten deleted at its 7-day limit is recreated empty on the next provision", async () => {
+test("a sandbox Baseten deleted at its 7-day limit is recreated on the next provision with its home kept", async () => {
   const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "old.txt", "x");
   fake.expire(h.id);
@@ -101,8 +101,8 @@ test("a sandbox Baseten deleted at its 7-day limit is recreated empty on the nex
   const again = await sandbox.provision(scope);
   assert.equal(again.coldStart, true);
   assert.equal(again.id, h.id);
-  assert.equal(await sandbox.readFile(again, "old.txt"), null);
-  assert.equal((await sandbox.run(again, "echo back")).stdout, "back\n");
+  assert.equal(await sandbox.readFile(again, "old.txt"), "x");
+  assert.equal(fake.volume(h.id)?.attachedTo, h.id);
 });
 
 test("a scope provisioned again while its old sandbox is still deleting gets a fresh sandbox", async () => {
@@ -160,7 +160,7 @@ test("a terminated or failed sandbox is replaced on the next provision", async (
   fake.setStatus(h.id, "TERMINATED");
   const replaced = await make().provision(scope);
   assert.equal(replaced.coldStart, true);
-  assert.equal(await make().readFile(replaced, "kept.txt"), null);
+  assert.equal(await make().readFile(replaced, "kept.txt"), "x");
   fake.setStatus(h.id, "FAILED");
   const again = await make().provision(scope);
   assert.equal(again.coldStart, true);
@@ -171,17 +171,21 @@ test("teardown keeps the sandbox, destroy and destroyScope delete it", async () 
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   assert.equal(fake.box(h.id)?.status, "DEPLOYED");
+  assert.equal(fake.volume(h.id)?.attachedTo, h.id);
   await sandbox.teardown(h, { destroy: true });
   assert.equal(fake.box(h.id)?.status, "TERMINATED");
+  assert.equal(fake.volume(h.id), null);
   const second = await sandbox.provision(scope);
   await sandbox.destroyScope!(scope);
   assert.equal(fake.box(second.id)?.status, "TERMINATED");
+  assert.equal(fake.volume(second.id), null);
 });
 
 test("scratch sandboxes are created on demand and deleted at release", async () => {
   const h = await sandbox.provision(scope, { scratch: { key: "job-1" } });
   assert.equal(h.scratch, true);
   assert.equal(fake.box(h.id)?.status, "DEPLOYED");
+  assert.equal(fake.volume(h.id), null);
   await sandbox.teardown(h);
   assert.equal(fake.box(h.id)?.status, "TERMINATED");
 });

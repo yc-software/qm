@@ -54,18 +54,19 @@ For local development, export the variables and run `npm run dev-instance -- --s
 | `EGRESS_PROXY_URL`            | unset    | Proxy every sandbox request goes through.                |
 
 Each scope maps to one sandbox named after it, so any core instance finds it again after a
-restart without a database record. Sandboxes get 8 GiB of memory and 4 vCPUs in the team's
-default region. Baseten holds a sandbox's filesystem in memory, so files count against those
-8 GiB (`df` reports about 6.3 GB free on a new sandbox). Ending a turn leaves the sandbox in place; Baseten puts it on standby when idle.
-Destroying a scope deletes its sandbox. Scratch sandboxes are deleted when their last handle
-closes.
+restart without a database record. Sandboxes get 8 GiB of memory and 4 vCPUs. Each scope's home
+(`/root`, which holds the workspace) is a 10 GiB Baseten volume named after the scope, created on
+the scope's first provision; the sandbox runs in the volume's region. The rest of the filesystem
+is held in memory and counts against the 8 GiB. Ending a turn leaves the sandbox and volume in
+place; Baseten puts the sandbox on standby when idle. Destroying a scope deletes its sandbox, then
+its volume. Scratch sandboxes get no volume and are deleted when their last handle closes.
 
 Baseten deletes every sandbox 7 days after it was created
 ([Sandbox lifecycle](https://docs.baseten.co/sandboxes/lifecycle)). The next turn on that scope
-creates a fresh sandbox under the same name, with an empty disk; the agent is told to publish
-durable work to git or Files. Each Baseten organization runs a limited number of sandboxes at
-once (10 by default); creating one past the limit fails with Baseten's quota error until a scope
-is destroyed or support raises the limit.
+creates a fresh sandbox under the same name and mounts the same volume, so home survives;
+anything outside it and running processes do not. Each Baseten organization runs 10 sandboxes at
+once unless support raises the limit; creating one past it fails with Baseten's quota error until
+a scope is destroyed.
 
 Each command is one blocking process request. When the request returns while the command still
 runs, the edge cuts it off, or the connection drops, core polls the named process until it exits;

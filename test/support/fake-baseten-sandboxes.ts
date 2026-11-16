@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -9,12 +9,14 @@ interface FakeBox {
   image: string;
   memory: number;
   root: string;
+  volume?: string;
 }
 
 export interface FakeBaseten {
   fetchImpl: typeof fetch;
   names(): string[];
   box(name: string): { status: string; image: string; memory: number } | null;
+  volume(name: string): { status: string; attachedTo?: string } | null;
   setStatus(name: string, status: string): void;
   expire(name: string): void;
   slowDeletes(): void;
@@ -33,6 +35,7 @@ export function installFakeBaseten(): FakeBaseten {
   const root = mkdtempSync(join(tmpdir(), "fake-baseten-"));
   const boxes = new Map<string, FakeBox>();
   const processes = new Map<string, Record<string, unknown>>();
+  const volumes = new Map<string, { name: string; size: string; status: string; dir: string }>();
   const gone = new Set(["TERMINATED", "FAILED", "DELETING"]);
   let generation = 0;
   let minted = 0;
@@ -54,6 +57,15 @@ export function installFakeBaseten(): FakeBaseten {
     expires_in: 7 * 24 * 3600,
   });
   const error = (status: number, code: string, message: string) => Response.json({ code, message }, { status });
+  const attachedTo = (volume: string) =>
+    [...boxes.values()].find((b) => b.volume === volume && !gone.has(b.status))?.name;
+  const volumeView = (v: { name: string; size: string; status: string }) => ({
+    name: v.name,
+    size: v.size,
+    region: "us-test-1",
+    status: v.status,
+    attached_to: attachedTo(v.name),
+  });
 
   const runCommand = (b: FakeBox, command: string) => {
     const script = command
@@ -73,7 +85,13 @@ export function installFakeBaseten(): FakeBaseten {
     };
   };
 
-  const create = (body: { name: string; image: string; memory: number; create_if_not_exists?: boolean }) => {
+  const create = (body: {
+    name: string;
+    image: string;
+    memory: number;
+    create_if_not_exists?: boolean;
+    volumes?: { name: string; mount_path: string }[];
+  }) => {
     const existing = boxes.get(body.name);
     if (existing && !gone.has(existing.status)) {
       if (!body.create_if_not_exists) return error(409, "ALREADY_EXISTS", "A sandbox with this name already exists.");
@@ -86,7 +104,12 @@ export function installFakeBaseten(): FakeBaseten {
       memory: body.memory,
       root: join(root, `${body.name}-${++generation}`),
     };
-    mkdirSync(join(box.root, "root"), { recursive: true });
+    const home = body.volumes?.find((v) => v.mount_path === "/root");
+    if (home) {
+      mkdirSync(box.root, { recursive: true });
+      symlinkSync(volumes.get(home.name)!.dir, join(box.root, "root"));
+      box.volume = home.name;
+    } else mkdirSync(join(box.root, "root"), { recursive: true });
     boxes.set(box.name, box);
     return Response.json(view(box), { status: 201 });
   };
@@ -94,6 +117,25 @@ export function installFakeBaseten(): FakeBaseten {
   const management = async (url: URL, method: string, init: RequestInit | undefined): Promise<Response> => {
     if (url.pathname === "/v1/sandboxes/instances" && method === "POST")
       return create(JSON.parse(String(init?.body)) as Parameters<typeof create>[0]);
+    if (url.pathname === "/v1/sandboxes/volumes" && method === "POST") {
+      const body = JSON.parse(String(init?.body)) as { name: string; size: string };
+      if (volumes.has(body.name)) return error(409, "RESOURCE_IN_USE", "Resource already exists");
+      const dir = join(root, `volume-${body.name}`);
+      mkdirSync(dir, { recursive: true });
+      volumes.set(body.name, { name: body.name, size: body.size, status: "DEPLOYED", dir });
+      return Response.json(volumeView(volumes.get(body.name)!), { status: 201 });
+    }
+    if (url.pathname.startsWith("/v1/sandboxes/volumes/")) {
+      const volume = volumes.get(decodeURIComponent(url.pathname.slice("/v1/sandboxes/volumes/".length)));
+      if (!volume) return error(404, "NOT_FOUND", "The requested resource was not found.");
+      if (method === "DELETE") {
+        if (attachedTo(volume.name)) return error(409, "RESOURCE_IN_USE", "Volume is attached");
+        volumes.delete(volume.name);
+        rmSync(volume.dir, { recursive: true, force: true });
+        return Response.json({ ...volumeView(volume), status: "DELETING" }, { status: 202 });
+      }
+      return Response.json(volumeView(volume));
+    }
     const named = /^\/v1\/sandboxes\/instances\/([^/]+)$/.exec(url.pathname);
     if (!named) return error(404, "NOT_FOUND", `no route ${method} ${url.pathname}`);
     const box = boxes.get(decodeURIComponent(named[1]!));
@@ -186,6 +228,10 @@ export function installFakeBaseten(): FakeBaseten {
     box: (name) => {
       const b = boxes.get(name);
       return b ? { status: b.status, image: b.image, memory: b.memory } : null;
+    },
+    volume: (name) => {
+      const v = volumes.get(name);
+      return v ? { status: v.status, attachedTo: attachedTo(name) } : null;
     },
     setStatus: (name, status) => {
       const b = boxes.get(name);
