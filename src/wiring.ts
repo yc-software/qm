@@ -2299,7 +2299,7 @@ export function buildApp(
     personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions
-      ? { replyCheck: createReplyCheck(decisions, decide), routePersona: createPersonaRouter(decide, personas, sessions) }
+      ? { replyCheck: createReplyCheck(decisions, decide), routePersona: createPersonaRouter(decide, personas) }
       : {}),
     environments,
     brokeredTools,

@@ -302,7 +302,7 @@ export function createPersonaService(deps: {
   };
 }
 
-export function personaPrompt({ persona, scope, pinned, routedBy }: PersonaForTurn): string {
+export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
@@ -311,11 +311,10 @@ export function personaPrompt({ persona, scope, pinned, routedBy }: PersonaForTu
     lines.push(
       `This channel or group pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
     );
-  if (routedBy)
-    lines.push(
-      `The decision rule ${routedBy} routed this conversation to ${persona.name} from its latest message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`,
-    );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");
 }
+
+export const personaRoutedNote = (name: string, ruleId: string): string =>
+  `The decision rule ${ruleId} routed this conversation to the persona ${name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`;

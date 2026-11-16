@@ -11,7 +11,6 @@ import {
 } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
 import type { PersonaForTurn, PersonaService } from "../personas/persona-service.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Tenant } from "../tenants/context.ts";
 
@@ -41,7 +40,7 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
-export function personaTurnState(turn: { input: string; surfaceName: string; conversation: string }): string {
+function personaTurnState(turn: { input: string; surfaceName: string; conversation: string }): string {
   return [
     "Turn context:",
     `- surface: ${turn.surfaceName}`,
@@ -96,7 +95,7 @@ export interface DecisionTurn {
   tenant: Tenant;
   actorId?: string;
   scopeLabel: string;
-  sessionId: string;
+  sessionId?: string;
   runId?: string;
   cancel?: AbortSignal;
 }
@@ -116,7 +115,7 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
         status: result.error ? "error" : result.action,
         detail: JSON.stringify({
           hook,
-          sessionId: turn.sessionId,
+          ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
           ...(turn.runId ? { runId: turn.runId } : {}),
           ...result,
         }),
@@ -177,14 +176,12 @@ export type PersonaRouter = (
 export function createPersonaRouter(
   decide: ReturnType<typeof createDecisionHooks>,
   personas: Pick<PersonaService, "forTurn">,
-  sessions: Pick<SessionStore, "setPersona">,
 ): PersonaRouter {
   return async (turn) => {
     const decision = await decide("persona", personaTurnState(turn), turn);
     if (!decision?.persona) return undefined;
     const routed = await personas.forTurn(decision.persona, turn.actorId, turn.scopeLabel);
     if (!routed || typeof routed !== "object") return undefined;
-    await sessions.setPersona(turn.sessionId, decision.persona);
     return { ...routed, routedBy: decision.ruleId };
   };
 }

@@ -70,6 +70,17 @@ A session's `persona_id` is set from the Personas page ("Chat") or by the agent
 (`PUT /v1/sessions/:id/persona`). A conversation in a channel or group with a pinned persona
 and no persona of its own wears the pinned one; the `## Persona` block then says it was pinned
 and how to change that.
+A turn without a persona, from a person with personas enabled, gets a short `## Personas`
+context block saying what personas do and where the API is, so the agent can offer one. There is no lock: the channel's own instructions and skills
+still apply, and anyone may still pick another persona for one conversation. On each turn,
+if the sender holds a role on the persona (counting the conversation's channel), the turn:
+
+- reads `persona:<id>` as an extra read-only scope (its skills and notes);
+- offers keychain grants to `persona:<id>` alongside the conversation's own;
+- adds a `## Persona` block after the organization and conversation instructions.
+
+If the sender has no role, the persona is skipped and the block says so. Writes (memory,
+files, crons) stay in the conversation's scope.
 
 An org admin can also route conversations to personas with a decision rule on the `persona`
 hook (Settings → Decision rules). Its options are `keep` or `use_persona` with a `persona` id,
@@ -77,8 +88,8 @@ and its `onError` must be a `keep` option. The hook runs on a person's message i
 that has no persona of its own and no pinned one; its state is the surface, the conversation kind
 (`dm`, `group` or `channel`) and the message, so "only in DMs" and which personas exist are part
 of the rule's question and options. When the enforcing rule picks a persona the sender holds a
-role on, the conversation keeps it, the turn wears it, and the `## Persona` block names the rule
-and how to switch. Otherwise the turn goes on without one. Example:
+role on, the conversation keeps it, the turn wears it, and that turn's context names the rule and
+how to switch. Otherwise the turn goes on without one. Example:
 
 ```json
 {
@@ -94,17 +105,6 @@ and how to switch. Otherwise the turn goes on without one. Example:
   "onError": "keep"
 }
 ```
-A turn without a persona, from a person with personas enabled, gets a short `## Personas`
-context block saying what personas do and where the API is, so the agent can offer one. There is no lock: the channel's own instructions and skills
-still apply, and anyone may still pick another persona for one conversation. On each turn,
-if the sender holds a role on the persona (counting the conversation's channel), the turn:
-
-- reads `persona:<id>` as an extra read-only scope (its skills and notes);
-- offers keychain grants to `persona:<id>` alongside the conversation's own;
-- adds a `## Persona` block after the organization and conversation instructions.
-
-If the sender has no role, the persona is skipped and the block says so. Writes (memory,
-files, crons) stay in the conversation's scope.
 
 A cron set up in a conversation with a persona fires as that persona: when it fires, the
 scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
