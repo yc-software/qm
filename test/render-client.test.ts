@@ -97,6 +97,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
         plan: "2c-4g",
         timeoutSeconds: 2592000,
         idleTimeoutSeconds: 0,
+        networkPolicy: { type: "allow-all" },
         snapshotId: "snp-base",
       },
     },
@@ -110,7 +111,13 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
   assert.deepEqual(requests[2], {
     method: "POST",
     path: "/v1/sandboxes",
-    body: { ownerId: "tea-test", plan: "2c-4g", timeoutSeconds: 86400, idleTimeoutSeconds: 0 },
+    body: {
+      ownerId: "tea-test",
+      plan: "2c-4g",
+      timeoutSeconds: 86400,
+      idleTimeoutSeconds: 0,
+      networkPolicy: { type: "allow-all" },
+    },
   });
   assert.equal(disposable.expiresAtMs, Date.parse(sandbox.createdAt) + 86400_000);
   await client.create({ image: "sbb-0000000000000000000a", lifetimeSec: 3600 });
@@ -122,6 +129,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
       plan: "2c-4g",
       timeoutSeconds: 3600,
       idleTimeoutSeconds: 0,
+      networkPolicy: { type: "allow-all" },
       buildId: "sbb-0000000000000000000a",
     },
   });

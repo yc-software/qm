@@ -1168,6 +1168,7 @@ export function buildApp(
       client: renderClient,
       base: renderBase,
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
+      ...(render.egressProxyUrl ? { egressProxyUrl: render.egressProxyUrl } : {}),
       store: renderBodies,
       scratchStore: renderScratch,
       cleanupStore: renderCleanup,

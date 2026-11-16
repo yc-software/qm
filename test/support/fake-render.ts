@@ -56,6 +56,7 @@ export function createFakeRender() {
   const root = mkdtempSync(join(tmpdir(), "fake-render-"));
   const sandboxes = new Map<string, RenderSandboxInfo>();
   const labels = new Map<string, { name?: string; createdAtMs: number }>();
+  const allowlists = new Map<string, string[]>();
   const snapshots = new Map<string, RenderSnapshot>();
   const snapshotSources = new Map<string, { sandboxId: string; name: string; requestedAtMs: number }>();
   const images = new Map<string, RenderImage & { name: string; source: string }>();
@@ -141,7 +142,7 @@ export function createFakeRender() {
     return image;
   };
   const client: RenderClient = {
-    async create({ name, snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, egressAllowlist, onCreated }) {
       const id = `sbx-${sandboxes.size + 1}`;
       const info: RenderSandboxInfo = { id, status: "running", expiresAtMs: Date.now() + lifetimeSec * 1000 };
       if (snapshotId) {
@@ -156,6 +157,7 @@ export function createFakeRender() {
       }
       sandboxes.set(id, info);
       labels.set(id, { ...(name ? { name } : {}), createdAtMs: Date.now() });
+      if (egressAllowlist) allowlists.set(id, egressAllowlist);
       createdFrom.push(snapshotId ?? image);
       try {
         await onCreated?.(id);
@@ -176,7 +178,10 @@ export function createFakeRender() {
       };
     },
     async get(id) {
-      return sandboxes.get(id) ?? null;
+      const info = sandboxes.get(id);
+      if (!info) return null;
+      const egressAllowlist = allowlists.get(id);
+      return { ...info, ...(egressAllowlist ? { egressAllowlist } : {}) };
     },
     async listLive(name) {
       return [...sandboxes.values()]
@@ -284,6 +289,9 @@ export function createFakeRender() {
     loseCheckpointReply(status: RenderSnapshot["status"] = "available") {
       loseCheckpointReply = status;
     },
+    allowlistOf(sandboxId: string) {
+      return allowlists.get(sandboxId);
+    },
     nameOf(sandboxId: string) {
       return labels.get(sandboxId)?.name;
     },
@@ -333,7 +341,9 @@ export function serveFakeRenderApi(
     status: fake.sandboxes.get(id)!.status,
     plan: "starter",
     region: "oregon",
-    networkPolicy: { type: "allow-all" },
+    networkPolicy: fake.allowlistOf(id)
+      ? { type: "allow-list", rules: fake.allowlistOf(id)!.map((domain) => ({ domain, protocol: "https" })) }
+      : { type: "allow-all" },
     timeoutSeconds: 86400,
     ...lifetimes.get(id),
     createdAt: new Date(fake.createdAtMs(id)!).toISOString(),
@@ -374,11 +384,15 @@ export function serveFakeRenderApi(
         snapshotId?: string;
         buildId?: string;
         timeoutSeconds?: number;
+        networkPolicy?: { type: string; rules?: Array<{ domain: string }> };
       };
       const { id } = await fake.client.create({
         ...(body.name ? { name: body.name } : {}),
         ...(body.snapshotId ? { snapshotId: body.snapshotId } : {}),
         ...(body.buildId ? { image: body.buildId } : {}),
+        ...(body.networkPolicy?.type === "allow-list"
+          ? { egressAllowlist: (body.networkPolicy.rules ?? []).map((rule) => rule.domain) }
+          : {}),
         lifetimeSec: body.timeoutSeconds ?? 86400,
       });
       lifetimes.set(id, { timeoutSeconds: body.timeoutSeconds ?? 86400 });

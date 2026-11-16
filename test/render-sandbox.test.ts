@@ -51,10 +51,11 @@ function setup(
     golden = { ref, snapshotId: fake.seedGolden(ref) };
     return golden.snapshotId;
   };
-  const make = (checkpointIntervalMs = -1, goldens = base) =>
+  const make = (checkpointIntervalMs = -1, goldens = base, egressProxyUrl?: string) =>
     createRenderSandbox({
       client,
       base: goldens,
+      ...(egressProxyUrl ? { egressProxyUrl } : {}),
       store,
       scratchStore,
       cleanupStore,
@@ -182,6 +183,42 @@ test("Render declares the tools and resources of the base image", (t) => {
     assert.ok(spec?.tools?.includes(tool), tool);
   for (const tool of ["gcloud", "kubectl", "flyctl", "glab"]) assert.ok(spec?.notInstalled?.includes(tool), tool);
   assert.deepEqual([spec?.cpus, spec?.memoryMb, spec?.diskGb], [2, 4096, 10]);
+});
+
+test("Render admits only the egress proxy from computers and disposable sandboxes when a proxy is set", async (t) => {
+  const { make, fake, store, scope } = setup(t, { http: true });
+  for (const url of ["http://proxy.example.com", "https://proxy.example.com:8443", "https://10.0.0.1"])
+    assert.throws(() => make(-1, undefined, url), /https URL with a host name on port 443/, url);
+  const sandbox = make(-1, undefined, "https://Proxy.example.com:443");
+  assert.equal(sandbox.profile.egressEnforcement, "domain");
+  const computer = await sandbox.provision(scope, { egressToken: "turn-token" });
+  const disposable = await sandbox.provision(scope, { scratch: { key: "job" }, egressToken: "turn-token" });
+  for (const [handle, id] of [
+    [computer, (await store.get(scope))!.sandboxId],
+    [disposable, disposable.providerSandboxId!],
+  ] as const) {
+    assert.deepEqual(fake.allowlistOf(id), ["proxy.example.com"]);
+    assert.equal((await sandbox.run(handle, "echo $HTTPS_PROXY")).stdout, "https://x:turn-token@proxy.example.com\n");
+  }
+});
+
+test("Render restarts a computer from its checkpoint when the egress proxy setting changes", async (t) => {
+  const { make, fake, store, scope } = setup(t, { http: true });
+  const open = make();
+  const handle = await open.provision(scope);
+  await open.writeFile(handle, "kept", "before the proxy");
+  await open.teardown(handle);
+  const before = (await store.get(scope))!;
+  const proxied = make(-1, undefined, "https://proxy.example.com");
+  const restored = await proxied.provision(scope);
+  const after = (await store.get(scope))!;
+  assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
+  assert.deepEqual(fake.allowlistOf(after.sandboxId), ["proxy.example.com"]);
+  assert.equal(await proxied.readFile(restored, "kept"), "before the proxy");
+  await proxied.provision(scope);
+  assert.equal((await store.get(scope))!.sandboxId, after.sandboxId);
+  await open.provision(scope);
+  assert.equal(fake.allowlistOf((await store.get(scope))!.sandboxId), undefined);
 });
 
 test("Render starts computers and disposable sandboxes from the golden snapshot and keeps a computer's base image", async (t) => {

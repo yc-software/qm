@@ -28,9 +28,20 @@ import {
   type Sandbox,
   type SandboxHandle,
 } from "./sandbox.ts";
-import type { RenderClient, RenderListedSandbox, RenderSandboxInfo, RenderSnapshot } from "./render-client.ts";
+import type {
+  RenderClient,
+  RenderListedSandbox,
+  RenderLiveSandbox,
+  RenderSandboxInfo,
+  RenderSnapshot,
+} from "./render-client.ts";
 import type { RenderBase } from "./render-base.ts";
-import { RENDER_COMPUTER_LIFETIME_SEC, RENDER_IDLE_STOP_MS, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
+import {
+  RENDER_COMPUTER_LIFETIME_SEC,
+  RENDER_IDLE_STOP_MS,
+  RENDER_SANDBOX_TTL_SEC,
+  renderEgressAllowlist,
+} from "./render-limits.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 
 const ORPHAN_GRACE_MS = 15 * 60_000;
@@ -85,6 +96,7 @@ export interface RenderSandboxOptions extends BlobStagingOptions {
   namePrefix?: string;
   homeDir?: string;
   defaultTimeoutSec?: number;
+  egressProxyUrl?: string;
   checkpointIntervalMs?: number;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -99,6 +111,10 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const rotationMarginMs = (defaultTimeoutSec + 60) * 1000;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? 5 * 60_000;
+  const egressAllowlist = opts.egressProxyUrl ? renderEgressAllowlist(opts.egressProxyUrl) : undefined;
+  const egress = egressAllowlist ? { egressAllowlist } : {};
+  const egressCurrent = (info: RenderLiveSandbox): boolean =>
+    JSON.stringify(info.egressAllowlist?.toSorted()) === JSON.stringify(egressAllowlist);
   const scratch = new Map<string, RenderSandboxInfo>();
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
   let sandboxName: Promise<string> | undefined;
@@ -339,7 +355,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     let stored = await store.get(scope);
     if (stored) stored = await cleanupRetired(scope, stored);
     const info = stored ? await client.get(stored.sandboxId) : null;
-    if (!stored || info?.status !== "running") return replace(scope, stored, info, onStatus);
+    if (!stored || info?.status !== "running" || !egressCurrent(info)) return replace(scope, stored, info, onStatus);
     const now = Date.now();
     if (
       info.expiresAtMs <= now + rotationMarginMs &&
@@ -418,6 +434,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       name: await nameSandbox(),
       snapshotId: source.snapshotId,
       lifetimeSec: RENDER_COMPUTER_LIFETIME_SEC,
+      ...egress,
       onCreated: (sandboxId) => holdForCleanup(scope, sandboxId),
     });
     try {
@@ -549,6 +566,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     homeDir,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
+    ...(opts.egressProxyUrl ? { egressProxyUrl: opts.egressProxyUrl } : {}),
     deleteFailureCode: "render_destroy_failed",
     onError: opts.onError,
     exec,
@@ -561,6 +579,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         name: await nameSandbox(),
         snapshotId: (await goldens.ready()).snapshotId,
         lifetimeSec: RENDER_SANDBOX_TTL_SEC,
+        ...egress,
       });
       scratch.set(name, temporary);
       try {
@@ -602,7 +621,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       backend: "render",
       writablePersistence: "provider_managed",
       processSessions: true,
-      egressEnforcement: "none",
+      egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
         os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
