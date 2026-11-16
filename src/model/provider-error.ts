@@ -29,7 +29,11 @@ type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" 
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
   const { status, type, code, body } = failed.providerError ?? {};
-  if ((failed.rawStopReason !== undefined && REFUSAL_STOP_REASONS.has(failed.rawStopReason)) || (code && POLICY_CODES.has(code))) return "refusal";
+  if (
+    (failed.rawStopReason !== undefined && REFUSAL_STOP_REASONS.has(failed.rawStopReason)) ||
+    (code && POLICY_CODES.has(code))
+  )
+    return "refusal";
   if (
     type === "billing_error" ||
     status === 402 ||
