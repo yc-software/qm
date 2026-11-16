@@ -8,6 +8,7 @@ import {
 } from "./pi-models.ts";
 import { customModelCatalog } from "./custom-providers.ts";
 import { readBoundedText } from "../util/bytes.ts";
+import { swallow } from "../util/errors.ts";
 
 export interface ModelCatalogEntry {
   id: string;
@@ -19,16 +20,42 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_par
 const OPENROUTER_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
-export const CACHE_TTL_MS = 5 * 60_000;
-export const FAILURE_TTL_MS = 30_000;
+const CACHE_TTL_MS = 5 * 60_000;
+const FAILURE_TTL_MS = 30_000;
 
-interface CacheEntry {
-  dynamic?: ModelCatalogEntry[];
-  expiresAt: number;
-  inFlight?: Promise<ModelCatalogEntry[]>;
+export function createCatalogCache<T>(label: string, load: () => Promise<T>) {
+  let value: T | undefined;
+  let expiresAt = 0;
+  let inFlight: Promise<void> | undefined;
+  const refresh = () =>
+    (inFlight ??= load()
+      .then(
+        (loaded) => {
+          value = loaded;
+          expiresAt = Date.now() + CACHE_TTL_MS;
+        },
+        (error: unknown) => {
+          swallow(label, error);
+          expiresAt = Date.now() + FAILURE_TTL_MS;
+        },
+      )
+      .finally(() => {
+        inFlight = undefined;
+      }));
+  const cached = () => {
+    if (Date.now() >= expiresAt) void refresh();
+    return { value, refreshing: Boolean(inFlight) };
+  };
+  return {
+    cached,
+    async get(): Promise<T | undefined> {
+      if (!expiresAt) await refresh();
+      return cached().value;
+    },
+  };
 }
 
-const cache = new WeakMap<typeof fetch, CacheEntry>();
+const openRouterCatalogs = new WeakMap<typeof fetch, ReturnType<typeof createCatalogCache<ModelCatalogEntry[]>>>();
 
 export function builtInModelCatalog(): ModelCatalogEntry[] {
   const builtIns = selectableBaseModels().flatMap((model) => {
@@ -151,28 +178,17 @@ function withBuiltIns(dynamic: readonly ModelCatalogEntry[]): ModelCatalogEntry[
   return [...models, ...dynamic.filter((model) => !known.has(model.id))];
 }
 
-function openRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
-  const entry = cache.get(fetcher) ?? { expiresAt: 0 };
-  cache.set(fetcher, entry);
-  if (entry.expiresAt > Date.now()) return Promise.resolve(entry.dynamic ?? []);
-  entry.inFlight ??= fetchOpenRouterModels(fetcher)
-    .then((dynamic) => {
-      entry.dynamic = dynamic;
-      entry.expiresAt = Date.now() + CACHE_TTL_MS;
-      return dynamic;
-    })
-    .catch(() => {
-      entry.expiresAt = Date.now() + FAILURE_TTL_MS;
-      return entry.dynamic ?? [];
-    })
-    .finally(() => {
-      delete entry.inFlight;
-    });
-  return entry.inFlight;
+function openRouterCatalog(fetcher: typeof fetch) {
+  let catalog = openRouterCatalogs.get(fetcher);
+  if (!catalog) {
+    catalog = createCatalogCache("[model] OpenRouter catalog refresh", () => fetchOpenRouterModels(fetcher));
+    openRouterCatalogs.set(fetcher, catalog);
+  }
+  return catalog;
 }
 
 export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
-  return withBuiltIns(await openRouterModels(fetcher));
+  return withBuiltIns((await openRouterCatalog(fetcher).get()) ?? []);
 }
 
 export function selectableCatalog(catalog: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
@@ -183,7 +199,6 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   models: ModelCatalogEntry[];
   refreshing: boolean;
 } {
-  void openRouterModels(fetcher);
-  const entry = cache.get(fetcher);
-  return { models: withBuiltIns(entry?.dynamic ?? []), refreshing: !!entry?.inFlight };
+  const { value, refreshing } = openRouterCatalog(fetcher).cached();
+  return { models: withBuiltIns(value ?? []), refreshing };
 }

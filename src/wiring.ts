@@ -316,8 +316,8 @@ import {
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
-import { setCustomProviders, type CustomProviderSpec } from "./model/custom-providers.ts";
 import { createBasetenCatalog } from "./model/baseten.ts";
+import { createCustomProviderSet } from "./model/custom-provider-set.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { bootTenant, inBootTenant, tenancyBooted } from "./tenants/boot.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
@@ -1403,13 +1403,12 @@ export function buildApp(
     fetchImpl: overrides.modelCredentialFetch,
   });
   const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
-  const basetenCatalog = config.basetenApiKey
-    ? createBasetenCatalog(config.basetenApiKey, overrides.modelCredentialFetch)
-    : undefined;
-  const refreshCustomProviders = async () => {
-    const enabled = await customProviders.enabled();
-    setCustomProviders([...enabled, ...((await basetenCatalog?.providers(enabled)) ?? [])]);
-  };
+  const customProviderSet = createCustomProviderSet(
+    customProviders,
+    config.basetenApiKey ? createBasetenCatalog(config.basetenApiKey, overrides.modelCredentialFetch) : undefined,
+  );
+  const refreshCustomProviders = customProviderSet.refresh;
+  const customProviderStatuses = customProviderSet.statuses;
   const reported =
     (context: string) =>
     (e: unknown): never => {
@@ -1438,55 +1437,19 @@ export function buildApp(
     const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
     return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
   };
-  const resolveCustomProviderKeys = async (enabled: readonly CustomProviderSpec[]) => ({
-    ...basetenCatalog?.keys(enabled),
-    ...Object.fromEntries(
-      (
-        await Promise.all(
-          enabled.map(async (p) => {
-            try {
-              return [p.id, await customProviders.resolveKey(p.id)] as const;
-            } catch (e) {
-              console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
-              return [p.id, null] as const;
-            }
-          }),
-        )
-      ).filter(([, key]) => key),
-    ),
-  });
-  const customProviderStatuses = async (): Promise<CustomProviderKeyStatus[]> => {
-    const enabled = await customProviders.enabled();
-    const [keys, builtIn] = await Promise.all([
-      resolveCustomProviderKeys(enabled),
-      basetenCatalog?.providers(enabled) ?? [],
-    ]);
-    return [
-      ...enabled.map((p): CustomProviderKeyStatus =>
-        keys[p.id]
-          ? { provider: p.id, configured: true, source: "admin" }
-          : { provider: p.id, configured: false, source: "absent" },
-      ),
-      ...builtIn.map((p): CustomProviderKeyStatus => ({
-        provider: p.id,
-        configured: Boolean(keys[p.id]),
-        source: "environment",
-      })),
-    ];
-  };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
-    const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
+    const [anthropic, openai, openrouter, customKeys] = await Promise.all([
       modelCredentials.resolve("anthropic"),
       modelCredentials.resolve("openai"),
       modelCredentials.resolve("openrouter"),
-      customProviders.enabled(),
+      customProviderSet.keys(),
     ]);
     return {
       ...(anthropic ? { anthropic } : {}),
       ...(openai ? { openai } : {}),
       ...(openrouter ? { openrouter } : {}),
-      ...(await resolveCustomProviderKeys(enabledCustom)),
+      ...customKeys,
     };
   };
   let companyChatGPTAuth: CompanyChatGPTAuth | undefined;

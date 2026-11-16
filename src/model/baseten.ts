@@ -1,6 +1,6 @@
 import { swallow } from "../util/errors.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
-import { CACHE_TTL_MS, FAILURE_TTL_MS, fetchCatalogData, perMillion, positiveInteger } from "./model-catalog.ts";
+import { createCatalogCache, fetchCatalogData, perMillion, positiveInteger } from "./model-catalog.ts";
 
 const BASETEN_PROVIDER_ID = "baseten";
 const BASETEN_BASE_URL = "https://inference.baseten.co/v1";
@@ -48,51 +48,36 @@ export function basetenCatalogModels(data: readonly unknown[]): BasetenModel[] {
 }
 
 export function createBasetenCatalog(apiKey: string, fetcher: typeof fetch = fetch) {
-  let provider: CustomProviderSpec | undefined;
-  let expiresAt = 0;
-  let loading: Promise<void> | undefined;
-  let first: Promise<void> | undefined;
-  const load = async () => {
-    try {
-      const models = basetenCatalogModels(
-        await fetchCatalogData(fetcher, `${BASETEN_BASE_URL}/models`, "Baseten model list", {
-          authorization: `Bearer ${apiKey}`,
-        }),
-      );
-      const spec = (kept: BasetenModel[]): CustomProviderSpec => ({
-        id: BASETEN_PROVIDER_ID,
-        name: "Baseten",
-        protocol: "openai",
-        baseUrl: BASETEN_BASE_URL,
-        models: kept,
-      });
-      const valid = models.filter((model) => {
-        try {
-          validateCustomProviderSpec(spec([model]));
-          return true;
-        } catch (error) {
-          swallow(`[model] Baseten model ${model.id} skipped`, error);
-          return false;
-        }
-      });
-      provider = valid.length ? spec(valid) : undefined;
-      expiresAt = Date.now() + CACHE_TTL_MS;
-    } catch (error) {
-      swallow("[model] Baseten catalog refresh", error);
-      expiresAt = Date.now() + FAILURE_TTL_MS;
-    }
-  };
-  const refresh = () =>
-    (loading ??= load().finally(() => {
-      loading = undefined;
-    }));
+  const catalog = createCatalogCache("[model] Baseten catalog refresh", async () => {
+    const models = basetenCatalogModels(
+      await fetchCatalogData(fetcher, `${BASETEN_BASE_URL}/models`, "Baseten model list", {
+        authorization: `Bearer ${apiKey}`,
+      }),
+    );
+    const spec = (kept: BasetenModel[]): CustomProviderSpec => ({
+      id: BASETEN_PROVIDER_ID,
+      name: "Baseten",
+      protocol: "openai",
+      baseUrl: BASETEN_BASE_URL,
+      models: kept,
+    });
+    const valid = models.filter((model) => {
+      try {
+        validateCustomProviderSpec(spec([model]));
+        return true;
+      } catch (error) {
+        swallow(`[model] Baseten model ${model.id} skipped`, error);
+        return false;
+      }
+    });
+    return valid.length ? spec(valid) : undefined;
+  });
   const adminOwnsId = (enabled: readonly CustomProviderSpec[]): boolean =>
     enabled.some((p) => p.id === BASETEN_PROVIDER_ID);
   return {
     async providers(enabled: readonly CustomProviderSpec[]): Promise<CustomProviderSpec[]> {
       if (adminOwnsId(enabled)) return [];
-      await (first ??= refresh());
-      if (Date.now() >= expiresAt) void refresh();
+      const provider = await catalog.get();
       return provider ? [provider] : [];
     },
     keys(enabled: readonly CustomProviderSpec[]): Record<string, string> {
