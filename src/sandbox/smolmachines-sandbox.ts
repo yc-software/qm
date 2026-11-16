@@ -15,7 +15,14 @@ import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
+import {
+  attemptSnapshot,
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  snapshotDue,
+  type HomeSnapshotStore,
+  type SnapshotBookkeeping,
+} from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type { AgentComputerProfile, ComputerStatus, ExecResult, Sandbox, TeardownOptions } from "./sandbox.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
@@ -58,10 +65,8 @@ interface MachineExecResponse {
   stderrTruncated?: boolean;
 }
 
-export interface StoredSmolmachinesSandbox {
+export interface StoredSmolmachinesSandbox extends SnapshotBookkeeping {
   initializationPending?: boolean;
-  lastSnapshotMs?: number;
-  homeDirty?: boolean;
   snapshotError?: string;
 }
 
@@ -611,16 +616,18 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
             if (stored?.initializationPending) return;
             if (!tdOpts?.homeUnchanged) await mergeStored(scope, { homeDirty: true });
             if (!snapshotDue(stored, tdOpts, snapshotIntervalMs)) return;
-            try {
-              await snapshotHome(scope, handle.id);
-            } catch (e) {
-              opts.onError?.({
-                category: "sandbox_snapshot",
-                code: "teardown_snapshot_failed",
-                message: errMessage(e),
-                scopeLabel: scope,
-              });
-            }
+            await attemptSnapshot(
+              stored,
+              (patch) => mergeStored(scope, patch),
+              () => snapshotHome(scope, handle.id),
+              (message) =>
+                opts.onError?.({
+                  category: "sandbox_snapshot",
+                  code: "teardown_snapshot_failed",
+                  message,
+                  scopeLabel: scope,
+                }),
+            );
           }),
         );
       }

@@ -1,4 +1,6 @@
 import { samePerson } from "../directory/person.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
+import { conversationScope } from "../resolution/resolution-service.ts";
 import { createCoreSearch, type BackendSearchHit, type SearchBackend } from "../search/core-search.ts";
 import { createIntersectionBackend } from "../search/backends.ts";
 import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
@@ -8,13 +10,14 @@ import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { ambientTenant } from "../tenants/context.ts";
 
 function conversationBackend(app: App, publicWebUrl: string | undefined): SearchBackend {
   return createIntersectionBackend({
     name: "conversations",
     key: (hit) => hit.id,
-    searchForPrincipal: async (principal, query, limit) =>
-      (await app.searchSessions(principal.id, query, limit)).map((hit) => {
+    searchForPrincipal: async (principal, { query, limit, botActor }) =>
+      (await app.searchSessions({ actorId: principal.id, botActor }, query, limit)).map((hit) => {
         const url = conversationWebUrl(publicWebUrl, hit.sessionId);
         return {
           id: `${hit.sessionId}:${hit.seq}`,
@@ -47,12 +50,13 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
   return {
     name: "files",
     async search(request) {
+      const tenant = ambientTenant();
       const libraries = await Promise.all(
         request.principals.map(async (p) => {
-          const scopes = await helpers.currentResourceScopesForViewer(p.id);
+          const scopes = await helpers.currentResourceScopesForViewer(p.id, request.ownScopeBotWork === true);
           const [owned, handles] = await Promise.all([
             deps.files.listOwnedByScopes(scopes, { limit: 200 }),
-            deps.acl.handlesFor(scopes),
+            deps.acl.handlesFor(tenant, scopes),
           ]);
           const shared = await deps.files.resolveByIds(
             handles.map((h) => ({ ownerScopeId: h.ownerScopeId, id: h.fileId })),
@@ -72,7 +76,12 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
       for (const file of files) {
         let text = file.name;
         if (searchableFile(file.mimetype, file.name)) {
-          const opened = await app.openFileForViewer(file.id, request.principals[0]!.id);
+          const opened = await app.openFileForViewer(
+            tenant,
+            file.id,
+            request.principals[0]!.id,
+            request.ownScopeBotWork === true,
+          );
           if (opened) {
             const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(
               swallowAs("app search: read file contents", null),
@@ -97,9 +106,11 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
 }
 function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
   if (!deps.surfaceCache) return null;
-  const canSee = async (principal: Principal, container: string): Promise<boolean> => {
+  const canSee = async (principal: Principal, container: string, ownScopeBotWork: boolean): Promise<boolean> => {
     const state = await deps.surfaceCache!.containerState(container);
     if (!state) return false;
+    const home = conversationScope({ kind: state.kind ?? "channel", threadRef: container }, principal.id);
+    if (!loadsScopeContext(principal.id, home, ownScopeBotWork)) return false;
     if (state.kind === "group") return deps.directory.groupMember(container, principal.id);
     if (state.kind === "dm") {
       const members = await deps.surfaceCache!.members(container);
@@ -113,7 +124,9 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
       const messages = await app.searchSurface(request.query, { limit: Math.min(100, request.limit * 4) });
       const hits: BackendSearchHit[] = [];
       for (const message of messages) {
-        const visible = await Promise.all(request.principals.map((p) => canSee(p, message.container)));
+        const visible = await Promise.all(
+          request.principals.map((p) => canSee(p, message.container, request.ownScopeBotWork === true)),
+        );
         if (!visible.every(Boolean)) continue;
         hits.push({
           id: `${message.container}:${message.ts}`,
@@ -154,8 +167,5 @@ export function createSearchMethods(
     options,
   );
   const conversations = createCoreSearch([conversationsBackend], options);
-  return {
-    search: (query, principals, limit) => core.search({ query, principals, limit }),
-    searchConversations: (query, principals, limit) => conversations.search({ query, principals, limit }),
-  };
+  return { search: core.search, searchConversations: conversations.search };
 }

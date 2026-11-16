@@ -6,6 +6,7 @@ export interface Me {
   browserErrors?: { dsn: string; release?: string; tracesSampleRate?: number };
   analytics?: { module: string; options?: unknown };
   companyName?: string | null;
+  workspace?: string | null;
   welcomeCohort?: string;
   suggestedActivities?: SuggestedActivity[];
   suggestedActivitiesGeneration?: boolean;
@@ -15,6 +16,7 @@ export interface Me {
   user: string;
   org: string;
   slackWorkspaceUrl?: string | null;
+  chatSurfaces?: { kind: string; label: string; mark?: string }[];
   impersonatedBy?: string | null;
   displayName?: string | null;
   permissions?: string[];
@@ -30,7 +32,7 @@ const VIEWS = [
   "loops",
   "files",
   "keychain",
-  "deploys",
+  "apps",
   "memory",
   "skills",
   "personas",

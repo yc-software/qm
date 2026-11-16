@@ -7,6 +7,7 @@ export type UiSignal =
   | { kind: "observe"; callId: string; selector?: string; css?: boolean; screenshot?: boolean; preview?: boolean };
 
 export interface SessionStateEvent {
+  tenantId?: string;
   threadRef: string;
   sessionId?: string;
   participants?: string[];

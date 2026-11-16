@@ -28,6 +28,8 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "memory-brain-drop-test-secret".repeat(2);
 const BRAIN = {
@@ -70,6 +72,7 @@ async function setup(
     auditLog: built.auditLog,
     admin: built.admin,
     memoryRegistry: registry,
+    runs: liveRunStore(),
     ...browserSessionDeps,
     ...(opts.fireDropResolution ? { fireDropResolution: opts.fireDropResolution } : {}),
   });
@@ -140,7 +143,7 @@ async function setup(
       {
         actorId,
         scopeId: scopeId("personal", actorId),
-        liveActor: true,
+        ...liveRunClaims(actorId),
         exp: Date.now() + CAPABILITY_TTL_MS,
         ...extra,
       },
@@ -204,7 +207,7 @@ test("an org admin's brain link saves the client secret core-only, from a projec
   assert.doesNotMatch(JSON.stringify((await built.memoryRegistry.current()).record), /brain-secret-/);
   assert.deepEqual(await built.keychain!.listByOwner("admin-alice"), [], "nothing enters a keychain");
   assert.deepEqual(await built.keychain!.listGrants({ ownerId: "admin-alice" }), [], "nothing is granted");
-  const rows = JSON.stringify(await built.auditLog.events());
+  const rows = JSON.stringify(await built.auditLog.events(tenant));
   assert.match(rows, /memory-registry\.brain\.secret/);
   assert.doesNotMatch(rows, /brain-secret-/);
 });
@@ -257,21 +260,30 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   assert.equal(await servedSecret(), "after-the-move-back");
 
   const alice = { id: "admin-alice", type: "internal" as const };
-  await built.admin.createGrant(alice, {
+  await built.admin.createGrant(tenant, alice, {
     principalId: "admin-carol",
     role: "org_admin",
     scopeId: scopeId("org", orgId()),
   });
   const carols = await mint("admin-carol", brainDrop);
   assert.equal(carols.status, 200);
-  await built.admin.revokeGrant(alice, "admin-carol", scopeId("org", orgId()), "org_admin");
+  await built.admin.revokeGrant(tenant, alice, "admin-carol", scopeId("org", orgId()), "org_admin");
+  const demotedForm = await carols.form();
+  assert.equal(demotedForm.status, 403, "a former admin's link shows no form");
+  assert.match(demotedForm.text, /You can no longer set this brain's secret/);
+  assert.doesNotMatch(demotedForm.text, /brain\.acme\.example|personal memory/);
   const demoted = await carols.redeem("from-a-former-admin");
   assert.equal(demoted.status, 403);
   assert.match(JSON.parse(demoted.text).message, /no longer set this brain's secret/);
   assert.equal(await servedSecret(), "after-the-move-back");
-  const rows = JSON.stringify(await built.auditLog.events());
+  await built.memoryRegistry.update((record) =>
+    putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change),
+  );
+  assert.equal((await carols.form()).status, 403, "a former admin's link stays refused after the brain moves");
+  const rows = JSON.stringify(await built.auditLog.events(tenant));
   assert.match(rows, /memory-registry\.brain\.secret\.refused/);
   assert.equal(rows.match(/acme-personal: brain acme-personal changed after this link was made/g)?.length, 2);
+  assert.equal(rows.match(/acme-personal: you can no longer set this brain's secret: only an org admin/g)?.length, 3);
   assert.doesNotMatch(rows, /for-the-old-url|from-a-former-admin/);
 });
 
@@ -307,6 +319,7 @@ test("a member connects their own brain from chat and sets its secret through th
   assert.equal((await fetch(`${base}/v1/memory/brain`)).status, 401);
   assert.equal((await self("U-member", "PUT", own, { triggered: true })).status, 403);
   assert.equal((await self("U-member", "PUT", own, { liveActor: false })).status, 403);
+  assert.equal(JSON.parse((await self("U-member", "PUT", own, { runId: "finished-run" })).text).error, "inactive_run");
 
   const put = await self("U-member", "PUT", own);
   assert.equal(put.status, 200);
@@ -348,7 +361,7 @@ test("a member connects their own brain from chat and sets its secret through th
   );
   let rows = "";
   for (let waited = 0; waited < 2_000; waited += 20) {
-    rows = JSON.stringify(await built.auditLog.events());
+    rows = JSON.stringify(await built.auditLog.events(tenant));
     if (actions.every((action) => rows.includes(action))) break;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -405,4 +418,22 @@ test("a signed-in admin mints a brain link from the browser, and a signed-in mem
   const admin = await browserMint("admin-alice", brainDrop);
   assert.equal(admin.status, 200, admin.text);
   assert.match((JSON.parse(admin.text) as { formPath: string }).formPath, /^\/drop\//);
+});
+
+test("a brain link stays usable when saving the secret fails, and works once on the retry", async (t) => {
+  const { built, mint, servedSecret } = await setup(t);
+  const link = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "survive a save failure" });
+  const registry = built.memoryRegistry as unknown as Record<string, unknown>;
+  const update = registry.update;
+  registry.update = async () => {
+    throw new Error("registry unavailable");
+  };
+  try {
+    assert.equal((await link.redeem("brain-secret-retry")).status, 500);
+  } finally {
+    registry.update = update;
+  }
+  assert.equal((await link.redeem("brain-secret-retry")).status, 200);
+  assert.equal(await servedSecret(), "brain-secret-retry");
+  assert.equal((await link.redeem("brain-secret-again")).status, 404);
 });

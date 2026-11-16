@@ -223,7 +223,8 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
   const base = createExecSandboxBase({
     label: "baseten",
     prefix,
-    maxNameLength: MAX_NAME_LENGTH,
+    instanceName: async (scope, scratch) =>
+      sandboxScopeName(scratch ? `${prefix}-scratch` : prefix, scope, MAX_NAME_LENGTH),
     ...(opts.egressProxyUrl ? { egressProxyUrl: opts.egressProxyUrl } : {}),
     homeDir: HOME_DIR,
     defaultTimeoutSec,

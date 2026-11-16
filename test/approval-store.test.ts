@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createApprovalStore } from "../src/slack/approval-store.ts";
+import { createApprovalStore as createRoutedApprovalStore } from "../src/surfaces/approval-store.ts";
+import { slackApprovalCardRoute } from "../src/slack/approval-cards.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+
+type StoreArgs = Parameters<typeof createRoutedApprovalStore>;
+const createApprovalStore = (backing: StoreArgs[0], deliveries: StoreArgs[1]) =>
+  createRoutedApprovalStore(backing, deliveries, { slack: slackApprovalCardRoute });
 
 function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
   return {
@@ -123,4 +128,17 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
   const [delivery] = await deliveries.pending("principal");
   assert.equal(delivery?.destination.threadTs, undefined);
   assert.deepEqual(delivery?.destination.account, { id: "partner", workspace: "T1" });
+});
+
+test("a Slack-originated approval goes to the Slack author even when the actor is a linked non-Slack principal", async () => {
+  const deliveries = createDeliveryStore();
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+  const approval = record("dm:D1");
+  approval.request!.actor.externalId = "oidc:linked-principal";
+  approval.request!.surfaceOrigin = slackSurfaceOrigin({ accountId: "default", teamId: "T1", userId: "U9" });
+  await approvals.put("A1", approval);
+  const [delivery] = await deliveries.pending("principal");
+  assert.equal(delivery?.destination.target, "U9");
+  assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
+  assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
 });

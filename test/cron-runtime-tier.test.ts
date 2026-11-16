@@ -100,3 +100,19 @@ test("loops and cron-spawned subagents keep their purposes", () => {
   assert.equal(turnRuntimePurpose({ triggered: false, surface: "cron", infrequentCron: true }), undefined);
   assert.deepEqual(turnModelOptions({ triggered: true, surface: "loop", infrequentCron: true }), {});
 });
+
+test("a session's stored runtime serves turns with no model, below requested and purpose runtimes", async () => {
+  const config = await setup();
+  await config.setRuntimeSelection(SCOPE, { modelId: "gpt-6-luna", effortLevel: "medium" });
+  const resolve = (requested: Partial<RuntimeChoice>, purpose?: "cron", sessionModelId?: string) =>
+    resolveRuntimeChoice(config, ORG, SCOPE, fallback, requested, undefined, purpose, sessionModelId);
+  const turn = { effortLevel: "high" } as Partial<RuntimeChoice>;
+  assert.equal((await resolve(turn, undefined, "claude-opus-5-5")).modelId, "claude-opus-5-5");
+  assert.equal((await resolve(turn, undefined, "no-such-model-anywhere")).modelId, "gpt-6-luna");
+  assert.equal((await resolve(turn, undefined)).modelId, "gpt-6-luna");
+  assert.equal(
+    (await resolve({ ...turn, modelId: "claude-haiku-4-5" }, undefined, "claude-opus-5-5")).modelId,
+    "claude-haiku-4-5",
+  );
+  assert.equal((await resolve(turn, "cron", "claude-opus-5-5")).modelId, cronSetting.modelId);
+});

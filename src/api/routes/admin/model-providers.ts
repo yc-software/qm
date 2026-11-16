@@ -1,5 +1,4 @@
-import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
-import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
+import { isModelProvider, providerBaseUrl, type ModelProvider } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -53,7 +52,7 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
   if (!authorized) return;
   await ctx.deps.refreshModels?.();
   if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "model-providers.read",
     resource: "model-providers",
@@ -87,7 +86,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
   await ctx.deps.modelCredentials.set(provider, apiKey.trim(), authorized.id);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "model-providers.update",
     resource: provider,
@@ -104,7 +103,7 @@ export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {
   const provider = ctx.params.provider;
   if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
   await ctx.deps.modelCredentials.delete(provider, authorized.id);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "model-providers.delete",
     resource: provider,

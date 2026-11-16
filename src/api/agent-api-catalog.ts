@@ -1,8 +1,6 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { livePersonCapability } from "./artifact-share.ts";
-import { adminRoutes } from "./routes/admin.ts";
-import { unattendedGrantListing } from "./routes/admin/unattended-grants.ts";
-import { UNATTENDED_ADMIN_GRANTS } from "./control-service.ts";
+import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
+import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -24,7 +22,7 @@ interface AgentApiFamily {
 }
 
 const CONVERSATION_UPDATE =
-  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person.";
+  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?, unread?}; archive/unarchive, pin/unpin, rename (null title clears), set the sidebar color (#rrggbb; null clears), or mark read/unread. These are per-person.";
 
 const FAMILIES: AgentApiFamily[] = [
   {
@@ -112,7 +110,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). pinned:true on a channel: entry pins the persona there, so every conversation in that channel wears it and posts under its name and icon; a channel pins one persona at most",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most",
       },
       {
         method: "POST",
@@ -136,7 +134,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Any member can send any worker, itself included, a goal (not the root session); send a goal again to replace a running, paused or finished one.",
+      "Start a swarm only when the person explicitly asks for a swarm; a large or parallelizable task is not a request for one, so do that work yourself or with subagents. Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead (only in a swarm a person starts; a swarm a Slack bot starts never takes one, from the bot or from a person spawning into it, and always uses its own board). Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Any member can send any worker, itself included, a goal (not the root session); send a goal again to replace a running, paused or finished one.",
     routes: [
       {
         method: "GET",
@@ -148,7 +146,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,wake?,goal?} sends to explicit peer ids or all and wakes each recipient (wake:false leaves it in their mailboxes for their next turn); {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool (a new swarm only on an explicit request for a swarm); {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,wake?,goal?} sends to explicit peer ids or all and wakes each recipient (wake:false leaves it in their mailboxes for their next turn); {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
       },
     ],
   },
@@ -296,12 +294,6 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "chat about one held item — body {message}; the reply lands on the item's thread and may revise its proposal",
       },
-      {
-        method: "POST",
-        path: "/v1/loops/:id/events",
-        summary:
-          'report new messages in conversations already on the ledger — body {events:[{sourceKey, author:"owner"|"other", at, text?, from?}]}; each event is judged by the loop\'s work stage, which may close or redraft the item',
-      },
     ],
   },
   {
@@ -417,85 +409,85 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/apps (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/apps/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/apps/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/apps/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
     routes: [
       {
         method: "GET",
-        path: "/v1/deployments",
+        path: "/v1/apps",
         summary:
-          "list the published apps you can reach across scopes — each row carries your effective permission (read|write) and a ready-to-clone/push gitUrl; find deployment ids here for share / name / display-name / archive / git-url",
+          "list the published apps you can reach across scopes — each row carries your effective permission (read|write) and a ready-to-clone/push gitUrl; find app ids here for share / name / display-name / archive / git-url",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id",
+        path: "/v1/apps/:id",
         summary:
-          "inspect one deployment you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
+          "inspect one app you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/fetch",
+        path: "/v1/apps/:id/fetch",
         summary:
-          "read a deployment's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
+          "read an app's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/logs",
+        path: "/v1/apps/:id/logs",
         summary:
-          "recent runtime output (entrypoint stdout+stderr) of a running deployment you can reach — query tailLines (default 200, max 2000); returns {logs} (null when the provider keeps none)",
+          "recent runtime output (entrypoint stdout+stderr) of a running app you can reach — query tailLines (default 200, max 2000); returns {logs} (null when the provider keeps none)",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/git-url",
+        path: "/v1/apps/:id/git-url",
         summary:
-          "get an authed git remote URL for a deployment you can reach (clone its source; push a new version if you have write access) — returns {url, permission}",
+          "get an authed git remote URL for an app you can reach (clone its source; push a new version if you have write access) — returns {url, permission}",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/share",
+        path: "/v1/apps/:id/share",
         summary: "inspect access for an app you own (:id is its name or id) — returns {public, grantees}; owner-only",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/share",
+        path: "/v1/apps/:id/share",
         summary:
           'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/name",
+        path: "/v1/apps/:id/name",
         summary: "rename an app you manage — body {name} (its URL slug; must be unique)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/display-name",
+        path: "/v1/apps/:id/display-name",
         summary: "set an app's human-friendly display name — body {displayName} (empty clears it)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/always-on",
+        path: "/v1/apps/:id/always-on",
         summary:
           "keep an app you manage permanently warm — body {alwaysOn:true} exempts it from idle sleep so visitors never hit a cold start; {alwaysOn:false} returns it to the default sleep-when-idle",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/embed-ancestors",
+        path: "/v1/apps/:id/embed-ancestors",
         summary:
           "let named sites show an app you manage inside their page (iframe) — body {embedAncestors:[https origins, optionally https://*.example.com]}; list every frame between the app and the browser tab; [] forbids embedding again",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/connectors",
+        path: "/v1/apps/:id/connectors",
         summary:
           "publisher only, after they ask: lend an app they published their connected apps — body {connectors:[hosts]}; [] withdraws; broker use is in the publish skill",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/archive",
+        path: "/v1/apps/:id/archive",
         summary: "take down an app you manage (stops it and frees its endpoint; the source is kept)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/restore",
+        path: "/v1/apps/:id/restore",
         summary: "restore an archived app you manage by reapplying its current saved version",
       },
     ],
@@ -519,7 +511,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => livePersonCapability(v.claims) && !v.claims.triggered,
+    when: (v) => personAtKeyboard(v.claims),
     routes: [
       {
         method: "GET|PUT|DELETE",
@@ -688,7 +680,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (v) => v.isAdmin && livePersonCapability(v.claims),
     guidance:
-      "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the live admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
+      "Admin plane: you act AS this org admin — authorized per call under their own standing (a cron, webhook or loop fire carries its owner's authority just as a typed turn does), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       {
@@ -733,7 +725,7 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/crons|deployments|skills?scope=",
+        path: "/v1/admin/crons|apps|skills?scope=",
         summary: "artifacts by owning scope (DM or effective Open sharing)",
       },
       {
@@ -775,16 +767,6 @@ const FAMILIES: AgentApiFamily[] = [
   },
 ];
 
-const unattendedFamilies = (): AgentApiFamily[] =>
-  UNATTENDED_ADMIN_GRANTS.map((grant) => ({
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes(grant) === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: unattendedGrantListing(adminRoutes).flatMap((entry) =>
-      entry.grant === grant ? [{ method: entry.method, path: entry.path, summary: entry.summary }] : [],
-    ),
-  }));
-
 const WHOAMI_FOR_ALL: AgentApiFamily = {
   when: (v) => !(v.isAdmin && livePersonCapability(v.claims)),
   routes: [
@@ -804,6 +786,7 @@ export function renderAgentApis(
   claims: CapabilityClaims,
   admin: { isAdmin: boolean; role?: string },
   features: { swarmsEnabled: boolean; personasEnabled: boolean },
+  query = "",
 ): AgentApiListing {
   const view: AgentApiView = {
     claims,
@@ -811,7 +794,17 @@ export function renderAgentApis(
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };
-  const visible = [...FAMILIES, ...unattendedFamilies(), WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
+  const terms = searchTerms(query);
+  const visible = [...FAMILIES, WHOAMI_FOR_ALL]
+    .filter((f) => f.when?.(view) ?? true)
+    .filter(
+      (f) =>
+        !terms.length ||
+        matchesSearchTerms(
+          [f.guidance ?? "", ...f.routes.map((r) => `${r.method} ${r.path} ${r.summary}`)].join(" "),
+          terms,
+        ),
+    );
   return {
     actorId: claims.actorId,
     scopeId: claims.scopeId,

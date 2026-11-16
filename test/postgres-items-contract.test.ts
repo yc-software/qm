@@ -16,6 +16,7 @@ import {
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
@@ -36,7 +37,8 @@ async function withSchema(
   const schema = `${prefix}_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
+  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+  await seedTestTenant(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });
@@ -103,7 +105,7 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
     assert.equal((await store.getItems(session.id))[0]!.createdAt, user.createdAt);
     await assert.rejects(
       raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_tenant_id(), $1, 9, 'AgentMessage', 'x', '{}', now())",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_bound_tenant(), $1, 9, 'AgentMessage', 'x', '{}', now())",
         [session.id],
       ),
       /items_author_kind/,
@@ -211,6 +213,13 @@ test(
         ).rows[0];
         assert.deepEqual([Number(row.size), row.days], [Buffer.byteLength(full), 30]);
         assert.match(row.storage_key, /^tool-output\/[0-9a-f-]{36}\/files\/[0-9a-f]{64}$/);
+        await raw.query(
+          "SET session_replication_role = replica; UPDATE items SET created_at = now() - interval '31 days' WHERE call_id = 'toolu_short'; SET session_replication_role = origin",
+        );
+        assert.deepEqual(await outputs.read(session.id, parkedOutputKey("tool-output/toolu_short")!), {
+          expired: true,
+        });
+        assert.deepEqual(await outputs.read(session.id, parkedOutputKey(markerPath)!), { text: full });
       } finally {
         await pool.close();
         await rm(dir, { recursive: true, force: true });
@@ -231,9 +240,7 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
       body: { name: "Alice", slackReplyReceipt: true, deliveryKey: "k-1" },
     };
     await store.appendMany({ ...writer, turnId: randomUUID() }, [receipt]);
-    assert.equal(await store.hasDeliveryEntry(session.id, "k-1"), true);
-    assert.equal(await store.hasDeliveryEntry(session.id, "k-2", "2.0"), true);
-    assert.equal(await store.hasDeliveryEntry(session.id, "k-2", "3.0"), false);
+    assert.equal(await store.appendDelivery({ ...writer, turnId: randomUUID() }, receipt), false);
     const texts = async () =>
       (await store.getItems(session.id, { transcript: true })).map((item) => [
         item.text,
@@ -265,5 +272,33 @@ test("message-only transcript reads filter before pagination and retain visibili
       [answer.seq],
     );
     assert.deepEqual(await store.visibleItems(session.id, "outsider", { messagesOnly: true, limit: 1 }), []);
+  });
+});
+
+test("latest visible prompt excludes hidden continuations and automatic wakes", { skip }, async () => {
+  await withSchema("items_prompt", async ({ url }) => {
+    let at = 1000;
+    const store = createPostgresSessionStore(url, { now: () => ++at });
+    const session = await store.getOrCreateByThread("web:prompt", "dm", scopeId("personal", "alice"));
+    await store.addParticipant(session.id, "alice");
+    const writer = { sessionId: session.id };
+    const human = await store.append(writer, { kind: "UserMessage", text: "Start", body: { speakerId: "alice" } });
+    await store.append(writer, { kind: "UserMessage", text: "Continue", hidden: true, body: { speakerId: "alice" } });
+    await store.append(writer, { kind: "UserMessage", text: "Automatic wake", author: "alice" });
+    await store.append(writer, {
+      kind: "UserMessage",
+      text: "Overheard",
+      body: { overheard: true, speakerId: "alice" },
+    });
+    assert.equal(await store.latestVisiblePromptAt(session.id, "alice"), human.createdAt);
+    assert.equal(await store.latestVisiblePromptAt(session.id, "outsider"), undefined);
+    const steering = await store.append(writer, { kind: "SteeringMessage", text: "Next", author: "alice" });
+    assert.equal(await store.latestVisiblePromptAt(session.id, "alice"), steering.createdAt);
+    const receipt = await store.append(writer, {
+      kind: "UserMessage",
+      text: "Slack reply",
+      body: { slackReplyReceipt: true },
+    });
+    assert.equal(await store.latestVisiblePromptAt(session.id, "alice"), receipt.createdAt);
   });
 });

@@ -1,4 +1,5 @@
 import { test, before } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createPostgresEgressAuditSink } from "../src/admin/postgres-egress-audit-sink.ts";
 import { scopeId } from "../src/types.ts";
@@ -26,7 +27,7 @@ test(
 
     const now = Date.now();
     const clock = t.mock.method(Date, "now", () => now);
-    sink.record({
+    sink.record(testTenant, {
       source: "proxy",
       host: "api.github.com",
       allowed: true,
@@ -38,7 +39,7 @@ test(
       principalId: "U1",
     });
     clock.mock.mockImplementation(() => now + 1);
-    sink.record({
+    sink.record(testTenant, {
       source: "proxy",
       host: "pastebin.com",
       allowed: false,
@@ -48,9 +49,9 @@ test(
       scopeLabel: s2,
     });
     clock.mock.restore();
-    await settle(async () => (await sink.list({ limit: 100 })).length === 2);
+    await settle(async () => (await sink.list(testTenant, { limit: 100 })).length === 2);
 
-    const all = await sink.list({ limit: 100 });
+    const all = await sink.list(testTenant, { limit: 100 });
     assert.equal(all.length, 2, "both decisions persisted");
     assert.equal(all[0]!.ts, now + 1);
     assert.equal(all[1]!.ts, now);
@@ -60,7 +61,7 @@ test(
     assert.equal(all[0]!.peerIp, undefined, "an absent peerIp stays absent (not empty string)");
     assert.equal(all[0]!.principalId, undefined, "a per-scope (not per-principal) row keeps principalId absent");
 
-    const onlyS1 = await sink.list({ scopeId: s1, limit: 100 });
+    const onlyS1 = await sink.list(testTenant, { scopeId: s1, limit: 100 });
     assert.equal(onlyS1.length, 1, "scope filter narrows to one");
     assert.equal(onlyS1[0]!.host, "api.github.com");
     assert.equal(onlyS1[0]!.allowed, true);
@@ -68,16 +69,16 @@ test(
     assert.equal(onlyS1[0]!.peerIp, "140.82.121.6", "the pinned dial IP round-trips");
     assert.equal(onlyS1[0]!.principalId, "U1");
 
-    const onlySource = await sink.list({ source: "proxy", limit: 100 });
+    const onlySource = await sink.list(testTenant, { source: "proxy", limit: 100 });
     assert.equal(onlySource.length, 2, "source filter matches both proxy rows");
 
-    const future = await sink.list({ since: Date.now() + 60_000, limit: 100 });
+    const future = await sink.list(testTenant, { since: Date.now() + 60_000, limit: 100 });
     assert.equal(future.length, 0, "nothing at/after a future cutoff");
   },
 );
 
 test("pg egress-audit sink: survives a fresh sink over the same table (durability)", { skip }, async () => {
   const reopened = createPostgresEgressAuditSink(URL!);
-  const rows = await reopened.list({ limit: 100 });
+  const rows = await reopened.list(testTenant, { limit: 100 });
   assert.ok(rows.length >= 2, "decisions written by a prior sink instance are still readable");
 });

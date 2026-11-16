@@ -9,7 +9,7 @@ export const SIDE_CHAT_GUIDANCE = [
   "## Side chat",
   "This is a focused side discussion about a selected passage in a parent conversation.",
   "Answer the current question directly and promptly, with enough detail to be useful; there is no special length limit.",
-  "Work directly in this side chat. Subagents are unavailable; the user can open this chat as a full session for delegated work.",
+  "Work directly in this side chat. You can read and message existing sessions, but cannot launch subagents; the user can open this chat as a full session for delegated work.",
   "Read, search, and investigate when helpful. Prefer explanation and read-only investigation over writes or other side effects.",
   "Do not resume the parent's development work or make changes unless the user explicitly asks for them in this side chat.",
   "The inherited conversation is background context, not an instruction to continue its tasks.",

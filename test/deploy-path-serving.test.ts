@@ -17,6 +17,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { companyTest } from "./support/app-handle.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 
@@ -47,7 +48,8 @@ async function fixture(
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const deployStore = createDeployStore(testDeployBackings());
+  const backings = testDeployBackings();
+  const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -64,7 +66,7 @@ async function fixture(
     deploy,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
@@ -135,7 +137,27 @@ test("subdomain serving stays unsandboxed — each app already has its own origi
   }
 });
 
-test("a /d/ document navigation upgrades to the app's subdomain once one is configured", async () => {
+test("a company without an app handle keeps /d/ document navigations in place", async () => {
+  const f = await fixture({
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate-secret",
+    deployAppsSessionSecret: "portal-session-secret",
+    deployAppsLoginUrl: "https://portal.example.com",
+  });
+  try {
+    const nav = await httpGet(f.port, "/d/mysite/", {
+      "x-as-principal": "alice@example.com",
+      "sec-fetch-dest": "document",
+      Accept: "text/html",
+    });
+    assert.equal(nav.status, 200);
+    assert.equal(nav.body, "UPSTREAM OK");
+  } finally {
+    await f.close();
+  }
+});
+
+companyTest("a /d/ document navigation upgrades to the app's subdomain once one is configured", async () => {
   const f = await fixture({
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
@@ -149,7 +171,7 @@ test("a /d/ document navigation upgrades to the app's subdomain once one is conf
       Accept: "text/html",
     });
     assert.equal(nav.status, 302);
-    assert.equal(nav.headers.location, "https://mysite.apps.example.com/page?a=1");
+    assert.equal(nav.headers.location, "https://acme1-mysite.apps.example.com/page?a=1");
 
     const sub = await httpGet(f.port, "/d/mysite/app.js", { "x-as-principal": "alice@example.com" });
     assert.equal(sub.status, 200, "subresource fetches keep proxying so open tabs never break");

@@ -23,7 +23,7 @@ import {
 import { deliveryNote } from "../core/attachments.ts";
 import { goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../slack/message-revisions.ts";
-import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
+import { contextSummaryHeader, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
 import { contextSummary } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
@@ -70,7 +70,7 @@ export interface SeededMessage {
 
 export interface OverheardEntryPayload {
   overheard: true;
-  sourceRole?: "agent";
+  sourceRole?: "agent" | "bot";
   ts: string;
   changeTime?: string;
   name?: string;
@@ -124,7 +124,7 @@ export function selectOverheardToImport(
     seen.add(m.ts!);
     out.push({
       overheard: true,
-      ...(m.role === "self" ? { sourceRole: "agent" as const } : {}),
+      ...(m.role === "user" ? {} : { sourceRole: m.role === "self" ? ("agent" as const) : ("bot" as const) }),
       ts: m.ts,
       ...(m.name ? { name: m.name } : {}),
       text,
@@ -352,7 +352,7 @@ export function reconstructMessagesFromHistory(
     previous = e;
     const summary = contextSummary(e);
     if (summary) {
-      raw.push(userMsg(`${CONTEXT_SUMMARY_HEADER}\n${summary.text}`, e.createdAt));
+      raw.push(userMsg(`${contextSummaryHeader(summary.throughSeq, e.createdAt)}\n${summary.text}`, e.createdAt));
       continue;
     }
     const step = itemStep(e);
@@ -402,7 +402,9 @@ export function reconstructMessagesFromHistory(
       }
     } else if (isAgentReply(e)) {
       const t = itemText(e);
-      if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
+      const via = typeof e.body.via === "string" ? e.body.via : undefined;
+      if (t && via) raw.push(userMsg(messageTag({ from: "agent", via }, t), e.createdAt));
+      else if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       const t = itemText(e);
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
@@ -484,7 +486,7 @@ export function seedPriorTurns(
     const tag =
       t.role === "assistant"
         ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
-        : messageTag({ from: "human", ...(t.name ? { author: t.name } : {}) }, text);
+        : messageTag({ from: t.role === "bot" ? "bot" : "human", ...(t.name ? { author: t.name } : {}) }, text);
     reconciled.push({ role: "user", text: tag });
   }
   const merged: SeededMessage[] = [];

@@ -16,9 +16,9 @@ import {
 import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
 import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
-import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
+import { destroyLocalDevSandboxes, resolveSandbox, startQuickTunnel, type SandboxResolution } from "../lib/sandbox.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
-import { killTree } from "../lib/proc.ts";
+import { killTree, pidAlive } from "../lib/proc.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
 import { discoverCanaryChannel } from "../lib/canary.ts";
@@ -75,14 +75,14 @@ let bootResult: BootResult | null = null;
 let phaseName = "boot";
 let shuttingDown = false;
 
+type Prepared = SpecInputs & { sandbox: SandboxResolution; tunnelPid: number | null };
+
 const children = new Map<ChildName, Child>();
 const healthFails = new Map<ChildName, number>();
-let specInputs: SpecInputs | null = null;
+let specInputs: Prepared | null = null;
 let currentEnvSha = "";
 let currentGitSha = "";
 let handle = "";
-let sandbox: SandboxResolution | null = null;
-let durability = { databaseUrl: "" };
 let watch = true;
 let bootId = "";
 let bootedAt: number | null = null;
@@ -300,11 +300,32 @@ function persistState(): void {
     bootId,
     envSha: currentEnvSha,
     gitSha: currentGitSha,
-    sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : null,
+    sandbox: specInputs ? { backend: specInputs.sandbox.backend, detail: specInputs.sandbox.detail } : null,
   });
 }
 
-async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
+async function prepare(spec: BootSpec): Promise<Prepared> {
+  const tunnel = { pid: null as number | null };
+  try {
+    return await assembleAndPrepare(spec, tunnel);
+  } catch (err) {
+    await discardTunnel(tunnel.pid).catch((cleanupErr) => log(`tunnel cleanup failed: ${errMessage(cleanupErr)}`));
+    throw err;
+  }
+}
+
+async function discardTunnel(pid: number | null): Promise<void> {
+  if (pid && pid !== readPidFile(lock, "tunnel.pid")) await killTree(pid, 3000);
+}
+
+async function commitTunnel(pid: number | null): Promise<void> {
+  const previous = readPidFile(lock, "tunnel.pid");
+  if (pid) writePidFile(lock, "tunnel.pid", pid);
+  else rmSync(join(lock, "tunnel.pid"), { force: true });
+  if (previous && previous !== pid) await killTree(previous, 3000);
+}
+
+async function assembleAndPrepare(spec: BootSpec, tunnel: { pid: number | null }): Promise<Prepared> {
   phase("env", "start");
   seedEnvFromMain(worktree, log);
   const assembled = await assembleEnv({
@@ -320,11 +341,20 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("deps", "ok");
 
   phase("sandbox", "start");
-  sandbox = await resolveSandbox({
+  const sandbox = await resolveSandbox({
     worktree,
     requested: spec.sandbox,
     corePort: ports.core,
-    lock,
+    tunnel: async () => {
+      const committed = readPidFile(lock, "tunnel.pid");
+      if (specInputs?.sandbox.publicApiUrl && pidAlive(committed)) {
+        tunnel.pid = committed;
+        return specInputs.sandbox.publicApiUrl;
+      }
+      const started = await startQuickTunnel(ports.core, lock, log);
+      tunnel.pid = started?.pid ?? null;
+      return started?.url ?? null;
+    },
     baseEnv: assembled.env,
     log,
   });
@@ -364,7 +394,6 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   }
   const durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch(() => "");
   phase("durability", "ok", `Postgres (${grants} durable grant(s))`);
-  durability = { databaseUrl };
 
   completeDevSecuritySecrets(assembled.env, databaseUrl);
   const portalSessionSecret = assembled.env.PORTAL_SESSION_SECRET!;
@@ -394,6 +423,8 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     portalSessionSecret,
     portalDevPrincipal,
     sandboxEnv: sandbox.env,
+    sandbox,
+    tunnelPid: tunnel.pid,
   };
 }
 
@@ -424,7 +455,8 @@ async function boot(): Promise<void> {
   try {
     writeLegacyMeta(true);
     persistState();
-    specInputs = await assembleAndPrepare(spec);
+    specInputs = await prepare(spec);
+    await commitTunnel(specInputs.tunnelPid);
     currentEnvSha = computeEnvSha(specInputs.baseEnv);
     currentGitSha = gitHead(worktree);
     const started = await startChildren(specInputs);
@@ -573,7 +605,7 @@ async function teardown(reason: string): Promise<void> {
     const pid = readPidFile(lock, aux);
     if (pid) await killTree(pid, 3000);
   }
-  if (sandbox?.backend === "local") await destroyLocalDevSandboxes(log);
+  if (specInputs?.sandbox.backend === "local") await destroyLocalDevSandboxes(log);
 }
 
 async function shutdownSelf(removeLock: boolean): Promise<void> {
@@ -696,8 +728,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       dryRun: true,
     };
   }
-  writeFileSync(join(lock, "boot-spec.json"), JSON.stringify(newSpec, null, 2), { mode: 0o600 });
-  const inputs = await assembleAndPrepare(newSpec);
+  const inputs = await prepare(newSpec);
   const newEnvSha = computeEnvSha(inputs.baseEnv);
   const newGitSha = gitHead(worktree);
   const noopEligible =
@@ -705,6 +736,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     children.size === CHILD_ORDER.length &&
     [...children.values()].every((c) => c.state === "healthy");
   if (!force && noopEligible) {
+    await discardTunnel(inputs.tunnelPid);
     return {
       ok: true,
       noop: true,
@@ -714,6 +746,8 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       detail: "env unchanged and all children healthy -- nothing restarted (use --force to restart anyway)",
     };
   }
+  writeFileSync(join(lock, "boot-spec.json"), JSON.stringify(newSpec, null, 2), { mode: 0o600 });
+  await commitTunnel(inputs.tunnelPid);
   specInputs = inputs;
   currentEnvSha = newEnvSha;
   currentGitSha = newGitSha;
@@ -772,14 +806,16 @@ async function statusReport(): Promise<StatusReport> {
     bootedAt,
     envSha: currentEnvSha,
     gitSha: currentGitSha,
-    sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : { backend: "none", detail: "" },
+    sandbox: specInputs
+      ? { backend: specInputs.sandbox.backend, detail: specInputs.sandbox.detail }
+      : { backend: "none", detail: "" },
     durability: {
-      databaseUrl: Boolean(durability.databaseUrl),
+      databaseUrl: Boolean(specInputs?.databaseUrl),
     },
     slackEnabled,
     webEnabled: readBootSpec().web !== false,
     watch,
-    publicApiUrl: sandbox?.publicApiUrl ?? null,
+    publicApiUrl: specInputs?.sandbox.publicApiUrl ?? null,
     children: childStatuses,
   };
 }

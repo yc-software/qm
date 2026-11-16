@@ -103,7 +103,9 @@ hostname with a Let's Encrypt certificate, so this path needs no DNS record, no 
 certificate, and no ingress controller. Core is that public service: Porter routes its
 hostname to core's front door on port 8000, which serves sign-in, the web UI and the
 agent-facing API. Core's own API port, 8080, is not declared to Porter and stays
-private.
+private. Core's `terminationGracePeriodSeconds` is 60: its default 30-second
+`SHUTDOWN_DRAIN_MS` plus 30 seconds to close stores and flush error reports. Raise
+it to match if you lengthen the drain.
 
 Two things `porter apply` will not do for you:
 
@@ -175,7 +177,7 @@ principal with `AmazonEKSClusterAdminPolicy`, then `aws eks update-kubeconfig`.
 
 App serving is tiered so the zero-config path works first. With nothing set, every
 published app is reachable signed-in at `/d/<app>/` on the portal, private to its owner
-and whoever the deployment is shared with; proxied HTML is served under a sandbox CSP so
+and whoever the app is shared with; proxied HTML is served under a sandbox CSP so
 app code cannot act on the portal's origin. Setting `DEPLOY_APPS_DOMAIN` to a wildcard
 domain you control (e.g. `apps.example.com`, with `*.apps.example.com` pointed at the
 instance) upgrades every app to its own origin — `https://<app>.apps.example.com/` — with

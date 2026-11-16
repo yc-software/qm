@@ -324,6 +324,9 @@ test("pg config store: settings written on one core reach another core through r
   await a.setChannelHeaderPin(ch, true);
   await a.setApprovalGrantModes(ch, { session: false, always: true });
   await a.setOrgAmbient(false);
+  await a.setCompactionKeepPercent(25);
+  await a.setHistoryBudgetTokens(60_000);
+  await a.setRuntimeSelection(org, { modelId: "claude-opus-4-8" });
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
@@ -334,14 +337,22 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.getChannelHeaderPin(ch), true);
   assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
   assert.equal(b.getOrgAmbient(), false);
+  assert.deepEqual(
+    await b.getCompactionSettingsDurable(),
+    { keepPercent: 25, historyBudgetTokens: 60_000 },
+    "a runtime change keeps the org compaction settings",
+  );
 
   await a.setWebuiModels(ch, null);
   await a.setAckEmoji(ch, null);
   await a.setBrowseMaxSteps(ch, null);
+  await a.setCompactionKeepPercent(null);
+  await a.setHistoryBudgetTokens(null);
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
   assert.equal(b.getWebuiModels(ch), null);
   assert.equal(b.getAckEmoji(ch), null);
   assert.equal(b.getBrowseMaxSteps(ch), null);
+  assert.deepEqual(await b.getCompactionSettingsDurable(), { keepPercent: null, historyBudgetTokens: null });
 });

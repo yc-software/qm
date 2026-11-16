@@ -3,18 +3,17 @@ import { samePerson } from "../directory/person.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
-import { publicUrlOf, type Deployment } from "./deploy-store.ts";
-import { trimTrailingSlashes } from "../util/text.ts";
+import { appUrlOf, type PublishedApp } from "./deploy-store.ts";
 
-export async function notifyDeploymentShared(
+export async function notifyAppShared(
   deps: { deliveries?: Pick<DeliveryStore, "enqueue">; publicWebUrl?: string; deployAppsDomain?: string },
-  deployment: Deployment | Promise<Deployment | null>,
+  publishedApp: PublishedApp | Promise<PublishedApp | null>,
   scope: ScopeId,
   permission: Permission | null,
   by: string,
 ): Promise<void> {
   try {
-    const d = await deployment;
+    const d = await publishedApp;
     const grantee = parseScopeId(scope);
     if (
       !d ||
@@ -26,10 +25,7 @@ export async function notifyDeploymentShared(
     )
       return;
     const slug = d.name ?? d.id;
-    const url = deps.deployAppsDomain
-      ? `https://${slug}.${deps.deployAppsDomain}/`
-      : (publicUrlOf(d.endpoint) ??
-        (deps.publicWebUrl ? `${trimTrailingSlashes(deps.publicWebUrl)}/d/${slug}/` : undefined));
+    const url = appUrlOf(d, { sharedWebUrl: deps.publicWebUrl, appsDomain: deps.deployAppsDomain });
     await deps.deliveries.enqueue({
       destination: principalDestination(grantee.ref, by),
       text: `${by} gave you access to the app "${d.displayName ?? slug}"${permission === "write" ? " (you can also manage it)" : ""}.${url ? ` Open it: ${url}` : ""}`,

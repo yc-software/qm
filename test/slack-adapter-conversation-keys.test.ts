@@ -59,7 +59,7 @@ test("explicit DM threads remain separate from the unthreaded conversation", () 
   }
 });
 
-test("probablyResolved and image URLs survive parsing", () => {
+test("image URLs survive parsing and unknown flags are dropped", () => {
   const parsed = slackAdapter.parse(
     raw({
       probablyResolved: true,
@@ -69,7 +69,7 @@ test("probablyResolved and image URLs survive parsing", () => {
   );
   assert.ok(!("error" in parsed));
   const payload = parsed.sourcePayload as Record<string, unknown>;
-  assert.equal(payload.probablyResolved, true);
+  assert.equal(payload.probablyResolved, undefined);
   assert.deepEqual(payload.images, ["https://files.slack.com/a.png"]);
   const context = payload.context as Array<Record<string, unknown>>;
   assert.deepEqual(context[0]!.images, ["https://files.slack.com/b.png"]);

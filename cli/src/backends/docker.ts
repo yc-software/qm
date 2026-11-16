@@ -46,7 +46,6 @@ import {
   type DeploymentState,
 } from "../state.ts";
 
-/** Deployment-layer transport for docker: signed HTTP to the locally published core port. */
 export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
   urlOf: (config) => new URL(`http://127.0.0.1:${dockerBasePort(config)}/v1/deployment-layer`),
 });
@@ -97,22 +96,25 @@ function localAgentSource(): Buffer {
   return readFileSync(existsSync(source) ? source : packaged);
 }
 
-function ensureLocalSandboxImage(config: QmConfig): string {
-  const image = localSandboxImage(config);
-  if (config.sandbox?.image) return image;
-  const base = sandboxBaseRef();
+function builtFrom(image: string): string | undefined {
   try {
-    const labeled = capture("docker", [
+    return capture("docker", [
       "image",
       "inspect",
       "-f",
       '{{index .Config.Labels "qm.local-sandbox-base"}}',
       image,
     ]).trim();
-    if (labeled === base) return image;
   } catch {
-    // Build the local wrapper when it is absent or stale.
+    return undefined;
   }
+}
+
+function ensureLocalSandboxImage(config: QmConfig): string {
+  const image = localSandboxImage(config);
+  if (config.sandbox?.image) return image;
+  const base = sandboxBaseRef();
+  if (builtFrom(image) === base) return image;
   const dir = mkdtempSync(join(tmpdir(), "qm-local-sandbox-"));
   try {
     writeFileSync(join(dir, "agent.mjs"), localAgentSource());

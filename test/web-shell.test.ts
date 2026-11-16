@@ -18,6 +18,7 @@ import { browserSessionCookie, browserSessionDeps } from "./support/browser-sess
 function releaseFiles(files: Record<string, string | Buffer>): WebReleases {
   const read = (name: string) => (files[name] === undefined ? undefined : Buffer.from(files[name]));
   return {
+    live: async () => "release-a1",
     async document(name) {
       const body = read(name);
       if (!body) throw new Error(`fixture release has no ${name}`);
@@ -102,6 +103,15 @@ test("the app document carries the org's branding, the security headers and a CS
   assert.equal(manifest.name, "QM");
 });
 
+test("the app document and signed-in API responses name the live web UI release", async () => {
+  assert.match((await raw("/")).body.toString(), /<meta name="qm-release" content="release-a1" \/>/);
+  const anonymous = await fetch(`${coreBase}/me`);
+  assert.equal(anonymous.status, 401);
+  assert.equal(anonymous.headers.get("x-qm-release"), null);
+  const signedIn = await fetch(`${coreBase}/api/contexts`, { headers: { cookie: browserSessionCookie("alice") } });
+  assert.equal(signedIn.headers.get("x-qm-release"), "release-a1");
+});
+
 test("the app-edit page may be framed by its own app's subdomain only", async () => {
   const framed = await raw("/app-edit?slug=notes");
   assert.equal(framed.status, 200);
@@ -173,13 +183,4 @@ test("share pages render the frozen snapshot from core for their audience only",
     (await fetch(`${coreBase}/share/external/22222222-2222-4222-8222-222222222222/files/missing`)).status,
     404,
   );
-});
-
-test("a legacy connector callback lands on the keychain page with an error when core rejects it", async () => {
-  const page = await fetch(`${coreBase}/connectors/oauth/google/callback?code=forged&state=forged`, {
-    headers: { cookie: browserSessionCookie("alice") },
-  });
-  assert.equal(page.status, 400);
-  assert.equal(page.headers.get("x-frame-options"), "SAMEORIGIN");
-  assert.match(await page.text(), /url=\.\.\/\.\.\/\.\.\/\?view=keychain&amp;connector=google&amp;status=error/);
 });

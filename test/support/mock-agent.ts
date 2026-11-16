@@ -324,8 +324,8 @@ export function createMockAgent(): Agent {
         await record({ kind: "ToolCall", tool: "execute", body: { command: "check" } });
         await record({ kind: "ToolResult", tool: "execute", body: { ok: true } });
         usedTool = true;
-        silent = turn.pollFire === true;
-        reply = turn.pollFire ? "" : preamble;
+        silent = turn.replyOptional === true;
+        reply = turn.replyOptional ? "" : preamble;
       } else if (command0.startsWith("!phased-reply")) {
         await turn.onTextBlockStart?.("commentary");
         turn.onDelta?.("Checking.");
@@ -351,7 +351,7 @@ export function createMockAgent(): Agent {
         reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0 === "!finish-silent") {
         usedTool = true;
-        silent = turn.pollFire === true || turn.surfaceTools === true;
+        silent = turn.replyOptional === true || turn.surfaceTools === true;
         reply = silent ? "" : "Nothing to report; ending silently.";
         if (silent) {
           await record({ kind: "ToolCall", tool: "finish_silently" });
@@ -359,7 +359,7 @@ export function createMockAgent(): Agent {
         }
       } else if (command0 === "!finish-silent-approval") {
         usedTool = true;
-        silent = turn.pollFire === true || turn.surfaceTools === true;
+        silent = turn.replyOptional === true || turn.surfaceTools === true;
         reply = silent ? "" : "I couldn't finish one check, but nothing to report.";
         collected.push({ command: "gated-check", reason: "requires approval" });
       } else if (command0 === "!cachemiss") {
@@ -453,9 +453,18 @@ export function createMockAgent(): Agent {
         pausedOnApproval = true;
         usedTool = true;
         reply = `about to run it`;
+      } else if (command0 === "!approval-note") {
+        reply = turn.approvalUnavailable ?? "approvals available";
+      } else if (command0.startsWith("!paused-approval-quiet ")) {
+        const command = command0.slice("!paused-approval-quiet ".length);
+        await record({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
+        collected.push({ command, reason: "requires approval" });
+        pausedOnApproval = true;
+        usedTool = true;
+        reply = "";
       } else if (command0 === "!finish-silent-paused") {
         usedTool = true;
-        silent = turn.pollFire === true || turn.surfaceTools === true;
+        silent = turn.replyOptional === true || turn.surfaceTools === true;
         pausedOnApproval = true;
         collected.push({ command: "gated-check", reason: "requires approval" });
         reply = "";
@@ -607,10 +616,12 @@ export function createMockAgent(): Agent {
           }
         }
         await record({ kind: "ToolCall", tool: "attach", body: { files: paths } });
-        const r = await turn.tools.attach(paths);
+        const r = await turn.tools.attach(
+          paths.map((p) => (p.startsWith("file_id:") ? { file_id: p.slice("file_id:".length) } : p)),
+        );
         await record({ kind: "ToolResult", tool: "attach", body: r.ok ? { ok: true, files: r.files } : { ok: false } });
         usedTool = true;
-        if (tag === "!attachsilent ") silent = turn.pollFire === true;
+        if (tag === "!attachsilent ") silent = turn.replyOptional === true;
         reply = r.ok ? "" : `[not attached] ${r.message}`;
       } else if (command0.startsWith("!reachchan ")) {
         const rest = cmd.slice(cmd.indexOf("!reachchan ") + "!reachchan ".length);
@@ -680,7 +691,6 @@ export function createMockAgent(): Agent {
         usedTool = true;
         reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0.startsWith("!postfiles ")) {
-        // !postfiles <path>[,<path>...] <message>
         const rest = cmd.slice(cmd.indexOf("!postfiles ") + "!postfiles ".length);
         const sp = rest.indexOf(" ");
         const paths = (sp === -1 ? rest : rest.slice(0, sp)).split(",").filter(Boolean);
@@ -879,7 +889,7 @@ export function createMockAgent(): Agent {
       if (/!judge-outage\b/i.test(prompt)) return Promise.reject(new Error("mock judge outage"));
       const asked = /!engage-asked\b[:\s]*(.*)/i.exec(prompt);
       if (asked) {
-        const id = /^\[([^\]]+)\]/m.exec(prompt)?.[1];
+        const id = /<message id="([^"]+)"[^>]*trigger="true"/.exec(prompt)?.[1];
         return Promise.resolve(
           JSON.stringify({
             act: true,

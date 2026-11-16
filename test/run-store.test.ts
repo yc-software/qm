@@ -114,9 +114,6 @@ for (const backend of backends) {
 
   test(`[${backend.name}] same-instant submissions keep send order, and the claim takes the displayed head`, async () => {
     const { runs } = backend.make();
-    // Six enqueues inside (usually) one millisecond: createdAt ties, so FIFO here is only as
-    // real as the store's tie handling. Send order must survive, and the worker must take
-    // exactly the head the queue displays.
     const created = [];
     for (let i = 0; i < 6; i++) created.push((await runs.enqueue({ sessionId: "sT", request: turn(`m${i}`) })).run);
     const expected = created.map((r) => r.id);

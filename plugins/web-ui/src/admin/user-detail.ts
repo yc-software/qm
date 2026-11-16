@@ -133,7 +133,7 @@ export async function detail(page: AdminPage) {
           ${[
             ["history", `${d.stats?.sessions ?? 0} conversation${d.stats?.sessions === 1 ? "" : "s"}`],
             ["files", "Files"],
-            ["deployments", "Apps"],
+            ["apps", "Apps"],
             ["crons", "Crons"],
             ["skills", "Skills"],
             ["memory", "Memory"],

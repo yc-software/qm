@@ -550,10 +550,10 @@ describe("directory group upsert", () => {
   it("makes a just-opened group resolvable and its members visible at once", async () => {
     const store = createPostgresDirectoryStore(testDatabaseUrl());
     await store.replaceGroups([]);
-    assert.equal((await store.resolveGroupByParticipants(["a", "b"])).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants(["a", "b"], "slack")).kind, "none");
 
-    await store.upsertGroup("C-new", ["a", "b"]);
-    assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"]), { kind: "one", groupId: "C-new" });
+    await store.upsertGroup("C-new", ["a", "b"], "slack");
+    assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"], "slack"), { kind: "one", groupId: "C-new" });
     assert.equal(await store.groupMember("C-new", "a"), true);
     assert.equal(await store.groupMember("C-new", "c"), false);
   });

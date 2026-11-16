@@ -1,4 +1,5 @@
 import { createPostgresNotifyBus, MAX_NOTIFY_PAYLOAD_BYTES } from "../persistence/postgres-notify-bus.ts";
+import { boundTenant } from "../tenants/context.ts";
 import type { SessionStateBus, SessionStateEvent } from "./session-state-bus.ts";
 
 const CHANNEL = "session_state";
@@ -12,7 +13,8 @@ export function encodeWirePayload(event: SessionStateEvent, maxBytes = MAX_NOTIF
 }
 
 export function createPostgresSessionStateBus(connectionString: string): SessionStateBus {
-  return createPostgresNotifyBus<SessionStateEvent>(connectionString, CHANNEL, "session-state", (event) =>
+  const bus = createPostgresNotifyBus<SessionStateEvent>(connectionString, CHANNEL, "session-state", (event) =>
     encodeWirePayload(event),
   );
+  return { ...bus, emit: (event) => bus.emit({ ...event, tenantId: event.tenantId ?? boundTenant() }) };
 }

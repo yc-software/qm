@@ -210,7 +210,7 @@ test("the whole snapshot is bounded by one deadline", async () => {
   fill(a.home, "data.bin", 4096 * 4);
   const slow: HomeSnapshotSessionIo<Box> = {
     ...io,
-    readFileBytes: (b, abs) => new Promise((res) => setTimeout(() => res(io.readFileBytes(b, abs)), 40)),
+    readFileBytes: (b, abs) => new Promise((res) => setTimeout(() => res(io.readFileBytes(b, abs)), 400)),
   };
   const rec = recordingStore();
   const snap = createHomeSnapshotOps<Box>({
@@ -221,9 +221,10 @@ test("the whole snapshot is bounded by one deadline", async () => {
     store: rec.store,
     io: slow,
     partBytes: 4096,
-    timeoutMs: 60,
+    timeoutMs: 1000,
   });
-  await assert.rejects(() => snap.snapshotHome("scope", a), /timed out|exceeded 60ms/);
+  await assert.rejects(() => snap.snapshotHome("scope", a), /timed out|exceeded 1000ms/);
+  assert.ok(rec.parts.length < 4, `uploaded ${rec.parts.length} parts`);
   assert.equal(rec.completed, 0);
   assert.equal(rec.aborted, 1);
 });

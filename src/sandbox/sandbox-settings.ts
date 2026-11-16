@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { parseRenderSandboxImage, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
@@ -197,6 +198,7 @@ interface RenderSandboxEnv {
   apiKey?: string;
   workspaceId?: string;
   image?: string;
+  egressProxyUrl?: string;
   defaultTimeoutSec?: number;
 }
 
@@ -208,6 +210,7 @@ function renderSandboxEnv(env: NodeJS.ProcessEnv): RenderSandboxEnv {
     ...(env.RENDER_API_KEY?.trim() ? { apiKey: env.RENDER_API_KEY.trim() } : {}),
     ...(env.RENDER_WORKSPACE_ID?.trim() ? { workspaceId: env.RENDER_WORKSPACE_ID.trim() } : {}),
     ...(image ? { image } : {}),
+    ...egressProxyFor(env, "render"),
     ...(defaultTimeoutSec !== undefined ? { defaultTimeoutSec } : {}),
   };
 }
@@ -434,6 +437,29 @@ function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
   };
 }
 
+export function superserveGenerationKey(
+  ss: SuperserveSandboxEnv,
+  buildSha: string | undefined,
+  keepWarmSec: number,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        buildSha ?? "",
+        ss.template,
+        ss.namePrefix ?? "",
+        ss.homeDir ?? "",
+        ss.idlePauseSec ?? null,
+        ss.retentionSec ?? null,
+        keepWarmSec,
+        [...(ss.egressAllow ?? [])].sort(),
+        [...(ss.egressDeny ?? [])].sort(),
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 32);
+}
+
 export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendName[] {
   const credentialed: Record<SandboxBackendName, boolean> = {
     local: Boolean(config.localSandbox?.image),
@@ -441,7 +467,7 @@ export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendN
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
     agent37: Boolean(config.agent37Sandbox?.apiKey),
     baseten: Boolean(config.basetenSandbox?.apiKey && config.basetenSandbox?.image),
-    superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
+    superserve: Boolean(config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
@@ -481,7 +507,7 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
 
 function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
   if (
-    ["sprites", "e2b", "modal", "smolmachines", "porter"].includes(env.SANDBOX_BACKEND ?? "") &&
+    ["sprites", "e2b", "modal", "smolmachines", "porter", "render"].includes(env.SANDBOX_BACKEND ?? "") &&
     !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
   ) {
     console.warn(

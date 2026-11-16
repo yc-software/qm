@@ -120,6 +120,18 @@ async function cronWakeOrigin(
   };
 }
 
+export async function cronOrigins(app: App, refs: readonly (string | undefined)[]): Promise<Map<string, Cron>> {
+  const ids = [
+    ...new Set(
+      refs.flatMap((ref) => {
+        const wake = parseSessionWakeRef(ref);
+        return wake?.trigger === "cron" ? [wake.sourceId] : [];
+      }),
+    ),
+  ];
+  return new Map((await app.listCrons(ids)).map((cron) => [cron.id, cron]));
+}
+
 export async function sessionOrigin(
   app: App,
   session: Pick<Session, "threadRef" | "scopeId">,
@@ -144,13 +156,14 @@ export async function deliveryOrigin(
   app: App,
   delivery: Delivery,
   requestedScope: string,
+  cronLookup?: Map<string, Cron>,
 ): Promise<AdminOrigin | null> {
   const provenance = delivery.provenance;
   const parsed = parseWakeFireKey(provenance?.fireKey ?? delivery.idempotencyKey);
   const trigger = parsed?.trigger ?? provenance?.trigger;
   if (!trigger || trigger === "conversation") return null;
   if (trigger === "cron" && parsed?.trigger === "cron")
-    return cronWakeOrigin(app, parsed, requestedScope, requestedScope);
+    return cronWakeOrigin(app, parsed, requestedScope, requestedScope, cronLookup);
   return {
     kind: "background_wake",
     label: wakeTriggerLabel(trigger),

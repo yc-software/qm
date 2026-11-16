@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
-import { factLine, normalizeClaim, type MemoryCandidate, type MemorySource } from "./facts.ts";
+import { factLine, fromOtherSession, normalizeClaim, type MemoryCandidate, type MemorySource } from "./facts.ts";
 import { quotedData, untrustedText } from "../util/text.ts";
 
 export interface RecalledFact {
@@ -48,7 +48,11 @@ export async function recallAcrossScopes(
   if (!budget) return [];
   const unique = [...new Set(scopes)];
   const batches = await Promise.all(
-    unique.map(async (scope) => (await memory.recall(scope, context)).map((row) => ({ ...row, scope }))),
+    unique.map(async (scope) =>
+      (await memory.recall(scope, context))
+        .filter((row) => fromOtherSession(row, context.sessionId))
+        .map((row) => ({ ...row, scope })),
+    ),
   );
   const picked: RecalledFact[] = [];
   const blocks = new Set<string>();

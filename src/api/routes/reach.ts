@@ -1,17 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { collectNamedOutbound, parseOutboundFiles, type ArtifactRegistration } from "../../core/attachments.ts";
 import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
+  BotComputerRefusedError,
+  botMayUseComputers,
+  defaultComputer,
   SandboxAccessError,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
 import { resolveEnvironmentId } from "../../environments/environment-store.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { scopeId, type OutgoingAttachment } from "../../types.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 
 type ReachBody = {
   recipient?: unknown;
@@ -166,6 +170,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           seed: `reach:${randomUUID()}`,
           onError: (e) =>
             deps.errors?.record(
+              tenantOf(ctx),
               {
                 category: "file_store",
                 code: "register_failed",
@@ -176,6 +181,13 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
             ),
         }
       : undefined;
+    const botMayUse = capability.botActor
+      ? botMayUseComputers(app.swarms, {
+          actorId: capability.actorId,
+          threadRef: capability.threadRef ?? "",
+          sessionId: capability.sessionId ?? "",
+        })
+      : undefined;
     let resource: SandboxResource | undefined;
     if (requestedSandboxId) {
       try {
@@ -184,13 +196,24 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           capability.actorId,
           requestedSandboxId,
           (scope) => scope === capability.scopeId || scope === envScope,
+          botMayUse,
         );
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, {
           error: "forbidden",
-          message: "sandbox_id isn't a computer this conversation can read files from",
+          message:
+            e instanceof BotComputerRefusedError
+              ? e.message
+              : "sandbox_id isn't a computer this conversation can read files from",
         });
+      }
+    } else if (needsSandbox) {
+      try {
+        resource = await defaultComputer(deps.sandboxResources, envScope, botMayUse);
+      } catch (e) {
+        if (!(e instanceof SandboxAccessError)) throw e;
+        return sendJson(res, 403, { error: "forbidden", message: e.message });
       }
     }
     let provisioned: Promise<SandboxHandle> | undefined;
@@ -202,7 +225,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         : sandbox!.provision(envScope));
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
-        app.openFileForViewer(id, capability.actorId),
+        app.openFileForViewer(tenantOf(ctx), id, capability.actorId, isOwnScopeBotWork(capability)),
       );
       const bad = [
         ...r.missing.map((p) => `${p} (not found)`),
@@ -240,6 +263,10 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     ...(attachments?.length ? { attachments } : {}),
     ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
     ...(capability.destination ? { currentDestination: capability.destination } : {}),
+    turn: {
+      ...(capability.surface ? { surface: capability.surface } : {}),
+      liveReplies: capability.liveReplies === true,
+    },
   });
   if (!result.ok) {
     return sendJson(res, result.status, {

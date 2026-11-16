@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isTenantId } from "../../chassis/src/tenant.ts";
 import { deriveKey, open, randomToken, safeEqual, seal, type SessionClaims } from "./session.ts";
 
 export const DESKTOP_LAUNCH_SCRIPT = `window.location.href = document.getElementById("desktop-launch").href;`;
@@ -24,6 +25,7 @@ export function mintDesktopLogin(
       sub: session.sub,
       org: session.org,
       name: session.name,
+      t: session.t,
       auth: session.auth ?? session.iat,
       sessionExp: session.exp,
       challenge,
@@ -53,6 +55,7 @@ export function openDesktopLogin(
     !p ||
     p.k !== "desktop-login" ||
     p.appOnly !== undefined ||
+    (p.t !== undefined && !isTenantId(p.t)) ||
     p.aud !== origin ||
     p.org !== org ||
     typeof p.sub !== "string" ||
@@ -89,6 +92,7 @@ export function openDesktopLogin(
     iat: now,
     exp: p.sessionExp,
     ...(typeof p.name === "string" ? { name: p.name } : {}),
+    ...(typeof p.t === "string" ? { t: p.t } : {}),
   };
   return { session, jti: p.jti, expiresAtMs: p.exp * 1000 };
 }

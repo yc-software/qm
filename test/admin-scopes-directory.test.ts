@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -42,7 +43,7 @@ test("the scope directory starts independent resource reads together", async () 
     };
   const app = s.built.app;
   app.listCrons = hold("crons", app.listCrons.bind(app));
-  app.listDeployments = hold("deployments", app.listDeployments.bind(app));
+  app.listApps = hold("deployments", app.listApps.bind(app));
   app.listSkills = hold("skills", app.listSkills.bind(app));
   app.listEnvironments = hold("environments", app.listEnvironments.bind(app));
   const request = fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN });
@@ -105,7 +106,7 @@ test("the admin scope directory lists every known scope with labels and counts (
       "org_admin-only",
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "scopes.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "scopes.read"),
       "the directory read is audited",
     );
   } finally {

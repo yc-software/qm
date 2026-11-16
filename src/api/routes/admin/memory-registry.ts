@@ -60,7 +60,7 @@ export async function writeRegistry(
     const record = await registry.update((current) =>
       write.apply(current, { actor, now: Date.now(), overlayIds: registry.overlayIds, key: registry.key }),
     );
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: actor,
       action: write.action,
       resource: write.resource,
@@ -94,7 +94,7 @@ async function read(ctx: ApiCtx, pick?: (full: ReturnType<typeof view>) => objec
   const authorized = await registryAdmin(ctx);
   if (!authorized) return;
   const { actor, registry } = authorized;
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "memory-registry.read",
     resource: ctx.params.id ?? "memory-registry",

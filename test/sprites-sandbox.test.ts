@@ -1,8 +1,6 @@
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { inspect } from "node:util";
 import {
   createSpritesSandbox,
@@ -103,11 +101,13 @@ test("file roundtrip incl. large binary and missing file goes through the filesy
 
 test("a file write lands on a temp path and is renamed into place, never streamed into the target", async () => {
   const h = await sandbox.provision(scope);
-  await sandbox.writeFile(h, "cfg.txt", "value\n");
-  assert.equal(await sandbox.readFile(h, "cfg.txt"), "value\n");
-  const write = fake.calls.find((c) => c.method === "PUT" && c.path.includes("cfg.txt"));
+  const name = "a".repeat(255);
+  const before = fake.calls.length;
+  await sandbox.writeFile(h, name, "value\n");
+  assert.equal(await sandbox.readFile(h, name), "value\n");
+  const write = fake.calls.slice(before).find((c) => c.method === "PUT" && c.path.includes("/fs/write?"));
   assert.ok(write, "expected a filesystem write");
-  assert.match(write!.path, /cfg\.txt\.part\./, "the payload lands on a temp path");
+  assert.ok(!write!.path.includes(name), "the payload lands on a temp path");
   const writeIdx = fake.calls.indexOf(write!);
   assert.ok(
     fake.calls.slice(writeIdx).some((c) => c.method === "POST" && c.path.endsWith("/fs/rename")),
@@ -182,7 +182,6 @@ test("scope names fit the 63-char provider limit for long prefixes, scratch incl
     }
     assert.notEqual(sandboxScopeName(prefix, scope), sandboxScopeName(`${prefix}-scratch`, scope));
   }
-  // Names that already fit are unchanged, so existing resident computers keep their identity.
   assert.equal(sandboxScopeName("qmt", "person:tester"), "qmt-person-tester-7b537e");
   assert.match(
     sandboxScopeName("qm-long-generic-fleet-tenant-prefix", "person:tester"),
@@ -362,6 +361,47 @@ test("a checkpoint failure is reported and never fails the teardown", async () =
   assert.ok(fake.checkpoints(h.id).length <= 1);
 });
 
+test("a failed checkpoint waits out the interval before it is tried again, across core restarts", async () => {
+  const events: Array<{ code: string }> = [];
+  const options = { initializationStore: testMap(), onError: (e: { code: string }) => events.push(e) };
+  const s = make(options);
+  const h = await s.provision(scope);
+  fake.failCheckpoints(h.id, "Failed to create checkpoint: rename clone: file exists");
+  const attempts = () => fake.calls.filter((c) => c.method === "POST" && c.path.endsWith(`/${h.id}/checkpoint`));
+  await s.teardown(h);
+  await s.teardown(h);
+  const restarted = make(options);
+  await restarted.teardown(await restarted.provision(scope));
+  assert.equal(attempts().length, 1, "the failed attempt throttles the next teardowns, in this core and the next");
+  assert.deepEqual(
+    events.map((e) => e.code),
+    ["checkpoint_failed"],
+  );
+});
+
+test("a run of checkpoint failures is reported once, and again after a success", async () => {
+  const events: Array<{ code: string; message: string }> = [];
+  const s = make({ checkpointIntervalMs: 1, onError: (e: { code: string; message: string }) => events.push(e) });
+  const h = await s.provision(scope);
+  const failures = () => events.filter((e) => e.code === "checkpoint_failed");
+  fake.failCheckpoints(h.id, "file exists");
+  for (let i = 0; i < 3; i++) {
+    await sleep(5);
+    await s.teardown(h);
+  }
+  assert.equal(failures().length, 1, "repeats of the same failure run are not reported again");
+  assert.match(failures()[0]!.message, /file exists/);
+  fake.failCheckpoints(h.id);
+  await sleep(5);
+  await s.teardown(h);
+  assert.equal(fake.checkpoints(h.id).length, 1, "the checkpoint is retried and succeeds once the provider recovers");
+  fake.failCheckpoints(h.id, "fetch failed");
+  await sleep(5);
+  await s.teardown(h);
+  assert.equal(failures().length, 2, "a new failure after a success is reported");
+  assert.match(failures()[1]!.message, /fetch failed/);
+});
+
 test("computerStatus reports checkpoint recovery and a healthy machine whose shell has stopped answering", async () => {
   const h = await sandbox.provision(scope);
   const fresh = await sandbox.computerStatus!(scope);
@@ -484,57 +524,6 @@ test("exec diagnostics keep the provider's transport reason but not its URL or r
       return true;
     });
   }
-});
-
-test("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
-  const h = await sandbox.provision(scope);
-  const bare = await sandbox.run(h, "echo ok");
-  assert.equal(bare.pressure, undefined);
-
-  fake.setPressure(h.id, { full10: 85.17, full60: 86.14, load1: 30.78 });
-  const r = await sandbox.run(h, "echo ok");
-  assert.equal(r.code, 0);
-  assert.deepEqual(r.pressure, { ioFull10: 85.17, ioFull60: 86.14, load1: 30.78 });
-});
-
-test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
-  const events: Array<{ code: string }> = [];
-  const s = make({ onError: (e: { code: string }) => events.push(e) });
-  const h = await s.provision(scope);
-
-  fake.setPressure(h.id, { full10: 90, full60: 88, load1: 25 });
-  await s.run(h, "echo a");
-  await s.run(h, "echo b");
-  assert.deepEqual(
-    events.filter((e) => e.code === "io_pressure_high").length,
-    1,
-    "a continuing episode records exactly one event",
-  );
-
-  fake.setPressure(h.id, { full10: 5, full60: 5, load1: 1 });
-  await s.run(h, "echo c");
-  fake.setPressure(h.id, { full10: 90, full60: 88, load1: 25 });
-  await s.run(h, "echo d");
-  assert.equal(events.filter((e) => e.code === "io_pressure_high").length, 2, "a new episode records again");
-});
-
-test("computerStatus carries guest pressure alongside the health check", async () => {
-  const h = await sandbox.provision(scope);
-  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
-  const s = await sandbox.computerStatus!(scope);
-  assert.equal(s.machine, "healthy");
-  assert.equal(s.guestResponsive, true);
-  assert.deepEqual(s.pressure, { ioFull10: 60, ioFull60: 55, load1: 8 });
-});
-
-test("a garbled pressure read never costs the caller a completed command's result", async () => {
-  const h = await sandbox.provision(scope);
-  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
-  writeFileSync(join(fake.homeDir(h.id), ".proc-loadavg"), "");
-  const r = await sandbox.run(h, "echo survived");
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout.trim(), "survived");
-  assert.equal(r.pressure, undefined, "partial telemetry is dropped, not surfaced or fatal");
 });
 
 test("concurrent restart calls for one sprite collapse into sequential requests", async () => {

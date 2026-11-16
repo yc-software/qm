@@ -50,7 +50,6 @@ test("searchSnippet clips long text around the first match", () => {
 });
 
 test("searchSnippet anchors on a word-prefix match, not a mid-word substring", () => {
-  // "art" appears mid-word ("smart") long before the real word-prefix hit ("artichoke").
   const filler = "x".repeat(300);
   const text = `a smart plan ${filler} we planted artichoke rows ${filler}`;
   const snip = searchSnippet(text, ["art"]);

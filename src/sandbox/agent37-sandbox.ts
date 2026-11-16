@@ -6,7 +6,13 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
+import {
+  createExecExport,
+  createBackendBlobStaging,
+  createExecFileOps,
+  posixJoin,
+  tempPathBeside,
+} from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
@@ -350,7 +356,7 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
-    const part = `${absPath}.${randomUUID().slice(0, 8)}.part`;
+    const part = `${tempPathBeside(absPath)}.part`;
     const b64 = Buffer.from(data).toString("base64");
     const mk = await postExec(name, `mkdir -p "$(dirname ${shq(absPath)})" && : > ${shq(part)}`, 60);
     if (mk.exit_code !== 0) throw new Error(`agent37 write ${absPath}: mkdir failed (${mk.exit_code})`);

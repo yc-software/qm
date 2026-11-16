@@ -1,10 +1,6 @@
 # Execution credential QA
 
-The retired command-scoped credential flag is removed from Customize → Feature flags. The screenshots show the real admin page against a local development instance with synthetic data.
-
-| Before                                       | After                                   |
-| -------------------------------------------- | --------------------------------------- |
-| ![Old credential rollout option](before.png) | ![Remaining feature options](after.png) |
+The retired command-scoped credential flag is removed from Customize → Feature flags.
 
 Live Slack QA used Firefox, a real model, local Docker/Postgres, and credentials containing disposable synthetic values with no authority:
 

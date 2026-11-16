@@ -37,6 +37,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
@@ -116,6 +117,49 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
     purpose: "other room",
   });
   assert.equal(elsewhere.existing, false, "a different scope is a different ask");
+});
+
+test("a bot's credential request and a person's in the same thread stay separate asks", async () => {
+  const k = kcAt(() => 1_000_000);
+  const cred = await k.save(GH);
+  const base = {
+    credentialId: cred.id,
+    requesterScopeId: "channel:C1" as const,
+    purpose: "deploy the release",
+    requesterThreadRef: "ch:C1-t1",
+  };
+  const person = await k.createAsk({ ...base, requesterId: "U_BOB" });
+  const bot = await k.createAsk({ ...base, requesterId: "U_RELEASEBOT", botActor: true });
+  assert.equal(bot.existing, false);
+  assert.notEqual(bot.ask.id, person.ask.id);
+  assert.equal(bot.ask.requesterId, "U_RELEASEBOT");
+  assert.equal(bot.ask.botActor, true);
+  const botAgain = await k.createAsk({ ...base, requesterId: "U_RELEASEBOT", botActor: true });
+  assert.equal(botAgain.ask.id, bot.ask.id);
+  const personAgain = await k.createAsk({ ...base, requesterId: "U_CAROL" });
+  assert.equal(personAgain.ask.id, person.ask.id);
+});
+
+test("a bot task's declined request survives pruning beside a newer person request in the same thread", async () => {
+  let now = 1_000_000;
+  const k = kcAt(() => now++);
+  const credential = await k.save(GH);
+  const base = {
+    credentialId: credential.id,
+    requesterScopeId: "channel:C1" as const,
+    requesterThreadRef: "ch:C1-t1",
+    purpose: "deploy the release",
+  };
+  const bot = { ...base, requesterId: "U_RELEASEBOT", botActor: true, triggered: true };
+  const { ask } = await k.createAsk(bot);
+  await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
+  await k.createAsk({ ...base, requesterId: "U_BOB" });
+  const sweep = createAskExpirySweep({ keychain: k, fire: async () => undefined });
+  await sweep(now);
+  now += ASK_PRUNE_AFTER_MS + 1;
+  await sweep(now);
+  assert.equal((await k.getAsk(ask.id))?.status, "declined");
+  await assert.rejects(k.createAsk(bot), (e: KeychainError) => e.status === 409);
 });
 
 test("personal cron asks deduplicate recurring fires without combining jobs or re-asking after denial", async () => {
@@ -593,18 +637,22 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.app.upsertDirectory([
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
+      { principalId: "U_RELEASE_BOT", displayName: "Release bot", type: "internal" },
     ]);
     await built.app.upsertChannels(
       [
         { channelId: "C_INFRA", name: "infra", isPrivate: true },
         { channelId: "C_NOALICE", name: "no-alice", isPrivate: true },
         { channelId: "C_PUBLIC", name: "public-room" },
+        { channelId: "C_RELEASE", name: "release", isPrivate: true },
       ],
       [
         { channelId: "C_INFRA", principalId: "U_ALICE" },
         { channelId: "C_INFRA", principalId: "U_BOB" },
         { channelId: "C_NOALICE", principalId: "U_BOB" },
         { channelId: "C_PUBLIC", principalId: "U_BOB" },
+        { channelId: "C_RELEASE", principalId: "U_ALICE" },
+        { channelId: "C_RELEASE", principalId: "U_RELEASE_BOT" },
       ],
     );
     approvals = createKeychainApprovals({
@@ -621,9 +669,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       keychain: built.keychain,
       keychainApprovals: approvals,
       deliveries: built.deliveries,
+      admin: built.admin,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
+      runs: liveRunStore(built.runs),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -882,14 +932,15 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     const environment = String(resolution[0]!.body.environment);
     const listSystems = async () =>
       (await built.sessions.listLlmRequests(session!.id)).map((r) => (r.promptEnvelope as { system: string }).system);
-    await waitFor(async () => ((await listSystems()).at(-1)?.includes(`\`github:${gh.id}\``) ? [true] : []));
+    await waitFor(async () => ((await listSystems()).length > 1 ? [true] : []));
     const systems = await listSystems();
     assert.ok(
       !prompt.includes(ask.id) && !prompt.includes(grant.id) && !prompt.includes(gh.id),
       "no ids in the resume text",
     );
     assert.ok(!systems[0]!.includes(`\`github:${gh.id}\``), "no handle before the approval");
-    assert.ok(systems.at(-1)!.includes(`\`github:${gh.id}\``), "the approved handle reaches the system prompt");
+    assert.equal(systems.at(-1), systems[0], "the system prompt stays byte-identical across the approval");
+    assert.ok(environment.includes(`\`github:${gh.id}\``), "the approved handle reaches the turn's environment note");
     assert.ok(
       !environment.includes(grant.id) && !systems.at(-1)!.includes(grant.id),
       "grant ids stay out of the prompt",
@@ -934,6 +985,37 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal((await decide(made.ask.id, "U_ALICE", "once")).ask.status, "declined", "a decided card stays decided");
   });
 
+  it("a credential request a Slack bot's turn makes resumes as the bot's work", async () => {
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "release-signing", secret: "s" }, await capFor("U_ALICE"))
+    ).json()) as any;
+    const threadRef = "ch:C_RELEASE-thread";
+    const made = (await (
+      await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "sign the release" },
+        await capFor("U_RELEASE_BOT", "channel:C_RELEASE", {
+          threadRef,
+          destination: { type: "slack", target: "C_RELEASE", audienceScopeId: "channel:C_RELEASE" },
+          botActor: true,
+        }),
+      )
+    ).json()) as any;
+    await decide(made.ask.id, "U_ALICE", "deny");
+    const [run] = await waitFor(() => built.runs.list({ threadRef }));
+    assert.equal(run?.request.botActor, true);
+  });
+
+  it("bot work in a person's name can't ask for a person's credential", async () => {
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "deploy-key", secret: "s" }, await capFor("U_ALICE"))
+    ).json()) as any;
+    await built.users.record({ id: "U_BOB", source: "turn", at: Date.now() });
+    const floored = await capFor("U_BOB", "channel:C_INFRA", { botActor: true });
+    const res = await post("/v1/keychain/asks", { credential: credential.id, purpose: "deploy" }, floored);
+    assert.equal(res.status, 403);
+  });
+
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
@@ -942,16 +1024,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
       assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
-    // An unregistered path answers exactly like any unknown route: the capability gate refuses it.
-    const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
     for (const [path, body] of [
       ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
       ["/v1/keychain/grants", { ask: "anything", mode: "once", purpose: "x" }],
       ["/v1/keychain/asks/anything/decline", {}],
     ] as const) {
       const res = await post(path, body, liveOwner);
-      assert.equal(res.status, 403, path);
-      assert.deepEqual(await res.json(), unknown, path);
+      assert.equal(res.status, 404, path);
     }
     const send = await post(
       "/v1/keychain/asks",
@@ -1103,7 +1182,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       const threadRef = `dm:U_ALICE-cron-${mode}`;
       const personal = scopeId("personal", "U_ALICE");
       const token = await capFor("U_ALICE", personal, { triggered: true, threadRef });
-      const live = await capFor("U_ALICE", personal, { liveActor: true });
+      const live = await capFor("U_ALICE", personal, liveRunClaims("U_ALICE"));
       const { credential } = (await (
         await post(
           "/v1/keychain/credentials",
@@ -1239,8 +1318,6 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       apiBaseUrl: "http://core.test",
     }),
   );
-  // The recorded script is the backend's OUTER `sh -c` wrapper, so the export's single quotes
-  // arrive shell-escaped — match the token's own alphabet instead of the quoting around it.
   const extractToken = (since: number): CapabilityClaims | null => {
     for (const script of fakeSprites.execScripts().slice(since)) {
       const m = /export AGENT_API_TOKEN=\W*([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/.exec(script);
@@ -1273,4 +1350,8 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
   const fired = extractToken(mark);
   assert.ok(fired);
   assert.equal(fired!.triggered, true, "a trigger-fired turn's token says so — consent routes refuse it");
+  mark = fakeSprites.execScripts().length;
+  const unproven = { ...turn(false), spawned: true, sessionSenderId: "gone", delegatingRunId: "gone" } as TurnRequest;
+  assert.equal((await built.app.turn(unproven)).status, "ok");
+  assert.equal(extractToken(mark)!.triggered, true, "a session turn whose delegation can't be proven runs unattended");
 });

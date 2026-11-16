@@ -36,7 +36,6 @@ test("an explicit channel off beats an org default of on", async () => {
   assert.equal(store.getChannelHeaderPin(channel), false);
   assert.equal(await store.getChannelHeaderPinDurable(channel), false);
   assert.equal(await store.getChannelHeaderPinOverrideDurable(channel), false);
-  // other channels still follow the default
   assert.equal(await store.getChannelHeaderPinDurable(other), true);
 });
 

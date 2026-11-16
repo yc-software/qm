@@ -2,15 +2,21 @@ import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
-import { isAgentReply, isUserItem, type Item, type NewItem } from "../sessions/items.ts";
+import { type Item, type NewItem } from "../sessions/items.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
+import { withTenant } from "../tenants/context.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import type { SessionStateBus } from "../runs/session-state-bus.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
 const WRITE_GIVEUP_MS = 10 * 60_000;
 
-type WebTranscriptSessions = Pick<SessionStore, "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "getItems">;
+type WebTranscriptSessions = Pick<
+  SessionStore,
+  "appendDelivery" | "get" | "getByThread" | "getItems" | "participantsOf"
+>;
 
 export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
   return tail.some((item) => {
@@ -42,7 +48,8 @@ export function withWebTranscriptDeliveries(
   store: DeliveryStore,
   sessions: WebTranscriptSessions,
   runs: Pick<RunStore, "inFlightForThread">,
-): DeliveryStore {
+  states?: Pick<SessionStateBus, "emit">,
+): DeliveryStore & { transcribeUndelivered(type: string): Promise<void> } {
   const recorded = new Set<string>();
   const remember = (key: string): void => {
     if (recorded.size >= RECORDED_CACHE_CAP) recorded.clear();
@@ -58,16 +65,10 @@ export function withWebTranscriptDeliveries(
     if (await hasRunningRun(runs, session.threadRef)) return false;
     const note = d.destination.webTranscript;
     const reply = note?.kind === "slack_reply" ? note : undefined;
-    if (await sessions.hasDeliveryEntry(session.id, d.idempotencyKey, reply?.ts)) return true;
     const failure = note?.kind === "turn_failure" ? note : undefined;
     if (failure && turnRecordedFailure(await sessions.getItems(session.id, { limit: DEDUPE_SCAN_LIMIT }), failure))
       return true;
     const turnId = failure?.runId ?? d.id;
-    if (
-      !failure &&
-      (await sessions.getItems(session.id, { turnId })).some((item) => (reply ? isUserItem(item) : isAgentReply(item)))
-    )
-      return true;
     const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
     const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
     let item: NewItem;
@@ -83,7 +84,18 @@ export function withWebTranscriptDeliveries(
     } else {
       item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
     }
-    await sessions.appendMany({ sessionId: session.id, turnId }, [item]);
+    const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item);
+    if (!inserted) return true;
+    if (states) {
+      const participants = await sessions.participantsOf(session.id);
+      states.emit({
+        threadRef: session.threadRef,
+        sessionId: session.id,
+        state: "idle",
+        at: Date.now(),
+        ...(participants.length ? { participants } : {}),
+      });
+    }
     return true;
   };
 
@@ -115,8 +127,8 @@ export function withWebTranscriptDeliveries(
     return false;
   };
 
-  const drained = async (rows: Delivery[]): Promise<Delivery[]> => {
-    const out: Delivery[] = [];
+  const drained = async <D extends Delivery>(rows: D[]): Promise<D[]> => {
+    const out: D[] = [];
     for (const d of rows) {
       try {
         const disposition = classify(d);
@@ -155,13 +167,26 @@ export function withWebTranscriptDeliveries(
       }
       return delivery;
     },
-    async pending(type) {
-      const rows = await store.pending(type);
+    async pending(type, sourceThreadRef) {
+      const rows = await store.pending(type, sourceThreadRef);
       return transcribed(type) ? drained(rows) : rows;
     },
-    async claimPending(type, ttlMs, opts) {
-      const rows = await store.claimPending(type, ttlMs, opts);
+    async claimPending(type, ttlMs) {
+      const rows = await store.claimPending(type, ttlMs);
       return transcribed(type) ? drained(rows) : rows;
+    },
+    async transcribeUndelivered(type) {
+      await claimThenBind(
+        () => store.undeliveredTenants(type),
+        async () => drained(await store.pending(type)),
+      );
+    },
+    async claimDue(type, ttlMs) {
+      const rows = await store.claimDue(type, ttlMs);
+      if (!transcribed(type)) return rows;
+      const out: typeof rows = [];
+      for (const d of rows) out.push(...(await withTenant(d.tenantId, () => drained([d]))));
+      return out;
     },
   };
 }

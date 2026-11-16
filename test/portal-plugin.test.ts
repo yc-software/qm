@@ -9,6 +9,7 @@ import { createAdminGrantStore } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { testDatabaseUrl, testUsers } from "./support/test-database.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 test("portal signs /d/ ingress with the principal as the canonical tail (core-verifiable)", () => {
   const secret = "portal-source-auth-secret";
@@ -49,11 +50,11 @@ test("ADMIN_GRANTS-seeded admins resolve and authorize org-wide; non-admins do n
   const u1 = svc.resolveActor("U1@default-org");
   const u2 = svc.resolveActor("U2@default-org");
   assert.ok(u1 && u2);
-  assert.equal(await svc.canAdminister(u1, scopeId("org", "default-org")), true);
-  assert.equal(await svc.canAdminister(u1, scopeId("channel", "eng")), true);
-  assert.equal(await svc.canAdminister(u2, scopeId("org", "default-org")), false);
+  assert.equal(await svc.canAdminister(tenant, u1, scopeId("org", "default-org")), true);
+  assert.equal(await svc.canAdminister(tenant, u1, scopeId("channel", "eng")), true);
+  assert.equal(await svc.canAdminister(tenant, u2, scopeId("org", "default-org")), false);
   assert.equal(
-    await svc.canAdminister(svc.resolveActor("admin-alice@default-org")!, scopeId("org", "default-org")),
+    await svc.canAdminister(tenant, svc.resolveActor("admin-alice@default-org")!, scopeId("org", "default-org")),
     false,
   );
 });

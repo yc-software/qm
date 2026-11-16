@@ -9,20 +9,16 @@ function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
 }
 
-/** The largest index <= max that is safe to cut at. */
 export function safeCutIndex(text: string, max: number): number {
   if (text.length <= max) return text.length;
   let cut = max;
-  // never split a surrogate pair
   if (isLowSurrogate(text.charCodeAt(cut))) cut--;
   const floor = Math.max(1, Math.floor(max * FLOOR_FRACTION));
-  // never split a <...> entity (links, mentions): back off to before the "<"
   const lastOpen = text.lastIndexOf("<", cut - 1);
   if (lastOpen >= 0) {
     const lastClose = text.lastIndexOf(">", cut - 1);
     if (lastOpen > lastClose && lastOpen >= floor) cut = lastOpen;
   }
-  // never leave an unbalanced formatting run open right at the cut
   for (const marker of ["`", "*", "~"]) {
     let count = 0;
     for (let i = 0; i < cut; i++) if (text[i] === marker) count++;
@@ -80,7 +76,6 @@ export function safeChunks(text: string, max: number): string[] {
   return chunks;
 }
 
-/** Truncate to at most `max` characters (plus ellipsis) at a safe point. */
 export function safeClip(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, safeCutIndex(text, max))}…`;

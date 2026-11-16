@@ -87,7 +87,7 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
     owner: "U1",
     createdBy: "U1",
   });
-  await store.markFired(c.id, 123);
+  await store.markFired(c, 123);
   const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
     fires: createPostgresCronFireStore(testDatabaseUrl()),
   });
@@ -312,7 +312,7 @@ test("pg map: original folded-index migration upgrades without changing its ledg
   try {
     await factory.pool.q("DROP INDEX IF EXISTS map_wide_widgets_owner_fold, map_wide_widgets_owner_unicode");
     await factory.pool.q(
-      "DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/map_wide_widgets/%' AND id <> 'durable-map/map_wide_widgets/0001'",
+      "DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/map_wide_widgets/%' AND id <> 'durable-map/map_wide_widgets/0001' AND id NOT LIKE 'durable-map/map_wide_widgets/0010-tenants/%'",
     );
     await applyPgMigrations(await factory.pool.pool(), [legacy]);
     const ledger = await factory.pool.q("SELECT * FROM qm_schema_migrations WHERE id = $1", [legacy.id]);

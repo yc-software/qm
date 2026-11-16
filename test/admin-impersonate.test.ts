@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -47,7 +48,7 @@ test("an org admin can start impersonating a user; audited", async () => {
     assert.equal(body.ok, true);
     assert.equal(body.target, "U-target");
     assert.ok(
-      (await s.built.auditLog.events()).some(
+      (await s.built.auditLog.events(testTenant)).some(
         (e) => e.action === "impersonate.start" && e.resource === "U-target" && e.principalId === "admin-alice",
       ),
       "the start is recorded in the durable audit log",
@@ -91,7 +92,9 @@ test("stopping impersonation is audited", async () => {
     const r = await stopImp(s.base, ALICE, "U-target");
     assert.equal(r.status, 200);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "impersonate.stop" && e.resource === "U-target"),
+      (await s.built.auditLog.events(testTenant)).some(
+        (e) => e.action === "impersonate.stop" && e.resource === "U-target",
+      ),
       "the stop is recorded in the durable audit log",
     );
   } finally {

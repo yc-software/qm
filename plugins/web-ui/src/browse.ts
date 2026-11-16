@@ -49,7 +49,7 @@ export function destinations(): Destination[] {
     to("crons", Clock, "Crons", "Work that runs on a schedule"),
     to("webhooks", Webhook, "Webhooks", "Inbound events that wake QM"),
     to("keychain", KeyRound, "Keychain", "Connected accounts and credentials"),
-    to("deploys", Rocket, "Apps", "What QM has shipped for you"),
+    to("apps", Rocket, "Apps", "What QM has shipped for you"),
     to("memory", Brain, "Memory", "What QM remembers about your work"),
     to("skills", Box, "Skills", "Reusable procedures QM can follow"),
   ];
@@ -67,7 +67,7 @@ export function destinations(): Destination[] {
   return list;
 }
 
-const SIDEBAR_VIEWS: ReadonlySet<View> = new Set<View>(["contexts", "deploys"]);
+const SIDEBAR_VIEWS: ReadonlySet<View> = new Set<View>(["contexts", "apps"]);
 
 type SidebarDestination = Destination & { view: View };
 

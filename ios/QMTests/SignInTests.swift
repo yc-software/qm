@@ -22,19 +22,9 @@ final class SignInProtocol: URLProtocol, @unchecked Sendable {
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
-    var data = request.httpBody ?? Data()
-    if let stream = request.httpBodyStream {
-      stream.open()
-      defer { stream.close() }
-      var buffer = [UInt8](repeating: 0, count: 1024)
-      while stream.hasBytesAvailable {
-        let count = stream.read(&buffer, maxLength: buffer.count)
-        if count <= 0 { break }
-        data.append(contentsOf: buffer.prefix(count))
-      }
-    }
     let fields =
-      URLComponents(string: "https://example.test/?" + String(decoding: data, as: UTF8.self))?
+      URLComponents(
+        string: "https://example.test/?" + String(decoding: request.bodyData, as: UTF8.self))?
       .queryItems ?? []
     let code = fields.first { $0.name == "code" }?.value ?? ""
     let verifier = fields.first { $0.name == "verifier" }?.value ?? ""

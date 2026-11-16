@@ -633,11 +633,11 @@ test('Door 2: an addressed @mention opens the sub-conversation with a <wake reas
     const items = await built.sessions.getItems(sub!.id);
     const userText = items.find((item) => USER_ITEM_KINDS.includes(item.kind))?.text ?? "";
     assert.match(userText, /^<wake reason="addressed"/, "the addressed turn opens with a wake envelope");
-    assert.match(
-      userText,
-      /<addressed-messages[^>]*>[\s\S]*!post ahoy[\s\S]*<\/addressed-messages>/,
-      "the trigger rides the addressed block",
-    );
+    assert.match(userText, /<addressed-messages[^>]*>\s*<message [^>]*from="human"[^>]*>!post ahoy</);
+    await built.app.turn({ ...mention("!post beep", channel, "700.2"), botActor: true });
+    await pollFor(built.deliveries, (d) => d.destination.target === `slack:${channel}:700.2`);
+    const botItems = await built.sessions.getItems((await built.sessions.getByThread(`ch:${channel}:700.2`))!.id);
+    assert.ok(botItems.some((item) => /<addressed-messages[^>]*>\s*<message [^>]*from="bot"/.test(item.text ?? "")));
   } finally {
     await built.runtime.stop();
   }
@@ -686,6 +686,30 @@ for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
     assert.equal((await built.deliveries.pending("slack")).length, 0);
   });
 }
+
+test("addressed channel turn paused on approval → the approval card reaches the requester, no nudge", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    await built.app.turn(mention("!paused-approval-quiet rm -rf /tmp/x", "C-paused", "720.1"));
+    const deadline = Date.now() + 5_000;
+    let card: any;
+    while (!card && Date.now() < deadline) {
+      card = ((await built.deliveries.pending("principal")) as any[]).find((d) => d.destination.commandApprovalId);
+      if (!card) await sleep(50);
+    }
+    assert.ok(card, "the approval card is enqueued for the requester");
+    assert.equal(card.destination.target, "U1");
+    const session = await built.sessions.getByThread("ch:C-paused:720.1");
+    const requests = await built.sessions.listLlmRequests(session!.id);
+    assert.ok(
+      !requests.some((r) => JSON.stringify(r.promptEnvelope).includes("[system] You were addressed directly")),
+      "a turn waiting on approval is not nudged into a forced reply",
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
 
 test("a shared web project turn answers with its final text, not surface tools", async () => {
   const built = freshApp();

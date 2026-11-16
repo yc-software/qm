@@ -152,10 +152,14 @@ export function activityGroupSummary(
   };
 }
 
-export function thinkingPresentation(text: string): { title: string; body: string } {
+export function thinkingLabel(live: boolean): string {
+  return live ? "Thinking" : "Thought";
+}
+
+export function thinkingPresentation(text: string, live: boolean): { title: string; body: string } {
   const trimmed = text.trim();
   const heading = /^(?:#{1,6} +([^\n]+)|\*\*([^\n]+?)\*\*|__([^\n]+?)__)(?:\r?\n|$)/.exec(trimmed);
-  if (!heading) return { title: "Thinking", body: trimmed };
+  if (!heading) return { title: thinkingLabel(live), body: trimmed };
   const title = (heading[1] ?? heading[2] ?? heading[3]!).replace(/ +#+$/, "").trim();
   return { title, body: trimmed.slice(heading[0].length).trim() };
 }

@@ -17,6 +17,7 @@ import {
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 export interface CreateLoopInput extends CreateTriggerInput {
   name: string;
@@ -48,6 +49,7 @@ export interface LoopPatch {
   cronId?: string;
   state?: LoopState;
   playbookEdit?: PlaybookEdit;
+  taskAuthor?: "automation" | null;
   restore?: Loop;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -63,6 +65,7 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;
@@ -191,6 +194,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    claimTenants: () => backing.claimTenants(),
     async byCron(cronId) {
       return (await backing.all()).find((loop) => loop.cronId === cronId) ?? null;
     },
@@ -214,6 +218,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         if (patch.governor !== undefined) fields.governor = patch.governor;
         if (patch.triage !== undefined) fields.triage = mergeTriage(loop.triage, patch.triage);
         if (patch.cronId !== undefined) fields.cronId = patch.cronId;
+        if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
         if (patch.state !== undefined) Object.assign(fields, stateFields(patch.state));
         if (patch.quarantineClearedBy !== undefined) fields.quarantineClearedBy = patch.quarantineClearedBy;
         if (patch.quarantineClearedAt !== undefined) fields.quarantineClearedAt = patch.quarantineClearedAt;

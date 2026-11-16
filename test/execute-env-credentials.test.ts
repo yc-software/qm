@@ -225,5 +225,5 @@ test("selected broker execute honors deployment approval rules before vending cr
     assert.ok(!(unrelated.reply ?? "").includes(value));
     assert.ok(!durable.includes(value));
   }
-  assert.deepEqual(await built.keychain!.grantsForScope(personal), []);
+  assert.deepEqual(await built.keychain!.grantsForScope(personal, { includePersonGrants: true }), []);
 });

@@ -98,8 +98,8 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   sessions.getForParticipant = async () => {
     throw new Error("search must not read legacy message activity");
   };
-  assert.deepEqual(await app.searchSessions("U1", "outputonly"), []);
-  const hits = await app.searchSessions("U1", "zanzibar");
+  assert.deepEqual(await app.searchSessions({ actorId: "U1" }, "outputonly"), []);
+  const hits = await app.searchSessions({ actorId: "U1" }, "zanzibar");
   assert.equal(hits.length, 2, "only U1's own conversation is searched");
   assert.ok(hits.every((h) => h.sessionId === id));
   assert.equal(hits[0]!.title, "Trip planning");
@@ -107,7 +107,7 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   assert.ok(hits[0]!.snippet.toLowerCase().includes("zanzibar"));
   assert.equal(hits[1]!.author, "josh");
 
-  assert.deepEqual(await app.searchSessions("U1", ""), [], "empty query is empty, not an error");
+  assert.deepEqual(await app.searchSessions({ actorId: "U1" }, ""), [], "empty query is empty, not an error");
 });
 
 test("app.searchSessions finds sessions by title", async () => {
@@ -118,8 +118,8 @@ test("app.searchSessions finds sessions by title", async () => {
   await sessions.updateTitle(id, "Quarterly roadmap review");
   await seed(sessions, "web:U2:other2", "U2", ["hello there"]);
 
-  const byTitle = await app.searchSessions("U1", "roadmap");
+  const byTitle = await app.searchSessions({ actorId: "U1" }, "roadmap");
   assert.ok(byTitle.some((h) => h.sessionId === id && h.entryType === "title"));
 
-  assert.deepEqual(await app.searchSessions("U2", "roadmap"), [], "title matches respect participation");
+  assert.deepEqual(await app.searchSessions({ actorId: "U2" }, "roadmap"), [], "title matches respect participation");
 });

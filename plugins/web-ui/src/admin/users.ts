@@ -92,6 +92,7 @@ function users(page: AdminPage, initial: any) {
         matches(
           filter,
           ...(u.aliases?.length ? u.aliases : [u.principalId]),
+          u.displayName || "",
           u.admin?.role || "",
           u.admin?.scopeId || "member",
           u.kind === "app" ? "app" : "",
@@ -158,10 +159,12 @@ function users(page: AdminPage, initial: any) {
                 ["Principal", "Role", "Last seen", "Sessions", "Turns", ""],
                 roster.map((u: any) => [
                   {
-                    node: html`<a href=${userHref(page, u)}>${u.principalId}</a> ${u.kind === "app" ? badge("app") : ""}
+                    node: html`<a href=${userHref(page, u)} title=${u.principalId}
+                        >${u.displayName || html`<span class="mono">${u.principalId}</span>`}</a
+                      >
+                      ${u.kind === "app" ? badge("app") : ""}
                       ${u.offboarded || u.deactivated ? badge(u.offboarded ? "offboarded" : "deactivated", "warn") : ""}
                       ${u.aliases?.length > 1 ? subline(u.aliases.filter((a: string) => a !== u.principalId).join(", ")) : ""}`,
-                    cls: "mono",
                   },
                   { node: subline(u.admin?.isAdmin ? labelRole(u.admin.role) : "member") },
                   { text: u.lastSeenAt ? relTime(u.lastSeenAt) : "-", cls: "num" },

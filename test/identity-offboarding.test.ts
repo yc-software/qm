@@ -1,4 +1,5 @@
 import { describe, it, before, after } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -67,13 +68,17 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.equal(built.identity.classify("U-leave").type, "guest");
     assert.equal(built.identity.classify("U-stay").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.deactivate" && e.principalId === "U-leave"),
+      (await built.auditLog.events(testTenant)).some(
+        (e) => e.action === "principal.deactivate" && e.principalId === "U-leave",
+      ),
     );
 
     await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
     assert.equal(built.identity.classify("U-leave").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-leave"),
+      (await built.auditLog.events(testTenant)).some(
+        (e) => e.action === "principal.reactivate" && e.principalId === "U-leave",
+      ),
     );
   });
 
@@ -89,7 +94,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       assert.equal(resolved.member.displayName, "allowed@example.com");
     }
     assert.ok(
-      !(await built.auditLog.events()).some(
+      !(await built.auditLog.events(testTenant)).some(
         (e) => e.action === "principal.deactivate" && e.principalId === "allowed@example.com",
       ),
     );
@@ -109,7 +114,9 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.deepEqual(await on.json(), { ok: true, principalId: "U-manual", active: true });
     assert.equal(built.identity.classify("U-manual").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-manual"),
+      (await built.auditLog.events(testTenant)).some(
+        (e) => e.action === "principal.reactivate" && e.principalId === "U-manual",
+      ),
     );
   });
 

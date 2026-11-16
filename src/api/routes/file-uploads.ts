@@ -68,7 +68,7 @@ const uploadClient = uploadRoute(async ({ res }) => {
 });
 
 const beginUpload = uploadRoute(async (ctx, uploads, actorId) => {
-  const { res, deps, app, capability } = ctx;
+  const { res, app, capability } = ctx;
   const body = isObj(ctx.body) ? ctx.body : {};
   const targetScope =
     typeof body.scopeId === "string"
@@ -92,7 +92,7 @@ const beginUpload = uploadRoute(async (ctx, uploads, actorId) => {
     checksums: body.checksums as string[],
     ...(body.requestId != null ? { requestId: body.requestId as string } : {}),
   });
-  audit(deps, { principalId: actorId, action: "file.upload.begin", resource: upload.id, scopeLabel: targetScope });
+  audit(ctx, { principalId: actorId, action: "file.upload.begin", resource: upload.id, scopeLabel: targetScope });
   return sendJson(res, 201, { upload });
 });
 
@@ -102,15 +102,21 @@ const signPart = ownedUpload(async ({ res, params }, uploads, upload) =>
   sendJson(res, 200, await uploads.sign(upload.id, Number(params.part))),
 );
 
-const completeUpload = ownedUpload(async ({ res, deps }, uploads, upload, actorId) => {
+const completeUpload = ownedUpload(async ({ res, deps, tenant }, uploads, upload, actorId) => {
   const file = await uploads.complete(upload.id);
-  audit(deps, { principalId: actorId, action: "file.upload", resource: file.path, scopeLabel: upload.scopeId });
+  audit(
+    { deps, tenant },
+    { principalId: actorId, action: "file.upload", resource: file.path, scopeLabel: upload.scopeId },
+  );
   return sendJson(res, 200, { file, contentUrl: `/v1/files/${file.id}/content` });
 });
 
-const abortUpload = ownedUpload(async ({ res, deps }, uploads, upload, actorId) => {
+const abortUpload = ownedUpload(async ({ res, deps, tenant }, uploads, upload, actorId) => {
   await uploads.abort(upload.id);
-  audit(deps, { principalId: actorId, action: "file.upload.abort", resource: upload.id, scopeLabel: upload.scopeId });
+  audit(
+    { deps, tenant },
+    { principalId: actorId, action: "file.upload.abort", resource: upload.id, scopeLabel: upload.scopeId },
+  );
   return sendJson(res, 200, { ok: true });
 });
 

@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -161,7 +162,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     const denied = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "user-uma@default-org" } });
     assert.equal(denied.status, 403);
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "users.read"));
+    assert.ok((await s.built.auditLog.events(testTenant)).some((e) => e.action === "users.read"));
   } finally {
     await s.close();
   }
@@ -216,7 +217,7 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     t.mock.method(s.built.sessions, "scopeSessionSummaries", fail);
     t.mock.method(s.built.files, "listOwnedByScopes", fail);
     t.mock.method(s.built.app, "listCrons", fail);
-    t.mock.method(s.built.app, "listDeployments", fail);
+    t.mock.method(s.built.app, "listApps", fail);
 
     const r = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
@@ -224,12 +225,12 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     assert.equal(d.principalId, "U1");
     assert.equal(d.scopeId, "personal:U1");
     assert.equal(d.stats.sessions, 1);
-    for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
+    for (const key of ["conversations", "files", "crons", "apps"]) assert.equal(key in d, false);
 
     const denied = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "user-uma@default-org" } });
     assert.equal(denied.status, 403);
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.read"));
+    assert.ok((await s.built.auditLog.events(testTenant)).some((e) => e.action === "user.read"));
   } finally {
     await s.close();
   }
@@ -266,7 +267,7 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
     assert.equal((await setOb("nope")).status, 400);
     assert.equal((await setOb("completed", "user-uma@default-org")).status, 403);
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.onboarding.set"));
+    assert.ok((await s.built.auditLog.events(testTenant)).some((e) => e.action === "user.onboarding.set"));
   } finally {
     await s.close();
   }
@@ -310,7 +311,7 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
     assert.equal("conversations" in d, false);
     assert.equal(d.onboarding, "not_started", "onboarding marker cleared");
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.reset"));
+    assert.ok((await s.built.auditLog.events(testTenant)).some((e) => e.action === "user.reset"));
   } finally {
     await s.close();
   }

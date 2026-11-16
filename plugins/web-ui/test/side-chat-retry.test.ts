@@ -54,7 +54,6 @@ test("failed first side-chat attachment submissions restore the raw draft for re
           forkSession: { sideChat: { quote: "durable queue", expanded: false } },
         },
         activePendingApprovals: () => [],
-        hasUnresolvedApproval: () => false,
         turnRuntime: () => null,
         drawActiveChat() {},
         notePendingSessionOnSend() {},

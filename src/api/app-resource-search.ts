@@ -20,29 +20,27 @@ export function createResourceSearchMethods(
 ): Pick<App, "searchResources"> {
   const store = deps.resourceSearch;
   return {
-    async searchResources(principalId, query) {
+    async searchResources(tenant, principalId, query) {
       query = query.slice(0, 500);
       if (query.trim().length < 2 || !searchTerms(query).length) return { hits: [], failed: [], limited: [] };
       let visibleSkills = new Set<string>();
       let crons: ReturnType<typeof cronVisibility> | undefined;
       let person: ReturnType<App["personMatcher"]> | undefined;
-      const canSee = async (kind: ResourceKind, row: ResourceCandidate): Promise<boolean> => {
+      const canSee = async (kind: Exclude<ResourceKind, "apps">, row: ResourceCandidate): Promise<boolean> => {
         switch (kind) {
           case "skills":
-            if (await helpers.canManageSkill(row, principalId)) return true;
+            if (await helpers.canManageSkill(row, principalId, false)) return true;
             if (row.status !== "published") return false;
             return visibleSkills.has(row.id);
           case "crons":
             crons ??= cronVisibility(deps, helpers, principalId);
             return (await crons).canSee(row);
-          case "deploys":
-            return (await helpers.principalGitPermission(row, principalId)) !== null;
           case "webhooks":
             person ??= app.personMatcher(principalId);
-            return canAdministerWebhook(app, row, principalId, await person);
+            return canAdministerWebhook(app, row, { actorId: principalId }, await person);
         }
       };
-      const kinds: ResourceKind[] = ["skills", "crons", "deploys", "webhooks"];
+      const kinds: ResourceKind[] = ["skills", "crons", "apps", "webhooks"];
       const limited: string[] = [];
       const search = async (kind: ResourceKind): Promise<ResourceSearchHit[]> => {
         const hits: ResourceSearchHit[] = [];
@@ -50,12 +48,16 @@ export function createResourceSearchMethods(
         const rows = candidates.slice(0, 200);
         if (kind === "skills" && rows.length) {
           const { skills, homes } = await store.skillMetadata([...new Set(rows.map((r) => r.title))]);
-          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes);
+          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes, false);
           visibleSkills = new Set(visibleSkillRows(skills, ordered, granted).map((r) => r.skill.id));
         }
+        const appPermissions = kind === "apps" ? await helpers.appPermissions(tenant, rows, principalId) : [];
         for (let i = 0; i < rows.length; i += 20) {
           const batch = rows.slice(i, i + 20);
-          const allowed = await Promise.all(batch.map((row) => canSee(kind, row)));
+          const allowed =
+            kind === "apps"
+              ? appPermissions.slice(i, i + 20).map((permission) => permission !== null)
+              : await Promise.all(batch.map((row) => canSee(kind, row)));
           for (const [j, row] of batch.entries()) {
             if (allowed[j]) hits.push(resourceHit(kind, row, query));
             if (hits.length === 8) {

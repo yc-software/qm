@@ -11,7 +11,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const config = testConfig({ signingSecret: "web-turn-browser-signing-secret-0123456" });
 const built = stopAtEnd(buildApp(config));
@@ -73,14 +73,16 @@ const app = {
     const record = viewer === "alice" ? approvals[requestId] : undefined;
     return record ? { requestId, command: "git push", ...record } : null;
   },
-  getSessionForViewer: async (sessionId: string, viewer: string) => {
-    const session = viewer === "alice" ? sessions[sessionId] : undefined;
+  getSessionForViewer: async (sessionId: string, viewer: { actorId: string }) => {
+    const session = viewer.actorId === "alice" ? sessions[sessionId] : undefined;
     return session ? { session: { id: sessionId, ...session } } : null;
   },
 } as unknown as App;
 
 const portalSession: NonNullable<ServerDeps["portalSession"]> = { ...browserSessionDeps.portalSession };
-const admin = { adminStatusOf: async ({ id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }) };
+const admin = {
+  adminStatusOf: async (_tenant: unknown, { id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }),
+};
 
 async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<string> {
   const server = createServer(app, {
@@ -190,6 +192,24 @@ test("the server writes who sent a turn and where it goes; the browser's own cla
   assert.equal((await sentTurn({ threadRef: "dm:D1" })).conversation.threadRef, "web:alice:default");
 });
 
+test("while impersonating someone, a new message reaches the agent as a direct turn and nothing else reaches a run", async () => {
+  const cookie = `${browserSessionCookie("admin-carol")}; ${browserImpersonationCookie("admin-carol", "alice")}`;
+  const body = { text: "hi", threadRef: "web:alice:t1", clientTools: [scroll] };
+  assert.equal((await post("/api/turn", body, { cookie })).status, 202);
+  const { actor, origin, clientTools } = turns.at(-1)!;
+  assert.deepEqual([actor.externalId, origin, clientTools], ["alice", { kind: "direct" }, undefined]);
+  const counts = [turns.length, signals.length];
+  for (const [path, body] of [
+    ["/api/turn", { threadRef: "web:alice:t1", approval: { requestId: "a-1", approved: true } }],
+    ["/api/approvals/a-1", { approved: true }],
+    ["/api/runs/r1/signal", { kind: "steer", text: "more", threadRef: "web:alice:t1" }],
+    ["/api/runs/r1/signal", { kind: "client_result", callId: "c1", result: {} }],
+  ] as const)
+    assert.equal((await post(path, body, { cookie })).status, 403, path);
+  assert.deepEqual([turns.length, signals.length], counts);
+  assert.equal((await post("/api/runs/r1/signal", { kind: "abort" }, { cookie })).status, 200);
+});
+
 test("a turn with nothing to send is refused before it reaches the agent", async () => {
   for (const body of ["", "{not json", "null", "{}", JSON.stringify({ text: "   " })])
     assert.equal(await refused("/api/turn", body, 400), body === "{not json" ? "bad_request" : "empty message");
@@ -249,7 +269,7 @@ test("attachments ride as blob references, junk attachments are dropped, and the
 test("app editing adds app context beside the exact message, only on the person's own app thread", async () => {
   const turn = await sentTurn({ text: "Make the title smaller", threadRef: "web:alice:app-edit:sample-app" });
   assert.equal(turn.text, "Make the title smaller");
-  assert.match(turn.conversationHeader ?? "", /deployed app "sample-app"/);
+  assert.match(turn.conversationHeader ?? "", /app "sample-app"/);
   for (const threadRef of ["web:alice:ordinary", "web:alice:app-edit:bad/name", "web:bob:app-edit:sample-app"])
     assert.equal((await sentTurn({ threadRef, conversationHeader: "injected" })).conversationHeader, undefined);
 });

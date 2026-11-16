@@ -2,6 +2,7 @@ import { posix } from "node:path";
 import { asError, type DecisionBackend, type DecisionProvider, type DecisionQuestion } from "./decisions.ts";
 import { modelGatewayHeaders, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 const MAX_RESPONSE_BYTES = 1_000_000;
 
@@ -147,7 +148,7 @@ const PROTOCOLS: Record<
 };
 
 export function createDecisionBackend(opts: {
-  providers: (ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
+  providers: (tenant: Tenant, ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
   gateway?: Pick<ModelGatewayTransportConfig, "url" | "apiKey" | "apiKeyHeader" | "actorKey">;
   credential: (slug: string) => Promise<{ host: string; enabled: boolean; headers: Record<string, string> } | null>;
   fetch?: AddressFetch;
@@ -170,13 +171,13 @@ export function createDecisionBackend(opts: {
     return { base: provider.baseUrl, auth: rec.headers, send: opts.fetch ?? publicFetch };
   };
   return {
-    async choose({ questions, state, model, signal }) {
+    async choose({ tenant, questions, state, model, signal }) {
       signal.throwIfAborted();
       const aborted = new Promise<never>((_, reject) =>
         signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true }),
       );
       aborted.catch(() => {});
-      const provider = (await Promise.race([opts.providers([model.provider]), aborted])).find(
+      const provider = (await Promise.race([opts.providers(tenant, [model.provider]), aborted])).find(
         (p) => p.id === model.provider,
       );
       if (!provider) throw new Error(`decision provider ${model.provider} is not configured`);

@@ -1,5 +1,5 @@
 import type { DerivedOAuthAuth, Keychain } from "../credentials/keychain.ts";
-import type { ModelProvider } from "./pi-models.ts";
+import { MODEL_PROVIDERS, type ModelProvider } from "./provider-endpoints.ts";
 
 type UserCredentialKind = "apikey" | "oauth";
 
@@ -33,7 +33,6 @@ export interface UserModelCredentialStore {
   delete(userId: string, provider: ModelProvider): Promise<void>;
 }
 
-const PROVIDERS: ModelProvider[] = ["anthropic", "openai"];
 const ORIGIN = "individual-model-auth";
 const AI_OAUTH_HOSTS: Record<"anthropic" | "openai", string> = {
   anthropic: "claude.ai",
@@ -88,7 +87,7 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
 
     async connections(userId) {
       const found: UserCredentialConnection[] = [];
-      for (const provider of PROVIDERS) {
+      for (const provider of MODEL_PROVIDERS) {
         const cred = (await oauthCredential(userId, provider)) ?? (await apiKeyCredential(userId, provider));
         if (cred) found.push({ provider, kind: cred.kind });
       }

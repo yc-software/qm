@@ -1,3 +1,4 @@
+import { externalOrgId } from "../../tenants/external-org.ts";
 import { mintSignedPayload } from "../../auth/signed-token.ts";
 import { orgId } from "../../config.ts";
 import { canonicalPerson } from "../../directory/person.ts";
@@ -5,8 +6,9 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { scopeId } from "../../types.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
-import { livePersonCapability } from "../artifact-share.ts";
-import { sendJson } from "../http.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
+import { refuseWithoutPerson, sendJson } from "../http.ts";
+import { appReturnPath } from "./connectors.ts";
 import { ACCOUNT_ID, composioUserId, credential, request } from "./composio.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -35,8 +37,7 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
 }
 
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
-  if (ctx.capability && !livePersonCapability(ctx.capability))
-    return sendJson(ctx.res, 403, { error: "human_consent_required" });
+  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
   const access = await credential(ctx);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
@@ -62,7 +63,7 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
@@ -93,7 +94,7 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
       url.password
     )
       throw new Error("Invalid authorization URL");
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.authorize",
       resource: toolkit,
@@ -133,7 +134,7 @@ async function authorizeToolkit(ctx: ApiCtx): Promise<void> {
   const callbackUrl = composioCallbackUrl(ctx.deps.portalUrl, body.returnTo, body.state);
   if (!callbackUrl && (body.returnTo !== undefined || body.state !== undefined))
     return sendJson(ctx.res, 400, { error: "invalid_return_url" });
-  return authorize(ctx, false, callbackUrl ?? undefined);
+  return authorize(ctx, false, callbackUrl ? appCallbackUrl(body, callbackUrl) : undefined);
 }
 
 async function authorizeSlack(ctx: ApiCtx): Promise<void> {
@@ -144,7 +145,12 @@ async function authorizeSlack(ctx: ApiCtx): Promise<void> {
   url.searchParams.delete("composioReturn");
   url.searchParams.set("slackReturn", String(body.state));
   ctx.res.setHeader("Cache-Control", "no-store");
-  return authorize(ctx, true, url.href);
+  return authorize(ctx, true, appCallbackUrl(body, url.href));
+}
+
+function appCallbackUrl(body: Record<string, unknown>, callbackUrl: string): string {
+  const web = new URL(callbackUrl);
+  return new URL(appReturnPath(body, `${web.pathname}${web.search}`)!, web).href;
 }
 
 export const composioAuthorizeRoutes: ReadonlyArray<Route<ApiCtx>> = [

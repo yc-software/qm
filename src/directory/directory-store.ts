@@ -16,6 +16,15 @@ export interface DirectoryChannel {
   isExternal?: boolean;
 }
 
+export interface ScopeMembershipFacts {
+  member: boolean;
+  membership: boolean | undefined;
+}
+
+export interface ChannelMembershipFacts extends ScopeMembershipFacts {
+  isPrivate: boolean | undefined;
+}
+
 export interface ChannelMembership {
   channelId: string;
   principalId: string;
@@ -30,6 +39,12 @@ export type GroupResolution = { kind: "one"; groupId: string } | { kind: "none" 
 
 export function groupParticipantsKey(participants: readonly string[]): string {
   return [...new Set(participants.filter((p) => p))].sort().join(",");
+}
+
+interface SignInTenant {
+  id: string;
+  brandName?: string;
+  handle?: string;
 }
 
 export interface DirectoryMeta {
@@ -54,12 +69,14 @@ export interface DirectoryStore {
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
+  getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>>;
   get(principalId: string): Promise<DirectoryMember | null>;
   getBySlackId(slackId: string): Promise<DirectoryMember | null>;
   resolve(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
+  channelMemberships(channelIds: readonly string[], principalId: string): Promise<Map<string, ChannelMembershipFacts>>;
   channelMemberIds(channelId: string): Promise<string[] | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
   rosterCoversAudience(channelId: string): Promise<boolean | undefined>;
@@ -69,16 +86,22 @@ export interface DirectoryStore {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
-  resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
+  upsertGroup(groupId: string, principalIds: readonly string[], surface: string): Promise<void>;
+  resolveGroupByParticipants(participants: readonly string[], surface: string): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
+  groupMemberships(groupIds: readonly string[], principalId: string): Promise<Map<string, ScopeMembershipFacts>>;
   listGroupsFor(principalId: string): Promise<string[]>;
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
   groupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   setWorkspaceUrl(url: string): Promise<void>;
   meta(): Promise<DirectoryMeta>;
+  tenantsForEmail?(email: string): Promise<SignInTenant[]>;
+  tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
+  setAppHandle?(handle: string): Promise<"ok" | "taken">;
+  tenantForAppHandle?(handle: string): Promise<string | undefined>;
+  trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
 }
 
 export const MAX_CANDIDATES = 10;

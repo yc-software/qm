@@ -7,6 +7,7 @@ import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withCleanup } from "../util/errors.ts";
+import { SandboxAccessError } from "../sandbox/sandbox-resources.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
@@ -15,11 +16,13 @@ export interface BackgroundExecBrokerDeps {
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
+  runId?: string;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
   termGraceMs?: number;
   killGraceMs?: number;
+  assertComputerUsable?: (sandboxId: string | undefined) => Promise<void>;
 }
 
 export interface BackgroundStartResult {
@@ -47,7 +50,6 @@ export interface BackgroundJobSummary {
   processId: string;
   command: string;
   purpose?: string;
-  status: ProcessState;
   registryStatus: ProcessStatus;
   startedAt: number;
 }
@@ -90,11 +92,6 @@ const DEFAULT_MAX_BYTES = 64 * 1024;
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_GRACE_MS = 1_000;
 
-function stateFromRow(status: ProcessStatus): ProcessState {
-  if (status === "running") return { state: "running" };
-  return { state: "exited", code: status === "reaped" ? 143 : 0 };
-}
-
 export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): BackgroundExecBroker {
   const POLL_MS = deps.pollMs ?? 5_000;
   const defaultTtlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
@@ -102,8 +99,8 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
-  const exited = async (handle: SandboxHandle, processId: string) => {
-    await deps.registry.markStatus(processId, "exited");
+  const exited = async (handle: SandboxHandle, processId: string, status: ProcessStatus = "exited") => {
+    await deps.registry.markStatus(processId, status);
     await deps.onExit?.(handle, processId);
   };
   return {
@@ -137,6 +134,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           : null;
 
       if (processId) {
+        await deps.assertComputerUsable?.(sandboxId);
         const existingProcessId = processId;
         try {
           const read = await deps.sandbox.readProcess(handle, existingProcessId, {
@@ -185,6 +183,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             purpose,
             ttlMs: ttl,
             ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+            ...(deps.runId ? { runId: deps.runId } : {}),
             ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
           });
         };
@@ -195,6 +194,18 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           ({ processId } = await deps.sandbox.startProcess(handle, command, startOptions));
           launched = true;
           await register(processId);
+        }
+        try {
+          await deps.assertComputerUsable?.(sandboxId);
+        } catch (error) {
+          const startedProcessId = processId;
+          return withCleanup(
+            () => Promise.reject(error),
+            async () => {
+              await deps.sandbox.signalProcess(handle, startedProcessId, "KILL");
+              await exited(handle, startedProcessId, "reaped");
+            },
+          );
         }
 
         const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {
@@ -265,13 +276,24 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async list(): Promise<BackgroundJobSummary[]> {
-      return (await deps.registry.listByScope(deps.scopeId))
-        .filter((r) => r.kind === "background")
+      const jobs = (await deps.registry.listByScope(deps.scopeId)).filter((r) => r.kind === "background");
+      const usable = await Promise.all(
+        jobs.map((r) =>
+          (deps.assertComputerUsable?.(r.sandboxId) ?? Promise.resolve()).then(
+            () => true,
+            (error: unknown) => {
+              if (error instanceof SandboxAccessError) return false;
+              throw error;
+            },
+          ),
+        ),
+      );
+      return jobs
+        .filter((_, i) => usable[i])
         .map((r) => ({
           processId: r.processId,
           command: r.command,
           ...(r.purpose ? { purpose: r.purpose } : {}),
-          status: stateFromRow(r.status),
           registryStatus: r.status,
           startedAt: r.startedAt,
         }));

@@ -1,8 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { api } from "./core-bridge";
+import { api, isSharedScopeId } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { tip } from "./tooltip";
+import { reportHandledError } from "./browser-errors";
 
 const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 type BotMode = (typeof BOT_MODES)[number];
@@ -37,10 +38,6 @@ const ambientPolicyState = {
 let loadSeq = 0;
 let redraw: () => void = () => {};
 
-function ambientPolicyApplies(scopeId: string): boolean {
-  return scopeId.startsWith("channel:") || scopeId.startsWith("group:");
-}
-
 export function resetAmbientPolicy(): void {
   loadSeq += 1;
   ambientPolicyState.scope = null;
@@ -58,7 +55,7 @@ export function resetAmbientPolicy(): void {
 
 export async function loadAmbientPolicy(scopeId: string, onChange: () => void): Promise<void> {
   redraw = onChange;
-  if (!ambientPolicyApplies(scopeId) || ambientPolicyState.scope === scopeId) return;
+  if (!isSharedScopeId(scopeId) || ambientPolicyState.scope === scopeId) return;
   resetAmbientPolicy();
   const seq = ++loadSeq;
   ambientPolicyState.scope = scopeId;
@@ -66,14 +63,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
   try {
     const r = await api<PolicyWire>(`/api/contexts/${encodeURIComponent(scopeId)}/ambient-policy`);
     if (seq !== loadSeq) return;
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    applyPolicy(r);
   } catch (e) {
     if (seq !== loadSeq) return;
     ambientPolicyState.notice = errMessage(e, "Couldn't load this scope's standing orders.");
@@ -84,6 +74,17 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
       redraw();
     }
   }
+}
+
+function applyPolicy({ policy }: PolicyWire): void {
+  ambientPolicyState.orders = policy.orders;
+  ambientPolicyState.ambientEnabled = policy.ambientEnabled ?? null;
+  ambientPolicyState.bots = Object.entries(policy.bots).map(([name, p]) => ({
+    name,
+    mode: p.mode,
+    ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
+  }));
+  ambientPolicyState.baseUpdatedAt = policy.updatedAt;
 }
 
 function markDirty(): void {
@@ -102,6 +103,7 @@ async function save(): Promise<void> {
     if (!name) continue;
     bots[name] = { mode: b.mode, ...(b.mode === "rollup" && b.rollupHours ? { rollupHours: b.rollupHours } : {}) };
   }
+  const seq = loadSeq;
   ambientPolicyState.saving = true;
   redraw();
   try {
@@ -114,23 +116,20 @@ async function save(): Promise<void> {
         baseUpdatedAt: ambientPolicyState.baseUpdatedAt,
       }),
     });
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    if (seq !== loadSeq) return;
+    applyPolicy(r);
     ambientPolicyState.dirty = false;
     ambientPolicyState.notice = "Saved.";
     ambientPolicyState.noticeKind = "saved";
   } catch (e) {
+    if (seq !== loadSeq) return reportHandledError("ambient_policy_save", e);
     ambientPolicyState.notice = errMessage(e, "Couldn't save. Try again.");
     ambientPolicyState.noticeKind = "error";
   } finally {
-    ambientPolicyState.saving = false;
-    redraw();
+    if (seq === loadSeq) {
+      ambientPolicyState.saving = false;
+      redraw();
+    }
   }
 }
 
@@ -219,7 +218,7 @@ function botRow(b: BotPolicyView, i: number): TemplateResult {
 }
 
 export function ambientPolicySection(scopeId: string): TemplateResult | typeof nothing {
-  if (!ambientPolicyApplies(scopeId)) return nothing;
+  if (!isSharedScopeId(scopeId)) return nothing;
   if (ambientPolicyState.scope !== scopeId) return nothing;
   if (ambientPolicyState.loading)
     return html`<section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">

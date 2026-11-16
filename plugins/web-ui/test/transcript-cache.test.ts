@@ -200,3 +200,39 @@ test("signing out clears the cache", async () => {
   shell.renderAuthGate({ kind: "portal" });
   assert.equal(cache.cachedTranscript("a"), undefined);
 });
+
+test("a burst of nudges for a cached chat refreshes its tail once, a second later", async () => {
+  transcripts.set("a", [entry(0, "first question"), entry(1, "first answer")]);
+  await visitThenLeave("a");
+  transcripts.get("a")!.push(entry(2, "from another device"), entry(3, "reply"));
+
+  cache.refreshCachedTranscript("a");
+  cache.refreshCachedTranscript("a");
+  cache.refreshCachedTranscript("never-opened");
+  await settle();
+  const fetched = () => requests.filter((path) => path.startsWith("/api/sessions/"));
+  assert.deepEqual(fetched(), [], "debounced");
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  await settle();
+
+  assert.deepEqual(fetched(), ["/api/sessions/a?tailTurns=25"]);
+  assert.deepEqual(
+    cache.cachedTranscript("a").items.map((e: { seq: number }) => e.seq),
+    [0, 1, 2, 3],
+  );
+});
+
+test("a stream resync drops the cache and refetches only the open chat", async () => {
+  transcripts.set("a", [entry(0, "first question"), entry(1, "first answer")]);
+  await visitThenLeave("a");
+
+  cache.resyncTranscriptCache(["other"]);
+  assert.equal(cache.cachedTranscript("a"), undefined);
+  await settle();
+
+  assert.deepEqual(
+    requests.filter((path) => path.startsWith("/api/sessions/")),
+    ["/api/sessions/other?tailTurns=25"],
+  );
+  assert.ok(cache.cachedTranscript("other"));
+});

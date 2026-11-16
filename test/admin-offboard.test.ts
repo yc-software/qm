@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -7,16 +8,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 
-function deployment(id: string, ownerScopeId: string, createdBy: string): Deployment {
+function publishedApp(id: string, ownerScopeId: string, createdBy: string): PublishedApp {
   return {
     id,
-    ownerScopeId: ownerScopeId as Deployment["ownerScopeId"],
+    ownerScopeId: ownerScopeId as PublishedApp["ownerScopeId"],
     createdBy,
     name: id,
     currentVersion: 1,
@@ -28,20 +29,20 @@ function deployment(id: string, ownerScopeId: string, createdBy: string): Deploy
 
 async function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-offboard-")) }));
-  const deployments = [
-    deployment("app-personal", "personal:U1", "U1"),
-    deployment("app-shared", "channel:C1", "U1"),
-    deployment("app-other", "personal:U9", "U9"),
-    deployment("app-broken", "personal:U1", "U1"),
+  const publishedApps = [
+    publishedApp("app-personal", "personal:U1", "U1"),
+    publishedApp("app-shared", "channel:C1", "U1"),
+    publishedApp("app-other", "personal:U9", "U9"),
+    publishedApp("app-broken", "personal:U1", "U1"),
   ];
   const archivedApps: string[] = [];
   const app = {
     ...built.app,
-    listDeployments: async () => deployments,
-    archiveDeployment: async (id: string) => {
+    listApps: async () => publishedApps,
+    archiveApp: async (id: string) => {
       if (id === "app-broken") throw new Error("runtime destroy failed");
       archivedApps.push(id);
-      deployments.find((d) => d.id === id)!.status = "archived";
+      publishedApps.find((d) => d.id === id)!.status = "archived";
     },
   };
   const server = createInsecureTestServer(app, {
@@ -173,7 +174,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.equal((await sandboxResources.get(computer.id)).state, "retired");
     assert.equal(await sandboxResources.resolve("personal:U1"), null, "the default was cleared first");
 
-    const events = await s.built.auditLog.events();
+    const events = await s.built.auditLog.events(testTenant);
     for (const change of applied.changes)
       assert.ok(
         events.some(
@@ -214,7 +215,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       "reactivation clears offboarding",
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "principal.reactivate"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "principal.reactivate"),
       "the audit log keeps the history",
     );
   } finally {
@@ -255,6 +256,17 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
       headers: { "x-admin-actor": "user-uma@default-org" },
     });
     assert.equal(deniedReactivate.status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a computer an admin creates through the admin API counts as used by a person", async () => {
+  const s = await start();
+  try {
+    const init = { method: "POST", headers: ADMIN, body: JSON.stringify({ action: "create", backend: "sprites" }) };
+    const made = await fetch(`${s.base}/v1/admin/sandboxes/personal:admin-alice`, init);
+    assert.equal(((await made.json()) as { personUsed?: boolean }).personUsed, true);
   } finally {
     await s.close();
   }

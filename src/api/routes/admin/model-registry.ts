@@ -51,7 +51,7 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
     }
   } catch (error) {
     if (error instanceof ModelVerificationError) {
-      audit(ctx.deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: "model-registry.verification-failed",
         resource: id,
@@ -66,7 +66,7 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
     }
     return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(error) });
   }
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: ctx.method === "DELETE" ? "model-registry.delete" : "model-registry.update",
     resource: id,
@@ -167,7 +167,7 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
     else await apply();
   } catch (error) {
     const failure = verificationFailure(error);
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "model-registry.verification-failed",
       resource: spec.id,
@@ -175,7 +175,7 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(ctx.res, 422, { error: failure.code, message: failure.message });
   }
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "model-registry.enable-builtin",
     resource: spec.id,

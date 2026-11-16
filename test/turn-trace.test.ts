@@ -2,37 +2,19 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
-import { once } from "node:events";
-import { gunzipSync } from "node:zlib";
 import * as Sentry from "@sentry/node";
-import { flushErrorReporting, initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
+import { initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { collectSpans } from "./support/sentry-spans.ts";
 
-const transactions: Record<string, any>[] = [];
-const collector = createServer(async (req, res) => {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const body = Buffer.concat(chunks);
-  const lines = (req.headers["content-encoding"] === "gzip" ? gunzipSync(body) : body).toString().split("\n");
-  for (let i = 1; i + 1 < lines.length; i += 2)
-    if (JSON.parse(lines[i]!).type === "transaction") transactions.push(JSON.parse(lines[i + 1]!));
-  res.end("{}");
-});
-collector.listen(0, "127.0.0.1");
-await once(collector, "listening");
-initializeErrorReporting(Sentry, "worker", {
-  SENTRY_DSN: `http://public@127.0.0.1:${(collector.address() as AddressInfo).port}/1`,
-  SENTRY_TRACES_SAMPLE_RATE: "1",
-});
-after(async () => {
-  collector.closeAllConnections();
-  await new Promise<void>((resolve) => collector.close(() => resolve()));
-});
+const sentry = await collectSpans();
+initializeErrorReporting(Sentry, "worker", { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
+after(() => sentry.close());
 
 function anthropicStream(block: Record<string, unknown>, delta: Record<string, unknown>, stopReason: string): string {
   return [
@@ -106,22 +88,9 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
     }),
   );
   assert.equal(result.reply, "done");
-  for (let i = 0; i < 40 && !transactions.some((event) => event.transaction === "run"); i++) {
-    await flushErrorReporting();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const run = transactions.find((event) => event.transaction === "run");
-  assert.ok(run, "the run transaction arrived");
-  const spans: Array<{
-    op: string;
-    description: string;
-    span_id: string;
-    parent_span_id: string;
-    start_timestamp: number;
-    timestamp: number;
-  }> = run.spans;
+  const run = await sentry.segment((sent) => sent.name === "run");
   const byOp = (op: string) =>
-    spans.filter((span) => span.op === op).sort((a, b) => a.start_timestamp - b.start_timestamp);
+    run.spans.filter((span) => span.op === op).sort((a, b) => a.start_timestamp - b.start_timestamp);
   const [firstToken, nextFirstToken, ...extraFirstTokens] = byOp("model.first_token");
   assert.ok(firstToken && nextFirstToken, "each model request has a first-token span");
   assert.equal(extraFirstTokens.length, 0);
@@ -132,16 +101,16 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
   const [tool, ...extraTools] = byOp("step.tool");
   assert.ok(tool);
   assert.equal(extraTools.length, 0);
-  assert.equal(tool.description, "memory");
+  assert.equal(tool.name, "memory");
   assert.equal(tool.parent_span_id, gap.span_id, "the tool runs inside its step's gap");
-  assert.ok(tool.timestamp - tool.start_timestamp >= 0.035, "the tool span covers the tool's own work");
-  assert.ok(gap.start_timestamp >= firstToken.timestamp, "the gap opens after the first response streamed");
-  assert.ok(gap.timestamp <= nextFirstToken.start_timestamp + 0.001, "the gap closes at the next model request");
-  assert.ok(tool.start_timestamp >= gap.start_timestamp && tool.timestamp <= gap.timestamp);
+  assert.ok(tool.end_timestamp - tool.start_timestamp >= 0.035, "the tool span covers the tool's own work");
+  assert.ok(gap.start_timestamp >= firstToken.end_timestamp, "the gap opens after the first response streamed");
+  assert.ok(gap.end_timestamp <= nextFirstToken.start_timestamp + 0.001, "the gap closes at the next model request");
+  assert.ok(tool.start_timestamp >= gap.start_timestamp && tool.end_timestamp <= gap.end_timestamp);
 });
 
 test("a human web turn persists its entries inside step.persist spans of the run", async () => {
-  transactions.length = 0;
+  sentry.spans.length = 0;
   const built = buildApp(testConfig());
   const result = await built.app.turn({
     surface: "web",
@@ -150,18 +119,13 @@ test("a human web turn persists its entries inside step.persist spans of the run
     text: "hello",
   });
   assert.equal(result.status, "ok");
-  for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
-    await flushErrorReporting();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const run = transactions.find((event) => event.contexts?.trace?.op === "queue.process");
-  assert.ok(run, "the run transaction arrived");
-  const persisted = run.spans.filter((span: { op: string }) => span.op === "step.persist");
+  const run = await sentry.segment((sent) => sent.op === "queue.process");
+  const persisted = run.spans.filter((span) => span.op === "step.persist");
   assert.ok(persisted.length >= 2, "the user entry and the reply are each persisted in a span");
 });
 
 test("a turn whose agent fails still sends its dispatch span", async () => {
-  transactions.length = 0;
+  sentry.spans.length = 0;
   const built = buildApp(testConfig({ maxAttempts: 1 }));
   const failed = await built.app.turn({
     surface: "web",
@@ -170,11 +134,6 @@ test("a turn whose agent fails still sends its dispatch span", async () => {
     text: "!boom-always",
   });
   assert.equal(failed.status, "failed");
-  for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
-    await flushErrorReporting();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const run = transactions.find((event) => event.contexts?.trace?.op === "queue.process");
-  assert.ok(run, "the run transaction arrived");
-  assert.ok(run.spans.some((span: { op: string }) => span.op === "turn.dispatch"));
+  const run = await sentry.segment((sent) => sent.op === "queue.process");
+  assert.ok(run.spans.some((span) => span.op === "turn.dispatch"));
 });

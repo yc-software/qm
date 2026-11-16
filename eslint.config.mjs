@@ -14,6 +14,22 @@ const rawPipeRule = {
     "Relay streams with relayStream() (plugins/chassis/src/http.ts) — a raw .pipe() leaves upstream errors unhandled and crashes the process.",
 };
 
+const noComments = {
+  create(context) {
+    return {
+      Program() {
+        for (const comment of context.sourceCode.getAllComments())
+          if (comment.type !== "Shebang")
+            context.report({
+              loc: comment.loc,
+              message:
+                "Comments are not allowed (AGENTS.md). Delete it; rationale goes in the commit message or PR description.",
+            });
+      },
+    };
+  },
+};
+
 export default tseslint.config(
   {
     ignores: [
@@ -23,7 +39,6 @@ export default tseslint.config(
       "**/dist-web/",
       "data/",
       "deploy/layers/",
-      "docs/",
       "plugins/web-ui/public/",
       ".claude/",
       ".context/",
@@ -60,7 +75,10 @@ export default tseslint.config(
     languageOptions: { globals: globals.browser },
   },
   {
+    plugins: { qm: { rules: { "no-comments": noComments } } },
+    linterOptions: { noInlineConfig: true },
     rules: {
+      "qm/no-comments": "error",
       "no-empty": ["error", { allowEmptyCatch: false }],
 
       "@typescript-eslint/no-unused-vars": [
@@ -130,6 +148,17 @@ export default tseslint.config(
     rules: {
       "no-restricted-syntax": ["error", rawErrorRule, rawPipeRule],
     },
+  },
+  {
+    files: [
+      "src/api/routes/**/*.ts",
+      "src/loops/**/*.ts",
+      "src/persistence/**/*.ts",
+      "src/runs/**/*.ts",
+      "src/util/event-bus.ts",
+    ],
+    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    rules: { "@typescript-eslint/no-floating-promises": ["error", { ignoreVoid: false }] },
   },
   {
     files: ["plugins/chassis/src/http.ts"],

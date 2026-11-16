@@ -1,6 +1,7 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { EMPTY_ENDING_NOTE } from "../src/agent/turn-wall-clock.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
@@ -14,6 +15,7 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -336,6 +338,7 @@ test("the next turn's OpenAI Responses request replays the previous turn's reaso
 
 test("a steer and an empty-ending re-prompt replay as the exact user messages the model saw", async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const taken = Promise.withResolvers<void>();
   const first = await runTurn(
     "where is the budget doc?",
     [],
@@ -345,11 +348,11 @@ test("a steer and an empty-ending re-prompt replay as the exact user messages th
       () => anthropicSse([{ type: "thinking", thinking: "Nothing to add.", signature: "sig-empty" }], "end_turn"),
       () => anthropicSse([{ type: "text", text: "Q2 is in shared/q2.md; no Q3 doc." }], "end_turn"),
     ],
-    { prepareSteer: async (text) => ({ text: `<steer>${text}</steer>` }) },
+    { prepareSteer: async (text) => (setImmediate(taken.resolve), { text: `<steer>${text}</steer>` }) },
     signals,
     async () => {
       await signals.send("run-1", { kind: "steer", text: "also check Q3", ts: "steer.1" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await taken.promise;
     },
   );
   assert.equal(first.result.reply, "Q2 is in shared/q2.md; no Q3 doc.");
@@ -394,6 +397,7 @@ test("user and steer images replay as the exact image blocks the model saw, rest
       createdAt: 1,
     });
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const taken = Promise.withResolvers<void>();
   const first = await runTurn(
     "what is in this photo?",
     [],
@@ -403,15 +407,15 @@ test("user and steer images replay as the exact image blocks the model saw, rest
     ],
     {
       images: [{ mimeType: "image/png", dataBase64: PNG_A, artifactId: "art-photo" }],
-      prepareSteer: async (text) => ({
-        text,
-        images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }],
-      }),
+      prepareSteer: async (text) => {
+        setImmediate(taken.resolve);
+        return { text, images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }] };
+      },
     },
     signals,
     async () => {
       await signals.send("run-1", { kind: "steer", text: "and this one", ts: "steer.img" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await taken.promise;
     },
   );
   assert.equal(first.result.reply, "A single pixel, twice.");
@@ -540,7 +544,8 @@ async function withPgSession(
   const schema = `replay_pg_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(PG_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
+  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+  await seedTestTenant(url.toString());
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
@@ -616,7 +621,7 @@ test(
             { type: "text", text: "Done." },
           ],
         },
-        { role: "assistant", content: [{ type: "text", text: "Daily digest" }] },
+        { role: "user", content: [{ type: "text", text: '<message from="agent" via="cron">Daily digest</message>' }] },
         { role: "user", content: [{ type: "text", text: "and Q3?" }] },
       ]);
     });

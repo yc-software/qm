@@ -291,13 +291,14 @@ test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (inva
 });
 
 test("reattach by FULL command key: a second start of the same command reattaches to ONE process", async () => {
-  const { broker, registry, starts } = build();
+  const { broker, registry, starts, sandbox } = build();
   const first = await broker.start(handle, "npm test", "Run background tests");
   const second = await broker.start(handle, "npm test", "Run background tests");
-  assert.equal(starts.length, 1, "no second startProcess");
-  assert.equal(second.processId, first.processId);
-  assert.equal(second.reattached, true);
+  assert.deepEqual([second.processId, second.reattached], [first.processId, true]);
   assert.equal((await registry.listByScope(SCOPE)).filter((r) => r.kind === "background").length, 1);
+  const refused = { sandbox, registry, scopeId: SCOPE, assertComputerUsable: () => Promise.reject(new Error("no")) };
+  await assert.rejects(createBackgroundBroker(refused).start(handle, "npm test", "Run background tests"), /no/);
+  assert.equal(starts.length, 1, "no second startProcess");
 });
 
 test("start does NOT reattach to a matching command whose process has already exited", async () => {
@@ -421,8 +422,8 @@ test("list reports the scope's background jobs from the registry (id, status, st
   const jobs = await broker.list();
   assert.equal(jobs.length, 2);
   const byId = new Map(jobs.map((j) => [j.processId, j]));
-  assert.equal(byId.get(a.processId)!.status.state, "running");
-  assert.equal(byId.get(b.processId)!.status.state, "exited");
+  assert.equal(byId.get(a.processId)!.registryStatus, "running");
+  assert.equal(byId.get(b.processId)!.registryStatus, "exited");
   assert.match(byId.get(a.processId)!.command, /job-a/);
 });
 
@@ -435,9 +436,7 @@ test("list distinguishes a TTL-reaped row from a clean exit (registry view, not 
   const byId = new Map((await broker.list()).map((j) => [j.processId, j]));
   assert.equal(byId.get(clean.processId)!.registryStatus, "running");
   assert.equal(byId.get(killed.processId)!.registryStatus, "reaped");
-  const ks = byId.get(killed.processId)!.status;
-  assert.equal(ks.state, "exited");
-  assert.notEqual(ks.state === "exited" ? ks.code : 0, 0, "a reaped job is NOT surfaced as a clean exit-0");
+  assert.equal("status" in byId.get(killed.processId)!, false, "no exit code is invented from the registry row");
 });
 
 test("start stamps the conversation's sessionRef on the registry row", async () => {

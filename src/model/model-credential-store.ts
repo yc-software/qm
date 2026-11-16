@@ -1,9 +1,9 @@
+import { validateHeaderValue } from "node:http";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
+import type { ModelProviderAvailability } from "./pi-models.ts";
+import { MODEL_PROVIDERS, type ModelProvider } from "./provider-endpoints.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
-
-export { isModelProvider, type ModelProvider } from "./pi-models.ts";
 
 export interface StoredModelCredential {
   provider: ModelProvider;
@@ -139,7 +139,9 @@ export function createCustomProviderStore(input: {
     async resolveKey(id: string): Promise<string | null> {
       const saved = await input.backing.get(id);
       if (!saved || saved.disabled || !saved.apiKeyEnc) return null;
-      return decryptSecret(saved.apiKeyEnc, key);
+      const apiKey = decryptSecret(saved.apiKeyEnc, key);
+      validateHeaderValue("apiKey", apiKey);
+      return apiKey;
     },
 
     async upsert(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<void> {
@@ -149,7 +151,8 @@ export function createCustomProviderStore(input: {
         if (!actor) throw new Error("updatedBy is required");
         const existing = await input.backing.get(spec.id);
         const trimmedKey = apiKey?.trim();
-        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
+        const live = existing?.disabled ? undefined : existing;
+        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : live?.apiKeyEnc;
         await input.backing.put(spec.id, {
           ...spec,
           ...(apiKeyEnc ? { apiKeyEnc } : {}),
@@ -164,7 +167,12 @@ export function createCustomProviderStore(input: {
       return write(async () => {
         const existing = await input.backing.get(id);
         if (!existing || existing.disabled) return false;
-        await input.backing.put(id, { ...existing, disabled: true, updatedAt: Date.now(), updatedBy });
+        await input.backing.put(id, {
+          ...customProviderSpec(existing),
+          disabled: true,
+          updatedAt: Date.now(),
+          updatedBy,
+        });
         return true;
       });
     },

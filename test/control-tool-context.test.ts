@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -43,6 +44,7 @@ const claims = (actorId: string): CapabilityClaims => ({
 function ctxFor(extra: Partial<ToolContextDeps>) {
   const scope = scopeId("personal", "U1");
   return createToolContext({
+    tenant: testTenant,
     sandbox: {} as unknown as Sandbox,
     provision: async () => handle,
     writableScopeId: scope,
@@ -68,58 +70,10 @@ test("createToolContext.cronCreate creates a real cron through the shared servic
   assert.equal(stored.title, "digest");
 });
 
-test("the cron tool lets a live org-admin owner attach unattended admin-read grants and shows them back", async () => {
-  const { built } = build();
-  const control = createControlService(built.app, built.scheduler, built.admin);
-  const ctx = ctxFor({ control, controlClaims: { ...claims("admin-alice"), liveActor: true } });
-  const cron = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "cron")!;
-  const run = async (params: Record<string, unknown>) =>
-    (
-      (await cron.execute("call", params as never, undefined, undefined, {} as never)) as {
-        content: Array<{ text: string }>;
-      }
-    ).content[0]!.text;
-
-  const created = await run({
-    action: "create",
-    title: "Spend review",
-    schedule: { everyMs: 3_600_000 },
-    task: "review spend",
-    unattendedGrants: ["admin.spend.read", "admin.crons.read"],
-  });
-  const id = /Created cron (\S+)/.exec(created)?.[1];
-  assert.ok(id, created);
-  assert.deepEqual((await built.app.getCron(id))?.unattendedGrants, ["admin.spend.read", "admin.crons.read"]);
-  assert.match(await run({ action: "get", id }), /unattended grants: admin\.spend\.read, admin\.crons\.read/);
-
-  await run({ action: "patch", id, unattendedGrants: ["admin.spend.read"] });
-  assert.deepEqual((await built.app.getCron(id))?.unattendedGrants, ["admin.spend.read"]);
-
-  const nonAdmin = createAgentTools(
-    { current: ctxFor({ control, controlClaims: { ...claims("U1"), liveActor: true } }) },
-    { controlTools: true },
-  ).find((t) => t.name === "cron")!;
-  const refused = (
-    (await nonAdmin.execute(
-      "call",
-      {
-        action: "create",
-        schedule: { everyMs: 3_600_000 },
-        task: "review spend",
-        unattendedGrants: ["admin.spend.read"],
-      } as never,
-      undefined,
-      undefined,
-      {} as never,
-    )) as { content: Array<{ text: string }> }
-  ).content[0]!.text;
-  assert.match(refused, /\[error\].*current org admin/);
-});
-
 test("webhook registration through the tool requires a live person and leaves refused calls without effects", async () => {
   const { built, control } = build();
   const request = { action: "handle the event", verification: { scheme: "hmac-sha256" as const, secret: "secret" } };
-  const auditBefore = await built.auditLog.events();
+  const auditBefore = await built.auditLog.events(testTenant);
   for (const scope of ["personal:U1", "channel:C1"] as const) {
     for (const extra of [
       {},
@@ -133,7 +87,7 @@ test("webhook registration through the tool requires a live person and leaves re
       assert.equal(result.ok, false, JSON.stringify({ scope, extra }));
       assert.equal(result.ok ? undefined : result.code, "forbidden");
       assert.deepEqual(await built.app.listWebhooks(), []);
-      assert.deepEqual(await built.auditLog.events(), auditBefore);
+      assert.deepEqual(await built.auditLog.events(testTenant), auditBefore);
     }
   }
   for (const extra of [{ liveActor: true }, { liveAuthor: true }]) {
@@ -146,12 +100,12 @@ test("webhook registration through the tool requires a live person and leaves re
   const [webhook] = await built.app.listWebhooks();
   await built.app.setWebhookEnabled(webhook!.id, false);
   const disabled = await built.app.listWebhooks();
-  const auditAfter = await built.auditLog.events();
+  const auditAfter = await built.auditLog.events(testTenant);
   const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), triggered: true } });
   const result = await ctx.webhookCreate(request);
   assert.equal(result.ok ? undefined : result.code, "forbidden");
   assert.deepEqual(await built.app.listWebhooks(), disabled);
-  assert.deepEqual(await built.auditLog.events(), auditAfter);
+  assert.deepEqual(await built.auditLog.events(testTenant), auditAfter);
 });
 
 test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () => {

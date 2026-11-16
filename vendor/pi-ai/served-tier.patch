@@ -1,3 +1,16 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 158acc8..c0da30c 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -389,6 +389,8 @@ export const stream = (model, context, options) => {
+                     output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
+                     output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
+                     output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
++                    if (typeof event.message.usage.speed === "string")
++                        output.serviceTier = event.message.usage.speed;
+                     // Anthropic doesn't provide total_tokens, compute from components
+                     output.usage.totalTokens =
+                         output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
 index 254156f..525c6eb 100644
 --- a/dist/api/openai-responses-shared.js

@@ -4,9 +4,14 @@ import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { NeedsApproval } from "../../tools/primitives.ts";
 import { isObj } from "../../util/objects.ts";
+import { APPROVAL_LIFETIME_MS } from "../../types.ts";
 import type { ToolContextRef, AgentToolsOptions } from "../agent-tools.ts";
 
 import { createRecorder } from "./record.ts";
+
+export function blockedForApprovalText(reason: string): string {
+  return `[blocked: needs human approval] ${reason}. If nobody answers the card within ${APPROVAL_LIFETIME_MS / 60_000} minutes, it expires and can no longer be approved.`;
+}
 
 export function text(s: string) {
   return { content: [{ type: "text" as const, text: s }], details: {} };
@@ -33,12 +38,21 @@ export const sandboxSelector = (description: string) => Type.Optional(Type.Strin
 export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   const recorder = createRecorder(ref);
   const { recordResult } = recorder;
+  const approvalUnavailableResult = (callId: string, summary: Record<string, unknown>, reason: string) =>
+    recordResult(
+      callId,
+      { ...summary, blocked: "approval_unavailable" },
+      text(`[blocked: approval unavailable] ${reason}\n${ref.approvalUnavailable}`),
+      true,
+    );
   const blockOnApproval = (
     callId: string,
     e: NeedsApproval,
     purpose?: string,
     summary: Record<string, unknown> = { tool: "execute" },
   ) => {
+    if (ref.approvalUnavailable)
+      return approvalUnavailableResult(callId, { ...summary, reason: e.approvalReason }, e.approvalReason);
     ref.pendingApprovals?.push({
       command: e.command,
       reason: e.approvalReason,
@@ -52,7 +66,7 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
     return recordResult(
       callId,
       { ...summary, blocked: "needs_approval", reason: e.approvalReason },
-      { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
+      { ...text(blockedForApprovalText(e.approvalReason)), terminate: true },
       true,
     );
   };
@@ -121,6 +135,7 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
     opts,
     ...recorder,
     blockOnApproval,
+    approvalUnavailableResult,
     unavailable,
     isUnavailable,
     resourceTool,

@@ -1,13 +1,12 @@
 import { errMessage } from "../util/errors.ts";
+import { credentialInjectionError, type CredentialInjection } from "./credential-injection.ts";
 import {
-  credentialInjectionError,
   isComposioHost,
   isValidBrokerHost,
   isValidBrokerMethod,
   isValidBrokerPathPrefix,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
-  type CredentialInjection,
   type DecryptedServiceCredential,
   type PublicServiceCredential,
   type ServiceCredentialStore,

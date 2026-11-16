@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export const DEFAULT_ROLLUP_HOURS = 24;
@@ -104,6 +105,10 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
         ON channel_policy_history(org_id, container, id DESC)`,
       ],
     },
+    ...tenantTables("surface-cache/channel-policy/0002-tenants", [
+      { table: "channel_policy", primaryKey: "org_id, container" },
+      { table: "channel_policy_history", primaryKey: "id" },
+    ]),
   ]);
   const row = (r: Record<string, unknown>): ChannelPolicy => ({
     container: r.container as string,
@@ -142,7 +147,7 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
               : `
            INSERT INTO channel_policy(org_id, container, orders, bots, ambient_enabled, set_by, updated_at)
            VALUES ($1,$2,COALESCE($3,''),COALESCE($4::jsonb,'{}'::jsonb),CASE WHEN $9 THEN $8::boolean END,$5,$6)
-           ON CONFLICT (org_id, container) DO UPDATE SET orders = COALESCE($3, channel_policy.orders),
+           ON CONFLICT (tenant_id, org_id, container) DO UPDATE SET orders = COALESCE($3, channel_policy.orders),
              bots = COALESCE($4::jsonb, channel_policy.bots),
              ambient_enabled = CASE WHEN $9 THEN $8::boolean ELSE channel_policy.ambient_enabled END,
              set_by = EXCLUDED.set_by, updated_at = EXCLUDED.updated_at

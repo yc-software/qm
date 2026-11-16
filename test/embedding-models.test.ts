@@ -20,11 +20,12 @@ import {
   resolveEmbeddingModel,
   embeddingModelCatalog,
   selectableBaseModels,
-  defaultWebuiModelIds,
+  modelOfferedInWebui,
   modelSupported,
 } from "../src/model/pi-models.ts";
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
+import { loadTenant } from "../src/tenants/cache.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const definition = {
@@ -76,7 +77,7 @@ test("verified embedding definitions survive registry reload but never become ch
   assert.deepEqual(requests, [{ model: "embed-small", input: ["verification"], encoding_format: "float" }]);
   assert.equal(resolveModel("embed-small"), undefined);
   assert.ok(!selectableBaseModels().some((m) => m.id === "embed-small"));
-  assert.ok(!defaultWebuiModelIds().includes("embed-small"));
+  assert.ok(!modelOfferedInWebui("embed-small"));
   assert.equal(modelSupported("embed-small"), false);
   await writer.delete("embed-small", "admin");
   await writer.refresh();
@@ -159,7 +160,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
     modelCredentialFetch: async () => Response.json({ data: [{ index: 0, embedding: [1, 0] }] }),
   });
   await built.modelRegistry.upsert(definition, "admin");
-  await built.refreshModels();
+  assert.ok(await loadTenant().then(() => resolveEmbeddingModel(definition.id)));
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));

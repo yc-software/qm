@@ -11,6 +11,7 @@ import {
 } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 const HOOK_TIMEOUT_MS = 5_000;
 
@@ -79,6 +80,7 @@ export function turnEndState(turn: {
 }
 
 export interface DecisionTurn {
+  tenant: Tenant;
   actorId?: string;
   scopeLabel: string;
   sessionId: string;
@@ -90,9 +92,9 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
   const run = async (rules: readonly DecisionRule[], hook: DecisionHook, state: string, turn: DecisionTurn) => {
     if (!rules.length) return undefined;
     const signal = AbortSignal.any([AbortSignal.timeout(HOOK_TIMEOUT_MS), ...(turn.cancel ? [turn.cancel] : [])]);
-    const { decisive, results } = await runHook(rules, hook, state, backend, signal);
+    const { decisive, results } = await runHook(turn.tenant, rules, hook, state, backend, signal);
     for (const result of results)
-      audit.record({
+      audit.record(turn.tenant, {
         at: Date.now(),
         principalId: turn.actorId ?? "system",
         action: "decision.classify",
@@ -109,7 +111,7 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
     return decisive;
   };
   return async (hook: DecisionHook, state: string, turn: DecisionTurn) => {
-    const rules = (await store?.rules(hook)) ?? [];
+    const rules = (await store?.rules(turn.tenant, hook)) ?? [];
     const enforced = new Set(rules.filter((rule) => rule.mode === "enforce").map(classifierKey));
     const awaited = (rule: DecisionRule) => enforced.has(classifierKey(rule));
     void run(
@@ -136,7 +138,7 @@ export function createReplyCheck(
   decide: ReturnType<typeof createDecisionHooks>,
 ): ReplyCheckFactory {
   return async (context) => {
-    const rules = (await store?.rules("turn_end")) ?? [];
+    const rules = (await store?.rules(context.turn.tenant, "turn_end")) ?? [];
     if (!rules.length) return undefined;
     const guidance = await context.guidance();
     return {

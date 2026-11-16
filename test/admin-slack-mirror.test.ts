@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -90,7 +91,7 @@ test("the mirror index lists containers with name, members, watermark, and messa
     assert.equal(c1.messageCount, 3, "deleted tombstones don't count as mirrored");
     assert.equal(d.hasMore, false);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "slack_mirror.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "slack_mirror.read"),
       "read is audited",
     );
   } finally {
@@ -131,7 +132,9 @@ test("the timeline pages a container's messages oldest→newest and keeps delete
     assert.equal(older.hasMore, false);
 
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "slack_mirror.messages.read" && e.resource === "C1"),
+      (await s.built.auditLog.events(testTenant)).some(
+        (e) => e.action === "slack_mirror.messages.read" && e.resource === "C1",
+      ),
       "message read is audited per container",
     );
   } finally {

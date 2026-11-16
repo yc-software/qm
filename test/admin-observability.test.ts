@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -146,7 +147,7 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const actions = (await s.built.auditLog.events()).map((e) => e.action);
+    const actions = (await s.built.auditLog.events(testTenant)).map((e) => e.action);
     for (const a of ["sessions.read", "session.read", "files.read", "file.read", "file.download", "file.view"]) {
       assert.ok(actions.includes(a), `audited ${a}`);
     }
@@ -228,7 +229,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       403,
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "session.llm.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "session.llm.read"),
       "audited session.llm.read",
     );
     assert.equal(
@@ -237,6 +238,33 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       "scope required",
     );
     assert.equal((await get(s.base, "/v1/admin/sessions/does-not-exist/llm?scope=org:default-org")).status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+test("batched capture reads retain exact session and turn pairs", async () => {
+  const s = start();
+  try {
+    const sessions = await Promise.all(
+      ["a", "b"].map((id) => s.built.sessions.getOrCreateByThread(`web:batch:${id}`, "dm", "personal:batch")),
+    );
+    for (const session of sessions)
+      for (const turnSeq of [1, 2])
+        await s.built.sessions.recordLlmRequest(session.id, {
+          turnSeq,
+          step: 0,
+          model: "mock",
+          scopeLabel: session.scopeId,
+          promptEnvelope: { model: "mock", messages: [{ role: "user", content: `${session.id}:${turnSeq}` }] },
+        });
+    const wanted = sessions.map((session, i) => ({ sessionId: session.id, turnSeq: i + 1 }));
+    const actual = await s.built.sessions.listLlmRequestsForTurns([...wanted, wanted[0]!]);
+    assert.deepEqual(
+      actual.map(({ sessionId, turnSeq }) => ({ sessionId, turnSeq })),
+      wanted,
+    );
+    assert.deepEqual(await s.built.sessions.listLlmRequestsForTurns([]), []);
   } finally {
     await s.close();
   }
@@ -1083,7 +1111,7 @@ test("a saved document is read and downloaded by artifact id", async () => {
       "bytes are downloadable by id",
     );
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1279,6 +1307,66 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
   }
 });
 
+test("admin governance: compaction keep percent round-trips, validates, and is org-scoped", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-compactionkeep-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, percent: unknown, headers: Record<string, string>) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/compaction-keep-percent`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ percent }),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, null);
+    assert.equal((await put("org:default-org", 30, { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put("channel:C1", 30, ALICE)).status, 400);
+    for (const bad of [0, 70, 2.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    assert.equal((await put("org:default-org", "25", ALICE)).status, 200);
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, 25);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, 25);
+    assert.equal((await put("org:default-org", "", ALICE)).status, 200);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("admin governance: history budget round-trips, validates, and is org-scoped", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-historybudget-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, tokens: unknown, headers: Record<string, string>) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/history-budget-tokens`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ tokens }),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, null);
+    assert.equal((await put("org:default-org", 60_000, { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put("channel:C1", 60_000, ALICE)).status, 400);
+    for (const bad of [0, -5, 20_000.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    assert.equal((await put("org:default-org", "60000", ALICE)).status, 200);
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, 60_000);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, 60_000);
+    assert.equal((await put("org:default-org", "", ALICE)).status, 200);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("admin governance: spend limits round-trip per scope, validate, and clear", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spendlimit-")) }));
   const server = createInsecureTestServer(built.app, {
@@ -1342,7 +1430,7 @@ test("the sessions listing digests cron fires from the fire table, even after th
     const row = listed.sessions.find((x: any) => x.id === session.id);
     assert.equal(row?.result, "42 signups today", "the digest is read from the cron_fires table by thread ref");
 
-    await s.built.app.deleteCron(cron.id);
+    await s.built.app.deleteCron(cron.id, { actorId: cron.owner });
     const relisted = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
     const survivor = relisted.sessions.find((x: any) => x.id === session.id);
     assert.equal(survivor?.result, "42 signups today", "fire digests outlive their cron");
@@ -1355,7 +1443,7 @@ test("admin errors paginate all retained records with scoped totals and bounded 
   const s = start();
   try {
     for (let i = 0; i < 260; i++) {
-      s.built.errors.record({
+      s.built.errors.record(testTenant, {
         category: "turn",
         code: String(i),
         message: "failure",
@@ -1364,7 +1452,12 @@ test("admin errors paginate all retained records with scoped totals and bounded 
       });
       await s.built.errors.flush();
     }
-    s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" });
+    s.built.errors.record(testTenant, {
+      category: "turn",
+      code: "other",
+      message: "failure",
+      scopeLabel: "personal:U2",
+    });
     const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
     const page = await getJson(s.base, path + "&limit=50&offset=200");
     assert.equal(page.total, 260);

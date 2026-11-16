@@ -23,6 +23,7 @@ export interface SpritesCall {
   method: string;
   path: string;
   script?: string;
+  token?: string;
 }
 
 export interface InjectedFailure {
@@ -44,11 +45,11 @@ export interface FakeSprites {
   failNext(status: number, opts?: InjectedFailure): void;
   refuseRestart(name: string): void;
   unhealthy(name: string, reason: string): void;
+  failCheckpoints(name: string, reason?: string): void;
   health(name: string, status: string, reason: string): void;
   refuseDelete(status?: number): void;
   rateLimitCreate(retryAfterSeconds: number): void;
   breakPolicyReadback(name: string): void;
-  setPressure(name: string, p: { full10: number; full60: number; load1: number }): void;
   restarts(): string[];
   reset(): void;
   cleanup(): void;
@@ -174,6 +175,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const stallAfterRun = new Set<string>();
   const refusedRestart = new Set<string>();
   const unhealthy = new Map<string, string>();
+  const checkpointFailure = new Map<string, string>();
   const health = new Map<string, { status: string; reason: string }>();
   const brokenReadback = new Set<string>();
   const restarts: string[] = [];
@@ -210,8 +212,6 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       script
         .replace(/\btimeout \d+ /g, "")
         .replace(/\bsha256sum -c --status\b/g, "shasum -a 256 -c --status")
-        .replace(/\/proc\/pressure\/io/g, `${home}/.proc-pressure-io`)
-        .replace(/\/proc\/loadavg/g, `${home}/.proc-loadavg`)
         .replace(/\/usr\/local/g, `${home}/.usr-local`)
         .replace(/\/home\/sprite/g, home)
         .replace(remapPath, (m) => (m.startsWith(home) ? m : `${home}/tmp/`))
@@ -280,7 +280,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
 
   const fetchImpl = async (url: URL, init?: RequestInit): Promise<Response> => {
     const method = init?.method ?? "GET";
-    calls.push({ method, path: url.pathname + url.search });
+    const token = new Headers(init?.headers).get("authorization")?.replace(/^Bearer /, "");
+    calls.push({ method, path: url.pathname + url.search, ...(token ? { token } : {}) });
     const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
     if (at >= 0) {
       const [next] = injected.splice(at, 1);
@@ -362,6 +363,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       return new Response(null, { status: 204 });
     }
     if (sub === "checkpoint" && method === "POST") {
+      const failure = checkpointFailure.get(name);
+      if (failure) return ndjson([{ type: "error", error: failure }]);
       const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { comment?: string };
       const id = `v${++checkpointSeq}`;
       const dir = join(root, ".checkpoints", name, id);
@@ -467,6 +470,10 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     unhealthy: (name, reason) => {
       unhealthy.set(name, reason);
     },
+    failCheckpoints: (name, reason) => {
+      if (reason) checkpointFailure.set(name, reason);
+      else checkpointFailure.delete(name);
+    },
     refuseDelete: (status) => {
       refuseDeleteStatus = status;
     },
@@ -475,14 +482,6 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     },
     breakPolicyReadback: (name) => {
       brokenReadback.add(name);
-    },
-    setPressure: (name, p) => {
-      const home = ensureDir(name);
-      writeFileSync(
-        join(home, ".proc-pressure-io"),
-        `some avg10=${p.full10} avg60=${p.full60} avg300=0.00 total=0\nfull avg10=${p.full10} avg60=${p.full60} avg300=0.00 total=0\n`,
-      );
-      writeFileSync(join(home, ".proc-loadavg"), `${p.load1} 0.00 0.00 1/100 1\n`);
     },
     restarts: () => [...restarts],
     reset: () => {

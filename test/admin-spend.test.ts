@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -258,14 +259,14 @@ test("spend: a caller with no admin grant gets 403 and writes no audit event, JS
       assert.deepEqual(Object.keys(body).sort(), ["error", "message"]);
     }
     assert.equal(
-      (await s.built.auditLog.events()).filter((e) => e.action === "spend.read").length,
+      (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.read").length,
       0,
       "a rejected read leaves no spend.read trail",
     );
 
     assert.equal((await get(s.base, "/v1/admin/spend")).status, 200);
     assert.equal((await get(s.base, "/v1/admin/spend?format=csv")).status, 200);
-    const audited = (await s.built.auditLog.events()).filter((e) => e.action === "spend.read");
+    const audited = (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.read");
     assert.equal(audited.length, 2, "both formats audit under the same action");
     for (const event of audited) assert.equal(event.resource, "spend");
   } finally {

@@ -2,6 +2,7 @@ import { githubRepoUrl, isGitBranchName } from "../../cli/src/render-source.ts";
 import { porterLocatorPresent, porterApiBaseUrl } from "../sandbox/sandbox-settings.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
 import { commitShaSchema } from "../util/ids.ts";
+import { isDnsName } from "../../plugins/chassis/src/dns-label.ts";
 
 export interface DeploySettings {
   deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b" | "render";
@@ -188,14 +189,11 @@ function sharedPlatformSuffixOf(domain: string): string | undefined {
   return SHARED_PLATFORM_SUFFIXES.find((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
-const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const HOSTNAME_RE = new RegExp(`^${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+$`);
-
 function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): string | undefined {
   const raw = env.DEPLOY_APPS_DOMAIN?.trim();
   if (raw) {
     const canonical = raw.toLowerCase().replace(/\.$/, "");
-    if (!HOSTNAME_RE.test(canonical)) {
+    if (!canonical.includes(".") || !isDnsName(canonical)) {
       throw new Error(
         `DEPLOY_APPS_DOMAIN (${raw}) is not a plain DNS name — set it to a bare domain like apps.example.com (no scheme, port, path, or wildcard prefix).`,
       );

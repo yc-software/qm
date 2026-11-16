@@ -134,6 +134,18 @@ test("one dispatchable workflow drives the whole release, main-only and in order
   assert.match(workflow, /concurrency:\n {2}group: release\n {2}cancel-in-progress: false/);
 });
 
+test("the release refuses a commit whose latest CI/CD run did not pass", () => {
+  const workflow = readFileSync(".github/workflows/release.yml", "utf8");
+
+  assert.match(workflow, /^ {2}preflight:\n[\s\S]*?permissions:\n {6}contents: read\n {6}actions: read\n/m);
+  assert.match(workflow, /actions\/workflows\/cicd\.yml\/runs\?head_sha=\$GITHUB_SHA/);
+  assert.match(workflow, /"completed success "\*\)/);
+  assert.ok(
+    workflow.indexOf("Require a green CI/CD run") < workflow.indexOf("Resolve the release tag"),
+    "the CI gate runs before the release is resolved or published",
+  );
+});
+
 test("the release bumps its own version past everything already released", () => {
   const workflow = readFileSync(".github/workflows/release.yml", "utf8");
 

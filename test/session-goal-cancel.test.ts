@@ -13,6 +13,8 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 
+const asU1 = { actorId: "U1" };
+
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) }));
 }
@@ -56,7 +58,7 @@ for (const status of ["active", "paused"] as const) {
     );
     assert.equal(openGoal(await sessionGoal(built, session.id))?.status, status);
     assert.equal(
-      (await built.app.getSessionForViewer(session.id, "U1"))?.goal?.status,
+      (await built.app.getSessionForViewer(session.id, asU1))?.goal?.status,
       status,
       "the chat's goal bar reads the open goal from the session",
     );
@@ -82,8 +84,8 @@ for (const status of ["active", "paused"] as const) {
       /The user cancelled this goal/,
       "the model is told the goal was cancelled",
     );
-    assert.ok(!(await built.app.listSessions("U1")).find((s) => s.id === session.id)?.goal);
-    assert.equal((await built.app.getSessionForViewer(session.id, "U1"))?.goal, undefined, "the goal bar closes");
+    assert.ok(!(await built.app.listSessions(asU1)).find((s) => s.id === session.id)?.goal);
+    assert.equal((await built.app.getSessionForViewer(session.id, asU1))?.goal, undefined, "the goal bar closes");
     assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
       cancelled: false,
       reason: "no_open_goal",
@@ -141,4 +143,50 @@ test("cancelling with no open goal touches nothing", async () => {
     reason: "no_open_goal",
   });
   assert.deepEqual(await built.signals.pending(run!.id), []);
+});
+
+test("a run holding a stale active copy cannot write a cancelled goal back to active; a new goal still replaces it", async () => {
+  const built = freshApp();
+  const session = await sessionWithGoal(built, "web:U1:stale", "active");
+  const stale = await sessionGoal(built, session.id);
+  assert.ok(stale);
+  assert.ok(await built.app.cancelSessionGoal(session.id, "U1"));
+
+  await built.sessions.setGoal({ sessionId: session.id }, { ...stale, tokensUsed: 99, updatedAt: Date.now() });
+  assert.equal((await sessionGoal(built, session.id))?.status, "cancelled");
+
+  const next = createGoalRecord({ objective: "old outreach goal", now: stale.createdAt + 1 });
+  await built.sessions.setGoal({ sessionId: session.id }, next);
+  assert.equal((await sessionGoal(built, session.id))?.status, "active");
+});
+
+test("the owner resumes a paused goal from the goal bar; a running reply or a closed goal refuses", async () => {
+  const built = freshApp();
+  const ref = "web:U1:resume";
+  const session = await sessionWithGoal(built, ref, "paused");
+  const paused = (await sessionGoal(built, session.id))!;
+  paused.pauseReason = "needs the user";
+  await built.sessions.setGoal({ sessionId: session.id }, paused);
+
+  assert.equal(await built.app.resumeSessionGoal(session.id, "U2"), null, "a non-participant cannot resume");
+
+  const out = await built.app.resumeSessionGoal(session.id, "U1");
+  assert.equal(out?.resumed && out.goal.status, "active");
+  const goal = await sessionGoal(built, session.id);
+  assert.equal(goal?.status, "active");
+  assert.equal(goal?.pauseReason, undefined, "the pause reason goes with the pause");
+  assert.equal((await built.app.getSessionForViewer(session.id, asU1))?.goal?.status, "active");
+  assert.equal(
+    (await built.app.resumeSessionGoal(session.id, "U1"))?.resumed,
+    true,
+    "resuming an already active goal is a no-op the bar can follow with a message",
+  );
+
+  await built.runs.enqueue({ sessionId: ref, request: runRequest() });
+  const run = (await built.runs.claim("w1", 60_000))[0]!;
+  assert.deepEqual(await built.app.resumeSessionGoal(session.id, "U1"), { resumed: false, reason: "busy" });
+  await built.runs.complete(run.id, run.leaseToken ?? "", { status: "ok", reply: "done" });
+
+  assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), { cancelled: true });
+  assert.deepEqual(await built.app.resumeSessionGoal(session.id, "U1"), { resumed: false, reason: "no_open_goal" });
 });

@@ -1,9 +1,9 @@
 import { escapeSlackText } from "./mrkdwn.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
-import { approvalDeliveryKey, approvalDeliveryRecipient } from "./approval-store.ts";
+import { approvalDeliveryKey } from "../surfaces/approval-cards.ts";
 import { samePerson } from "../directory/person.ts";
-import { approvalMessage } from "./approval-cards.ts";
+import { approvalDeliveryRecipient, approvalMessage, type ApprovalRequester } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
@@ -32,7 +32,7 @@ import {
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { Delivery } from "../types.ts";
-import type { TurnFlow } from "./turn-flow.ts";
+import { liveRunHoldsDelivery, runDeliveryId, type TurnFlow } from "../surfaces/turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
@@ -60,7 +60,6 @@ const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
 
 const DELIVERY_CLAIM_MARGIN_MS = 2_000;
 
-const RUN_RECOVERY_GRACE_MS = 15_000;
 const STATUS_PLACEHOLDER_LOOKBACK_MS = 6 * 3_600_000;
 
 function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown {
@@ -103,8 +102,8 @@ export function createDeliveryPoller(deps: {
       let complete = true;
       for (const t of types) {
         try {
-          const claimed = await core.claimDeliveries(t, claimMs);
           const at = Date.now();
+          const claimed = await core.claimDeliveries(t, claimMs);
           for (const r of claimed) expiresAt.set(r.id, at + claimMs);
           rows.push(...claimed);
         } catch {
@@ -228,7 +227,7 @@ export function createDeliveryPoller(deps: {
         const destinationClient = deliveryClient(defaultClient, d.destination);
         if (!destinationClient) return;
         const client = destinationClient;
-        const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
+        const runId = runDeliveryId(d);
         const account = d.destination.account;
         const namespace = deps.externalNamespace?.(account?.id ?? "default");
         if (
@@ -240,8 +239,7 @@ export function createDeliveryPoller(deps: {
           await ackDelivery(d.id);
           return;
         }
-        if (runId && inFlightRuns.has(runId)) return;
-        if (runId && typeof d.createdAt === "number" && Date.now() - d.createdAt < RUN_RECOVERY_GRACE_MS) return;
+        if (liveRunHoldsDelivery(inFlightRuns, d)) return;
         let slackApiMs: number | undefined;
         await deliverWithRetry({
           tracker: deliveryTracker,
@@ -432,8 +430,9 @@ export function createDeliveryPoller(deps: {
             }
           },
           ack: async (body) => {
+            const acked = await ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs));
             if (runId) await core.taskAcknowledgements?.finish(client, runId);
-            return ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs));
+            return acked;
           },
           onError: logDeliveryError(d.id),
         });
@@ -463,9 +462,7 @@ export function createDeliveryPoller(deps: {
               const commandApproval = d.destination.commandApprovalId
                 ? await core.getApproval(d.destination.commandApprovalId)
                 : null;
-              const requester = approvalDeliveryRecipient(
-                commandApproval?.request?.actor as { externalId?: string } | undefined,
-              );
+              const requester = approvalDeliveryRecipient(commandApproval?.request as ApprovalRequester | undefined);
               if (
                 d.destination.commandApprovalId &&
                 (!commandApproval ||

@@ -1,4 +1,5 @@
 import { test, before } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { scopeId } from "../src/types.ts";
@@ -22,7 +23,7 @@ test("pg error log: persists events, filters by scope, newest-first, shape-only"
 
   const now = Date.now();
   const clock = t.mock.method(Date, "now", () => now);
-  log.record({
+  log.record(testTenant, {
     category: "command_policy",
     code: "denied",
     message: "rm -rf <redacted>",
@@ -30,10 +31,10 @@ test("pg error log: persists events, filters by scope, newest-first, shape-only"
     sessionId: "sess-1",
   });
   clock.mock.mockImplementation(() => now + 1);
-  log.record({ category: "turn", code: "error", message: "boom (shape-only)", scopeLabel: s2 });
+  log.record(testTenant, { category: "turn", code: "error", message: "boom (shape-only)", scopeLabel: s2 });
 
   clock.mock.restore();
-  const all = await log.list({ limit: 100 });
+  const all = await log.list(testTenant, { limit: 100 });
   assert.equal(all.length, 2, "both events persisted");
   assert.equal(all[0]!.ts, now + 1);
   assert.equal(all[1]!.ts, now);
@@ -42,31 +43,31 @@ test("pg error log: persists events, filters by scope, newest-first, shape-only"
   assert.equal(all[0]!.code, "error");
   assert.equal(all[0]!.sessionId, undefined, "an absent session id stays absent (not empty string)");
 
-  const onlyS1 = await log.list({ scopeId: s1, limit: 100 });
+  const onlyS1 = await log.list(testTenant, { scopeId: s1, limit: 100 });
   assert.equal(onlyS1.length, 1, "scope filter narrows to one");
   assert.equal(onlyS1[0]!.category, "command_policy");
   assert.equal(onlyS1[0]!.message, "rm -rf <redacted>", "the redacted message round-trips");
   assert.equal(onlyS1[0]!.sessionId, "sess-1", "the triage session id round-trips");
   assert.ok(typeof onlyS1[0]!.ts === "number", "stamped with a timestamp");
 
-  const capped = await log.list({ limit: 1 });
+  const capped = await log.list(testTenant, { limit: 1 });
   assert.equal(capped.length, 1, "limit caps the result");
 
-  assert.equal(await log.count(), 2, "count totals every event");
-  assert.equal(await log.count({ scopeId: s1 }), 1, "count honors the scope filter");
-  assert.equal(await log.count({ sessionId: "sess-1" }), 1, "count honors the session filter");
+  assert.equal(await log.count(testTenant), 2, "count totals every event");
+  assert.equal(await log.count(testTenant, { scopeId: s1 }), 1, "count honors the scope filter");
+  assert.equal(await log.count(testTenant, { sessionId: "sess-1" }), 1, "count honors the session filter");
 });
 
 test("pg error log: survives a fresh log over the same table (durability)", { skip }, async () => {
   const reopened = createPostgresErrorLog(URL!);
-  const rows = await reopened.list({ limit: 100 });
+  const rows = await reopened.list(testTenant, { limit: 100 });
   assert.ok(rows.length >= 2, "events written by a prior log instance are still readable");
 });
 
 test("pg error log: flush makes writes visible to another process", { skip }, async () => {
   const writer = createPostgresErrorLog(URL!);
   const reader = createPostgresErrorLog(URL!);
-  writer.record({
+  writer.record(testTenant, {
     category: "session_title",
     code: "generation_failed",
     message: "cross-process barrier",
@@ -75,7 +76,7 @@ test("pg error log: flush makes writes visible to another process", { skip }, as
   });
 
   await writer.flush();
-  assert.equal((await reader.list({ sessionId: "sess-cross-process" })).length, 1);
+  assert.equal((await reader.list(testTenant, { sessionId: "sess-cross-process" })).length, 1);
 });
 
 test("pg error log pages equal-timestamp records deterministically beyond 200", { skip }, async () => {
@@ -86,12 +87,17 @@ test("pg error log pages equal-timestamp records deterministically beyond 200", 
       "INSERT INTO error_events(ts, scope_label, category, code, message, session_id) SELECT 123, 'personal:pagination', 'turn', n::text, 'failure', 'pagination' FROM generate_series(0,259) n",
     );
     const log = createPostgresErrorLog(URL!);
-    const page = await log.list({ scopeId: "personal:pagination", sessionId: "pagination", limit: 50, offset: 200 });
+    const page = await log.list(testTenant, {
+      scopeId: "personal:pagination",
+      sessionId: "pagination",
+      limit: 50,
+      offset: 200,
+    });
     assert.equal(page.length, 50);
     assert.equal(page[0]?.code, "59");
     assert.equal(page.at(-1)?.code, "10");
-    assert.equal((await log.list({ scopeId: "personal:pagination", offset: 250, limit: 50 })).length, 10);
-    assert.equal(await log.count({ scopeId: "personal:pagination" }), 260);
+    assert.equal((await log.list(testTenant, { scopeId: "personal:pagination", offset: 250, limit: 50 })).length, 10);
+    assert.equal(await log.count(testTenant, { scopeId: "personal:pagination" }), 260);
   } finally {
     await pool.end();
   }

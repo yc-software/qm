@@ -5,6 +5,7 @@ import { buildGmailReplyMime } from "../src/loops/sources/gmail.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
+import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { testMap } from "./support/test-database.ts";
 
 test("sent chats are durable, idempotent, and isolated to the signed-in owner", async () => {
@@ -91,7 +92,7 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
       text: "Original sent message",
     },
     deps: {
-      loops: { store, items },
+      loops: { store, items, outputs: createLoopOutputStore(testMap()) },
       loopSourceTokens: { connectorAccessToken: async () => "test-token" },
       featureFlags: { enabled: async () => true },
     },

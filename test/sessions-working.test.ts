@@ -10,6 +10,9 @@ import { buildApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
+
+const asU1 = { actorId: "U1" };
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-working-"));
@@ -43,7 +46,7 @@ test("listSessions flags a session with an in-flight turn as working", async () 
   assert.notEqual(busyId, busyThread, "session UUID and threadRef are distinct (the trap)");
   await runs.enqueue({ sessionId: busyThread, request: enqueueRequest() });
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions(asU1);
   const busyRow = list.find((s) => s.threadRef === busyThread);
   const idleRow = list.find((s) => s.threadRef === "web:U1:idle");
 
@@ -58,14 +61,14 @@ test("the working flag clears once the in-flight run settles", async () => {
   await app.turn(dm("start", thread));
   await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
 
-  assert.equal((await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working, true);
+  assert.equal((await app.listSessions(asU1)).find((r) => r.threadRef === thread)?.working, true);
 
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   assert.equal(claimed?.sessionId, thread, "the run is keyed by threadRef");
   await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "ok", reply: "done" });
 
   assert.ok(
-    !(await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working,
+    !(await app.listSessions(asU1)).find((r) => r.threadRef === thread)?.working,
     "the flag clears once the run is terminal",
   );
 });
@@ -78,21 +81,21 @@ test("listSessions flags a subagent whose latest turn failed, and only while it 
   await sessions.setParentSession(child.sessionId!, parent.sessionId!);
 
   for (const thread of ["web:U1:child", "web:U1:loose"]) {
-    await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
-    const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
+    const { run } = await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
+    let claimed = await runs.claimById(run.id, "w1", 5_000);
+    await settle(async () => (claimed ??= await runs.claimById(run.id, "w1", 5_000)) !== null);
     await runs.fail(claimed!.id, claimed!.leaseToken ?? "", "boom", { retry: false });
   }
 
-  let list = await app.listSessions("U1");
-  for (let i = 0; i < 100 && !list.find((s) => s.id === child.sessionId)?.lastTurnFailed; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    list = await app.listSessions("U1");
-  }
+  let list = await app.listSessions(asU1);
+  await settle(async () =>
+    (list = await app.listSessions(asU1)).some((s) => s.id === child.sessionId && s.lastTurnFailed),
+  );
   assert.equal(list.find((s) => s.id === child.sessionId)?.lastTurnFailed, true);
   assert.ok(!list.find((s) => s.id === loose.sessionId)?.lastTurnFailed, "only subagents carry the flag");
 
   await app.turn(dm("try again", "web:U1:child"));
-  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child.sessionId)?.lastTurnFailed);
+  assert.ok(!(await app.listSessions(asU1)).find((s) => s.id === child.sessionId)?.lastTurnFailed);
 });
 
 test("sidebar batches visible goals from the session rows and drops inactive ones", async () => {
@@ -132,7 +135,7 @@ test("sidebar batches visible goals from the session rows and drops inactive one
     assert.deepEqual(new Set(ids), new Set(refs));
     return current(ids);
   };
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions(asU1);
   assert.deepEqual({ reads, runReads }, { reads: 1, runReads: 1 });
   assert.equal(list.length, 2);
   assert.equal(list.find((row) => row.id === visible[0])?.goal?.objective, "goal 0");
@@ -161,12 +164,12 @@ test("a working subagent reports its current run start and latest purpose from t
   await runs.enqueue({ sessionId: "web:U1:c", request: enqueueRequest() });
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
 
-  let row = (await app.listSessions("U1")).find((s) => s.id === child.sessionId);
+  let row = (await app.listSessions(asU1)).find((s) => s.id === child.sessionId);
   assert.equal(row?.workingSince, claimed!.startedAt);
   assert.equal(row?.purpose, undefined, "a purpose from an earlier run is not shown");
 
   await say("Reading the spec", claimed!.id);
-  row = (await app.listSessions("U1")).find((s) => s.id === child.sessionId);
+  row = (await app.listSessions(asU1)).find((s) => s.id === child.sessionId);
   assert.equal(row?.purpose, "Reading the spec");
-  assert.equal((await app.listSessions("U1")).find((s) => s.id === parent.sessionId)?.workingSince, undefined);
+  assert.equal((await app.listSessions(asU1)).find((s) => s.id === parent.sessionId)?.workingSince, undefined);
 });

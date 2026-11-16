@@ -1,4 +1,5 @@
 import { Check } from "typebox/value";
+import { IO_SATURATED_FULL60 } from "../../sandbox/load-probe.ts";
 import { isObj } from "../../util/objects.ts";
 import { MaskedExecutionError } from "../../security/secret-masking.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -16,8 +17,6 @@ function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }):
   return s.state === "exited" ? `exited ${s.code}` : "running";
 }
 
-const PRESSURE_WARN_FULL60 = 50;
-
 export function computerTools(kit: ToolKit) {
   const { ref, opts, logResult, recordCall, recordResult, blockOnApproval } = kit;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
@@ -32,11 +31,12 @@ export function computerTools(kit: ToolKit) {
     capabilityTtlMs === 0
       ? "Those turn tokens do not expire here, but authorization checks still apply."
       : `Those turn tokens expire ${capabilityTtlHours} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
+  const adoptSandbox = opts?.botActor ? "pass its sandbox_id" : "set it default";
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
     `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
     "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
-    "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
+    `On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, ${adoptSandbox}, and recover work from git or Files.`;
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
@@ -108,8 +108,8 @@ export function computerTools(kit: ToolKit) {
         : "";
       const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =
-        localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
-          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
+        localExec && r.load && (r.load.ioFull60 ?? 0) >= IO_SATURATED_FULL60
+          ? `\n[pressure] this computer's disk is saturated (io ${r.load.ioFull60}%, load ${r.load.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
           : "";
       return recordResult(
         callId,
@@ -200,19 +200,18 @@ export function computerTools(kit: ToolKit) {
   const sandboxActions = [
     "status",
     "restart",
-    ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
+    ...(opts?.sandboxResources ? ["list", "create", ...(opts.botActor ? [] : ["set_default"]), "retire"] : []),
   ];
   const memorySizedBackends = opts?.sandboxResources ? (opts.memorySizedBackends ?? []) : [];
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
-    description:
-      "Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). set_default: route commands there (null clears). status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, list, create, set_default and retry; report blocked only if creation fails. Durable outputs belong in git or Files.",
+    description: `Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). ${opts?.botActor ? "" : "set_default: route commands there (null clears). "}status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, ${opts?.botActor ? "list or create one and pass its sandbox_id" : "list, create, set_default and retry"}; report blocked only if creation fails. Durable outputs belong in git or Files.`,
     parameters: Type.Object({
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
         Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
-          description: "Sandbox ID; status/restart use the default if omitted. null only for set_default.",
+          description: `Sandbox ID; status/restart use the default if omitted.${sandboxActions.includes("set_default") ? " null only for set_default." : ""}`,
         }),
       ),
       backend: Type.Optional(Type.String({ description: "create: provider from list." })),
@@ -268,9 +267,8 @@ export function computerTools(kit: ToolKit) {
         const s = await tc.computerStatus(params.sandbox_id);
         const verdict = computerVerdict(s);
         const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
-        const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
-        const resourcesLine = s.resources
-          ? `; cpu ${s.resources.cpuUsedPct}%, memory ${s.resources.memUsedMb}/${s.resources.memTotalMb} MiB, disk ${s.resources.diskUsedGb}/${s.resources.diskTotalGb} GiB`
+        const loadLine = s.load
+          ? `${s.load.ioFull60 === null ? "" : `; io pressure: ${s.load.ioFull60}%`}; load ${s.load.load1}, memory ${s.load.memUsedMb}/${s.load.memTotalMb} MiB, disk ${s.load.diskUsedGb}/${s.load.diskTotalGb} GiB`
           : "";
         let shellLine = s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`;
         if (s.lifecycleState === "paused") shellLine = "paused (not probed)";
@@ -292,17 +290,12 @@ export function computerTools(kit: ToolKit) {
         }
         const verdictLine =
           verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
+            ? ` — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, ${adoptSandbox}, and retry there`
             : "";
         return recordResult(
           callId,
           { tool: "sandbox", action: "status", verdict, ...s },
-          text(
-            [
-              `machine: ${machineLine}; shell: ${shellLine}${pressureLine}${resourcesLine}${verdictLine}`,
-              ...recoveryLines,
-            ].join("\n"),
-          ),
+          text([`machine: ${machineLine}; shell: ${shellLine}${loadLine}${verdictLine}`, ...recoveryLines].join("\n")),
         );
       } catch (e) {
         if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose, { tool: "sandbox" });
@@ -535,10 +528,13 @@ export function computerTools(kit: ToolKit) {
           case "unwatch": {
             try {
               const r = await tc.backgroundUnwatch(params.monitor_id!);
+              const refusal = r.notYours
+                ? `[not your watch: ${r.monitorId}; someone else in this conversation armed it]`
+                : `[no such watch: ${r.monitorId}]`;
               return recordResult(
                 callId,
                 { tool: "background", action: params.action, ...r },
-                text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
+                text(r.removed ? `unwatched ${r.monitorId}` : refusal),
                 !r.removed,
               );
             } catch (e) {
@@ -577,7 +573,7 @@ export function computerTools(kit: ToolKit) {
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
+                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : j.registryStatus}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",
@@ -633,12 +629,15 @@ export function validateSandboxTool(
   if (!["execute", "background", "sandbox"].includes(tool.name)) return tool;
   const properties = (tool.parameters as { properties: Record<string, TSchema> }).properties;
   const schema = Type.Object(properties, { additionalProperties: false });
+  const declared = operationFields[tool.name];
+  const offered = (properties.action as { enum?: string[] } | undefined)?.enum;
+  const operations =
+    declared && Object.fromEntries(Object.entries(declared).filter(([name]) => offered?.includes(name) ?? true));
   return {
     ...tool,
     parameters: schema,
     async execute(callId, params, signal, onUpdate, ctx) {
       const action = isObj(params) ? String(params.action) : "";
-      const operations = operationFields[tool.name];
       const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
       const allowed = fields ? new Set(["action", "purpose", ...fields]) : undefined;
       let required: string[];
@@ -671,7 +670,9 @@ export function validateSandboxTool(
         if (unknown.length) return `${tool.name} has no ${named(unknown)} field`;
         if (unused.length) return `${action} doesn't take ${named(unused)}; omit them and retry`;
         if (nullSandbox)
-          return "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID";
+          return operations && Object.hasOwn(operations, "set_default")
+            ? "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID"
+            : "omit `sandbox_id` or pass a sandbox ID";
         if (!Check(schema, params)) return "a field has the wrong type or value; check the tool schema";
         return undefined;
       })();

@@ -1,5 +1,5 @@
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
-import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
+import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
 import { clearTranscriptCache } from "./transcript-cache";
@@ -53,6 +53,7 @@ import { isPhone, markDesktopEmbed, onPhoneChange, trackVisualViewport } from ".
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { reloadIntoServedRelease } from "./stale-release";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
@@ -99,7 +100,7 @@ import { openSessionAtMessage, showLinkedSession } from "./open-message";
 import { closeBrowse, openBrowse, sidebarDestinations } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { openDeployById, renderDeploys } from "./deploys";
+import { openAppById, renderApps } from "./apps-page";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
 import {
@@ -173,7 +174,7 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
 }
 
 function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
-  if (view === "deploys" && item) openDeployById(item);
+  if (view === "apps" && item) openAppById(item);
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
@@ -253,7 +254,7 @@ const ICON = {
   contexts: Folder,
   files: Files,
   keychain: KeyRound,
-  deploys: Rocket,
+  apps: Rocket,
   webhooks: Webhook,
   crons: Clock,
   loops: Repeat,
@@ -766,8 +767,8 @@ function showView(v: View): void {
     case "keychain":
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
@@ -837,8 +838,8 @@ function refreshActiveView(v: View): void {
       clearConnectorNotice();
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
@@ -1016,8 +1017,10 @@ window.addEventListener("popstate", () => {
   else void restoreChatsEntry(session);
 });
 
+document.addEventListener("visibilitychange", reloadIntoServedRelease);
+
 window.addEventListener("focus", () => {
-  if (!appState.me) return;
+  if (!appState.me || reloadIntoServedRelease()) return;
   if (appState.currentView === "contexts") void renderContexts();
   else if (appState.currentView === "chats") {
     void refreshSessions({ silent: true, refreshContexts: true });
@@ -1056,8 +1059,6 @@ export async function bootSafely(): Promise<void> {
   }
 }
 
-// Session links nobody else handled (chat messages, markdown) switch the view instead of opening a new
-// tab or desktop window. Modified clicks fall through, so cmd/ctrl-click still opens a new tab.
 document.addEventListener("click", (e) => {
   if (!shellMounted || e.defaultPrevented || !isPlainLeftClick(e)) return;
   const anchor = e.composedPath().find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
@@ -1080,6 +1081,15 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (wanted === "app-share") {
+    await import("./app-share-embed")
+      .then(({ bootAppShare }) => bootAppShare(params))
+      .catch((e: unknown) => {
+        reportHandledError("web-ui: app-share", e);
+        renderAuthGate({ kind: "unreachable" });
+      });
+    return;
+  }
   const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
   document.body.classList.toggle("app-edit-embed", appEditEmbed);
   markDesktopEmbed(appEditEmbed);
@@ -1193,7 +1203,7 @@ export async function boot(): Promise<void> {
       const status = params.get("status");
       if (provider && status) noteConnectorResult(provider, status);
     }
-    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
+    if (wanted === "contexts" || wanted === "files" || wanted === "apps") {
       const scope =
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;

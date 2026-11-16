@@ -26,7 +26,7 @@ test("Slack group DM contexts list the other members with their Slack photos", a
       avatarUrl: "http://insecure.example.com/b.png",
     },
   ]);
-  await directory.upsertGroup("G1", ["U1", "U2", "U3"]);
+  await directory.upsertGroup("G1", ["U1", "U2", "U3"], "slack");
   await app.turn({
     surface: "test",
     actor: { externalId: "U1" },

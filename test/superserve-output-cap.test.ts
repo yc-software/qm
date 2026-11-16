@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clampUtf8 } from "../src/sandbox/superserve-client.ts";
+import { clampUtf8 } from "../src/util/text.ts";
 
 test("clampUtf8 bounds output by bytes, not UTF-16 code units", () => {
   assert.equal(clampUtf8("a".repeat(100), 10), "a".repeat(10));

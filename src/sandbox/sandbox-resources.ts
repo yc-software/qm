@@ -1,11 +1,30 @@
+import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
+import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
+import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
-import type { SandboxBackendName } from "./sandbox-routing.ts";
+import {
+  parseScopeId,
+  personalScope,
+  type CommandPolicy,
+  type EgressPolicy,
+  type Principal,
+  type Resolution,
+  type ScopeId,
+} from "../types.ts";
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import type { IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
+import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
+import { isOpenScopeMember } from "../resolution/sharing-access.ts";
+import { NoDefaultSandboxError, type SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import type { LoadSample } from "./load-probe.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
 
 export interface SandboxResource {
   id: string;
@@ -18,13 +37,14 @@ export interface SandboxResource {
   legacy: boolean;
   state: "unverified" | "provisioning" | "ready" | "failed" | "retired";
   availableActions?: string[];
-  machineId?: string;
   cleanupPending?: boolean;
   holders?: string[];
   spec?: AgentComputerSpec;
   error?: string;
   jobOnly?: boolean;
   memoryGb?: number;
+  swarmId?: string;
+  personUsed?: true;
 }
 
 export interface SandboxAccessPlan {
@@ -68,29 +88,53 @@ export interface SandboxResources {
     reservationId?: string,
     jobOnly?: boolean,
     memoryGb?: number,
+    swarmId?: string,
+    personUsed?: boolean,
   ): Promise<SandboxResource>;
-  jobComputers(): Promise<SandboxResource[]>;
+  eachJobComputer(work: (computer: SandboxResource) => Promise<void>): Promise<void>;
   retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
   retire(actorId: string, id: string): Promise<void>;
+  notePersonUse(id: string): Promise<SandboxResource>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
+  recordLoad(id: string, sample: LoadSample): Promise<void>;
+  load(id: string): Promise<LoadSample | null>;
   release(id: string, runId: string | undefined, isLive: (runId: string) => Promise<boolean>): Promise<boolean>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
-  defaultBackend(): SandboxBackendName;
+  defaultBackend(): Promise<SandboxBackendName>;
 }
 
 export class SandboxAccessError extends Error {}
+
+export class BotComputerRefusedError extends SandboxAccessError {
+  constructor() {
+    super("a Slack bot's turn can use only a computer it made that no person has used");
+  }
+}
 
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
 
 export async function preferredBackend(resources: SandboxResources, scopeId: ScopeId): Promise<SandboxBackendName> {
-  return (await resources.resolve(scopeId))?.backend ?? resources.defaultBackend();
+  return (await resources.resolve(scopeId))?.backend ?? (await resources.defaultBackend());
+}
+
+export function botMayUseComputers(
+  swarms: Pick<SwarmService, "botMayUseComputer"> | undefined,
+  turn: { actorId: string; threadRef: string; sessionId: string },
+): (computer: SandboxResource) => Promise<boolean> {
+  return async (computer) =>
+    computer.swarmId
+      ? !!swarms && (await swarms.botMayUseComputer(computer, turn))
+      : personOrOwningBot(
+          { actorId: turn.actorId, botActor: true },
+          async () => !computer.personUsed && samePerson(computer.createdBy, turn.actorId),
+        );
 }
 
 export async function accessConversationSandbox(
@@ -98,17 +142,63 @@ export async function accessConversationSandbox(
   actorId: string,
   id: string,
   canUseScope: (scope: ScopeId) => boolean | Promise<boolean>,
+  botMayUse?: (resource: SandboxResource) => Promise<boolean>,
 ): Promise<SandboxResource> {
   if (!id.trim()) throw new SandboxAccessError("sandbox_id must be a non-empty sandbox ID");
   const resource = await resources?.access(actorId, id);
   if (!resource || resource.state === "retired" || !(await canUseScope(resource.ownerScopeId)))
     throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");
+  if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+  return resource;
+}
+
+export async function assertBotMayUseComputer(
+  resources: Pick<SandboxResources, "get" | "resolve"> | undefined,
+  scopeId: ScopeId,
+  sandboxId: string | undefined,
+  botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
+): Promise<void> {
+  if (!botMayUse) return;
+  if (!sandboxId) {
+    await defaultComputer(resources, scopeId, botMayUse);
+    return;
+  }
+  const resource = await resources?.get(sandboxId);
+  if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+}
+
+export const MARK_ADMIN_CREATED_COMPUTERS_MIGRATION = {
+  id: "durable-map/sandbox_resources/0040-mark-admin-created",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('sandbox_resources') IS NOT NULL AND to_regclass('audit_log') IS NOT NULL THEN
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
+        UPDATE sandbox_resources r SET json = r.json || '{"personUsed": true}'::jsonb
+        FROM audit_log a
+        WHERE a.action = 'sandbox.create' AND a.tenant_id = r.tenant_id AND a.resource = r.id
+          AND NOT r.json ? 'personUsed';
+      END IF;
+    END $$`,
+  ],
+};
+
+export async function defaultComputer(
+  resources: Pick<SandboxResources, "resolve"> | undefined,
+  scopeId: ScopeId,
+  botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
+): Promise<SandboxResource | undefined> {
+  if (!resources) return;
+  const resource = await resources.resolve(scopeId);
+  if (!resource) throw new NoDefaultSandboxError();
+  if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
   return resource;
 }
 
 export function createSandboxResources(opts: {
   upgrade?: () => Promise<void>;
   records: DurableMap<SandboxResource>;
+  loads: DurableMap<LoadSample>;
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
@@ -118,14 +208,15 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  let upgraded: Promise<void> | undefined;
+  const upgraded = perTenant<{ done?: Promise<void> }>(() => ({}));
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    upgraded ??= opts.upgrade().catch((error: unknown) => {
-      upgraded = undefined;
+    const state = upgraded();
+    state.done ??= opts.upgrade().catch((error: unknown) => {
+      state.done = undefined;
       throw error;
     });
-    await upgraded;
+    await state.done;
   };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
@@ -166,12 +257,12 @@ export function createSandboxResources(opts: {
     }
   };
   const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
-    const lock = exclusive ? opts.lock.withLock : opts.lock.withSharedLock;
-    return lock(`sandbox-resource:${id}`, async () => {
+    const guarded = async (): Promise<T> => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");
       return action();
-    });
+    };
+    return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
   };
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
@@ -195,10 +286,17 @@ export function createSandboxResources(opts: {
         canUseScope: async (actorId, scopeId) =>
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
-    defaultBackend: () => opts.defaultBackend,
+    async defaultBackend() {
+      const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
+      if (!opts.backends[backend])
+        throw new Error(`sandbox backend unavailable: ${backend}; this deployment does not run it`);
+      return backend;
+    },
     initialize,
     get,
     use,
+    recordLoad: (id, sample) => opts.loads.put(id, sample),
+    load: (id) => opts.loads.get(id),
     async hold(id, runId) {
       await opts.records.update(id, (current) =>
         current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },
@@ -236,16 +334,23 @@ export function createSandboxResources(opts: {
         }),
       );
     },
-    async jobComputers() {
-      await initialize();
-      return (await opts.records.all()).filter((record) => record.jobOnly);
+    async notePersonUse(id) {
+      const record = await get(id);
+      if (record.personUsed) return record;
+      return (await opts.records.update(id, (current) => ({ ...current, personUsed: true }))) ?? record;
+    },
+    async eachJobComputer(work) {
+      await claimThenBind(opts.records.claimTenants, async () => {
+        await initialize();
+        for (const record of await opts.records.all()) if (record.jobOnly) await work(record);
+      });
     },
     async retireJobComputer(id, seenState) {
       await opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const current = await get(id);
         if (!current.jobOnly || current.state !== seenState) return;
         await destroy(current);
-        await opts.records.delete(id);
+        await Promise.all([opts.records.delete(id), opts.loads.delete(id)]);
       });
     },
     access: agentRecord,
@@ -296,7 +401,7 @@ export function createSandboxResources(opts: {
         providers: profiles(),
       };
     },
-    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb) {
+    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId, personUsed) {
       await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
@@ -320,6 +425,8 @@ export function createSandboxResources(opts: {
         state: "provisioning",
         ...(jobOnly ? { jobOnly } : {}),
         ...(memoryGb ? { memoryGb } : {}),
+        ...(swarmId ? { swarmId } : {}),
+        ...(personUsed ? { personUsed } : {}),
       };
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const existing = await opts.records.get(id);
@@ -329,27 +436,31 @@ export function createSandboxResources(opts: {
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
         }
-        await opts.records.put(id, record);
+        if (existing)
+          await opts.records.update(id, (current) => ({
+            ...current,
+            ...record,
+            createdBy: current.createdBy,
+            error: undefined,
+          }));
+        else await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
-          const handle = await sandbox.provision(record.backingScopeId, {
+          await sandbox.provision(record.backingScopeId, {
             ...(await opts.provisionOptions?.(scopeId)),
             ...(memoryGb ? { memoryGb } : {}),
           });
-          const ready: SandboxResource = {
-            ...record,
+          return (await opts.records.update(id, (current) => ({
+            ...current,
             state: "ready",
-            machineId: handle.id,
             spec: sandbox.profile.spec,
-          };
-          await opts.records.put(id, ready);
-          return ready;
+          })))!;
         } catch (error) {
-          await opts.records.put(id, {
-            ...record,
+          await opts.records.update(id, (current) => ({
+            ...current,
             state: "failed",
             error: error instanceof Error ? error.message : String(error),
-          });
+          }));
           throw error;
         }
       });
@@ -371,4 +482,65 @@ export function createSandboxResources(opts: {
       });
     },
   };
+}
+
+export function createTurnSandboxAccess(ctx: {
+  deps: {
+    sandboxResources?: SandboxResources;
+    config?: ScopedConfigStore;
+    isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
+  };
+  actor: Principal;
+  resolution: Resolution;
+  scopeId: ScopeId;
+  openResourceAccess?: boolean;
+  botMayUse?: (resource: SandboxResource) => Promise<boolean>;
+}) {
+  const { deps, actor, resolution, scopeId, openResourceAccess, botMayUse } = ctx;
+  const writableScopeId = resolution.writableScopeId;
+  const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
+    if (target === writableScopeId || target === scopeId) return true;
+    if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
+      return false;
+    const personal = personalScope(actor.id);
+    for (const scope of new Set([scopeId, target])) {
+      if (scope === personal) {
+        if ((await deps.config.resolveSharingPostureDurable(personal, scope)) !== "open") return false;
+      } else if (
+        !(await isOpenScopeMember({
+          actorId: actor.id,
+          scope,
+          config: deps.config,
+          isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
+        }))
+      )
+        return false;
+    }
+    return true;
+  };
+  const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
+    const resource = await accessConversationSandbox(
+      deps.sandboxResources,
+      actor.id,
+      id,
+      canUseSandboxScope,
+      botMayUse,
+    );
+    const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
+    if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
+    await deps.config!.refreshSecurity([resource.ownerScopeId]);
+    const credentialScopeId = resource.ownerScopeId === personalScope(actor.id) ? resource.ownerScopeId : undefined;
+    return {
+      resource,
+      crossScope: true,
+      egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
+      commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
+      ...(credentialScopeId ? { credentialScopeId } : {}),
+    };
+  };
+  const jobComputerPlan = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
+    if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+    return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
+  };
+  return { accessResource, jobComputerPlan };
 }

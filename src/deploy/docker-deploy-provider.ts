@@ -1,4 +1,4 @@
-import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
+import type { PublishedApp, AppVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import {
   dockerContainerNetworks,
@@ -72,19 +72,19 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
 
   const dexec = opts.dockerExec ?? spawnDockerExec(docker);
 
-  const name = (d: Deployment) => `agent-deploy-${d.id.slice(0, 12)}`;
+  const name = (d: PublishedApp) => `agent-deploy-${d.id.slice(0, 12)}`;
   const execIn =
-    (d: Deployment): Exec =>
+    (d: PublishedApp): Exec =>
     (script, timeoutSec) =>
       dexec(["exec", name(d), "sh", "-c", script], timeoutSec * 1000);
   const checked = recentAppChecks();
-  const network = (d: Deployment) => `${name(d)}-net`;
-  const exists = async (d: Deployment): Promise<boolean> => (await dockerContainerNetworks(dexec, name(d))) !== null;
+  const network = (d: PublishedApp) => `${name(d)}-net`;
+  const exists = async (d: PublishedApp): Promise<boolean> => (await dockerContainerNetworks(dexec, name(d))) !== null;
 
   return {
     profile: { managedScaleToZero: false },
 
-    async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
+    async apply(d: PublishedApp, version: AppVersion): Promise<DeployEndpoint> {
       const net = await ensureDockerNetwork(dexec, network(d));
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
@@ -137,12 +137,12 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       return { host: "127.0.0.1", port: hostPort };
     },
 
-    async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {
+    async logs(d: PublishedApp, opts: { tailLines: number }): Promise<string | null> {
       if (!(await exists(d))) return null;
       return appLogs(execIn(d), opts.tailLines);
     },
 
-    async destroy(d: Deployment): Promise<void> {
+    async destroy(d: PublishedApp): Promise<void> {
       await dexec(["rm", "-f", name(d)]);
       await dexec(["network", "rm", network(d)]);
       freePort(name(d));

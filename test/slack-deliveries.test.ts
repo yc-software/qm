@@ -368,6 +368,27 @@ test("delegated approvals recover native buttons from durable records", async ()
   assert.deepEqual(second.acknowledgements, ["D1"]);
 });
 
+test("an approval from a linked principal is posted to the Slack user who asked", async () => {
+  const approval = {
+    requestId: "A1",
+    command: "publish",
+    reason: "approval",
+    request: {
+      actor: { externalId: "oidc:linked-principal" },
+      surfaceOrigin: { author: { surface: "slack", account: "default", id: "U9" }, workspace: "T1" },
+    },
+  };
+  const { posts, conversationsOpened } = await deliver(
+    { type: "principal", target: "U9", commandApprovalId: "A1" },
+    undefined,
+    undefined,
+    "Approval needed",
+    { approval },
+  );
+  assert.deepEqual(conversationsOpened, [{ users: "U9" }]);
+  assert.match(JSON.stringify(posts[0]!.blocks), /hilo_allow_once/);
+});
+
 test("an approval too long for Slack links its Deny-only card to the conversation on the web", async () => {
   const approval = {
     requestId: "A1",

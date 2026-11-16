@@ -36,15 +36,15 @@ test.after(() => {
   idp.close();
   core.close();
 });
-function cookie(extra: Record<string, unknown> = {}) {
+function cookie() {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${seal({ k: "session", sub: "fixture", org: "logout", iat: now, exp: now + 3600, ...extra }, deriveKey(secret, "portal.session.v1"))}`;
+  return `portal_session=${seal({ k: "session", sub: "fixture", org: "logout", iat: now, exp: now + 3600 }, deriveKey(secret, "portal.session.v1"))}`;
 }
-async function logout(extra: Record<string, unknown> = {}, html = false) {
+async function logout(html = false) {
   return fetch(`${base}/auth/logout?returnTo=https://evil.example`, {
     method: "POST",
     redirect: "manual",
-    headers: { origin, cookie: cookie(extra), accept: html ? "text/html" : "application/json" },
+    headers: { origin, cookie: cookie(), accept: html ? "text/html" : "application/json" },
   });
 }
 test("external OIDC sign-out is local: it never contacts the provider and stays signed out until Sign in", async () => {
@@ -62,7 +62,7 @@ test("external OIDC sign-out is local: it never contacts the provider and stays 
     assert.ok(
       response.headers.getSetCookie().some((value) => value.startsWith(`${name}=;`) && value.includes("Max-Age=0")),
     );
-  const html = await logout({}, true);
+  const html = await logout(true);
   assert.equal(html.status, 303);
   assert.equal(html.headers.get("location"), "/auth/signed-out");
   const landing = await fetch(`${base}/auth/signed-out`, { redirect: "manual", headers: { accept: "text/html" } });
@@ -71,10 +71,6 @@ test("external OIDC sign-out is local: it never contacts the provider and stays 
   assert.match(body, /You have signed out of this portal/);
   assert.match(body, /href="\/auth\/login"/);
   assert.equal(idpRequests, before);
-});
-test("anonymous sessions keep the existing root redirect", async () => {
-  const result = (await (await logout({ anon: true })).json()) as { redirectTo: string };
-  assert.equal(result.redirectTo, "/");
 });
 test("signed-out landing does not falsely claim an authenticated session ended", async () => {
   const signedIn = await fetch(`${base}/auth/signed-out`, { headers: { cookie: cookie() } });

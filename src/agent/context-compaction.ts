@@ -3,7 +3,7 @@ import { contextSummary } from "../sessions/session-store.ts";
 import { isOverheard, isUserItem, itemFields, type Item, proseText, stepMessage } from "../sessions/items.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
-import { documentAttachmentTokens, replayableDocumentMetas } from "../core/documents.ts";
+import { replayableDocumentMetas } from "../core/documents.ts";
 
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
 const COMPACT_ENTRY_TAIL_CHARS = 2_000;
@@ -38,8 +38,10 @@ export function unrecordedToolResult(stop: RunStop | undefined): string {
     : INTERRUPTED_TOOL_RESULT;
 }
 
-export const CONTEXT_SUMMARY_HEADER =
-  "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
+export function contextSummaryHeader(throughSeq: number, writtenAt: number): string {
+  const stamp = entryStamp(writtenAt);
+  return `[Earlier conversation summary, covering entries through seq ${throughSeq}${stamp ? ` (written${stamp})` : ""}: an index of turns compacted out of your context. Entries after it appear verbatim and are newer; where they disagree, such as a task listed here as open but answered later, the later entries win. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]`;
+}
 
 const isNarration = (item: Item): boolean => item.kind === "AgentMessage" && item.variant === "narration";
 
@@ -79,10 +81,6 @@ const itemTokenCache = new Map<string, number>();
 const ITEM_TOKEN_CACHE_MAX = 50_000;
 
 export function estimateItemTokens(item: Item): number {
-  return estimateItemTextTokens(item) + (isUserItem(item) ? documentAttachmentTokens(item.body) : 0);
-}
-
-function estimateItemTextTokens(item: Item): number {
   const prose = item.kind === "Reasoning" ? (item.text ?? "") : proseText(item);
   const environment = item.kind === "Reasoning" ? null : item.body.environment;
   const text =
@@ -162,6 +160,12 @@ export function compactTranscript(history: Item[]): string {
 
 export const COMPACT_SOFT_FRACTION = 0.7;
 export const COMPACT_HARD_FRACTION = 0.9;
+const COMPACT_HEADROOM_FRACTION = 0.3;
+export const COMPACT_KEEP_PERCENT = {
+  min: 1,
+  default: Math.round((COMPACT_SOFT_FRACTION - COMPACT_HEADROOM_FRACTION) * 100),
+  max: Math.round(COMPACT_SOFT_FRACTION * 100) - 1,
+};
 
 export function overBudgetFraction(history: Item[], maxTokens: number, fraction: number): boolean {
   return estimateHistoryTokens(history) > maxTokens * fraction;

@@ -1,8 +1,9 @@
+import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { foldPrincipalId } from "../directory/person.ts";
-import { ensureUserIn, USER_MIGRATIONS } from "../identity/user-store.ts";
+import { ensureUserIn, USER_SCHEMA_MIGRATIONS } from "../identity/user-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import type { ScopeId } from "../types.ts";
 import type { ProjectIcon } from "../projects/project-store.ts";
@@ -67,6 +68,7 @@ export interface PersonaFields {
 }
 
 export interface PersonaStore {
+  claimTenants?(): Promise<ClaimedRow[]>;
   create(input: PersonaFields & { name: string }, owner: ScopeId, by: string): Promise<Persona>;
   get(id: string): Promise<Persona | null>;
   update(id: string, fields: PersonaFields, by: string, restoredFrom?: number): Promise<Persona | null>;
@@ -142,10 +144,11 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
   const { q, pool } = createPgPool(connectionString, [
     ...DIRECTORY_MIGRATIONS,
     ...SESSION_MIGRATIONS,
-    ...USER_MIGRATIONS,
+    ...USER_SCHEMA_MIGRATIONS,
   ]);
   const nextId = opts.id ?? randomUUID;
   return {
+    claimTenants: () => claimRows({ q }, "claim_persona_tenants"),
     async create(input, owner, by) {
       const id = nextId();
       return withPgTransaction(await pool(), async (db) => {
@@ -244,7 +247,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
           await db
             .query(
               `INSERT INTO persona_access (persona_id, grantee_scope_id, role, pinned, granted_by) VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE
+             ON CONFLICT (tenant_id, persona_id, grantee_scope_id) DO UPDATE
                SET role = EXCLUDED.role, pinned = EXCLUDED.pinned, granted_by = EXCLUDED.granted_by, granted_at = now()
                WHERE (persona_access.role, persona_access.pinned) IS DISTINCT FROM (EXCLUDED.role, EXCLUDED.pinned)`,
               [id, entry.scopeId, entry.role, entry.pinned === true, user],
@@ -291,7 +294,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
         const user = await ensureUserIn(db, foldPrincipalId(by));
         await db.query(
           `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, 'owner', $3)
-           ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE
+           ON CONFLICT (tenant_id, persona_id, grantee_scope_id) DO UPDATE
              SET role = 'owner', granted_by = EXCLUDED.granted_by, granted_at = now()
              WHERE persona_access.role <> 'owner'`,
           [id, owner, user],

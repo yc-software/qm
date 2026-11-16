@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -106,7 +107,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
     assert.equal((await get(s.base, "/v1/admin/retention", { "x-admin-actor": "nobody@default-org" })).status, 403);
 
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "retention.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "retention.read"),
       "the read is audited",
     );
   } finally {

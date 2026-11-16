@@ -3,7 +3,7 @@ import { adminStatusFromGrants } from "../../../admin/admin-service.ts";
 import { samePerson } from "../../../directory/person.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 
 const DIRECTORY_MEMBER_IS_CANONICAL =
   "that principal is a directory member; directory members stay canonical, so link the other identity to it instead";
@@ -33,7 +33,7 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
   if (typeof b.principalId === "string" && (await directoryMember(deps, b.principalId)))
     return sendJson(res, 400, { error: "link_failed", message: DIRECTORY_MEMBER_IS_CANONICAL });
   if (typeof b.principalId === "string" && typeof b.canonicalId === "string" && deps.admin) {
-    const grants = await deps.admin.listGrants();
+    const grants = await deps.admin.listGrants(tenantOf(ctx));
     if (adminStatusFromGrants(grants, b.principalId).isAdmin && !adminStatusFromGrants(grants, b.canonicalId).isAdmin)
       return sendJson(res, 400, { error: "link_failed", message: ADMIN_SIGN_IN_NEEDS_ADMIN_CANONICAL });
   }
@@ -45,7 +45,7 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
       linkedBy: actor.id,
     });
     await deps.identity?.refresh(true);
-    audit(deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "principal_link.create",
       resource: `${link.principalId} -> ${link.canonicalId}`,
@@ -67,7 +67,7 @@ export async function deletePrincipalLink(ctx: ApiCtx): Promise<void> {
   const link = await deps.principalLinks.unlink(params.principalId!);
   if (!link) return sendJson(res, 404, { error: "not_found" });
   await deps.identity?.refresh(true);
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "principal_link.delete",
     resource: `${link.principalId} -> ${link.canonicalId}`,

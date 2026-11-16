@@ -1,6 +1,8 @@
 import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
+import { cleanDisplayName } from "../../identity/user-store.ts";
+import { personLabel } from "../../identity/person-names.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -14,7 +16,7 @@ async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.deactivate(id);
-  audit(deps, { principalId: id, action: "principal.deactivate", resource: "principal", scopeLabel: orgScope(deps) });
+  audit(ctx, { principalId: id, action: "principal.deactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: false });
 }
 
@@ -24,7 +26,7 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.reactivate(id);
-  audit(deps, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
+  audit(ctx, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
 }
 
@@ -33,7 +35,27 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity?.refresh();
-  return sendJson(res, 200, { principalId: id, canonicalId: canonicalPerson(id) });
+  const canonicalId = canonicalPerson(id);
+  const user = await deps.users?.get(canonicalId);
+  const label = personLabel(canonicalId, { user });
+  return sendJson(res, 200, {
+    principalId: id,
+    canonicalId,
+    ...(label !== canonicalId ? { displayName: label } : {}),
+    ...(user?.displayName ? { storedName: user.displayName } : {}),
+  });
+}
+
+async function recordProfile(ctx: ApiCtx): Promise<void> {
+  const { res, deps } = ctx;
+  if (!deps.users) return sendJson(res, 404, { error: "not_found" });
+  const b = isObj(ctx.body) ? ctx.body : {};
+  const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
+  const displayName = cleanDisplayName(b.displayName);
+  if (!principalId || !displayName)
+    return sendJson(res, 400, { error: "bad_request", message: "principalId and displayName required" });
+  const changed = await deps.users.setDisplayName(canonicalPerson(principalId), displayName);
+  return sendJson(res, 200, { ok: true, changed });
 }
 
 async function pushDirectory(ctx: ApiCtx): Promise<void> {
@@ -93,7 +115,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
         ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
-        ...(m.isBot === true ? { isBot: true } : {}),
+        ...(typeof m.isBot === "boolean" ? { isBot: m.isBot } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
@@ -204,6 +226,7 @@ async function channelMembership(ctx: ApiCtx): Promise<void> {
 
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/principals/:id/canonical", auth: "source", handle: canonicalPrincipal },
+  { method: "POST", path: "/v1/principals/profile", actor: "body.principalId", auth: "source", handle: recordProfile },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
   {
     method: "GET",

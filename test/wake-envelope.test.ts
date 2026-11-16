@@ -30,7 +30,7 @@ test("ambient envelope: exact format is locked (zero-drift vs the ambient path)"
     at: AT,
     why: "may warrant a reply",
     orders: "be terse",
-    recentMessages: [{ ts: "1.0", authorName: "ada", authorId: "U1", text: "hello" }],
+    recentMessages: [{ ts: "1.0", authorName: "ada", authorId: "U1", text: "hello", trigger: true }],
     instructions: "do it",
   });
   assert.equal(

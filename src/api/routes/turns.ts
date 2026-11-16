@@ -22,6 +22,7 @@ function renderSurfaceBriefing(surface: SurfaceBriefing): string {
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
     isObj(body) &&
+    typeof body.surface === "string" &&
     typeof body.text === "string" &&
     isObj(body.actor) &&
     typeof body.actor.externalId === "string" &&
@@ -105,7 +106,7 @@ function zodMessage(field: string, error: z.ZodError): string {
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ...safe } = origin;
+  const { useOwnerKeychain: _internalOnly, ownerFire: _fireOnly, ...safe } = origin;
   return safe;
 }
 
@@ -133,7 +134,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   const {
     surfaceOrigin: _surfaceOrigin,
     spawned: _spawned,
-    unattendedGrants: _unattendedGrants,
     cronScript: _cronScript,
     infrequentCron: _infrequentCron,
     redeliveryKey: _redeliveryKey,
@@ -155,6 +155,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
+  const { hostIds: _hostIds, ...callerGateway } = rest.gatewayContext ?? {};
   let conversationHeader = rest.conversationHeader;
   if (rawSurfaceBriefing !== undefined) {
     const parsed = surfaceBriefingSchema.safeParse(rawSurfaceBriefing);
@@ -164,6 +165,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   return {
     request: {
       ...rest,
+      ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(origin ? { origin } : {}),
       ...(clientTools?.length ? { clientTools } : {}),
@@ -351,7 +353,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "PATCH",
     path: "/v1/runs/:id/input",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "source",
     handle: patchQueuedRun,

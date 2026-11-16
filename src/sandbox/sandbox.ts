@@ -1,5 +1,6 @@
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import type { EgressPolicy, ScopeId } from "../types.ts";
+import type { LoadSample } from "./load-probe.ts";
 
 export interface SandboxHandle {
   resourceId?: string;
@@ -104,18 +105,12 @@ export interface ProvisionOptions {
   memoryGb?: number;
 }
 
-export interface ExecPressure {
-  ioFull10: number;
-  ioFull60: number;
-  load1: number;
-}
-
 export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number;
   timedOut: boolean;
-  pressure?: ExecPressure;
+  load?: LoadSample;
 }
 
 export interface ExecOptions {
@@ -187,16 +182,7 @@ export interface ComputerStatus {
   provisioned?: boolean;
   guestResponsive: boolean;
   probeError?: string;
-  pressure?: ExecPressure;
-  resources?: ComputerResources;
-}
-
-interface ComputerResources {
-  cpuUsedPct: number;
-  memUsedMb: number;
-  memTotalMb: number;
-  diskUsedGb: number;
-  diskTotalGb: number;
+  load?: LoadSample;
 }
 
 export type ComputerVerdict = "ok" | "wedged" | "down";
@@ -244,8 +230,8 @@ export interface Sandbox {
   signalProcess?(handle: SandboxHandle, processId: string, signal: string): Promise<void>;
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
   persistHomeSnapshot?(scopeId: string): Promise<void>;
-  computerStatus?(scopeId: string): Promise<ComputerStatus>;
-  restartComputer?(scopeId: string, memoryGb?: number): Promise<void>;
+  computerStatus?(scopeId: string, sandboxId?: string): Promise<ComputerStatus>;
+  restartComputer?(scopeId: string, memoryGb?: number, sandboxId?: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;

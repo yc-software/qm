@@ -1,6 +1,7 @@
 import type { OrgBranding, ScopedConfigStore } from "./config-store.ts";
 import type { ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
+import { tenantSettings } from "../tenants/settings.ts";
 
 const LABEL_STRIP = /[\u0000-\u001F\u007F-\u009F\u2028\u2029<>{}]/g;
 const ACCENT_RE = /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
@@ -55,7 +56,7 @@ export async function resolveBranding(
       mark: stored?.mark ?? dflt?.mark,
       markUrl: stored?.markUrl ?? dflt?.markUrl,
       selfLabel: stored?.selfLabel ?? dflt?.selfLabel,
-      orgName: stored?.orgName ?? dflt?.orgName,
+      orgName: stored?.orgName ?? tenantSettings().brandName ?? dflt?.orgName,
     }) ?? {}
   );
 }

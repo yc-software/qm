@@ -3,7 +3,14 @@ import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { LoopItem } from "../src/loops/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";
+import {
+  INBOX_SUMMARY_FIELDS,
+  agentDraftOf,
+  createLoopItemLedger,
+  loopItemId,
+  type IngestEntryInput,
+  type VerdictInput,
+} from "../src/loops/item-ledger.ts";
 import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/loops/ledger-view.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -387,15 +394,22 @@ test("continuing a sent reply clears the old draft without losing chat or allowi
   assert.equal(await ledger.reopen(ordinary.id, { sentReply: true }), null);
 });
 
-test("email classification projection is opt-in, scoped, and never changes stored previews", async (t) => {
+test("summaries pick the inbox preview fields from the source payload without scanning the ledger", async (t) => {
   const backing = testMap<LoopItem>();
   const ledger = createLoopItemLedger(backing);
   await ledger.ingest([
     entry({
-      sourcePayload: { automated: true, privateDetail: "hidden" },
+      sourcePayload: {
+        title: "Budget",
+        from: "Ada",
+        snippet: "can you look at this?",
+        participants: [{ id: "U1", name: "Alex" }],
+        sentChat: true,
+        privateDetail: "hidden",
+      },
       proposal: { by: "agent", data: { body: "Draft" } },
     }),
-    entry({ loopId: "unselected", sourcePayload: { automated: true } }),
+    entry({ loopId: "unselected", sourcePayload: { title: "Other" } }),
   ]);
   const stored = structuredClone(await ledger.get(loopItemId(LOOP, "gmail:thread-1")));
   t.mock.method(backing, "all", async () => {
@@ -404,25 +418,21 @@ test("email classification projection is opt-in, scoped, and never changes store
   const originalSelect = backing.select.bind(backing);
   t.mock.method(backing, "select", async (query: DurableMapSelect<LoopItem, keyof LoopItem>) => {
     assert.deepEqual(query.where, { field: "loopId", anyOfFold: [LOOP] });
-    assert.ok(query.omit?.includes("proposal"));
-    assert.ok(query.omit?.includes("thread"));
-    if (!query.omit?.includes("sourcePayload"))
-      assert.deepEqual(query.pickNested, {
-        sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"],
-      });
-    const rows = await originalSelect(query);
-    for (const row of rows) assert.equal((row as LoopItem).sourcePayload?.privateDetail, undefined);
-    return rows;
+    assert.deepEqual(query.omit, ["proposal", "agentDrafts", "thread"]);
+    assert.deepEqual(query.pickNested, { sourcePayload: [...INBOX_SUMMARY_FIELDS] });
+    return originalSelect(query);
   });
-  const before = await ledger.summaries([LOOP]);
-  assert.equal(before.length, 1);
-  assert.equal(before[0]!.inboxPreview!.automated, undefined);
-  const classified = await ledger.summaries([LOOP], { includeInboxMetadata: true });
-  assert.equal(classified.length, 1);
-  assert.equal(classified[0]!.inboxPreview!.automated, true);
-  assert.equal(classified[0]!.inboxPreview!.privateDetail, undefined);
-  for (const key of ["sourcePayload", "proposal", "thread", "agentDrafts"]) assert.ok(!(key in classified[0]!));
-  assert.deepEqual(await ledger.summaries([LOOP]), before);
+  const summaries = await ledger.summaries([LOOP]);
+  assert.equal(summaries.length, 1);
+  const [summary] = summaries;
+  assert.deepEqual(summary!.sourcePayload, {
+    title: "Budget",
+    from: "Ada",
+    snippet: "can you look at this?",
+    participants: [{ id: "U1", name: "Alex" }],
+    sentChat: true,
+  });
+  for (const key of ["proposal", "thread", "agentDrafts"]) assert.ok(!(key in summary!));
   assert.deepEqual(await ledger.get(loopItemId(LOOP, "gmail:thread-1")), stored);
 });
 
@@ -492,7 +502,6 @@ test("agent ledger views omit cosmetic Slack data without changing UI data or ta
   const ledger = createLoopItemLedger(testMap());
   const payload = {
     source: "slack",
-    slackAvatarsRefreshAt: 12345,
     participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
     context: [
       {
@@ -518,29 +527,191 @@ test("agent ledger views omit cosmetic Slack data without changing UI data or ta
   assert.deepEqual(ledgerItemView({ ...item!, source: "gmail" }, {}, true).sourcePayload, payload);
 });
 
-test("ordinary ledger annotations leave previews unchanged and do not project avatar metadata", async () => {
+test("annotations flow into summaries only through the inbox preview fields", async () => {
   const ledger = createLoopItemLedger(testMap());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
-  const before = structuredClone(item!.inboxPreview);
   const updated = await ledger.annotate(item!.id, {
     title: "Updated title",
     participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
-    slackAvatarsRefreshAt: 12345,
+    reactions: ["eyes"],
   });
   assert.equal(updated!.sourcePayload!.title, "Updated title");
-  assert.deepEqual(updated!.inboxPreview, before);
+  assert.deepEqual(updated!.sourcePayload!.reactions, ["eyes"]);
   const [summary] = await ledger.summaries([LOOP]);
-  assert.deepEqual(summary!.inboxPreview, before);
-  const [inboxSummary] = await ledger.summaries([LOOP], { includeInboxMetadata: true });
-  assert.equal(inboxSummary!.inboxPreview?.participants, undefined);
-  await ledger.ingest([entry({ source: "slack", dedupeKey: "slack", sourcePayload: updated!.sourcePayload })]);
-  const ordinary = (await ledger.summaries([LOOP])).find((item) => item.source === "slack")!;
-  assert.equal(ordinary.inboxPreview?.participants, undefined);
-  const projected = (await ledger.summaries([LOOP], { includeInboxMetadata: true })).find(
-    (item) => item.source === "slack",
-  )!;
-  assert.deepEqual(projected.inboxPreview?.participants, updated!.sourcePayload!.participants);
-  assert.equal(projected.inboxPreview?.slackAvatarsRefreshAt, 12345);
-  assert.equal("sourcePayload" in projected, false);
+  assert.equal(summary!.sourcePayload!.title, "Updated title");
+  assert.deepEqual(summary!.sourcePayload!.participants, updated!.sourcePayload!.participants);
+  assert.equal(summary!.sourcePayload!.reactions, undefined);
+  assert.deepEqual((await ledger.get(item!.id))!.sourcePayload, updated!.sourcePayload);
+});
+
+const VERDICT = {
+  state: "needs_reply" as const,
+  reason: "asked a question",
+  waitingTs: "1.2",
+  lastSeenTs: "1.2",
+  at: 5,
+};
+
+function verdictInput(over: Partial<VerdictInput> = {}): VerdictInput {
+  return {
+    verdict: VERDICT,
+    sourcePayload: { title: "Budget", from: "Ada", snippet: "bumping this" },
+    sourceAt: 1_000,
+    ...over,
+  };
+}
+
+test("recordVerdict stores the verdict and replaces an older agent draft with the new one", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "first" }, by: "agent" } })]);
+  const [item] = await ledger.byLoop(LOOP);
+  const after = await ledger.recordVerdict(item!.id, verdictInput({ draft: { body: "second" } }));
+  assert.deepEqual(after!.verdict, VERDICT);
+  assert.equal(after!.sourcePayload!.snippet, "bumping this");
+  assert.deepEqual(after!.proposal?.data, { body: "second" });
+  assert.equal(after!.proposal?.by, "agent");
+  assert.deepEqual(
+    after!.agentDrafts!.map((d) => d.data),
+    [{ body: "first" }, { body: "second" }],
+  );
+  assert.equal(ledgerState(after!), "held");
+});
+
+test("recordVerdict keeps a human-edited draft while sourceAt stands still", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
+  const [item] = await ledger.byLoop(LOOP);
+  await ledger.setProposal(item!.id, { data: { body: "my own words" }, by: "human" });
+  const after = await ledger.recordVerdict(item!.id, verdictInput({ draft: { body: "agent rewrite" } }));
+  assert.deepEqual(after!.proposal?.data, { body: "my own words" });
+  assert.equal(after!.proposal?.by, "human");
+  assert.deepEqual(agentDraftOf(after!)?.data, { body: "agent draft" });
+  assert.deepEqual(after!.verdict, VERDICT);
+});
+
+test("recordVerdict replaces a human-edited draft once sourceAt moves", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
+  const [item] = await ledger.byLoop(LOOP);
+  await ledger.setProposal(item!.id, { data: { body: "my own words" }, by: "human" });
+  const after = await ledger.recordVerdict(
+    item!.id,
+    verdictInput({ sourceAt: 2_000, draft: { body: "reply to the newer message" } }),
+  );
+  assert.equal(after!.sourceAt, 2_000);
+  assert.deepEqual(after!.proposal?.data, { body: "reply to the newer message" });
+  assert.equal(after!.proposal?.by, "agent");
+});
+
+test("recordVerdict reopens sent and dismissed items to ready when sourceAt moves, and not otherwise", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([entry({ dedupeKey: "sent" }), entry({ dedupeKey: "dismissed" }), entry({ dedupeKey: "stale" })]);
+  const byKey = new Map((await ledger.byLoop(LOOP)).map((i) => [i.sourceKey, i]));
+  await ledger.recordAction(byKey.get("sent")!.id, { kind: "send", outcome: "actioned", result: "sent" });
+  await ledger.recordAction(byKey.get("dismissed")!.id, { kind: "dismiss", outcome: "dismissed" });
+  await ledger.recordAction(byKey.get("stale")!.id, { kind: "send", outcome: "actioned", result: "sent" });
+  const sent = await ledger.recordVerdict(
+    byKey.get("sent")!.id,
+    verdictInput({ sourceAt: 2_000, draft: { body: "follow-up" } }),
+  );
+  assert.equal(sent!.status, "ready");
+  assert.equal(sent!.actedAt, undefined);
+  assert.equal(sent!.actionKind, undefined);
+  assert.equal(sent!.actionResult, undefined);
+  assert.deepEqual(sent!.proposal?.data, { body: "follow-up" });
+  const dismissed = await ledger.recordVerdict(byKey.get("dismissed")!.id, verdictInput({ sourceAt: 2_000 }));
+  assert.equal(dismissed!.status, "ready");
+  assert.equal(dismissed!.actedAt, undefined);
+  const stale = await ledger.recordVerdict(byKey.get("stale")!.id, verdictInput({ sourceAt: 1_000 }));
+  assert.equal(ledgerState(stale!), "actioned");
+  assert.equal(stale!.actionResult, "sent");
+  assert.deepEqual(stale!.verdict, VERDICT);
+});
+
+test("recordVerdict with a reply marks the item replied in one write and keeps it handled until a new ask", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([entry({ dedupeKey: "replied" })]);
+  const [item] = await ledger.byLoop(LOOP);
+  const answered = { ...VERDICT, state: "resolved" as const, waitingTs: null, lastSeenTs: "1.2" };
+  const replied = await ledger.recordVerdict(item!.id, verdictInput({ verdict: answered, replied: "done" }));
+  assert.equal(replied!.status, "skipped");
+  assert.equal(replied!.actionKind, "replied");
+  assert.equal(replied!.actionResult, "done");
+  assert.ok(replied!.actedAt);
+  const resolved = { ...answered, lastSeenTs: "1.3" };
+  const after = await ledger.recordVerdict(item!.id, verdictInput({ verdict: resolved, sourceAt: 2_000 }));
+  assert.equal(after!.status, "skipped");
+  assert.equal(after!.actionKind, "replied");
+  assert.equal(after!.actionResult, "done");
+  assert.deepEqual(after!.verdict, resolved);
+  const asked = await ledger.recordVerdict(
+    item!.id,
+    verdictInput({ verdict: { ...VERDICT, lastSeenTs: "1.4" }, sourceAt: 3_000 }),
+  );
+  assert.equal(asked!.status, "ready");
+  assert.equal(asked!.actionKind, undefined);
+});
+
+test("recordVerdict moves queued and failed items to ready", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([entry({ dedupeKey: "queued" }), entry({ dedupeKey: "failed" })]);
+  const byKey = new Map((await ledger.byLoop(LOOP)).map((i) => [i.sourceKey, i]));
+  assert.equal(byKey.get("queued")!.status, "queued");
+  await ledger.park(byKey.get("failed")!.id, "model unavailable");
+  assert.equal((await ledger.get(byKey.get("failed")!.id))!.status, "failed");
+  const queued = await ledger.recordVerdict(byKey.get("queued")!.id, verdictInput());
+  assert.equal(queued!.status, "ready");
+  const failed = await ledger.recordVerdict(byKey.get("failed")!.id, verdictInput());
+  assert.equal(failed!.status, "ready");
+  assert.equal(failed!.parkedReason, undefined);
+  assert.equal(failed!.attempts, 0);
+});
+
+test("recordVerdict keeps sentChat from the existing payload", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([entry({ sourcePayload: { title: "Budget", snippet: "hi", sentChat: true } })]);
+  const [item] = await ledger.byLoop(LOOP);
+  const after = await ledger.recordVerdict(
+    item!.id,
+    verdictInput({ sourcePayload: { title: "Budget", snippet: "newer text" } }),
+  );
+  assert.deepEqual(after!.sourcePayload, { title: "Budget", snippet: "newer text", sentChat: true });
+  const plain = await ledger.recordVerdict(
+    item!.id,
+    verdictInput({ sourceAt: 2_000, sourcePayload: { title: "Budget", snippet: "later" } }),
+  );
+  assert.equal(plain!.sourcePayload!.sentChat, true);
+});
+
+test("prune treats items with a resolved or noise verdict as settled", async () => {
+  const ledger = createLoopItemLedger(testMap());
+  await ledger.ingest([
+    entry({ dedupeKey: "needs" }),
+    entry({ dedupeKey: "resolved" }),
+    entry({ dedupeKey: "noise" }),
+    entry({ dedupeKey: "open" }),
+  ]);
+  const byKey = new Map((await ledger.byLoop(LOOP)).map((i) => [i.sourceKey, i]));
+  await ledger.recordVerdict(byKey.get("needs")!.id, verdictInput());
+  await ledger.recordVerdict(
+    byKey.get("resolved")!.id,
+    verdictInput({ verdict: { ...VERDICT, state: "resolved", reason: "they said thanks" } }),
+  );
+  await ledger.recordVerdict(
+    byKey.get("noise")!.id,
+    verdictInput({ verdict: { ...VERDICT, state: "noise", reason: "newsletter" } }),
+  );
+  const dropped = await ledger.prune(LOOP, { maxItems: 50, retentionMs: 1, now: Date.now() + 10 });
+  assert.equal(dropped, 2);
+  assert.deepEqual((await ledger.byLoop(LOOP)).map((i) => i.sourceKey).sort(), ["needs", "open"]);
+  await ledger.recordVerdict(
+    byKey.get("open")!.id,
+    verdictInput({ verdict: { ...VERDICT, state: "noise", reason: "newsletter" } }),
+  );
+  assert.equal(await ledger.prune(LOOP, { maxItems: 1, retentionMs: 60_000 }), 1);
+  assert.deepEqual(
+    (await ledger.byLoop(LOOP)).map((i) => i.sourceKey),
+    ["needs"],
+  );
 });

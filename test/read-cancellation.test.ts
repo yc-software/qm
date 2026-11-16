@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,6 +12,7 @@ function setup(overrides: Partial<ToolContextDeps> = {}) {
   const started = Promise.withResolvers<void>();
   let reads = 0;
   const tc = createToolContext({
+    tenant: testTenant,
     sandbox: {
       readFile: async () => {
         reads++;

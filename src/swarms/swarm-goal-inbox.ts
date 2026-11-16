@@ -64,13 +64,12 @@ export async function openSwarmMailbox(deps: {
   const messages = await deps.swarms
     .queuedMessages(deps.input, { mailboxOnly: true })
     .catch(reportFailureAs("swarm: read the mailbox", []));
-  const shown = await Promise.all(
-    messages.map(
-      async (message) =>
-        (await deps.screen(swarmMessageText(message))) ??
+  const shown: string[] = [];
+  for (const message of messages)
+    shown.push(
+      (await deps.screen(swarmMessageText(message))) ??
         `[Swarm message ${message.id} from agent ${message.senderId} was withheld by the security screen.]`,
-    ),
-  );
+    );
   return {
     text: shown.length ? `Swarm messages left in your mailbox since your last turn:\n\n${shown.join("\n\n")}` : "",
     async settle() {

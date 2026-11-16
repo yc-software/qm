@@ -4,7 +4,7 @@ import { shq } from "../util/shell.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
-import type { Deployment } from "./deploy-store.ts";
+import type { PublishedApp } from "./deploy-store.ts";
 import { normalizeRelPath, readTree } from "./deploy-fs.ts";
 
 const EXIT_APP_SERVER_ERROR = 96;
@@ -56,7 +56,7 @@ export type AppErrorSink = (
 ) => void;
 type Report = (code: string, detail: string) => Error;
 
-export function appReporter(onError: AppErrorSink | undefined, d: Deployment, env?: Record<string, string>): Report {
+export function appReporter(onError: AppErrorSink | undefined, d: PublishedApp, env?: Record<string, string>): Report {
   const mask = createSecretValueMasker(env);
   return (code, detail) => {
     const error = new Error(`app ${d.name ?? d.id} (deployment ${d.id}): ${redactSecrets(mask(detail))}`);

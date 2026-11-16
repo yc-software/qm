@@ -115,7 +115,14 @@ export async function prepareChildWorkdir(
 
 export async function ensureChildSandbox(
   resources: SandboxResources | undefined,
-  input: { id: string; session: Session; actorId: string; scopeId: ScopeId; backendScopeId: ScopeId },
+  input: {
+    id: string;
+    session: Session;
+    actorId: string;
+    scopeId: ScopeId;
+    backendScopeId: ScopeId;
+    personUsed: boolean;
+  },
 ): Promise<void> {
   if (!resources) throw new Error("sandbox inventory unavailable");
   const record = await resources.get(input.id).catch((error: unknown) => {
@@ -131,7 +138,17 @@ export async function ensureChildSandbox(
   if (!resources.profiles().some((profile) => profile.name === backend && profile.actions.includes("retire")))
     throw new Error(`${backend} computers cannot be retired, so a subagent cannot have its own sandbox there`);
   const name = input.id === input.session.id && input.session.title ? input.session.title : `subagent ${input.id}`;
-  await resources.create(input.actorId, input.scopeId, backend, name, input.id);
+  await resources.create(
+    input.actorId,
+    input.scopeId,
+    backend,
+    name,
+    input.id,
+    undefined,
+    undefined,
+    undefined,
+    input.personUsed,
+  );
 }
 
 const DEFAULT_TOOLS = "execute, files, skills and apps use it when sandbox_id is omitted";

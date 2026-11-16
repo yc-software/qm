@@ -134,6 +134,8 @@ test("embedding client orders responses and normalizes vectors", async () => {
     [0, 1],
   ]);
   for (const v of [[], [0, 0], [NaN, 1], [Infinity, 1], ["1", 2]]) assert.throws(() => unitVector(v));
+  assert.equal(unitVector(Array(16_000).fill(1)).length, 16_000);
+  assert.throws(() => unitVector(Array(16_001).fill(1)), /16001 dimensions; pgvector stores at most 16000/);
 });
 
 test("malformed responses and provider errors do not expose provider payloads", async () => {

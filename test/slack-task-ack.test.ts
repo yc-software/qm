@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
+import { createSessionWork } from "../src/sessions/session-work.ts";
 import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -155,7 +156,10 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
       } as OrchestratorInput,
     });
     await manager.move(client, run.id, "D1", "10.1");
-    const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });
+    const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), {
+      runs,
+      work: createSessionWork({ runs, deliveries }),
+    });
     await restarted.reconcile(client);
     assert.equal((await store.get(run.id))?.finished, false);
     const claimed = await runs.claimById(run.id, "test", 10000);
@@ -167,6 +171,13 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
             destination: { type: "slack", target: "D1" },
             text: "Done",
             idempotencyKey: outbound === "post" ? `post:${run.id}:slack:D1:0` : `${outbound}:${run.id}`,
+            provenance: {
+              trigger: "conversation",
+              surface: "slack",
+              fireKey: run.id,
+              sourceScopeId: "personal:person",
+              sourceThreadRef: "task-session",
+            },
           });
     await runs.complete(
       run.id,
@@ -185,3 +196,41 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
     assert.equal(events.at(-1), "remove:10.1:eyes");
   });
 }
+
+test("a finished DM turn keeps its acknowledgement while its session still has work, then clears", async () => {
+  const { client, store, events } = setup();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const actor = { id: "person", type: "internal" as const };
+  const { run } = await runs.enqueue({
+    sessionId: "delegating-session",
+    request: {
+      actor,
+      conversation: { kind: "dm", threadRef: "dm:D2", audience: [actor] },
+      origin: { kind: "human" },
+      surface: "slack",
+      deliveryTarget: "D2",
+      text: "Have a subagent do it",
+    } as OrchestratorInput,
+  });
+  let busy = true;
+  const asked: string[] = [];
+  const work = {
+    of: async (threadRef: string) => {
+      asked.push(threadRef);
+      return { busy, branches: [], returning: false, delivering: false };
+    },
+  };
+  const manager = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, work });
+  await manager.move(client, run.id, "D2", "20.1");
+  const claimed = await runs.claimById(run.id, "test", 10000);
+  await runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "On it" });
+  await manager.finish(client, run.id);
+  await manager.reconcile(client);
+  assert.equal((await store.get(run.id))?.finished, false);
+  assert.ok(!events.includes("remove:20.1:eyes"));
+  busy = false;
+  await manager.reconcile(client);
+  assert.equal((await store.get(run.id))?.finished, true);
+  assert.equal(events.at(-1), "remove:20.1:eyes");
+  assert.ok(asked.every((ref) => ref === "delegating-session"));
+});

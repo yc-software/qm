@@ -37,7 +37,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   for (const c of await app.listCrons())
     if (!c.loopId && !c.archived && (await owns(c.owner, c.ownerScopeId)))
       step("cron", c.id, c.title ?? "", "disable_and_archive", () =>
-        app.updateCron(c.id, { enabled: false, archived: true }),
+        app.updateCron(c.id, { enabled: false, archived: true }, { actorId }),
       );
   const loops = deps.loops;
   for (const l of (await loops?.store.list()) ?? [])
@@ -52,9 +52,9 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   for (const g of (await deps.keychain?.listGrants({ ownerId: principalId })) ?? [])
     if (g.status === "active")
       step("keychain_grant", g.id, g.purpose, "revoke", () => deps.keychain!.revokeGrant(g.ownerId, g.id));
-  for (const d of await app.listDeployments())
+  for (const d of await app.listApps())
     if (d.status !== "archived" && (await personal(d.ownerScopeId)))
-      step("app", d.id, d.displayName || d.name, "archive", () => app.archiveDeployment(d.id));
+      step("app", d.id, d.displayName || d.name, "archive", () => app.archiveApp(d.id));
   for (const s of await app.listSkills())
     if (s.status !== "archived" && (await personal(s.scopeId)))
       step("skill", s.id, s.manifest.name, "archive", () => app.archiveSkill(s.id));
@@ -102,7 +102,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
       } catch (e) {
         Object.assign(change, { result: "failed", error: errMessage(e) });
       }
-      audit(deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: `user.offboard.${change.kind}.${change.action}`,
         resource: change.id,
@@ -124,7 +124,7 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const user = await deps.admin!.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "principal.reactivate",
     resource: principalId,

@@ -31,11 +31,12 @@ test("worked time counts only running turns: idle and paused intervals are exclu
     turn(10 * MIN, 12 * MIN, { stopReason: "aborted" }),
     turn(40 * MIN, 45 * MIN),
   ];
-  assert.deepEqual(goalWorked(messages.slice(0, 2), strip), { workedMs: 8 * MIN, paused: false });
-  assert.deepEqual(goalWorked(messages.slice(0, 3), strip), { workedMs: 10 * MIN, paused: true });
+  assert.equal(goalWorked(messages.slice(0, 2), strip), 8 * MIN);
+  assert.equal(goalWorked(messages.slice(0, 3), strip), 10 * MIN);
+  assert.equal(goalWorked(messages, strip), 15 * MIN, "a turn after a stop keeps adding to the tally");
 });
 
 test("a resumed goal adds the new turn but not the gap before it", () => {
   const messages = [turn(MIN, 10 * MIN, {}, created), turn(30 * MIN, 35 * MIN), turn(90 * MIN, 91 * MIN)];
-  assert.deepEqual(goalWorked(messages, strip), { workedMs: 14 * MIN, paused: false });
+  assert.equal(goalWorked(messages, strip), 14 * MIN);
 });

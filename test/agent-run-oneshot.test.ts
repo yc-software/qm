@@ -6,18 +6,15 @@ import { tmpdir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import {
-  buildDetectionPrompt,
   createAgent,
   oneShot,
-  parseDetectVerdict,
   agentConfigOptions,
-  piLastAssistantTextOrThrow,
-  piTurnError,
-  refusalFallbackNote,
-  renderDetectPrompt,
   seedRawMessagesIntoSession,
   toPiMessage,
 } from "../src/agent/agent-run.ts";
+import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "../src/agent/utility-prompts.ts";
+import { piLastAssistantTextOrThrow, piTurnError } from "../src/agent/pi-messages.ts";
+import { refusalFallbackNote } from "../src/agent/turn-fallback.ts";
 import { configRouteOptions, createModelRoutes, resolveConfiguredModelId } from "../src/model/model-route.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
@@ -82,7 +79,6 @@ test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefu
 test("agentConfigOptions and configRouteOptions map every Config knob the agent consumes, field by field", () => {
   const config = testConfig({
     modelId: "model-base",
-    detectModelId: "model-detect",
     titleModelId: "model-title",
     anthropicApiKey: "sk-test",
     modelGateway: {
@@ -113,7 +109,6 @@ test("agentConfigOptions and configRouteOptions map every Config knob the agent 
     },
   });
   assert.deepEqual(agentConfigOptions(config), {
-    detectModelId: "model-detect",
     titleModelId: "model-title",
     captureRequests: false,
     sandboxResources: true,
@@ -385,11 +380,11 @@ async function detectAgainst(
         models: { "claude-haiku-4-5": "detect-model" },
       },
     }),
-    detectModelId: "claude-haiku-4-5",
   });
   const rows: TurnLlmRequestRecord[] = [];
   const outcome = await agent.shouldRespond!({
     session: { id: "session-1" } as DetectInput["session"],
+    runtime: { modelId: "claude-haiku-4-5" },
     message: "hey bot, can you check this?",
     recentContext: "",
     systemPrompt: "be brief",
@@ -432,7 +427,7 @@ test(
 
 test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = { ...agentConfigOptions(testConfig()), ...configRouteOptions(testConfig()) };
-  for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
+  for (const key of ["defaultModelId", "titleModelId", "apiKey"] as const) {
     assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
   }
 });
@@ -965,7 +960,6 @@ test("Pi provider errors are classified once into a typed code from structured f
     [{ providerError: { status: 400, code: "context_length_exceeded" } }, "context_too_long", 400],
     [{ providerError: { status: 529, type: "overloaded_error" } }, "transient", 529],
     [{ rawStopReason: "refusal" }, "refusal", undefined],
-    // Anthropic documents prompt-too-long only as a 400 invalid_request_error, so it is a bad_request, not context_too_long.
     [
       {
         errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",

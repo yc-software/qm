@@ -186,15 +186,10 @@ interface DeploymentLayerTransportOpts {
   envFile?: string;
 }
 
-/**
- * How a hosting target reaches its core's /v1/deployment-layer endpoint.
- * Each HostingProvider supplies one; nothing in this file knows about targets.
- */
 export type DeploymentLayerTransport = (
   opts: DeploymentLayerTransportOpts,
 ) => Promise<{ status: number; body: string }>;
 
-/** Signed-HTTP transport used by providers whose core is reachable over plain HTTPS. */
 export function httpDeploymentLayerTransport(
   o: {
     urlOf?: (config: QmConfig) => URL;

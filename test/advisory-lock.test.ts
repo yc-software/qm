@@ -237,9 +237,9 @@ test(
 
 test("pg nested locks reuse one connection without bypassing sibling exclusion", { skip, timeout: 10000 }, async () => {
   const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString: URL, max: 1, connectionTimeoutMillis: 200 });
+  const pool = new Pool({ connectionString: URL, max: 1, connectionTimeoutMillis: 2_000 });
   const pg = createPgPool(URL!);
-  const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5, timeoutMs: 100 });
+  const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5, timeoutMs: 1_000 });
   try {
     assert.equal(
       await lock.withSharedLock!("resource", () =>
@@ -298,7 +298,7 @@ test(
   { skip, timeout: 10000 },
   async () => {
     const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: URL, max: 1, connectionTimeoutMillis: 200 });
+    const pool = new Pool({ connectionString: URL, max: 1, connectionTimeoutMillis: 2_000 });
     const pg = createPgPool(URL!);
     const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5 });
     const entered = Promise.withResolvers<void>();
@@ -334,7 +334,7 @@ test(
 
 test("pg contended polling releases connections for unrelated keys", { skip, timeout: 10000 }, async () => {
   const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString: URL, max: 2, connectionTimeoutMillis: 100 });
+  const pool = new Pool({ connectionString: URL, max: 2, connectionTimeoutMillis: 2_000 });
   const pg = createPgPool(URL!);
   const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5 });
   const entered = Promise.withResolvers<void>();

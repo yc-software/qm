@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 type AckPickOutcome = "picked" | "declined";
 
@@ -59,6 +60,7 @@ export function createPostgresAckEmojiPickStore(connectionString: string): AckEm
         ON ack_emoji_picks(org_id, outcome)`,
       ],
     },
+    ...tenantTables("surface-cache/ack-emoji-pick/0002-tenants", [{ table: "ack_emoji_picks", primaryKey: "id" }]),
   ]);
   const row = (r: Record<string, unknown>): AckEmojiPick => ({
     id: Number(r.id),

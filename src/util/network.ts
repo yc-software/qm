@@ -198,8 +198,11 @@ export function createPublicFetch(origins: ReadonlySet<string>, listedRefused = 
 
 let configuredPublicFetch = createPublicFetch(new Set());
 
-export function configurePublicFetch(privateNetworkAllowedOrigins: ReadonlySet<string>): void {
-  configuredPublicFetch = createPublicFetch(privateNetworkAllowedOrigins);
+export function configurePublicFetch(
+  privateNetworkAllowedOrigins: ReadonlySet<string>,
+  listedRefused?: (ip: string) => boolean,
+): void {
+  configuredPublicFetch = createPublicFetch(privateNetworkAllowedOrigins, listedRefused);
 }
 
 export const publicFetch: AddressFetch = (input, init) => configuredPublicFetch(input, init);

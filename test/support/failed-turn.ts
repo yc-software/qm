@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { testTenant } from "./test-tenant.ts";
 import type { BuiltApp } from "../../src/wiring.ts";
 import type { TurnRequest } from "../../src/types.ts";
 
@@ -10,7 +11,7 @@ export async function failedTurnError(
   assert.equal(result.status, "failed", JSON.stringify(result));
   const threadRef = request.conversation.threadRef;
   const run = (await built.runs.list({ threadRef })).find((candidate) => candidate.sessionId === threadRef);
-  const logged = (await built.errors.list()).filter(
+  const logged = (await built.errors.list(testTenant)).filter(
     (e) =>
       e.category === "turn" &&
       ((result.sessionId !== undefined && e.sessionId === result.sessionId) ||

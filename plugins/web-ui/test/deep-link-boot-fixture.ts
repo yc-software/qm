@@ -142,6 +142,10 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         user: "tester",
         org: "test",
         permissions: [],
+        chatSurfaces: [
+          { kind: "slack", label: "Slack" },
+          { kind: "partner-chat", label: "Community chat" },
+        ],
         ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
       });
     if (path === "/api/composio/slack/complete")

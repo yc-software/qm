@@ -34,8 +34,8 @@ struct NativeVoiceTranscript {
   mutating func appendResult(_ text: String) {
     appendItem(.result(text))
   }
-  mutating func appendActivity(_ activity: [Item], runID: String) {
-    for entry in activity
+  mutating func appendActivity(_ items: [Item], runID: String) {
+    for entry in items
     where NativeWorkItem.supports(entry) && activityIDs.insert("\(runID):\(entry.id)").inserted {
       appendItem(.activity(entry))
     }
@@ -73,6 +73,7 @@ final class NativeVoiceModel: NSObject {
   var conversation: Conversation?
   var available = false
   var status = "Checking voice availability…"
+  private(set) var permissionError: NativeAudioPermissionError?
   var connected = false
   var connecting = false
   var stopping = false
@@ -94,24 +95,33 @@ final class NativeVoiceModel: NSObject {
   private var threadRef = ""
   private var scopeID = ""
   private var user = ""
-  init(client: APIClient, conversation: Conversation?) {
+  private let microphonePermission: @MainActor () async -> Bool
+  init(
+    client: APIClient, conversation: Conversation?,
+    microphonePermission: @escaping @MainActor () async -> Bool = {
+      await AVAudioApplication.requestRecordPermission()
+    }
+  ) {
     self.client = client
     self.conversation = conversation
+    self.microphonePermission = microphonePermission
   }
   func load() async {
     do {
       struct Capability: Decodable { let enabled: Bool }
-      let identity: Identity = try await client.fetch("me")
-      let capability: Capability = try await client.fetch("api/voice")
+      async let identity: Identity = try await client.fetch("me")
+      async let capability: Capability = try await client.fetch("api/voice")
+      let (me, voice) = try await (identity, capability)
       try Task.checkCancellation()
-      user = identity.user
-      available = capability.enabled
+      user = me.user
+      available = voice.enabled
       status = available ? "Ready when you are." : "Voice is not enabled for this account."
     } catch { if !Task.isCancelled { status = error.localizedDescription } }
   }
   func start() async {
     guard available, !connecting, !connected, !stopping else { return }
     cleanup()
+    permissionError = nil
     closingStatus = "Conversation ended. QM tasks remain in your history."
     audioInterrupted = false
     audioPaused = false
@@ -127,8 +137,8 @@ final class NativeVoiceModel: NSObject {
     threadRef = conversation?.threadRef ?? "web:\(user):voice-\(UUID().uuidString.lowercased())"
     scopeID = conversation?.scopeId ?? "personal:\(user)"
     do {
-      guard await AVAudioApplication.requestRecordPermission() else {
-        throw QMError.message("Enable microphone access for QM in Settings to use voice.")
+      guard await microphonePermission() else {
+        throw NativeAudioPermissionError.microphoneDenied
       }
       guard current == revision && !Task.isCancelled else { return }
       let rtcAudio = RTCAudioSessionConfiguration.webRTC()
@@ -211,7 +221,12 @@ final class NativeVoiceModel: NSObject {
         do { try await Task.sleep(for: .seconds(30)) } catch { return }
         if current == revision && !connected { fail("Voice did not connect. Try again.") }
       }
-    } catch { if current == revision { fail(error.localizedDescription) } }
+    } catch {
+      if current == revision {
+        permissionError = error as? NativeAudioPermissionError
+        fail(error.localizedDescription)
+      }
+    }
   }
   func updatePlaybackVolume() {
     let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
@@ -375,20 +390,18 @@ final class NativeVoiceModel: NSObject {
   }
   private func briefing() async -> String? {
     guard let conversation else { return nil }
+    async let activeRun: ActiveRun? = try await client.fetch(
+      "api/runs/active", query: [.init(name: "threadRef", value: threadRef)])
+    async let transcript: Transcript? = try await client.fetch(
+      "api/sessions/\(conversation.id.apiComponent)",
+      query: [.init(name: "tailTurns", value: "25")])
     let active: ActiveRun?
-    do {
-      active = try await client.fetch(
-        "api/runs/active", query: [.init(name: "threadRef", value: threadRef)])
-    } catch {
+    do { active = try await activeRun } catch {
       Log.background.failure("Voice briefing active run check", error)
       active = nil
     }
     let history: Transcript?
-    do {
-      history = try await client.fetch(
-        "api/sessions/\(conversation.id.apiComponent)",
-        query: [.init(name: "tailTurns", value: "25")])
-    } catch {
+    do { history = try await transcript } catch {
       Log.background.failure("Voice briefing history", error)
       history = nil
     }
@@ -510,9 +523,9 @@ final class NativeVoiceModel: NSObject {
         guard current == revision else { throw CancellationError() }
         guard let run = event.run else { return }
         latest = run
-        transcript.appendActivity(run.activityItems ?? [], runID: runID)
+        transcript.appendActivity(run.activity ?? [], runID: runID)
         if Self.clock - reported >= 4,
-          let item = NativeWorkItem.items(run.activityItems ?? []).last(where: { !$0.isThinking })
+          let item = NativeWorkItem.items(run.activity ?? []).last(where: { !$0.isThinking })
         {
           reported = Self.clock
           bridge.progress(String(item.label(active: true).prefix(160)), run: runID)
@@ -531,7 +544,7 @@ final class NativeVoiceModel: NSObject {
         let run: Run = try await client.fetch("api/runs/\(runID.apiComponent)")
         latest = run
         failures = 0
-        transcript.appendActivity(run.activityItems ?? [], runID: runID)
+        transcript.appendActivity(run.activity ?? [], runID: runID)
       } catch {
         failures += 1
       }
@@ -621,39 +634,99 @@ extension NativeVoiceModel: RTCPeerConnectionDelegate, RTCDataChannelDelegate {
   }
 }
 
+private struct NativeVoiceConnectionLoading: View {
+  let status: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      HStack(spacing: 14) {
+        Image(systemName: "mic").font(.system(size: 24))
+          .frame(width: 48, height: 48)
+          .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+        HStack(spacing: 5) {
+          ForEach(0..<5) { _ in
+            Capsule().fill(.teal).frame(height: 2)
+          }
+        }
+        .frame(maxWidth: 132)
+        .modifier(NativeLoadingPulse())
+        Text("QM").font(.headline).frame(minWidth: 48, minHeight: 48)
+          .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+      }
+      .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Voice connection").font(.subheadline).foregroundStyle(.secondary)
+        Text(status).font(.headline).fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.vertical, 20)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
+    .accessibilityAddTraits(.updatesFrequently)
+  }
+}
+
 struct VoiceView: View {
   @State private var model: NativeVoiceModel
+  @State private var confirmingAgentVoice = false
+  @State private var followsLatest = true
+  @State private var transcriptPosition = ScrollPosition(edge: .bottom)
   @Environment(\.scenePhase) private var phase
   init(client: APIClient, conversation: Conversation? = nil) {
-    _model = State(initialValue: NativeVoiceModel(client: client, conversation: conversation))
+    self.init(model: NativeVoiceModel(client: client, conversation: conversation))
+  }
+  init(model: NativeVoiceModel) {
+    _model = State(initialValue: model)
   }
   var body: some View {
     VStack(spacing: 24) {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           Text("Talk to QM").font(.title2.weight(.semibold))
-          Text(model.status).font(.headline).accessibilityAddTraits(.updatesFrequently)
+          if model.connecting {
+            NativeVoiceConnectionLoading(status: model.status)
+          } else if let permission = model.permissionError {
+            NativeAudioPermissionNotice(message: model.status, permission: permission)
+          } else {
+            Text(model.status).font(.headline).accessibilityAddTraits(.updatesFrequently)
+          }
           LazyVStack(alignment: .leading, spacing: 20) {
             ForEach(model.transcript.items) { item in
-              switch item.content {
-              case .speech(let fragment):
-                NativeChatMessageView(
-                  message: ChatMessage(
-                    id: item.id.uuidString, role: fragment.role == "You" ? "user" : "assistant",
-                    text: fragment.text), client: model.client, showSpeaker: false, user: "")
-              case .activity(let entry):
-                NativeActivityRow(entry: entry, client: model.client)
-              case .status(let text):
-                Text(text).font(.caption).foregroundStyle(.secondary)
-              case .result(let text):
-                NativeChatMessageView(
-                  message: ChatMessage(id: item.id.uuidString, role: "assistant", text: text),
-                  client: model.client, showSpeaker: false, user: "")
+              Group {
+                switch item.content {
+                case .speech(let fragment):
+                  NativeChatMessageView(
+                    message: ChatMessage(
+                      id: item.id.uuidString, role: fragment.role == "You" ? "user" : "assistant",
+                      text: fragment.text), client: model.client, showSpeaker: false, user: "")
+                case .activity(let entry):
+                  NativeActivityRow(entry: entry, client: model.client)
+                case .status(let text):
+                  Text(text).font(.caption).foregroundStyle(.secondary)
+                case .result(let text):
+                  NativeChatMessageView(
+                    message: ChatMessage(id: item.id.uuidString, role: "assistant", text: text),
+                    client: model.client, showSpeaker: false, user: "")
+                }
               }
             }
           }
         }.padding(24).frame(maxWidth: QMTheme.conversationWidth, alignment: .leading)
       }
+      .scrollPosition($transcriptPosition)
+      .onScrollPhaseChange { previous, phase, context in
+        if phase == .interacting { followsLatest = false }
+        if phase == .idle, previous == .interacting || previous == .decelerating {
+          followsLatest =
+            context.geometry.contentSize.height - context.geometry.visibleRect.maxY <= 44
+        }
+      }
+      .onChange(of: model.transcript.items.isEmpty) { _, empty in
+        if empty { followsLatest = true }
+      }
+      .defaultScrollAnchor(.bottom, for: .initialOffset)
+      .defaultScrollAnchor(followsLatest ? .bottom : nil, for: .sizeChanges)
+      .defaultScrollAnchor(.top, for: .alignment)
       if model.connected || model.connecting || model.stopping {
         HStack(spacing: 24) {
           Button(model.muted ? "Unmute" : "Mute", systemImage: model.muted ? "mic.slash" : "mic") {
@@ -663,9 +736,13 @@ struct VoiceView: View {
             .disabled(model.stopping)
         }.buttonStyle(.bordered).controlSize(.large)
       } else {
-        Button("Start voice", systemImage: "waveform") { Task { await model.start() } }.buttonStyle(
-          .borderedProminent
-        ).controlSize(.large).disabled(!model.available)
+        Button("Start voice", systemImage: "waveform") {
+          if model.conversation?.parentSessionId?.isEmpty == false {
+            confirmingAgentVoice = true
+          } else {
+            startVoice()
+          }
+        }.buttonStyle(.borderedProminent).controlSize(.large).disabled(!model.available)
       }
       Text("Audio is sent to OpenAI while connected. Tasks and approvals stay in QM.").font(
         .caption
@@ -673,6 +750,18 @@ struct VoiceView: View {
         .padding(.bottom)
     }
     .background(QMTheme.paper).navigationBarTitleDisplayMode(.inline)
+    .alert(
+      "Talk to this agent directly?", isPresented: $confirmingAgentVoice
+    ) {
+      Button("Start voice", action: startVoice)
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      if let conversation = model.conversation {
+        Text(
+          "You’ll be speaking directly to \(NativeAgentBranch.name(conversation)), a delegated agent. Spoken requests may change the work it reports to its parent conversation."
+        )
+      }
+    }
     .task { await model.load() }
     .onDisappear { model.finish() }
     .onChange(of: phase) {
@@ -697,5 +786,9 @@ struct VoiceView: View {
         model.headphonesDisconnected()
       }
     }
+  }
+
+  private func startVoice() {
+    Task { await model.start() }
   }
 }

@@ -26,9 +26,8 @@ for (const [label, glyph] of [
   ["Close pane", X],
 ] as const) {
   test(`${label} keeps pointer targeting on the button across icon redraws`, () => {
-    const host = document.createElement("div");
-    host.className = "dv-tab dv-active-tab";
-    document.body.append(host);
+    document.body.innerHTML = `<div class="dockview-theme-qm"><div class="dv-tabs-and-actions-container"><div class="dv-tabs-container"><div class="dv-tab dv-active-tab">`;
+    const host = document.querySelector<HTMLElement>(".dv-tab")!;
     const view = () =>
       html`<span class="split-tab-actions"
         ><button class="icon-btn subtle split-tab-close" type="button" aria-label=${label}>
@@ -49,6 +48,7 @@ for (const [label, glyph] of [
     assert.equal(dom.window.getComputedStyle(after).pointerEvents, "none");
     for (const child of after.children) assert.equal(dom.window.getComputedStyle(child).pointerEvents, "none");
     assert.notEqual(dom.window.getComputedStyle(button).pointerEvents, "none");
+    assert.equal(dom.window.getComputedStyle(host.parentElement!).cursor, "pointer", "the gaps between tabs");
     host.remove();
   });
 }

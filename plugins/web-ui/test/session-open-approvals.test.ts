@@ -31,7 +31,6 @@ test("a chat draws its transcript before its approvals arrive, then shows the ca
     assert.equal(conv.state.sessionId, SESSION.id);
     assert.match(chatText(), /please run the deploy/, "the transcript is drawn while approvals are in flight");
     assert.equal(cards(), 0);
-    assert.equal(conv.hasUnresolvedApproval(), false, "nothing blocks the composer until an approval arrives");
 
     h.releaseApprovals();
     await until(() => cards() > 0);
@@ -40,7 +39,6 @@ test("a chat draws its transcript before its approvals arrive, then shows the ca
       conv.activePendingApprovals().map((a) => a.requestId),
       ["a1"],
     );
-    assert.equal(conv.hasUnresolvedApproval(), true, "a blocking approval locks the composer");
   } finally {
     await h.close();
   }
@@ -129,7 +127,6 @@ test("approvals that land after switching chats stay out of the new chat", async
     assert.equal(conv.state.sessionId, OTHER.id);
     assert.equal(cards(), 0);
     assert.deepEqual(conv.activePendingApprovals(), []);
-    assert.equal(conv.hasUnresolvedApproval(), false);
   } finally {
     await h.close();
   }

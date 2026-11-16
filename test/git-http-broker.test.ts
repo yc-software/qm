@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
 import { Readable, PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
@@ -8,7 +9,7 @@ import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability
 import type { BaseCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 
-function req(headers: Record<string, string>, body = ""): IncomingMessage {
+function req(headers: Record<string, string>, body: string | Buffer = ""): IncomingMessage {
   const r = Readable.from(body ? [body] : []) as IncomingMessage;
   r.headers = headers;
   return r;
@@ -35,7 +36,12 @@ async function text(r: PassThrough): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function ctx(path: string, method: string, deps: ServerDeps, body = ""): BaseCtx & { res: ReturnType<typeof res> } {
+function ctx(
+  path: string,
+  method: string,
+  deps: ServerDeps,
+  body: string | Buffer = "",
+): BaseCtx & { res: ReturnType<typeof res> } {
   const url = new URL(path, "http://core.test");
   const out = res();
   return {
@@ -94,7 +100,8 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
       };
     },
   };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
+  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, gzipSync("PACK"));
+  c.req.headers["content-encoding"] = "gzip";
   await brokerGitHttp(c);
 
   assert.equal(await text(c.res), "0000");
@@ -105,10 +112,11 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
     method: "POST",
     headers: {
       "content-type": "application/x-git-receive-pack-request",
+      "content-encoding": "gzip",
       "git-protocol": "version=2",
       Authorization: "Basic dXNlcjp0b2tlbg==",
     },
-    body: "PACK",
+    body: gzipSync("PACK").toString("utf8"),
   });
 });
 

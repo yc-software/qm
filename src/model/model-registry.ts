@@ -5,7 +5,6 @@ export interface ModelEntry {
   name: string;
   fastMode: boolean;
   buttonLabel?: string;
-  webui: boolean;
   base: boolean;
   auxiliary?: boolean;
   request?: { model: string; service_tier: "ultrafast" };
@@ -41,7 +40,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     id: "claude-opus-5-5",
     name: "Claude Opus 5.5",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       template: "claude-opus-4-8",
@@ -55,10 +53,24 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     },
   },
   {
+    id: "claude-fable-5-2",
+    name: "Claude Fable 5.2",
+    fastMode: true,
+    base: true,
+    clone: {
+      template: "claude-fable-5",
+      input: 8,
+      output: 40,
+      cacheRead: 0.2,
+      cacheWrite: 10,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+  },
+  {
     id: "claude-fable-5-1",
     name: "Claude Fable 5.1",
     fastMode: false,
-    webui: true,
     base: true,
     clone: {
       template: "claude-fable-5",
@@ -70,12 +82,11 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-fable-5", name: "Claude Fable 5", fastMode: false, webui: true, base: true },
+  { id: "claude-fable-5", name: "Claude Fable 5", fastMode: false, base: true },
   {
     id: "claude-opus-5",
     name: "Claude Opus 5",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       template: "claude-opus-4-8",
@@ -86,12 +97,11 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-opus-4-8", name: "Claude Opus 4.8", fastMode: true, webui: true, base: true },
+  { id: "claude-opus-4-8", name: "Claude Opus 4.8", fastMode: true, base: true },
   {
     id: "claude-sonnet-5-5",
     name: "Claude Sonnet 5.5",
     fastMode: false,
-    webui: true,
     base: true,
     clone: {
       template: "claude-opus-4-8",
@@ -104,12 +114,11 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", fastMode: false, webui: true, base: true },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", fastMode: false, base: true },
   {
     id: "claude-haiku-5-5",
     name: "Claude Haiku 5.5",
     fastMode: false,
-    webui: true,
     base: true,
     auxiliary: true,
     clone: {
@@ -123,13 +132,12 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
     },
   },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, webui: true, base: true },
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, base: true },
   {
     id: "gpt-5.6-sol",
     buttonLabel: "5.6 Sol",
     name: "GPT-5.6 Sol",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       ...GPT_56_CLONE,
@@ -144,7 +152,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "5.6 Terra",
     name: "GPT-5.6 Terra",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       ...GPT_56_CLONE,
@@ -159,7 +166,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "5.6 Luna",
     name: "GPT-5.6 Luna",
     fastMode: true,
-    webui: true,
     base: true,
     auxiliary: true,
     clone: {
@@ -175,7 +181,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "Astra",
     name: "GPT-6 Astra",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       ...GPT_56_CLONE,
@@ -192,7 +197,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "Astra Ultrafast",
     name: "GPT-6 Astra · Ultrafast (6× cost)",
     fastMode: false,
-    webui: true,
     base: true,
     request: { model: "gpt-6-astra", service_tier: "ultrafast" },
     clone: {
@@ -210,7 +214,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6.1 Sol",
     name: "GPT-6.1 Sol",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       ...GPT_56_CLONE,
@@ -227,7 +230,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6.1 Sol Ultrafast",
     name: "GPT-6.1 Sol · Ultrafast (6× cost)",
     fastMode: false,
-    webui: true,
     base: true,
     request: { model: "gpt-6.1-sol", service_tier: "ultrafast" },
     clone: {
@@ -245,7 +247,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6.1 Terra",
     name: "GPT-6.1 Terra",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       ...GPT_56_CLONE,
@@ -261,7 +262,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6 Sol",
     name: "GPT-6 Sol",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       ...GPT_56_CLONE,
@@ -276,7 +276,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6 Luna",
     name: "GPT-6 Luna",
     fastMode: true,
-    webui: true,
     base: true,
     clone: {
       ...GPT_56_CLONE,
@@ -286,7 +285,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
     },
   },
-  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true },
-  { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: false, webui: false, base: false },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, webui: false, base: false },
+  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, base: true },
+  { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: false, base: false },
+  { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, base: false },
 ];

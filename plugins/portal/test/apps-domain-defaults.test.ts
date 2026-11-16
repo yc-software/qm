@@ -25,7 +25,7 @@ test.after(() => {
   upstream.close();
 });
 
-test("the cookie domain derives only when the apps domain sits under the portal host", () => {
+test("a stale parent-domain cookie is recognised only when the apps domain sits under the portal host", () => {
   assert.equal(derivedCookieDomain("qm.example.com", "apps.qm.example.com"), "qm.example.com");
   assert.equal(derivedCookieDomain("Example.com", "APPS.example.COM"), "example.com");
   assert.equal(
@@ -47,17 +47,17 @@ test("the cookie domain derives only when the apps domain sits under the portal 
   assert.equal(derivedCookieDomain("example.com", "appsXexample.com"), undefined, "dot-boundary required");
 });
 
-test("DEPLOY_APPS_DOMAIN alone yields a working portal apps setup — cookie domain derived, boot clean", () => {
+test("DEPLOY_APPS_DOMAIN alone yields a working portal apps setup with a clean boot", () => {
   assert.doesNotThrow(() => bootChecks());
 });
 
-test("an apps domain that shares no parent with the portal host refuses to boot with a cookie-domain explanation", () => {
+test("an apps domain that shares no parent with the portal host boots with no domain-wide cookie", () => {
   const command = "import('./src/index.ts').then(m => m.bootChecks())";
   const r = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
     cwd: process.cwd(),
     env: { ...process.env, DEPLOY_APPS_DOMAIN: "apps.unrelated.net" },
     encoding: "utf8",
   });
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /not a subdomain of the portal host/);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /cookie domain/);
 });

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { perTenant } from "../tenants/cache.ts";
+import { boundTenant } from "../tenants/context.ts";
 
 const price = z.number().finite().nonnegative();
 const tokens = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -60,25 +62,25 @@ export function parseRegisteredModel(value: unknown): RegisteredModel {
     : parseModelOverlay(value);
 }
 
-let overlays = new Map<string, RegisteredModel>();
-let unavailableOverlays = new Map<string, string>();
-let version = 0;
-let snapshot = JSON.stringify([[], [], []]);
+const emptyOverlayState = () => ({
+  overlays: new Map<string, RegisteredModel>(),
+  unavailable: new Map<string, string>(),
+  snapshot: JSON.stringify([[], [], []]),
+});
+const tenantOverlayState = perTenant(emptyOverlayState);
+const unboundOverlayState = emptyOverlayState();
+const overlayState = () => (boundTenant() === undefined ? unboundOverlayState : tenantOverlayState());
 
 export function overlayModel(id: string): RegisteredModel | undefined {
-  return overlays.get(id);
+  return overlayState().overlays.get(id);
 }
 
 export function overlayModels(): RegisteredModel[] {
-  return [...overlays.values()];
+  return [...overlayState().overlays.values()];
 }
 
 export function overlayUnavailableReason(id: string): string | undefined {
-  return unavailableOverlays.get(id);
-}
-
-export function overlaysVersion(): number {
-  return version;
+  return overlayState().unavailable.get(id);
 }
 
 export function publishModelOverlays(
@@ -86,10 +88,10 @@ export function publishModelOverlays(
   unavailable: Map<string, string>,
   deleted: readonly string[],
 ): void {
+  const state = tenantOverlayState();
   const nextSnapshot = JSON.stringify([[...next], [...unavailable], deleted]);
-  if (nextSnapshot === snapshot) return;
-  overlays = next;
-  unavailableOverlays = unavailable;
-  snapshot = nextSnapshot;
-  version += 1;
+  if (nextSnapshot === state.snapshot) return;
+  state.overlays = next;
+  state.unavailable = unavailable;
+  state.snapshot = nextSnapshot;
 }

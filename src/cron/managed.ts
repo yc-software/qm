@@ -23,7 +23,7 @@ export async function claimManagedCron<T extends ManagedCronClaim>(
 ): Promise<T> {
   const existing = await deps.store.get(key);
   if (existing?.cronId) return existing.arming ? arm(deps, key, existing.cronId) : existing;
-  const cron = await deps.crons.create({ ...input, enabled: false });
+  const cron = await deps.crons.create({ ...input, enabled: false, taskAuthor: "automation" });
   await deps.store.putIfAbsent(key, initial);
   const stored = await deps.store.update(key, (value) =>
     value.cronId ? value : { ...value, cronId: cron.id, arming: true, ...fields(cron) },

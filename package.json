@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Headless core for the shared org agent (managed-agents architecture).",
+  "description": "A multiplayer agent harness for teams. In Slack and on the web.",
   "engines": {
     "node": ">=24.22.1",
     "npm": ">=11.10.0"
@@ -59,6 +59,7 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
+    "lint:tenancy": "node scripts/tenant-ratchet.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "build:app-annotations": "node scripts/build-app-devbar.mjs"
   },
@@ -75,7 +76,7 @@
     "@aws-sdk/credential-provider-node": "^3.972.70",
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
     "@basetenlabs/sandbox": "0.5.0",
-    "@earendil-works/pi-ai": "https://github.com/yc-software/qm/releases/download/vendored-pi-ai-0.82.0-qm.3/earendil-works-pi-ai-0.82.0-qm.3.tgz",
+    "@earendil-works/pi-ai": "https://github.com/yc-software/qm/releases/download/vendored-pi-ai-0.82.0-qm.5/earendil-works-pi-ai-0.82.0-qm.5.tgz",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.6/earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz",
     "@fly/sprites": "0.2.3",
     "@grpc/grpc-js": "^1.14.5",
@@ -104,6 +105,7 @@
     "pg-connection-string": "2.14.0",
     "porter-sandbox": "^0.1.41",
     "socks-proxy-agent": "10.1.0",
+    "standardwebhooks": "1.1.1",
     "tar-stream": "^3.2.0",
     "tree-sitter-bash": "^0.25.1",
     "typebox": "^1.1.38",
@@ -113,8 +115,8 @@
     "zod": "4.6.7"
   },
   "overrides": {
-    "@hono/node-server": "2.1.5",
-    "hono": "4.13.13",
+    "@hono/node-server": "2.1.6",
+    "hono": "4.13.18",
     "@fastify/ajv-compiler": {
       "fast-uri": "3.1.9"
     },

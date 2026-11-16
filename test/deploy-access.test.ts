@@ -11,7 +11,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import {
-  decideDeploymentAccess,
+  decideAppAccess,
   deployAccessMessage,
   parseDeployAccess,
   registerDeployAccessActions,
@@ -24,6 +24,8 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { companyTest } from "./support/app-handle.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -80,10 +82,10 @@ async function fixture(t: { after(fn: () => void): void }) {
   const d = await app.deploy(publishInput());
   const value = JSON.stringify({ deploymentId: d.id, requesterId: requester });
   const share = (permission: Permission | null, scope = person(requester)) =>
-    app.shareDeployment(d.id, scope, permission, { createdBy: owner });
+    app.shareApp(d.id, scope, permission, { createdBy: owner });
   return {
     share,
-    grants: () => app.deploymentGrantees(d.id),
+    grants: () => app.appGrantees(d.id),
     notices: () => deliveries.pending("principal"),
     app,
     deploy,
@@ -94,11 +96,11 @@ async function fixture(t: { after(fn: () => void): void }) {
     value,
     auditLog,
     decide: (id = owner, approve = true, extra: Partial<ActorAssertion> = {}) =>
-      decideDeploymentAccess(app, identity, value, { externalId: id, ...extra }, approve),
+      decideAppAccess(tenant, app, identity, value, { externalId: id, ...extra }, approve),
   };
 }
 
-test("card is plain text with only deployment and requester in bounded JSON buttons", () => {
+test("card is plain text with only app and requester in bounded JSON buttons", () => {
   const text = '<@everyone> asks to open "A & B"';
   const card = deployAccessMessage(request, text);
   assert.equal(card.text, text);
@@ -132,7 +134,7 @@ test("malformed or scope-injecting button payloads are rejected", () => {
     assert.throws(() => parseDeployAccess(value));
 });
 
-test("approve is audited and idempotent, preserves manage access, and respects transfers/revokes", async (t) => {
+companyTest("approve is audited and idempotent, preserves manage access, and respects transfers/revokes", async (t) => {
   const f = await fixture(t);
   assert.match(await f.decide(), /^Approved\./);
   await f.decide();
@@ -140,8 +142,8 @@ test("approve is audited and idempotent, preserves manage access, and respects t
   const notices = await f.notices();
   assert.equal(notices.length, 1);
   assert.equal(notices[0]!.destination.target, requester);
-  assert.match(notices[0]!.text, /gave you access.*https:\/\/mysite.apps.example.com\//);
-  assert.ok((await f.auditLog.events()).some((e) => e.action === "grant"));
+  assert.match(notices[0]!.text, /gave you access.*https:\/\/acme1-mysite.apps.example.com\//);
+  assert.ok((await f.auditLog.events(tenant)).some((e) => e.action === "grant"));
   await f.share(null);
   assert.deepEqual(await f.grants(), []);
   await assert.rejects(f.decide(requester), /owner/);
@@ -170,12 +172,12 @@ test("requester, stranger, guest and deactivated owner cannot approve or decline
   assert.deepEqual(await f.notices(), []);
 });
 
-test("tampering the deployment ID cannot authorize another owner's app", async (t) => {
+test("tampering the app ID cannot authorize another owner's app", async (t) => {
   const f = await fixture(t);
   const other = await f.app.deploy(publishInput(requester, "other"));
   const value = JSON.stringify({ ...request, deploymentId: other.id });
   for (const approve of [true, false])
-    await assert.rejects(decideDeploymentAccess(f.app, f.identity, value, { externalId: owner }, approve), /owner/);
+    await assert.rejects(decideAppAccess(tenant, f.app, f.identity, value, { externalId: owner }, approve), /owner/);
 });
 
 test("decline only notifies and leaves access unchanged; duplicate clicks dedupe", async (t) => {
@@ -207,7 +209,7 @@ test("direct share paths notify only after successful grants; org, self and revo
   assert.equal((await f.share("write")).find((g) => g.scope === person(requester))?.permission, "write");
 });
 
-test("notify:false grants access on every direct share path without a DM or invitation email", async (t) => {
+companyTest("notify:false grants access on every direct share path without a DM or invitation email", async (t) => {
   const f = await fixture(t);
   const sent: string[] = [];
   const app = createApp({
@@ -229,7 +231,7 @@ test("notify:false grants access on every direct share path without a DM or invi
     (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,
     true,
   );
-  await app.shareDeployment(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
+  await app.shareApp(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
   const invited = await control.shareArtifact(
     { type: "deploy", id: f.d.id, email: "carol@example.com", ...quiet },
     cap,
@@ -238,9 +240,9 @@ test("notify:false grants access on every direct share path without a DM or invi
   assert.deepEqual(invited.invitation, {
     emailSent: false,
     emailProblem: "notify was false",
-    appUrl: "https://mysite.apps.example.com/",
+    appUrl: "https://acme1-mysite.apps.example.com/",
   });
-  assert.deepEqual(await f.deploy.deploymentGrantees(f.d.id), [
+  assert.deepEqual(await f.deploy.appGrantees(f.d.id), [
     { scope: person(requester), permission: "write" },
     { scope: person("carol@example.com"), permission: "read" },
   ]);
@@ -265,8 +267,8 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
     {
       directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id }) } as never,
       core: {
-        decideDeploymentAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
-          decideDeploymentAccess(f.app, f.identity, value, actor, approve),
+        decideAppAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
+          decideAppAccess(tenant, f.app, f.identity, value, actor, approve),
       } as never,
     },
   );
@@ -296,7 +298,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
 
 test("shared-home members can approve and decline, outsiders cannot", async (t) => {
   const f = await fixture(t);
-  await f.directory.upsertGroup("G1", [owner, "carol@example.com"]);
+  await f.directory.upsertGroup("G1", [owner, "carol@example.com"], "slack");
   await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
   assert.match(await f.decide("carol@example.com", false), /^Declined\./);
   assert.match(await f.decide("carol@example.com"), /^Approved\./);

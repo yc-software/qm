@@ -2,7 +2,6 @@ import {
   resolveGatewayEmbeddingModel,
   gatewayEmbeddingModelIds,
   gatewayModelCatalog,
-  gatewayModelsVersion,
   isGatewayModelId,
   resolveGatewayModel,
 } from "./gateway-models.ts";
@@ -12,14 +11,13 @@ import {
   isEmbeddingModel,
   overlayModel,
   overlayModels,
-  overlaysVersion,
   overlayUnavailableReason,
   type EmbeddingModel,
   type EmbeddingModelDefinition,
   type ModelOverlay,
 } from "./model-overlay.ts";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
-import { providerBaseUrl } from "./provider-endpoints.ts";
+import { MODEL_PROVIDERS, providerBaseUrl, type ModelProvider } from "./provider-endpoints.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 
@@ -90,18 +88,7 @@ export function thinkingLevelsFor(modelId?: string): readonly string[] {
     return true;
   });
 }
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
-export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
-
-export function isModelProvider(value: unknown): value is ModelProvider {
-  return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
-}
-
 type PiModel = Model<Api>;
-
-export function modelOverlayVersion(): number {
-  return overlaysVersion() + gatewayModelsVersion();
-}
 
 export function isOverlayModel(id: string): boolean {
   return overlayModel(id) !== undefined;
@@ -152,22 +139,15 @@ export function overlayModelCatalog(): Array<{ id: string; name: string; provide
     .map(({ id, name, provider }) => ({ id, name, provider }));
 }
 
-export function defaultWebuiModelIds(): readonly string[] {
-  return [
-    ...DEFAULT_WEBUI_MODEL_IDS,
-    ...gatewayModelCatalog(true).map((m) => m.id),
-    ...chatOverlays()
-      .filter((m) => m.webui)
-      .map((m) => m.id),
-  ];
-}
-
 export function fastModeModelIds(): readonly string[] {
   return [
     ...FAST_MODE_MODEL_IDS.filter(modelSupportsFastMode),
     ...chatOverlays()
       .filter((m) => modelSupportsFastMode(m.id))
       .map((m) => m.id),
+    ...gatewayModelCatalog(true)
+      .map((m) => m.id)
+      .filter(modelSupportsFastMode),
   ];
 }
 
@@ -177,8 +157,6 @@ const OPENROUTER_CATALOG_MODELS = new Map<string, PiModel>();
 export function modelDisplayName(id: string): string {
   return overlayModel(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? OPENROUTER_CATALOG_MODELS.get(id)?.name ?? id;
 }
-
-export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
 
 export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }> = MODEL_REGISTRY.filter(
   (m) => m.base,
@@ -284,7 +262,10 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
   return builtinModel(id);
 }
 
-function resolveBaseModel(id: string): PiModel | undefined {
+function resolveBaseModel(
+  id: string,
+  customModel: (id: string) => CustomRuntimeModel | undefined = resolveCustomModel,
+): PiModel | undefined {
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
   if (overlayUnavailableReason(id) !== undefined) return undefined;
   const builtin = resolveBuiltinModel(id);
@@ -293,8 +274,12 @@ function resolveBaseModel(id: string): PiModel | undefined {
   if (overlay && !isEmbeddingModel(overlay)) {
     return modelFromOverlay(overlay, false);
   }
-  const custom = resolveCustomModel(id);
+  const custom = customModel(id);
   return custom ? customPiModel(custom) : OPENROUTER_CATALOG_MODELS.get(id);
+}
+
+export function resolveDeploymentModel(id: string): PiModel | undefined {
+  return resolveBaseModel(id, () => undefined);
 }
 
 function customPiModel(custom: CustomRuntimeModel): PiModel {
@@ -341,15 +326,15 @@ export function auxiliaryModelFor(baseModelId: string): string {
 }
 
 const CONTEXT_BUDGET_FRACTION = 0.5;
-const CONTEXT_BUDGET_CAP_TOKENS = 150_000;
+export const HISTORY_BUDGET_DEFAULT_TOKENS = 150_000;
 
-export function contextTokenBudgetForModel(id: string): number | undefined {
+export function contextTokenBudgetForModel(id: string, cap = HISTORY_BUDGET_DEFAULT_TOKENS): number | undefined {
   const model = resolveModel(id);
   const window = model?.contextWindow;
   const output = model?.maxTokens;
   if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0 || output >= window)
     return undefined;
-  return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
+  return Math.min(cap, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
 }
 
 export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
@@ -439,6 +424,7 @@ export function modelSupportsFastMode(modelId: string | undefined): boolean {
   return (
     (overlay && !isEmbeddingModel(overlay) ? overlay.fastMode : undefined) ??
     REGISTRY_BY_ID.get(modelId)?.fastMode ??
+    resolveGatewayModel(modelId)?.fastMode ??
     false
   );
 }

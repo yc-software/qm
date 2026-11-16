@@ -53,10 +53,14 @@ function agent() {
   const slowDrainReports: Array<{ durationMs: number; rows: number }> = [];
   const undeliverable: Array<{ id: string; reason: string }> = [];
   const failed: Array<{ id: string; reason: string }> = [];
-  const makePoller = (opts: { slowDrainMs?: number } = {}) =>
+  const makePoller = (opts: { slowDrainMs?: number; claimMs?: number; claimResponseDelayMs?: number } = {}) =>
     createDeliveryPoller({
       core: {
-        claimDeliveries: (type: string, ms: number) => store.claimPending(type, ms),
+        claimDeliveries: async (type: string, ms: number) => {
+          const claimed = await store.claimPending(type, ms);
+          if (opts.claimResponseDelayMs && type === "slack") await sleep(opts.claimResponseDelayMs);
+          return claimed;
+        },
         ackDelivery: async (id: string) => {
           await store.ack(id, Date.now());
         },
@@ -75,7 +79,7 @@ function agent() {
       flow: { inFlightRuns: { add() {}, delete() {}, has: () => false } } as never,
       threads: createThreadTracker(),
       clientForIdentity: () => makeClient("identity"),
-      claimMs: CLAIM_MS,
+      claimMs: opts.claimMs ?? CLAIM_MS,
       ...(opts.slowDrainMs !== undefined ? { slowDrainMs: opts.slowDrainMs } : {}),
     });
   return { store, posted, makeClient, makePoller, slowDrainReports, undeliverable, failed };
@@ -99,6 +103,28 @@ test("a sibling relay re-claiming an expired batch does not double-post the tail
   await Promise.all([relayA, relayB]);
   const done = posted.filter((p) => p.text.includes("unpinned"));
   assert.equal(done.length, 1, `tail delivery must post exactly once, saw: ${JSON.stringify(done)}`);
+});
+
+test("a slow claim response does not stretch a relay's claim past the store's expiry", async () => {
+  const { store, posted, makeClient, makePoller } = agent();
+  await store.enqueue({
+    destination: { type: "slack", target: "C1:100.0" },
+    text: "SLOW head-of-line",
+    idempotencyKey: "post:s:a",
+  });
+  await store.enqueue({
+    destination: { type: "slack", target: "C1:100.0" },
+    text: "LATE tail reply",
+    idempotencyKey: "post:s:b",
+  });
+  const relayA = makePoller({ claimMs: 3_000, claimResponseDelayMs: 1_500 }).pollDeliveries(
+    makeClient("A", { SLOW: 1_600, LATE: 600 }),
+  );
+  await sleep(3_300);
+  const relayB = makePoller({ claimMs: 3_000 }).pollDeliveries(makeClient("B"));
+  await Promise.all([relayA, relayB]);
+  const tail = posted.filter((p) => p.text.includes("tail"));
+  assert.equal(tail.length, 1, `tail delivery must post exactly once, saw: ${JSON.stringify(tail)}`);
 });
 
 test("a lone relay renews its own expired claim and still delivers the tail", async () => {

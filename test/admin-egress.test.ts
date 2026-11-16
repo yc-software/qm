@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -32,7 +33,7 @@ const getJson = async (base: string, path: string, headers: Record<string, strin
 test("egress: brokered calls surface as scope-labelled audit records, org-wide", async () => {
   const s = start();
   try {
-    s.built.credentialUsage.record({
+    s.built.credentialUsage.record(testTenant, {
       slug: "x-firehose",
       host: "api.x.com",
       status: "ok",
@@ -40,7 +41,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
       scopeLabel: "personal:U1",
       principalId: "U1",
     });
-    s.built.credentialUsage.record({
+    s.built.credentialUsage.record(testTenant, {
       slug: "x-firehose",
       host: "api.x.com",
       status: "denied",
@@ -48,7 +49,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
       principalId: "U2",
     });
 
-    await settle(async () => (await s.built.credentialUsage.list()).length >= 2);
+    await settle(async () => (await s.built.credentialUsage.list(testTenant)).length >= 2);
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
     assert.equal(d.scopeId, "org:default-org");
     assert.equal(d.total, 2, "both brokered calls counted");
@@ -70,7 +71,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
     assert.equal(ok.upstreamStatus, 200, "upstream status is surfaced");
 
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "egress.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "egress.read"),
       "the egress read is itself audited",
     );
   } finally {
@@ -81,7 +82,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
 test("egress: broker and firewall sources are unioned into one feed", async () => {
   const s = start();
   try {
-    s.built.credentialUsage.record({
+    s.built.credentialUsage.record(testTenant, {
       slug: "x-firehose",
       host: "api.x.com",
       status: "ok",
@@ -89,7 +90,7 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
       scopeLabel: "personal:U1",
       principalId: "U1",
     });
-    s.built.egressAudit.record({
+    s.built.egressAudit.record(testTenant, {
       source: "proxy",
       host: "pastebin.com",
       allowed: false,
@@ -100,8 +101,8 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
       scopeLabel: "personal:U1",
     });
 
-    await settle(async () => (await s.built.credentialUsage.list()).length >= 1);
-    await settle(async () => (await s.built.egressAudit.list()).length >= 1);
+    await settle(async () => (await s.built.credentialUsage.list(testTenant)).length >= 1);
+    await settle(async () => (await s.built.egressAudit.list(testTenant)).length >= 1);
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
     assert.equal(d.total, 2, "both sources counted in one feed");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });
@@ -123,28 +124,28 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
 test("egress: a scoped read returns only that scope's records, across both sources", async () => {
   const s = start();
   try {
-    s.built.credentialUsage.record({
+    s.built.credentialUsage.record(testTenant, {
       slug: "a",
       host: "api.a.com",
       status: "ok",
       scopeLabel: "personal:U1",
       principalId: "U1",
     });
-    s.built.credentialUsage.record({
+    s.built.credentialUsage.record(testTenant, {
       slug: "b",
       host: "api.b.com",
       status: "ok",
       scopeLabel: "personal:U2",
       principalId: "U2",
     });
-    s.built.egressAudit.record({
+    s.built.egressAudit.record(testTenant, {
       source: "proxy",
       host: "fw.a.com",
       allowed: true,
       verdict: "ok",
       scopeLabel: "personal:U1",
     });
-    s.built.egressAudit.record({
+    s.built.egressAudit.record(testTenant, {
       source: "proxy",
       host: "fw.b.com",
       allowed: true,
@@ -152,8 +153,8 @@ test("egress: a scoped read returns only that scope's records, across both sourc
       scopeLabel: "personal:U2",
     });
 
-    await settle(async () => (await s.built.credentialUsage.list()).length >= 2);
-    await settle(async () => (await s.built.egressAudit.list()).length >= 2);
+    await settle(async () => (await s.built.credentialUsage.list(testTenant)).length >= 2);
+    await settle(async () => (await s.built.egressAudit.list(testTenant)).length >= 2);
     const d = await getJson(s.base, "/v1/admin/egress?scope=personal:U1");
     assert.equal(d.total, 2, "the broker + firewall rows for this scope, and nothing else");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });
@@ -238,6 +239,51 @@ test("egress-audit ingest: a hostile over-long hostname is truncated, never drop
     assert.deepEqual(await res.json(), { accepted: 1, rejected: 0 });
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
     assert.equal(d.records[0].host.length, 512, "the row survives, truncated");
+  } finally {
+    await s.close();
+  }
+});
+
+test("egress-audit ingest: a record naming a malformed tenant is rejected, the rest land", async () => {
+  const s = start();
+  try {
+    const res = await fetch(s.base + "/v1/egress-audit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        records: [
+          { host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1", tenant: "not-a-tenant" },
+          { host: "example.com", verdict: "ok", scopeLabel: "personal:U1" },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { accepted: 1, rejected: 1 });
+  } finally {
+    await s.close();
+  }
+});
+
+test("egress-audit ingest: a record naming a tenant that does not exist is rejected", async () => {
+  const s = start();
+  try {
+    const res = await fetch(s.base + "/v1/egress-audit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        records: [
+          {
+            host: "api.github.com",
+            verdict: "ok",
+            scopeLabel: "personal:U1",
+            tenant: "7d1f0c52-3b8e-4f6a-9c2d-5e4b3a2f1c0d",
+          },
+          { host: "example.com", verdict: "ok", scopeLabel: "personal:U1" },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { accepted: 1, rejected: 1 });
   } finally {
     await s.close();
   }

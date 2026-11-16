@@ -12,12 +12,10 @@ export function isOwnStatusCard(
   return Boolean(
     own &&
     Array.isArray(message.blocks) &&
-    message.blocks.some(
-      (block) =>
-        isObj(block) &&
-        block.type === "task_card" &&
-        typeof block.task_id === "string" &&
-        block.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
+    message.blocks.some((block) =>
+      (isObj(block) && block.type === "plan" && Array.isArray(block.tasks) ? block.tasks : [block]).some(
+        (task) => isObj(task) && typeof task.task_id === "string" && task.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
+      ),
     ),
   );
 }
@@ -43,6 +41,10 @@ export function threadHasBotStake(
       (botUserId && mentionsBot(text, botUserId)),
     );
   });
+}
+
+export function isBotAuthored(m: { bot_id?: string; bot_profile?: unknown; subtype?: string }): boolean {
+  return Boolean(m.bot_id || m.bot_profile || m.subtype === "bot_message");
 }
 
 export function shouldProcessMessage(
@@ -101,6 +103,8 @@ export function createRefreshCoalescer(run: () => Promise<void>): () => Promise<
     return active;
   };
 }
+
+export { inboundFileName as slackFileName } from "../surfaces/attachments.ts";
 
 export function hasContent(text: string, files: readonly unknown[]): boolean {
   return text.trim().length > 0 || files.length > 0;

@@ -7,7 +7,7 @@ export const ADMIN_SECTIONS = [
     views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "spend"],
   },
   { label: "Logs", views: ["history", "judgments", "errors", "audit", "egress"] },
-  { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
+  { label: "Artifacts", views: ["files", "skills", "memory", "apps", "crons"] },
 ];
 
 const ADMIN_VIEWS = new Set([
@@ -40,7 +40,7 @@ export const VIEW_TITLE: Record<string, string> = {
   audit: "Audit",
   skills: "Skills",
   crons: "Crons",
-  deployments: "Apps",
+  apps: "Apps",
   "slack-settings": "Slack",
   judgments: "Judgments",
   ackemoji: "Ack emoji",
@@ -113,7 +113,7 @@ const pages = {
   egress: () => import("./activity.ts"),
   files: () => import("./artifacts.ts"),
   memory: () => import("./artifacts.ts"),
-  deployments: () => import("./artifacts.ts"),
+  apps: () => import("./artifacts.ts"),
   crons: () => import("./artifacts.ts"),
   skills: () => import("./artifacts-skills.ts"),
 } as Record<string, () => Promise<AdminModule>>;

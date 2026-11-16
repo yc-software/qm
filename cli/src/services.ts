@@ -201,7 +201,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "S3_REGION",
         "PUBLIC_WEB_URL",
         "FLY_ORG",
-        "PI_DETECT_MODEL",
         "OIDC_CLIENT_ID",
         "OIDC_ALLOWED_EMAILS",
         "OIDC_ALLOWED_EMAIL_DOMAIN",

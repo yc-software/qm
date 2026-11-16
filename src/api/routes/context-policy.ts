@@ -84,7 +84,7 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
     bots: parsed.bots,
     ambientEnabled: b.ambientEnabled as boolean | null | undefined,
   });
-  audit(deps, { principalId, action: "surface.policy.set", resource: container, scopeLabel: scope });
+  audit(ctx, { principalId, action: "surface.policy.set", resource: container, scopeLabel: scope });
   return sendJson(res, 200, {
     policy: { orders: p.orders, bots: p.bots, ambientEnabled: p.ambientEnabled ?? null, updatedAt: p.updatedAt },
   });
