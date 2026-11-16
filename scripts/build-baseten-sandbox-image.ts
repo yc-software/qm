@@ -20,11 +20,11 @@ const existing = await client.images.getInfo({ name }).catch((error: unknown) =>
 if (existing?.status === "BUILT") {
   console.error(`${name} is already built`);
 } else {
+  const source = git("show", "HEAD:fly/Dockerfile").toString().trimEnd();
+  const withBrowser = source.replace("\nARG INSTALL_BROWSER_ENGINE=0\n", "\nARG INSTALL_BROWSER_ENGINE=1\n");
+  if (withBrowser === source) throw new Error("fly/Dockerfile has no ARG INSTALL_BROWSER_ENGINE=0 line to turn on");
   const dockerfile = [
-    git("show", "HEAD:fly/Dockerfile")
-      .toString()
-      .trimEnd()
-      .replace(/^ARG INSTALL_BROWSER_ENGINE=0$/m, "ARG INSTALL_BROWSER_ENGINE=1"),
+    withBrowser,
     `COPY --from=${SANDBOX_API} /sandbox-api /usr/local/bin/sandbox-api`,
     'ENTRYPOINT ["/usr/local/bin/sandbox-api"]',
     "CMD []",
