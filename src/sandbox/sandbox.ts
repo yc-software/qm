@@ -80,26 +80,32 @@ export function effectiveEgressEnforcement(
   return controlPlane.signingSecret && controlPlane.apiBaseUrl ? (profile.egressEnforcement ?? "none") : "none";
 }
 
+export const SANDBOX_BASE_IMAGE_TOOLS: ReadonlyArray<readonly [label: string, command: string, installed: boolean]> = [
+  ["git", "git", true],
+  ["curl", "curl", true],
+  ["wget", "wget", true],
+  ["jq", "jq", true],
+  ["unzip", "unzip", true],
+  ["gnupg", "gpg", true],
+  ["python3", "python3", true],
+  ["node", "node", true],
+  ["npm", "npm", true],
+  ["gh", "gh", true],
+  ["aws (CLI v2)", "aws", true],
+  ["claude", "claude", true],
+  ["codex", "codex", true],
+  ["x-api", "x-api", true],
+  ["gcloud", "gcloud", false],
+  ["kubectl", "kubectl", false],
+  ["flyctl", "flyctl", false],
+  ["glab", "glab", false],
+];
+
 export const SANDBOX_BASE_IMAGE_SPEC = {
   runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
-  tools: [
-    "git",
-    "curl",
-    "wget",
-    "jq",
-    "unzip",
-    "gnupg",
-    "python3",
-    "node",
-    "npm",
-    "gh",
-    "aws (CLI v2)",
-    "claude",
-    "codex",
-    "x-api",
-  ],
-  notInstalled: ["gcloud", "kubectl", "flyctl", "glab"],
-} as const;
+  tools: SANDBOX_BASE_IMAGE_TOOLS.filter(([, , installed]) => installed).map(([label]) => label),
+  notInstalled: SANDBOX_BASE_IMAGE_TOOLS.filter(([, , installed]) => !installed).map(([label]) => label),
+};
 
 export function visibleNotInstalled(notInstalled: readonly string[], extraTools: readonly string[]): string[] {
   const advertised = new Set(extraTools.map((line) => line.trim().split(/\s+/)[0]).filter(Boolean));
