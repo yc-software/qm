@@ -241,7 +241,7 @@ Confirm with the admin before inviting or revoking — say who, which role, and 
 when. The invitation email needs Resend configured on core (`RESEND_API_KEY` +
 `AUTH_EMAIL_FROM`); without it the user is still added. When the response has
 `emailSent:false`, tell the admin why (`emailProblem`); the `signInUrl` you get is the
-plain portal address, so a resend once email works is how they get a sign-in link. The `org_admin` role for externals is portal-only, like every other
+plain portal address, so once email works, re-invite with `"resendInvite":true` to send them a sign-in link. The `org_admin` role for externals is portal-only, like every other
 grant change — don't offer it.
 
 ## Admin grants (promote / revoke)
