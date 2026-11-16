@@ -84,13 +84,18 @@ files, crons) stay in the conversation's scope.
 
 An org admin can also route conversations to personas with a decision rule on the `persona`
 hook (Settings → Decision rules). Its options are `keep` or `use_persona` with a `persona` id,
-and its `onError` must be a `keep` option. The hook runs on a person's message in a conversation
-that has no persona of its own and no pinned one; its state is the surface, the conversation kind
+and its `onError` must be a `keep` option. The hook runs on a person's own message (a Slack or
+web message, or a turn a person submits through the API; not cron, webhook, ambient, bot,
+subagent or session-to-session turns) in a conversation that has no persona of its own and no
+pinned one; its state is the surface, the conversation kind
 (`dm`, `group` or `channel`) and the message, so "only in DMs" and which personas exist are part
 of the rule's question and options. When the enforcing rule picks a persona the sender holds a
 role on, the conversation keeps it, the turn wears it, and that turn's context names the rule and
 how to switch. If the sender has no role on it or it no longer exists, the turn goes on without
-one and its `## Personas` block says which rule picked what. Example:
+one and its `## Personas` block says which rule picked what. Dropping a routed persona
+(`personaId: null`) returns the conversation to routing, so a later message the rule judges
+addressed to a persona routes it again; a message it isn't keeps the conversation as it is.
+Example:
 
 ```json
 {
