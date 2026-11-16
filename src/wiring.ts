@@ -6,7 +6,13 @@ import { nonDeploymentCredential, withDeploymentCredentials } from "./credential
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks, createReplyCheck, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
+import {
+  createDecisionHooks,
+  createPersonaRouter,
+  createReplyCheck,
+  routeTurnRuntime,
+  turnStartState,
+} from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -504,6 +510,7 @@ export interface BuiltApp {
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   modelRoutes: ModelRoutes;
+  runtimeFallback: { readonly modelId: string };
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
   modelRegistry: ModelOverlayStore;
@@ -2306,7 +2313,9 @@ export function buildApp(
     projects,
     personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
-    ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
+    ...(decisions
+      ? { replyCheck: createReplyCheck(decisions, decide), routePersona: createPersonaRouter(decide) }
+      : {}),
     environments,
     brokeredTools,
     deploymentLayer,
@@ -3207,6 +3216,7 @@ export function buildApp(
   };
   return {
     app,
+    runtimeFallback: fallback,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
       if (boundTenant()) await configStore.hydrate?.();
@@ -3324,7 +3334,6 @@ export function serverDeps(
   slackEnvironmentState: "absent" | "configured" | "partial" = "absent",
   slackEnvBotToken?: string,
 ): Omit<ServerDeps, "control"> {
-  const deploymentModel = configuredModel(config);
   const subscriptionAuth = companySubscriptionAuth(config);
   return {
     externalSlackPolicies: config.externalSlackPolicies,
@@ -3352,7 +3361,7 @@ export function serverDeps(
     replayDedupe: built.replayDedupe,
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
-    ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
+    baseModelDefault: configuredModel(config) ?? built.runtimeFallback.modelId,
     modelProviders: providerKeysPresent(config),
     providerKeys: providerKeysPresent(config),
     modelCredentials: built.modelCredentials,

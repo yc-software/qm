@@ -1,6 +1,7 @@
 import {
   ClientError,
   Render,
+  type SandboxSnapshotKind,
   SandboxEndedError,
   SandboxSnapshotFailedError,
   SandboxSnapshotNotFoundError,
@@ -85,7 +86,7 @@ export interface RenderClient {
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   readFileBytes(sandboxId: string, absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(sandboxId: string, absPath: string, data: Uint8Array): Promise<void>;
-  createSnapshot(sandboxId: string, name: string): Promise<RenderSnapshot>;
+  createSnapshot(sandboxId: string, name: string, kind: SandboxSnapshotKind): Promise<RenderSnapshot>;
   getSnapshot(snapshot: RenderSnapshot): Promise<RenderSnapshot>;
   waitSnapshot(snapshot: RenderSnapshot): Promise<RenderSnapshot>;
   deleteSnapshot(snapshot: RenderSnapshot): Promise<void>;
@@ -333,13 +334,13 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         timeoutMs: TRANSFER_TIMEOUT_MS,
       });
     },
-    async createSnapshot(sandboxId, name) {
+    async createSnapshot(sandboxId, name, kind) {
       return normalizeSnapshot(
         await retryOperation(
           () =>
             api.snapshots.create({
               sandboxId,
-              kind: "filesystem",
+              kind,
               name,
               expiresAt: new Date(Date.now() + RENDER_SNAPSHOT_RETENTION_MS).toISOString(),
             }),

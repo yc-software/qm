@@ -203,7 +203,7 @@ test("OpenRouter failure rebuilds local choices", async () => {
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
-  const config = testConfig({ openaiApiKey: "local-test-key" });
+  const config = testConfig({ openaiApiKey: "local-test-key", modelProvider: "openai" });
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
@@ -248,7 +248,9 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     const body = (await response.json()) as {
       modelCatalog: Record<string, ReturnType<typeof safeModelMetadata>>;
       models: string[];
+      orgDefault: { modelId: string };
     };
+    assert.ok(body.models.includes(body.orgDefault.modelId), body.orgDefault.modelId);
     assert.equal(body.modelCatalog[MODEL_ID]?.contextWindow, 400_000);
     assert.deepEqual(body.modelCatalog[MODEL_ID]?.cost, spec.cost);
     assert.ok(body.models.includes(MODEL_ID));

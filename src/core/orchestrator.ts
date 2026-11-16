@@ -1,4 +1,4 @@
-import { personaPrompt } from "../personas/persona-service.ts";
+import { personaPrompt, personaRoutedNote } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
@@ -790,7 +790,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const personaTurn =
         external || !deps.personas
           ? null
-          : await deps.personas.forTurn(storedSession?.personaId ?? input.personaId, actor.id, scopeId);
+          : await deps.personas.forTurn(
+              storedSession?.personaId ?? input.personaId,
+              actor.id,
+              scopeId,
+              personConversationTurn && deps.routePersona
+                ? () =>
+                    tracePhase("turn.decision", () =>
+                      deps.routePersona!({
+                        tenant,
+                        actorId: actor.id,
+                        scopeLabel: scopeId,
+                        ...(storedSession ? { sessionId: storedSession.id } : {}),
+                        ...(input.runId ? { runId: input.runId } : {}),
+                        input: input.text,
+                        surfaceName: input.surface ?? "slack",
+                        conversation: conversation.kind,
+                      }).catch(swallowAs("orchestrator: persona routing", undefined)),
+                    )
+                : undefined,
+            );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
@@ -898,6 +917,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (typeof personaTurn === "string") turnContextBlocks["Personas"] = `## Personas\n${personaTurn}`;
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
+      if (persona?.routedBy) turnEvents.push(personaRoutedNote(persona.persona.name, persona.routedBy));
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
@@ -1021,6 +1041,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         },
       );
       screenSession.id = session.id;
+      if (persona?.routedBy) await deps.sessions.setPersona(session.id, persona.persona.id);
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
       const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
