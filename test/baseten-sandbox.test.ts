@@ -97,7 +97,7 @@ test("a sandbox Baseten deleted at its 7-day limit is recreated empty on the nex
   const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "old.txt", "x");
   fake.expire(h.id);
-  await assert.rejects(make().run(h, "true"), /gone; the next provision creates a replacement/);
+  await assert.rejects(make().run(h, "true"), /gone \(not found\); the next provision creates a replacement/);
   const again = await sandbox.provision(scope);
   assert.equal(again.coldStart, true);
   assert.equal(again.id, h.id);
@@ -123,7 +123,7 @@ test("a core holding a sandbox another core destroyed recovers on the next provi
   const h = await coreA.provision(scope);
   await coreB.destroyScope!(scope);
   await assert.rejects(coreA.run(h, "true"));
-  await assert.rejects(coreA.run(h, "true"), /gone; the next provision creates a replacement/);
+  await assert.rejects(coreA.run(h, "true"), /gone \(not found\); the next provision creates a replacement/);
   const again = await coreA.provision(scope);
   assert.equal(again.coldStart, true);
   assert.equal((await coreA.run(again, "echo back")).stdout, "back\n");

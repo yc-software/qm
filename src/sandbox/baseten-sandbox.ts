@@ -129,7 +129,9 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
     if (cached) return cached;
     const current = await info(name);
     if (!current || REPLACEABLE_STATUSES.has(current.status))
-      throw new Error(`baseten sandbox ${name} is gone; the next provision creates a replacement`);
+      throw new Error(
+        `baseten sandbox ${name} is gone (${current ? `status ${current.status}` : "not found"}); the next provision creates a replacement`,
+      );
     const box = await waitReady(name, current);
     boxByName.set(name, box);
     return box;
@@ -157,6 +159,7 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
     const deadline = Date.now() + timeoutSec * 1000 + EXEC_GRACE_MS;
     for (;;) {
       let cutOff: string;
+      let cause: unknown;
       try {
         const state = await onBox(name, (box) =>
           box.process.exec({
@@ -172,6 +175,7 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
         const reason = cutOffReason(error);
         if (reason === null) throw error;
         cutOff = reason;
+        cause = error;
       }
       try {
         return await onBox(name, (box) =>
@@ -184,7 +188,8 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
           throw error;
         }
       }
-      if (Date.now() > deadline) throw new Error(`baseten exec ${name}: the command did not start (${cutOff})`);
+      if (Date.now() > deadline)
+        throw new Error(`baseten exec ${name}: the command did not start (${cutOff})`, { cause });
       await sleep(POLL_MS);
     }
   }
