@@ -2,9 +2,10 @@ import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
 import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
+import { readBoundedText } from "../util/bytes.ts";
 import { swallow } from "../util/errors.ts";
-import { fetchCatalogData, perMillion, positiveInteger } from "./model-catalog.ts";
 
+const MAX_BYTES = 2 * 1024 * 1024;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 const STALE_MS = 15 * 60_000;
@@ -27,6 +28,16 @@ function modelId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/.test(value);
 }
 
+function tokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function price(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && Number.isFinite(value * 1_000_000)
+    ? value * 1_000_000
+    : undefined;
+}
+
 function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): GatewayModel | EmbeddingModel | undefined {
   const info = record(value);
   if (!info || !modelId(info.model_group) || !allowed.has(info.model_group)) return undefined;
@@ -40,10 +51,10 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
     };
   }
   if (info.mode !== "chat" || info.supports_function_calling !== true) return undefined;
-  const contextWindow = positiveInteger(info.max_input_tokens);
-  const reportedMaxTokens = positiveInteger(info.max_output_tokens);
-  const input = perMillion(info.input_cost_per_token);
-  const output = perMillion(info.output_cost_per_token);
+  const contextWindow = tokens(info.max_input_tokens);
+  const reportedMaxTokens = tokens(info.max_output_tokens);
+  const input = price(info.input_cost_per_token);
+  const output = price(info.output_cost_per_token);
   if (!contextWindow || !reportedMaxTokens || input === undefined || output === undefined) return undefined;
   const maxTokens =
     reportedMaxTokens < contextWindow
@@ -77,8 +88,8 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
     cost: {
       input,
       output,
-      cacheRead: perMillion(info.cache_read_input_token_cost) ?? input,
-      cacheWrite: perMillion(info.cache_creation_input_token_cost) ?? input,
+      cacheRead: price(info.cache_read_input_token_cost) ?? input,
+      cacheWrite: price(info.cache_creation_input_token_cost) ?? input,
     },
     compat: {
       supportsDeveloperRole: false,
@@ -99,8 +110,23 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
   };
 }
 
-const readCatalog = (url: string, config: ModelGatewayTransportConfig, fetcher: typeof fetch) =>
-  fetchCatalogData(fetcher, url, "Gateway catalog", { [config.apiKeyHeader]: config.apiKey });
+async function readCatalog(
+  url: string,
+  config: ModelGatewayTransportConfig,
+  fetcher: typeof fetch,
+): Promise<unknown[]> {
+  const response = await fetcher(url, {
+    headers: { [config.apiKeyHeader]: config.apiKey },
+    signal: AbortSignal.timeout(5_000),
+    redirect: "error",
+  });
+  if (!response.ok)
+    throw Object.assign(new Error(`Gateway catalog returned HTTP ${response.status}`), { status: response.status });
+  const body = await readBoundedText(response, MAX_BYTES, () => new Error("Gateway catalog exceeds size limit"));
+  const data = record(JSON.parse(body))?.data;
+  if (!Array.isArray(data)) throw new Error("Invalid gateway catalog");
+  return data;
+}
 
 export function createGatewayCatalog(
   config: ModelGatewayTransportConfig,

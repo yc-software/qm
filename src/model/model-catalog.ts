@@ -104,10 +104,7 @@ export async function fetchCatalogData(
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw Object.assign(
-      new Error(withRequestId(`${label} returned HTTP ${response.status} ${detail}`.trim(), response.headers)),
-      { status: response.status },
-    );
+    throw new Error(withRequestId(`${label} returned HTTP ${response.status} ${detail}`.trim(), response.headers));
   }
   const body = JSON.parse(
     await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error(`${label} is too large`)),
