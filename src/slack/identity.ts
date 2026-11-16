@@ -47,7 +47,7 @@ export function classifyUser(
 ): ActorAssertion {
   const user = u ?? {};
   const email = (user.profile?.email ?? "").trim().toLowerCase();
-  const invitedGuest = Boolean(user.team_id && user.team_id === ownTeamId && email && invited?.(email));
+  const invitedGuest = Boolean(identity === "email" && user.team_id === ownTeamId && email && invited?.(email));
   let isGuest = Boolean(
     !u ||
     user.deleted ||
