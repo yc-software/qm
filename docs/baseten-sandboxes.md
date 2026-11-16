@@ -55,7 +55,8 @@ For local development, export the variables and run `npm run dev-instance -- --s
 
 Each scope maps to one sandbox named after it, so any core instance finds it again after a
 restart without a database record. Sandboxes get 8 GiB of memory and 4 vCPUs in the team's
-default region. Ending a turn leaves the sandbox in place; Baseten puts it on standby when idle.
+default region. Baseten holds a sandbox's filesystem in memory, so files count against those
+8 GiB (`df` reports about 6.3 GB free on a new sandbox). Ending a turn leaves the sandbox in place; Baseten puts it on standby when idle.
 Destroying a scope deletes its sandbox. Scratch sandboxes are deleted when their last handle
 closes.
 

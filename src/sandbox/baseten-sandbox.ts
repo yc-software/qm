@@ -270,7 +270,7 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
       processSessions: true,
       egressEnforcement: "none",
       spec: {
-        os: "Debian 12 — Baseten sandbox from the QM sandbox base image (standby keeps the disk and running processes; Baseten deletes a sandbox 7 days after it was created and the next turn starts a fresh one, so publish durable work to git or Files)",
+        os: "Debian 12 — Baseten sandbox from the QM sandbox base image (its disk is held in memory, so files count against its 8 GB; standby keeps the disk and running processes; Baseten deletes a sandbox 7 days after it was created and the next turn starts a fresh one, so publish durable work to git or Files)",
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         memoryMb: MEMORY_MB,
         homeDir: HOME_DIR,
