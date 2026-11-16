@@ -24,7 +24,13 @@ import {
   createExecFileOps,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import { visibleNotInstalled, visibleTools, type ExecResult, type Sandbox } from "./sandbox.ts";
+import {
+  SANDBOX_BASE_IMAGE_SPEC,
+  visibleNotInstalled,
+  visibleTools,
+  type ExecResult,
+  type Sandbox,
+} from "./sandbox.ts";
 
 const HOME_DIR = "/root";
 const MEMORY_MB = 8192;
@@ -301,32 +307,16 @@ export function createBasetenSandbox(opts: BasetenSandboxOptions): Sandbox {
       egressEnforcement: "none",
       spec: {
         os: `Debian 12 — Baseten sandbox from the QM sandbox base image (home, with the workspace, is a ${HOME_VOLUME_GB} GB volume of this scope that survives Baseten deleting the sandbox 7 days after it was created; the rest of the disk is held in memory and starts fresh then; standby keeps running processes)`,
-        runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
+        runtimes: [...SANDBOX_BASE_IMAGE_SPEC.runtimes],
         memoryMb: MEMORY_MB,
         diskGb: HOME_VOLUME_GB,
         homeDir: HOME_DIR,
         workdir: base.workspaceDir,
         get tools() {
-          return visibleTools([
-            "git",
-            "curl",
-            "wget",
-            "jq",
-            "unzip",
-            "gnupg",
-            "python3",
-            "node",
-            "npm",
-            "gh",
-            "aws (CLI v2)",
-            "claude",
-            "codex",
-            "x-api",
-            ...(opts.extraTools ?? []),
-          ]);
+          return visibleTools([...SANDBOX_BASE_IMAGE_SPEC.tools, ...(opts.extraTools ?? [])]);
         },
         get notInstalled() {
-          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+          return visibleNotInstalled(SANDBOX_BASE_IMAGE_SPEC.notInstalled, opts.extraTools ?? []);
         },
       },
     },

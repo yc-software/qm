@@ -20,6 +20,7 @@ import {
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
 import {
+  SANDBOX_BASE_IMAGE_SPEC,
   SandboxProvisionCleanupError,
   visibleNotInstalled,
   visibleTools,
@@ -624,28 +625,17 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
         os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
-        runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
+        runtimes: [...SANDBOX_BASE_IMAGE_SPEC.runtimes],
         cpus: 2,
         memoryMb: 4096,
         diskGb: 10,
         homeDir,
         workdir: base.workspaceDir,
         get tools() {
-          return visibleTools([
-            "git",
-            "curl",
-            "wget",
-            "jq",
-            "unzip",
-            "gnupg",
-            "python3",
-            "gh",
-            "aws (CLI v2)",
-            ...(opts.extraTools ?? []),
-          ]);
+          return visibleTools([...SANDBOX_BASE_IMAGE_SPEC.tools, ...(opts.extraTools ?? [])]);
         },
         get notInstalled() {
-          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+          return visibleNotInstalled(SANDBOX_BASE_IMAGE_SPEC.notInstalled, opts.extraTools ?? []);
         },
       },
     },

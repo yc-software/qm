@@ -80,6 +80,27 @@ export function effectiveEgressEnforcement(
   return controlPlane.signingSecret && controlPlane.apiBaseUrl ? (profile.egressEnforcement ?? "none") : "none";
 }
 
+export const SANDBOX_BASE_IMAGE_SPEC = {
+  runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
+  tools: [
+    "git",
+    "curl",
+    "wget",
+    "jq",
+    "unzip",
+    "gnupg",
+    "python3",
+    "node",
+    "npm",
+    "gh",
+    "aws (CLI v2)",
+    "claude",
+    "codex",
+    "x-api",
+  ],
+  notInstalled: ["gcloud", "kubectl", "flyctl", "glab"],
+} as const;
+
 export function visibleNotInstalled(notInstalled: readonly string[], extraTools: readonly string[]): string[] {
   const advertised = new Set(extraTools.map((line) => line.trim().split(/\s+/)[0]).filter(Boolean));
   return notInstalled.filter((name) => !advertised.has(name));
