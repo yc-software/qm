@@ -67,7 +67,6 @@ import type { ControlService } from "./control-service.ts";
 import type { LoopServiceDeps } from "./routes/loops.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
-import type { BrowserSessionStore } from "../connectors/browser-session-store.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { DeploymentLayerStore } from "../deployment/deployment-layer-store.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
@@ -187,7 +186,6 @@ export interface ServerDeps {
   sandbox?: Sandbox;
   advisoryLock?: AdvisoryLock;
   processes?: ProcessRegistry;
-  browserSessionStore?: BrowserSessionStore;
   directory?: DirectoryStore;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
