@@ -113,12 +113,15 @@ test("external members written by one instance reach another over the same backi
   await reader.refresh(true);
   assert.equal(reader.externalMember("Pat@Partner.example")?.expiresAt, now + 60_000);
   assert.equal(reader.classify("pat@partner.example").type, "internal");
+  assert.equal(reader.classify("pat@partner.example", true).type, "internal", "an invite admits a surface guest");
+  assert.equal(reader.classify("sam@partner.example", true).type, "guest");
 
   await writer.putExternalMember(member(now - 1));
   await reader.refresh();
   assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
   await reader.refresh(true);
   assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
+  assert.equal(reader.classify("pat@partner.example", true).type, "guest");
   const late = createIdentityService(testMap(), { externalMembers });
   await late.refresh();
   assert.equal(late.classify("pat@partner.example").type, "guest");

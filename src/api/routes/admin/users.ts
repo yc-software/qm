@@ -172,7 +172,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     email,
     role: teammate && holdsGrant ? "org_admin" : role,
     expiresAt: expiry.value ?? null,
-    ...(teammate ? { kind: "teammate" as const, inviteId: randomUUID() } : {}),
+    ...(teammate ? { kind: "teammate" as const } : {}),
+    inviteId: randomUUID(),
     invitedBy: existing?.invitedBy ?? actor.id,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -186,7 +187,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     resource: email,
     scopeLabel: scope,
   });
-  const signInUrl = teammate
+  const linkSignIn = Boolean(deps.portalUrl && deps.portalIdentitySecret && deps.replayDedupe);
+  const signInUrl = linkSignIn
     ? `${trimTrailingSlashes(deps.portalUrl!)}/auth/invite#token=${encodeURIComponent(
         await mintSignedPayload(
           {
@@ -220,7 +222,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
             invitedBy: actor.id,
             signInUrl,
             expiresAt: member.expiresAt,
-            magicLink: teammate,
+            magicLink: linkSignIn,
           }),
         });
         emailSent = true;
@@ -235,7 +237,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     created,
     emailSent,
     ...(emailProblem ? { emailProblem } : {}),
-    ...(!emailSent && signInUrl ? { signInUrl } : {}),
+    ...(!emailSent && signInUrl ? { signInUrl: ctx.capability ? signInUrlOf(deps) : signInUrl } : {}),
   });
 }
 

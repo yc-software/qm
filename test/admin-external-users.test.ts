@@ -139,7 +139,7 @@ test("inviting an external user stores the record, lists it as active, audits, a
     assert.equal(d.member.expiresAt, Date.parse(expiresAt));
     assert.equal(d.emailSent, false);
     assert.equal(d.emailProblem, INVITE_EMAIL_NOT_CONFIGURED);
-    assert.equal(d.signInUrl, `${PORTAL}/auth/login`);
+    assert.equal(new URL(d.signInUrl).pathname, "/auth/invite");
 
     const list = await roster(s.base);
     assert.deepEqual(list.inviteEmail, {
@@ -380,7 +380,7 @@ test("with a mailer the invitation goes out carrying the sign-in URL and brand; 
     assert.equal(ok.sent.length, 1);
     assert.equal(ok.sent[0]!.to, "pat@partner.example");
     assert.match(ok.sent[0]!.subject, /invited to Acme Bot/);
-    assert.ok(ok.sent[0]!.text.includes(`${PORTAL}/auth/login`));
+    assert.ok(ok.sent[0]!.text.includes(`${PORTAL}/auth/invite#token=`));
     assert.match(ok.sent[0]!.text, /admin-alice/);
     assert.match(ok.sent[0]!.html, /Acme Bot/);
     assert.equal((await roster(s.base)).inviteEmail.configured, true);
@@ -414,7 +414,7 @@ test("with a mailer the invitation goes out carrying the sign-in URL and brand; 
     assert.equal(r.ok, true);
     assert.equal(r.emailSent, false);
     assert.match(r.emailProblem, /HTTP 403 domain not verified/);
-    assert.equal(r.signInUrl, `${PORTAL}/auth/login`);
+    assert.equal(new URL(r.signInUrl).pathname, "/auth/invite");
     assert.equal(f.built.identity.externalMember("sam@partner.example")?.role, "member");
   } finally {
     await f.close();
@@ -444,7 +444,9 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
 
     const member = await invite(s.base, { email: "pat@partner.example", expiresAt }, cap);
     assert.equal(member.status, 200);
-    assert.equal(((await member.json()) as any).member.invitedBy, "admin-alice");
+    const invited: any = await member.json();
+    assert.equal(invited.member.invitedBy, "admin-alice");
+    assert.equal(invited.signInUrl, `${PORTAL}/auth/login`, "an agent never receives a sign-in link");
 
     const promote = await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt }, cap);
     assert.equal(promote.status, 403);
@@ -714,7 +716,7 @@ test("invitation links work without email delivery and are single use, scoped, a
       body: JSON.stringify({ token }),
     });
   const issue = async () => {
-    const r = await inviteTeammate(s.base, { email: "qa@corp.example" });
+    const r = await invite(s.base, { email: "qa@corp.example", expiresAt: Date.now() + DAY_MS });
     assert.equal(r.status, 200);
     const data: any = await r.json();
     assert.equal(data.emailSent, false);

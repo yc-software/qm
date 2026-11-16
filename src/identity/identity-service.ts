@@ -98,7 +98,7 @@ export function createIdentityService(
       record?.source === "manual" ||
       (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
       (external !== undefined && !externalMemberActive(external));
-    const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
+    const type: Principal["type"] = inactive || (isExternalGuest && external === undefined) ? "guest" : "internal";
     return { id, type };
   }
 

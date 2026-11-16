@@ -284,7 +284,6 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const member = deps.identity.externalMember(claims.email);
   if (
     !member ||
-    member.kind !== "teammate" ||
     !member.inviteId ||
     member.inviteId !== claims.inviteId ||
     !externalMemberActive(member) ||
