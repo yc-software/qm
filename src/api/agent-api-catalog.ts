@@ -745,7 +745,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/admin/external-users",
         summary:
-          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; they sign in at the portal with that address until expiry; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem and hand the user signInUrl to share. org_admin role is portal-only",
+          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; until expiry they count as members everywhere, including as guests in the org's own Slack, and the invitation email carries a single-use sign-in link; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem; the signInUrl you get is the plain portal address, so once email works, re-invite with resendInvite:true to send a link. org_admin role is portal-only",
       },
       {
         method: "DELETE",

@@ -132,7 +132,7 @@ export function createDirectory(deps: {
         if (!u?.id || u.id === ids.botUserId) continue;
         const actor = deps.externalAccess
           ? companySlackActor(u, deps.externalAccess)
-          : classifyUser(u, ids.ownTeamId, ids.identityMode);
+          : classifyUser(u, ids.ownTeamId, ids.identityMode, core.invitedExternal);
         if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
           missingEmails++;
         const timezone = slackUserTimezone(u);
@@ -573,7 +573,7 @@ export function createDirectory(deps: {
       const user = (await client.users.info({ user: userId })).user as SlackUser | undefined;
       const actor = deps.externalAccess
         ? companySlackActor(user, deps.externalAccess)
-        : classifyUser(user, ids.ownTeamId, ids.identityMode);
+        : classifyUser(user, ids.ownTeamId, ids.identityMode, core.invitedExternal);
       const timezone = slackUserTimezone(user);
       const classified = { actor, ...(timezone ? { timezone } : {}) };
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
