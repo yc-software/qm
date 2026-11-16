@@ -214,9 +214,8 @@ test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provide
     assert.ok(!after.models.includes("custom/baseten/zai-org/GLM-5.3"));
     assert.deepEqual(await keyStatus("baseten"), { provider: "baseten", configured: true, source: "admin" });
 
-    t.mock.method(built.customProviders, "resolveKey", async () => {
-      throw new Error("unsupported state or unable to authenticate data");
-    });
+    const read = built.customProviders.enabledWithKeys;
+    t.mock.method(built.customProviders, "enabledWithKeys", async () => ({ ...(await read()), keys: {} }));
     assert.deepEqual(await keyStatus("baseten"), { provider: "baseten", configured: false, source: "absent" });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
