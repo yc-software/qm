@@ -175,6 +175,7 @@ import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.
 import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
+import { withSignInMembers } from "./directory/sign-in-members.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
@@ -1869,7 +1870,17 @@ export function buildApp(
     beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
-  const directory = createPostgresDirectoryStore(databaseUrl);
+  const emailAuthMembers = config.emailAuthPrincipals?.map((principalId) => ({
+    principalId,
+    displayName: principalId,
+    type: "internal" as const,
+  }));
+  const directory = withSignInMembers(createPostgresDirectoryStore(databaseUrl), {
+    identity,
+    sessions,
+    users,
+    ...(emailAuthMembers?.length ? { emailAuthMembers } : {}),
+  });
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
     memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
@@ -2480,15 +2491,7 @@ export function buildApp(
     webhooks,
     deliveries,
     directory,
-    ...(config.emailAuthPrincipals?.length
-      ? {
-          emailAuthMembers: config.emailAuthPrincipals.map((principalId) => ({
-            principalId,
-            displayName: principalId,
-            type: "internal" as const,
-          })),
-        }
-      : {}),
+    ...(emailAuthMembers?.length ? { emailAuthMembers } : {}),
     projects,
     personas,
     personaHandover,
