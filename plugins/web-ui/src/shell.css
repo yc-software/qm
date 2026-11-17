@@ -12086,17 +12086,17 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   margin-top: 0;
 }
 
-.app-permissions-dialog {
+.share-dialog {
   width: min(440px, calc(100vw - 32px));
   padding: 24px;
 }
-.app-permissions-dialog .project-dialog-head {
+.share-dialog .project-dialog-head {
   margin-bottom: 20px;
 }
-.app-permissions-dialog .project-dialog-head h2 {
+.share-dialog .project-dialog-head h2 {
   font-size: var(--font-17);
 }
-.app-permissions-dialog .project-dialog-head p {
+.share-dialog .project-dialog-head p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
   font-size: 12px;
@@ -12195,11 +12195,11 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--muted-foreground);
   margin: 10px 0 0;
 }
-.app-permissions-dialog .project-dialog-actions {
+.share-dialog .project-dialog-actions {
   margin-top: 20px;
 }
 
-.app-permissions-dialog .permission-control .menu-popover {
+.share-dialog .permission-control .menu-popover {
   position: absolute !important;
   inset: calc(100% + 6px) 0 auto auto !important;
   width: 170px !important;
@@ -12210,21 +12210,21 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   border-radius: var(--radius-sm);
   animation: none;
 }
-.app-permissions-dialog .permission-control .menu-popover::after {
+.share-dialog .permission-control .menu-popover::after {
   display: none;
 }
-.app-permissions-dialog .permission-control .menu-option {
+.share-dialog .permission-control .menu-option {
   min-height: 34px;
   padding: 6px 10px;
 }
-.app-permissions-dialog .permission-invite .menu-popover {
+.share-dialog .permission-invite .menu-popover {
   inset: calc(100% + 6px) auto auto 0 !important;
 }
-.app-permissions-dialog .general-access-control .menu-popover {
+.share-dialog .general-access-control .menu-popover {
   inset: calc(100% + 6px) auto auto -8px !important;
   width: 220px !important;
 }
-.app-permissions-dialog .permission-control .menu-popover.drop-up {
+.share-dialog .permission-control .menu-popover.drop-up {
   top: auto !important;
   bottom: calc(100% + 6px) !important;
 }

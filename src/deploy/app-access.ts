@@ -23,7 +23,7 @@ const NOUNS: Record<ScopeKind, [one: string, many: string]> = {
   persona: ["persona", "personas"],
 };
 
-export const canEditAppPermissions = (ownerScopeId: string, principalId: string): boolean =>
+const canEditAppPermissions = (ownerScopeId: string, principalId: string): boolean =>
   ownerScopeId === personalScope(principalId);
 
 export function appAccess(opts: {
