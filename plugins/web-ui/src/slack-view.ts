@@ -18,8 +18,13 @@ export function continuedSpeakers(rows: readonly AgentMessage[]): Set<AgentMessa
   return continued;
 }
 
-export function slackAppIcon(session: CoreSession | null, iconUrl: string | null | undefined): string | undefined {
-  return session?.surface === "slack" && !session.personaId ? iconUrl || undefined : undefined;
+export function slackAppIcon(
+  session: CoreSession | null,
+  message: AgentMessage,
+  iconUrl: string | null | undefined,
+): string | undefined {
+  const persona = session?.personaId || (message as { personaId?: string }).personaId;
+  return session?.surface === "slack" && !persona ? iconUrl || undefined : undefined;
 }
 
 export function fromSomeoneElse(message: AgentMessage, viewer: string | undefined): boolean {

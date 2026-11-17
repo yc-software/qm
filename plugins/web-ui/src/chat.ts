@@ -1989,7 +1989,7 @@ export function createChatSurface(
     const speaker = speakerLabelFor(message);
     const speakerLabel =
       message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
-        ? `${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)}\n${slackAppIcon(chatState.forkSession, appState.me?.slackAppIconUrl) ?? ""}`
+        ? `${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)}\n${slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl) ?? ""}`
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}\n${continuedSpeakerRows.has(message)}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -2233,7 +2233,7 @@ export function createChatSurface(
           ${
             labeled
               ? html`<div class="speaker-label">
-                  ${assistantMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
+                  ${assistantMark(msg)}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -2399,8 +2399,8 @@ export function createChatSurface(
     return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
   }
 
-  function assistantMark(): TemplateResult {
-    const icon = slackAppIcon(chatState.forkSession, appState.me?.slackAppIconUrl);
+  function assistantMark(message: AgentMessage): TemplateResult {
+    const icon = slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl);
     return icon ? avatarTpl({ key: brandName(), name: brandName(), avatarUrl: icon }) : brandMark();
   }
 

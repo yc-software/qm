@@ -2209,6 +2209,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 const body = { ...entry.body };
                 if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                 if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
+                if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
                 return { ...entry, body };
               }
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;

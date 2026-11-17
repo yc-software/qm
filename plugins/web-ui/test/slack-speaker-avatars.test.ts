@@ -76,6 +76,7 @@ test("a Slack channel transcript sets other people apart, groups a speaker's run
       item("ToolResult", { seq: 4, turnId: "t", callId: "c", tool: "slack", body: { ok: true } }),
       said("SteeringMessage", 5, "thanks!", { name: "T", speakerId: "tester" }),
       item("AgentMessage", { seq: 6, turnId: "t", body: { workStartedAt: 1, workFinishedAt: 6 } }),
+      item("AgentMessage", { seq: 7, turnId: "u", text: "as Ada", body: { personaId: "ada", workFinishedAt: 7 } }),
     ],
   });
   try {
@@ -93,13 +94,18 @@ test("a Slack channel transcript sets other people apart, groups a speaker's run
         [false, "@qm DM me", undefined],
         [false, "thanks!", undefined],
         [false, undefined, "https://avatars.slack-edge.com/app_72.png"],
+        [false, undefined, undefined],
       ],
     );
     assert.deepEqual(
       rows.map((row) => Boolean(row.querySelector(":scope > .speaker-label"))),
-      [true, true, false, true],
+      [true, true, false, true, true],
     );
-    assert.equal(rows.at(-1)!.querySelectorAll(".user-row").length, 0);
+    assert.ok(
+      rows.at(-1)!.querySelector(":scope > .speaker-label > .brand-mark"),
+      "a persona's reply keeps the brand mark",
+    );
+    assert.equal(rows.at(-2)!.querySelectorAll(".user-row").length, 0);
   } finally {
     await h.close();
   }

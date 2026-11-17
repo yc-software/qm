@@ -502,7 +502,7 @@ test("what a persona conversation posts carries the persona, so Slack can name i
 });
 
 test("a persona pinned in a channel is worn by every conversation there until it's unpinned", async () => {
-  const { personas, enable, sysprompt } = setup();
+  const { built, personas, enable, sysprompt } = setup();
   for (const who of [ALICE, CAROL]) await enable(who);
   const ada = ok(await personas.create(ALICE, { name: "Ada", icon: { kind: "emoji", value: "🎨" } }));
   const bea = ok(await personas.create(ALICE, { name: "Bea" }));
@@ -522,7 +522,14 @@ test("a persona pinned in a channel is worn by every conversation there until it
     true,
   );
 
-  assert.match((await sysprompt(CAROL, thread(2))).reply, /## Persona: Ada/);
+  const pinnedTurn = await sysprompt(CAROL, thread(2));
+  assert.match(pinnedTurn.reply, /## Persona: Ada/);
+  const replies = (await built.sessions.getItems(pinnedTurn.sessionId)).filter((i) => i.kind === "AgentMessage");
+  assert.deepEqual(
+    replies.map((i) => i.body.personaId),
+    [ada.id],
+    "the reply records the persona that wore it",
+  );
 
   const second = await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]);
   assert.equal(second.status, "invalid");
