@@ -191,7 +191,8 @@ withdraws. Only the publisher may call it, from a live turn or a signed-in sessi
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
 withdrawn before that version runs. Moving the app out of the publisher's own library, to
-a teammate or a shared home, withdraws it as the app moves. The token comes from the
+a teammate or a shared home, withdraws it as the app moves. While the app borrows
+connectors, only the publisher can give anyone else access to it. The token comes from the
 publisher's personal connection, else their default, else their company one.
 
 The app's server sends the broker `connector` (the host) instead of `credential`, with

@@ -20,6 +20,7 @@ import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-not
 import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
 import {
   personAtKeyboard,
   resolveShareTarget,
@@ -955,7 +956,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           permission,
         };
       } catch (e) {
-        if (e instanceof AdminError) {
+        if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         return { ok: false, code: "share_failed", message: errMessage(e) };
