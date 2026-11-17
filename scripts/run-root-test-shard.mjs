@@ -40,9 +40,14 @@ const match = /^(\d+)\/(\d+)$/.exec(values.shard ?? "");
 if (!match || Number(match[1]) < 1 || Number(match[1]) > Number(match[2])) {
   throw new Error(`Pass --shard <index>/<total> or set CORE_TEST_SHARD, got ${values.shard}`);
 }
-const files = pack(rootTests(), Number(match[2]), JSON.parse(readFileSync(TIMINGS, "utf8")))[Number(match[1]) - 1];
+const selected = JSON.parse(process.env.CORE_TESTS ?? '"all"');
+const files = pack(
+  rootTests().filter((file) => selected === "all" || selected.includes(file)),
+  Number(match[2]),
+  JSON.parse(readFileSync(TIMINGS, "utf8")),
+)[Number(match[1]) - 1];
 console.log(`Root test shard ${values.shard} (${files.length} files):\n${files.map((file) => `  ${file}`).join("\n")}`);
-if (!values.list) {
+if (!values.list && files.length > 0) {
   spawn(process.execPath, ["scripts/run-pg-tests.mjs", ...files], { cwd: ROOT, stdio: "inherit" }).on(
     "exit",
     (code, signal) => (signal ? process.kill(process.pid, signal) : process.exit(code ?? 1)),
