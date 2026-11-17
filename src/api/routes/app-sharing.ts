@@ -70,6 +70,7 @@ export async function shareApp(ctx: ApiCtx): Promise<void> {
       error: "forbidden",
       message: "sharing requires a signed-in person or an agent capability token",
     });
+  if (!(await livePersonTurn(ctx))) return;
   const actor = { createdBy: principalId, botActor: ctx.capability?.botActor };
   const b = (isObj(body) ? body : {}) as {
     scope?: unknown;
