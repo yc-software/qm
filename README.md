@@ -156,7 +156,7 @@ npm exec --yes --package=@yc-software/qm@latest -- \
 npm install
 ```
 
-For Render, also pass `--repo <url> --branch <name>`, the repository and branch Render builds from.
+Render also needs `--repo` and `--branch`; see [`docs/getting-started.md`](./docs/getting-started.md).
 
 Initialization materializes a deployment skill for an agent and walks through
 infrastructure, web sign-in, connector credentials, optional Slack access, deployment,
