@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import process from "node:process";
 import { parseArgs } from "node:util";
@@ -23,7 +23,10 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   throw new Error(`--timeout must be a positive number of seconds, got ${values.timeout}`);
 }
 if (positionals.length === 0) throw new Error("Pass the Postgres test files to run");
-const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
+const timings = JSON.parse(readFileSync(new URL("root-test-timings.json", import.meta.url), "utf8"));
+const files = positionals.toSorted(
+  (a, b) => (timings[b] ?? 0) - (timings[a] ?? 0) || statSync(b).size - statSync(a).size,
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");

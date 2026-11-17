@@ -16,7 +16,14 @@ function start(): { base: string; close: () => Promise<void> } {
   const server = createInsecureTestServer(built.app, { blobTransfer: built.blobTransfer });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    base,
+    close: () =>
+      new Promise<void>((r) => {
+        server.close(() => r());
+        server.closeAllConnections();
+      }),
+  };
 }
 
 const sha = (b: Buffer): string => createHash("sha256").update(b).digest("hex");
@@ -77,7 +84,14 @@ function startWithDeadline(deadlineMs: number): { base: string; close: () => Pro
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    base,
+    close: () =>
+      new Promise<void>((r) => {
+        server.close(() => r());
+        server.closeAllConnections();
+      }),
+  };
 }
 
 function slowBody(chunks: Buffer[], gapMs: number): ReadableStream<Uint8Array> {

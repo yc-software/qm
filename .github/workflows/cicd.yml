@@ -70,15 +70,17 @@ jobs:
           npm test --prefix desktop
 
   core-tests:
-    name: Core tests (${{ matrix.shard }}/5)
+    name: Core tests (${{ matrix.shard }}/7)
     timeout-minutes: 25
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.plan.outputs.full }}
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     services:
       postgres:
         image: pgvector/pgvector:0.8.1-pg16
@@ -98,20 +100,29 @@ jobs:
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         if: needs.reuse.outputs.reusable != 'true'
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          fetch-depth: 2
+      - name: Pick this shard's root test files
+        id: plan
         if: needs.reuse.outputs.reusable != 'true'
+        env:
+          CORE_TEST_SHARD: ${{ matrix.shard }}/7
+          CORE_TEST_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+        run: node scripts/run-root-test-shard.mjs > "$RUNNER_TEMP/root-tests"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
         run: npm ci
       - name: Build connector SDK
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
         run: npm run build:connector-sdk
       - name: Install Helm for chart tests
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
         run: |
           cd "$(mktemp -d)"
           curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
@@ -120,27 +131,25 @@ jobs:
           tar -xzf helm-v3.19.0-linux-amd64.tar.gz
           sudo install linux-amd64/helm /usr/local/bin/helm
       - name: Configure test Postgres
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
         run: |
           for setting in "max_connections = 1000" "fsync = off" "synchronous_commit = off" "full_page_writes = off"; do
             docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET $setting"
           done
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
-      - name: Verify root test shard plan
-        if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
-        run: npm run test:root:shard:check
       - name: Root tests
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
         env:
-          CORE_TEST_SHARD: ${{ matrix.shard }}/5
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: npm run test:root:shard
+        run: xargs node scripts/run-pg-tests.mjs < "$RUNNER_TEMP/root-tests"
       - name: Render runner tests as root
-        if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
+        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: sudo env "PATH=$PATH" "DATABASE_URL=$DATABASE_URL" node scripts/run-pg-tests.mjs test/render-deploy-runner.test.ts
+        run: |
+          grep -qx test/render-deploy-runner.test.ts "$RUNNER_TEMP/root-tests" || exit 0
+          sudo env "PATH=$PATH" "DATABASE_URL=$DATABASE_URL" node scripts/run-pg-tests.mjs test/render-deploy-runner.test.ts
 
   core:
     name: Core
@@ -150,6 +159,8 @@ jobs:
     needs:
       - core-typecheck
       - core-tests
+    outputs:
+      full: ${{ needs.core-tests.outputs.full }}
     steps:
       - name: Core checks passed
         env:
@@ -374,12 +385,16 @@ jobs:
           SQL
           scripts/check-published-upgrade.sh
 
-  web-ui-plugin:
-    name: Web UI plugin
+  web-ui-checks:
+    name: Web UI plugin (${{ matrix.check }})
     timeout-minutes: 20
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [tests 1/2, tests 2/2, core image]
     steps:
       - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
@@ -387,7 +402,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         if: needs.reuse.outputs.reusable != 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && matrix.check != 'core image'
         with:
           node-version-file: .node-version
           cache: npm
@@ -395,19 +410,32 @@ jobs:
             package-lock.json
             plugins/web-ui/package-lock.json
       - name: Install core dependencies
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && matrix.check != 'core image'
         run: npm ci
-      - name: Install, typecheck, test, build
-        if: needs.reuse.outputs.reusable != 'true'
+      - name: Install, typecheck, test
+        if: needs.reuse.outputs.reusable != 'true' && matrix.check != 'core image'
         working-directory: plugins/web-ui
+        env:
+          SHARD: ${{ matrix.check }}
         run: |
           npm ci
           npm run typecheck
-          npm test
-          npm run build
+          node --test --test-shard="${SHARD#tests }" "test/**/*.test.ts"
       - name: Build and boot the core image's web front door
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && matrix.check == 'core image'
         run: bash scripts/smoke-core-image.sh
+
+  web-ui-plugin:
+    name: Web UI plugin
+    timeout-minutes: 3
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    needs: web-ui-checks
+    steps:
+      - name: Web UI checks passed
+        env:
+          CHECKS: ${{ needs.web-ui-checks.result }}
+        run: test "$CHECKS" = success
 
   auth-plugin:
     name: Auth plugin
@@ -488,6 +516,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Record the immutable tested tree
+        if: needs.core.outputs.full == 'true'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |

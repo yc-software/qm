@@ -26,7 +26,14 @@ function start(): { base: string; close: () => Promise<void> } {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    base,
+    close: () =>
+      new Promise<void>((r) => {
+        server.close(() => r());
+        server.closeAllConnections();
+      }),
+  };
 }
 
 const tok = (blob: { dir: "read" | "write"; id?: string }) =>
