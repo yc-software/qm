@@ -31,13 +31,13 @@ export interface ChannelMembership {
 export type GroupResolution = { kind: "one"; groupId: string } | { kind: "none" };
 
 export async function recordGroupRoster(
-  directory: Pick<DirectoryStore, "replaceChannels" | "conversationMembers">,
+  directory: Pick<DirectoryStore, "replaceChannels" | "channelMemberIds">,
   surface: string,
   groupId: string,
   principalIds: readonly string[],
 ): Promise<boolean> {
-  const roster = await directory.conversationMembers(groupId);
-  const stored = new Set(roster?.map((member) => member.principalId));
+  const roster = await directory.channelMemberIds(groupId);
+  const stored = new Set(roster);
   const wanted = new Set(principalIds);
   if (roster && stored.size === wanted.size && [...wanted].every((id) => stored.has(id))) return true;
   return directory.replaceChannels(
