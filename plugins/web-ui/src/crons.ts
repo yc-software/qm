@@ -36,6 +36,10 @@ export interface CronView {
   lastFireNote?: { text: string; at: number; by?: string } | null;
   scopeName?: string;
   permission?: "read" | "manage";
+  sharedFrom?: string;
+  sharedBy?: string;
+  forkedAt?: number;
+  copies?: Array<{ id: string; owner: string; enabled: boolean; forkedAt?: number }>;
 }
 
 interface CronRunView {
@@ -507,6 +511,7 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
           <label>Status</label>
           <div class="value">${cronStatusText(c)}</div>
         </div>
+        ${cronSharingFields(c)}
         ${
           c.destination
             ? html`<div class="field">
@@ -557,6 +562,48 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
   );
   appState.mainEl.replaceChildren(host);
   if (manageable && (shouldRefreshRuns || !cronRuns.has(c.id)) && !cronRunsLoading.has(c.id)) void loadCronRuns(c.id);
+}
+
+function cronCopyStatus(copy: NonNullable<CronView["copies"]>[number]): string {
+  if (copy.forkedAt) return "Edited their copy";
+  return copy.enabled ? "On" : "Paused";
+}
+
+function cronSharingFields(c: CronView): TemplateResult | typeof nothing {
+  let origin: string | null = null;
+  if (c.sharedFrom && c.forkedAt)
+    origin = "Your own copy now: you edited it, so the original's edits no longer reach it.";
+  else if (c.sharedFrom)
+    origin = c.enabled
+      ? "Linked: edits to the original reach this copy until you edit it."
+      : "Waiting for you: turn it on to accept, or delete it to decline.";
+  if (!origin && !c.copies?.length) return nothing;
+  return html`
+    ${
+      origin
+        ? html`<div class="field">
+            <label>Shared by</label>
+            <div class="value">${c.sharedBy ?? "A teammate"}</div>
+            <div class="hint">${origin}</div>
+          </div>`
+        : nothing
+    }
+    ${
+      c.copies?.length
+        ? html`<div class="field">
+            <label>Shared with</label>
+            <div class="cron-run-list">
+              ${c.copies.map(
+                (copy) =>
+                  html`<div class="cron-run-row">
+                    <span class="badge">${cronCopyStatus(copy)}</span><span class="cron-run-detail">${copy.owner}</span>
+                  </div>`,
+              )}
+            </div>
+          </div>`
+        : nothing
+    }
+  `;
 }
 
 function cronRunHistory(c: CronView): TemplateResult {

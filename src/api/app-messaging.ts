@@ -27,6 +27,7 @@ import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
+import { linkedChanges, propagateCronEdit, withSharing } from "./app-cron-share.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 import { editableIn, SLACK } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
@@ -218,13 +219,13 @@ export function createMessagingMethods(
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
-      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c));
+      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c)).map((c) => withSharing(c, all));
       const visible = all
         .filter((c) => !viewersOwn(c.owner))
         .filter(canSee)
         .map((c) => {
           const name = scopeNames.get(c.ownerScopeId);
-          return name ? { ...c, scopeName: name } : c;
+          return withSharing(name ? { ...c, scopeName: name } : c, all);
         });
       return { owned, visible };
     },
@@ -234,8 +235,12 @@ export function createMessagingMethods(
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
-      const updated = await deps.crons.update(id, patch);
+      const linked = linkedChanges(before, patch);
+      const edited = Object.keys(linked).length > 0;
+      const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
+      const updated = await deps.crons.update(id, forks ? { ...patch, forkedAt: Date.now() } : patch);
       auditCron("cron_update", before, by);
+      if (edited) await propagateCronEdit(deps.crons, id, linked);
       return updated;
     },
     async deleteCron(id, by) {

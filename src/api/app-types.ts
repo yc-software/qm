@@ -201,7 +201,14 @@ export type ReachNowResult =
       candidates?: Array<Record<string, string>>;
     };
 
-export type VisibleCron = Cron & { scopeName?: string };
+export interface CronCopy {
+  id: string;
+  owner: string;
+  enabled: boolean;
+  forkedAt?: number;
+}
+
+export type VisibleCron = Cron & { scopeName?: string; copies?: CronCopy[]; sharedBy?: string };
 
 export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
 
@@ -512,7 +519,8 @@ export interface App {
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
-  listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
+  listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
+  shareCron(id: string, recipient: string, by: string): Promise<{ copy: Cron; existed: boolean }>;
   updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
