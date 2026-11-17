@@ -30,12 +30,16 @@ export interface ChannelMembership {
 
 export type GroupResolution = { kind: "one"; groupId: string } | { kind: "none" };
 
-export function recordGroupRoster(
-  directory: Pick<DirectoryStore, "replaceChannels">,
+export async function recordGroupRoster(
+  directory: Pick<DirectoryStore, "replaceChannels" | "conversationMembers">,
   surface: string,
   groupId: string,
   principalIds: readonly string[],
 ): Promise<boolean> {
+  const roster = await directory.conversationMembers(groupId);
+  const stored = new Set(roster?.map((member) => member.principalId));
+  const wanted = new Set(principalIds);
+  if (roster && stored.size === wanted.size && [...wanted].every((id) => stored.has(id))) return true;
   return directory.replaceChannels(
     [{ channelId: groupId, name: "", kind: "group" }],
     principalIds.map((principalId) => ({ channelId: groupId, principalId })),

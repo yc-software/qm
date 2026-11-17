@@ -37,3 +37,25 @@ test("group rosters come back in one read with Slack photos, skipping unknown gr
   assert.equal(rosters.has("G_UNKNOWN"), false);
   assert.equal((await store.conversationRosters([])).size, 0);
 });
+
+test("re-recording an unchanged group roster writes nothing; a changed one is written", async () => {
+  const store = createPostgresDirectoryStore(testDatabaseUrl());
+  await store.replace([
+    { principalId: "U_ALICE", displayName: "alice", type: "internal" },
+    { principalId: "U_BOB", displayName: "bob", type: "internal" },
+  ]);
+  let writes = 0;
+  const counted = {
+    conversationMembers: store.conversationMembers,
+    replaceChannels: (...args: Parameters<typeof store.replaceChannels>) => (writes++, store.replaceChannels(...args)),
+  };
+  await recordGroupRoster(counted, "web", "G3", ["U_ALICE", "U_BOB"]);
+  await recordGroupRoster(counted, "web", "G3", ["U_BOB", "U_ALICE"]);
+  assert.equal(writes, 1);
+  await recordGroupRoster(counted, "web", "G3", ["U_ALICE"]);
+  assert.equal(writes, 2);
+  assert.deepEqual(
+    (await store.conversationMembers("G3"))?.map((m) => m.principalId),
+    ["U_ALICE"],
+  );
+});
