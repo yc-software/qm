@@ -4,13 +4,16 @@ import { pathToFileURL } from "node:url";
 
 export const CI_JOBS = [
   "Core typecheck",
-  ...Array.from({ length: 5 }, (_, i) => `Core tests (${i + 1}/5)`),
+  ...Array.from({ length: 8 }, (_, i) => `Core tests (${i + 1}/8)`),
   "Core",
   "CLI",
   "Lint",
   "Production dependency audit",
   "Core Postgres tests",
   "Web UI plugin",
+  "Web UI plugin (tests 1/2)",
+  "Web UI plugin (tests 2/2)",
+  "Web UI plugin (core image)",
   "Auth plugin",
   "Portal plugin",
 ];

@@ -69,6 +69,7 @@ import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/br
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
+  CLEAR_BOT_SET_DEFAULTS_MIGRATION,
   createSandboxResources,
   MARK_ADMIN_CREATED_COMPUTERS_MIGRATION,
   type SandboxResource,
@@ -1314,6 +1315,13 @@ export function buildApp(
       `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
     ],
   });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/keychain_credentials/0003-delete-kernel-writer-markers",
+    statements: [
+      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active')`,
+      `DELETE FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active'`,
+    ],
+  });
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
     grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
@@ -2029,6 +2037,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
+  pgArtifactMap.pool.registerMigration(CLEAR_BOT_SET_DEFAULTS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
     statements: [

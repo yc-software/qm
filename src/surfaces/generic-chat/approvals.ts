@@ -27,7 +27,7 @@ import {
 import type { SurfaceAction } from "../contract.ts";
 import type { GenericChatClient } from "./client.ts";
 import { editGenericChatMessage, postGenericChatMessage } from "./messages.ts";
-import { GENERIC_CHAT, parseGenericChatRef } from "./protocol.ts";
+import { GENERIC_CHAT, genericChatUserIds, parseGenericChatRef } from "./protocol.ts";
 
 type ApprovalSubject = Pick<PendingApproval, "command" | "summary" | "kind">;
 
@@ -53,11 +53,12 @@ export interface GenericChatActionClick {
   actor: ActorAssertion;
 }
 
-function surfaceAction(button: CardButton): SurfaceAction {
+function surfaceAction(button: CardButton, userIds: string[] | undefined): SurfaceAction {
   return {
     id: `${button.actionId}:${encodeURIComponent(button.value)}`,
     label: button.label,
     style: button.style ?? "default",
+    ...(userIds ? { userIds } : {}),
   };
 }
 
@@ -105,7 +106,7 @@ function commandDetail(p: ApprovalSubject): string {
     .join("\n");
 }
 
-function commandApprovalCard(p: PendingApproval): Card {
+function commandApprovalCard(p: PendingApproval, userIds: string[] | undefined): Card {
   const title = toolTitle(p);
   let heading = title ? `🔒 **Approval needed:** ${title}` : "🔒 **Approval needed.**";
   if (p.kind === "input") heading = "🔒 **My security screen flagged part of this message. Allow it?**";
@@ -116,7 +117,10 @@ function commandApprovalCard(p: PendingApproval): Card {
     commandDetail(p),
     `**Flagged as:** ${p.reason}`,
   ];
-  return { body: lines.filter(Boolean).join("\n\n"), actions: approvalButtons(p).map(surfaceAction) };
+  return {
+    body: lines.filter(Boolean).join("\n\n"),
+    actions: approvalButtons(p).map((b) => surfaceAction(b, userIds)),
+  };
 }
 
 function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?: string): string {
@@ -125,12 +129,16 @@ function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?
   return `${decision === "deny" ? "" : "✅ "}${APPROVAL_DECISION_LABEL[decision]}${who} · ${subject}`;
 }
 
-function keychainCard(view: KeychainApprovalView): Card {
+function keychainCard(view: KeychainApprovalView, account: string | undefined): Card {
   const { pending, duration, status } = keychainCardWording(view);
   const summary = `Use your **${view.service}** credential in ${view.conversation}${duration}.`;
   return {
     body: `${pending ? "🔒 **Approval needed.**" : `**${status}**`}\n\n${summary}`,
-    actions: pending ? keychainButtons(view.ask).map(surfaceAction) : [],
+    actions: pending
+      ? keychainButtons(view.ask).map((b) =>
+          surfaceAction(b, account ? genericChatUserIds(view.ask.ownerSurfaceUser, account) : undefined),
+        )
+      : [],
   };
 }
 
@@ -149,11 +157,16 @@ export async function genericChatCard(
   d: Pick<Delivery, "destination" | "idempotencyKey">,
 ): Promise<GenericChatCard | null | undefined> {
   const { commandApprovalId, keychainAskId } = d.destination;
+  const account = parseGenericChatRef(d.destination.target)?.account;
   if (commandApprovalId) {
     const record = await deps.app.getApproval(commandApprovalId);
     if (!record || d.idempotencyKey !== approvalDeliveryKey(commandApprovalId, record)) return null;
+    const userIds = account ? genericChatUserIds(record.request?.surfaceOrigin?.author, account) : undefined;
     return {
-      ...commandApprovalCard({ ...record, requestId: commandApprovalId, reason: record.reason ?? "Approval required" }),
+      ...commandApprovalCard(
+        { ...record, requestId: commandApprovalId, reason: record.reason ?? "Approval required" },
+        userIds,
+      ),
       key: d.idempotencyKey,
     };
   }
@@ -161,7 +174,7 @@ export async function genericChatCard(
     const view = await deps.keychainApprovals?.card(keychainAskId);
     if (!view) return null;
     const key = `ask:${keychainAskId}:notice`;
-    return { ...keychainCard(view), key, ...(d.idempotencyKey === key ? {} : { resolved: true as const }) };
+    return { ...keychainCard(view, account), key, ...(d.idempotencyKey === key ? {} : { resolved: true as const }) };
   }
   return undefined;
 }
@@ -227,7 +240,7 @@ export function createGenericChatApprovals(deps: {
     } catch (error) {
       return tell(`Couldn't complete this approval: ${errMessage(error)} You can try the button again.`);
     }
-    return settle(keychainCard(view));
+    return settle(keychainCard(view, click.account));
   }
 
   return { invoke };

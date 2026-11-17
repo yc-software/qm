@@ -29,7 +29,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return { base, built, close: () => new Promise<void>((r) => server.close(() => r()).closeAllConnections()) };
 }
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
@@ -1035,7 +1035,7 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     assert.equal(doc.scopeId, scope);
     assert.ok(doc.openable);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1147,7 +1147,7 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
       const base = `http://localhost:${(server.address() as AddressInfo).port}`;
       return (await getJson(base, "/v1/admin/scopes/org:default-org")).egressEnforcement;
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()).closeAllConnections());
     }
   };
   assert.deepEqual(await read("none", "none"), {
@@ -1253,7 +1253,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
     assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty modelId clears the override");
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1303,7 +1303,7 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
     assert.equal((await putSteps("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1333,7 +1333,7 @@ test("admin governance: compaction keep percent round-trips, validates, and is o
     assert.equal((await put("org:default-org", "", ALICE)).status, 200);
     assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1363,7 +1363,7 @@ test("admin governance: history budget round-trips, validates, and is org-scoped
     assert.equal((await put("org:default-org", "", ALICE)).status, 200);
     assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1398,7 +1398,7 @@ test("admin governance: spend limits round-trip per scope, validate, and clear",
     assert.equal((await put("channel:C1", { inherit: true })).status, 200);
     assert.equal(await built.config.getSpendLimitDurable("channel:C1"), null, "inherit clears it");
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 

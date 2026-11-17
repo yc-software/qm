@@ -327,6 +327,7 @@ class FakeCore implements SlackCoreClient {
     this.directories.push(body);
     return true;
   }
+  async registerGroupRoster(): Promise<void> {}
   holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
     return fn(new Promise<void>(() => {}));
   }

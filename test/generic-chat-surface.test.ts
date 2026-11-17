@@ -19,7 +19,7 @@ import {
   type GenericChatMessages,
 } from "../src/surfaces/generic-chat/messages.ts";
 import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
-import { createGenericChatApprovals } from "../src/surfaces/generic-chat/approvals.ts";
+import { createGenericChatApprovals, genericChatCard } from "../src/surfaces/generic-chat/approvals.ts";
 import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
 import { setGenericChatReaction } from "../src/surfaces/generic-chat/reactions.ts";
 import { signGenericChat, signGenericChatRequest } from "../src/surfaces/generic-chat/protocol.ts";
@@ -985,6 +985,7 @@ interface ShownAction {
   id: string;
   label: string;
   style: string;
+  user_ids?: string[];
 }
 
 test("a pending approval arrives as a card with buttons that only the person who asked can settle", async () => {
@@ -999,12 +1000,12 @@ test("a pending approval arrives as a card with buttons that only the person who
     assert.match(String(posted.body), /Approval needed[\s\S]*git push[\s\S]*Flagged as/);
     assert.equal(posted.thread_id, "1002");
     assert.deepEqual(
-      actions.map((a) => [a.label, a.style]),
+      actions.map((a) => [a.label, a.style, a.user_ids]),
       [
-        ["Allow once", "primary"],
-        ["Allow session", "default"],
-        ["Allow always", "default"],
-        ["Deny", "danger"],
+        ["Allow once", "primary", ["5"]],
+        ["Allow session", "default", ["5"]],
+        ["Allow always", "default", ["5"]],
+        ["Deny", "danger", ["5"]],
       ],
     );
     const click = (eventId: string, user: Record<string, string>) =>
@@ -1038,7 +1039,13 @@ test("a pending approval arrives as a card with buttons that only the person who
 
 test("a credential request is a card its owner decides from the chat, and a decision made elsewhere clears the posted card", async () => {
   const genericChat = await fakeGenericChat();
-  const ask = { id: "ask1", status: "pending", requestedMode: "once", requesterScopeId: "group:g1" };
+  const ask = {
+    id: "ask1",
+    status: "pending",
+    requestedMode: "once",
+    requesterScopeId: "group:g1",
+    ownerSurfaceUser: { surface: "partner-chat", account: "7001", id: "5" },
+  };
   const view = () => ({ ask, service: "github", conversation: "Launch crew" }) as unknown as KeychainApprovalView;
   const decided: unknown[] = [];
   const keychainApprovals = {
@@ -1069,8 +1076,12 @@ test("a credential request is a card its owner decides from the chat, and a deci
     );
     const actions = card!.actions as ShownAction[];
     assert.deepEqual(
-      actions.map((a) => a.label),
-      ["Allow once", "Allow", "Deny"],
+      actions.map((a) => [a.label, a.user_ids]),
+      [
+        ["Allow once", ["5"]],
+        ["Allow", ["5"]],
+        ["Deny", ["5"]],
+      ],
     );
     const actor = { externalId: "ada@example.com" };
     await createGenericChatApprovals({ client, app: app as never, keychainApprovals }).invoke({
@@ -1098,6 +1109,20 @@ test("a credential request is a card its owner decides from the chat, and a deci
   } finally {
     await genericChat.close();
   }
+});
+
+test("a card names no allowed clicker when the owner's chat identity is unknown or from another account", async () => {
+  const card = async (ownerSurfaceUser?: object) => {
+    const ask = { id: "a", status: "pending", requesterScopeId: "group:g1", ownerSurfaceUser };
+    const keychainApprovals = { card: async () => ({ ask, service: "github", conversation: "c" }) as never };
+    const destination = { type: "partner-chat", target: `${CONTAINER}:1002`, keychainAskId: "a" };
+    return genericChatCard(
+      { app: { getApproval: async () => null }, keychainApprovals },
+      { destination, idempotencyKey: "k" },
+    );
+  };
+  for (const owner of [undefined, { surface: "partner-chat", account: "7002", id: "5" }])
+    assert.ok((await card(owner))!.actions.every((a) => !a.userIds));
 });
 
 test("a status post becomes the final reply in place, and the agent can revise or delete what it posted", async () => {
