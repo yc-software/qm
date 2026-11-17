@@ -8,7 +8,8 @@ import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
-import { startNewChat } from "./sessions";
+import { sessionsState, sessionTitle, startNewChat } from "./sessions";
+import { friendlyPrincipal } from "./app-view";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import {
   cronNextFire,
@@ -27,7 +28,7 @@ export interface CronView {
   action?: string;
   message?: string;
   schedule: { everyMs?: number; firstFireAt?: number; cron?: string; timezone?: string };
-  destination?: { type: string; target: string } | null;
+  destination?: { type: string; target: string; audienceScopeId?: string } | null;
   enabled: boolean;
   archived?: boolean;
   createdAt: number;
@@ -39,7 +40,7 @@ export interface CronView {
   sharedFrom?: string;
   sharedBy?: string;
   forkedAt?: number;
-  copies?: Array<{ id: string; owner: string; enabled: boolean; forkedAt?: number }>;
+  copies?: Array<{ id: string; owner: string; enabled: boolean; forkedAt?: number; deliversTo?: string }>;
 }
 
 interface CronRunView {
@@ -511,15 +512,7 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
           <label>Status</label>
           <div class="value">${cronStatusText(c)}</div>
         </div>
-        ${cronSharingFields(c)}
-        ${
-          c.destination
-            ? html`<div class="field">
-                <label>Destination</label>
-                <div class="value">${c.destination.type} → ${c.destination.target}</div>
-              </div>`
-            : ""
-        }
+        ${cronSharingFields(c, mine)}
         <div class="field">
           <label>Next run</label>
           <div class="value">${next != null ? new Date(next).toLocaleString() : "Never"}</div>
@@ -566,10 +559,38 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
 
 function cronCopyStatus(copy: NonNullable<CronView["copies"]>[number]): string {
   if (copy.forkedAt) return "Edited their copy";
-  return copy.enabled ? "On" : "Paused";
+  return copy.enabled ? "On" : "Pending";
 }
 
-function cronSharingFields(c: CronView): TemplateResult | typeof nothing {
+function destinationLabel(d: NonNullable<CronView["destination"]>): TemplateResult | string {
+  if (d.type === "web") {
+    const session = sessionsState.list.find((s) => s.threadRef === d.target);
+    return session
+      ? html`<a href=${deepLinkPath(UI_BASE, "chats", session.id)}>${sessionTitle(session)}</a>`
+      : "A chat";
+  }
+  if (d.type === "principal") return `${friendlyPrincipal(d.target)}'s DM`;
+  if (d.audienceScopeId) return scopeChip(d.audienceScopeId);
+  if (d.type === "slack") return d.target.startsWith("D") ? "A Slack DM" : "A Slack channel";
+  return d.type === "group" ? "A group DM" : "Somewhere else";
+}
+
+function copyDestinationLabel(type: string | undefined): string {
+  if (type === "web") return "Their own chat";
+  if (type === "principal") return "Their DM";
+  if (type === "slack" || type === "group") return "A Slack conversation of theirs";
+  return "Nowhere yet";
+}
+
+function deliveryRow(who: string, where: TemplateResult | string, status?: string): TemplateResult {
+  return html`<div class="cron-delivery-row">
+    <span class="cron-delivery-who">${who}</span>
+    <span class="cron-delivery-where">${where}</span>
+    ${status ? html`<span class="badge">${status}</span>` : nothing}
+  </div>`;
+}
+
+function cronSharingFields(c: CronView, mine: boolean): TemplateResult {
   let origin: string | null = null;
   if (c.sharedFrom && c.forkedAt)
     origin = "Your own copy now: you edited it, so the original's edits no longer reach it.";
@@ -577,32 +598,32 @@ function cronSharingFields(c: CronView): TemplateResult | typeof nothing {
     origin = c.enabled
       ? "Linked: edits to the original reach this copy until you edit it."
       : "Waiting for you: turn it on to accept, or delete it to decline.";
-  if (!origin && !c.copies?.length) return nothing;
+  const own = c.destination ? destinationLabel(c.destination) : "Nowhere yet";
+  const copies = c.copies ?? [];
   return html`
     ${
       origin
         ? html`<div class="field">
             <label>Shared by</label>
-            <div class="value">${c.sharedBy ?? "A teammate"}</div>
+            <div class="value">${c.sharedBy ? friendlyPrincipal(c.sharedBy) : "A teammate"}</div>
             <div class="hint">${origin}</div>
           </div>`
         : nothing
     }
-    ${
-      c.copies?.length
-        ? html`<div class="field">
-            <label>Shared with</label>
-            <div class="cron-run-list">
-              ${c.copies.map(
-                (copy) =>
-                  html`<div class="cron-run-row">
-                    <span class="badge">${cronCopyStatus(copy)}</span><span class="cron-run-detail">${copy.owner}</span>
-                  </div>`,
-              )}
-            </div>
-          </div>`
-        : nothing
-    }
+    <div class="field">
+      <label>Delivers to</label>
+      <div class="cron-delivery-list">
+        ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), own)}
+        ${copies.map((copy) => deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), cronCopyStatus(copy)))}
+      </div>
+      ${
+        copies.length
+          ? html`<div class="hint">
+              Each person you share with gets a linked copy that runs as them and posts to their own chat.
+            </div>`
+          : nothing
+      }
+    </div>
   `;
 }
 

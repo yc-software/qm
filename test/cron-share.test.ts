@@ -39,8 +39,8 @@ test("a cron shared with a person becomes their paused linked copy until they ed
   assert.equal(forked.action, "weather in Oakland");
   const { owned } = await app.listCronsForViewer("U1");
   assert.deepEqual(
-    owned.find((c) => c.id === source.id)?.copies?.map((c) => [c.owner, Boolean(c.forkedAt)]),
-    [["U2", true]],
+    owned.find((c) => c.id === source.id)?.copies?.map((c) => [c.owner, Boolean(c.forkedAt), c.deliversTo]),
+    [["U2", true, "web"]],
   );
 });
 

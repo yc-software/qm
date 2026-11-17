@@ -21,7 +21,13 @@ export function withSharing(all: readonly Cron[]): (cron: VisibleCron) => Visibl
   const copies = new Map<string, CronCopy[]>();
   for (const c of all) {
     if (!c.sharedFrom) continue;
-    const copy = { id: c.id, owner: c.owner, enabled: c.enabled, ...(c.forkedAt ? { forkedAt: c.forkedAt } : {}) };
+    const copy = {
+      id: c.id,
+      owner: c.owner,
+      enabled: c.enabled,
+      ...(c.forkedAt ? { forkedAt: c.forkedAt } : {}),
+      ...(c.destination ? { deliversTo: c.destination.type } : {}),
+    };
     copies.set(c.sharedFrom, [...(copies.get(c.sharedFrom) ?? []), copy]);
   }
   return (cron) => {

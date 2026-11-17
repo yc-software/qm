@@ -5839,6 +5839,35 @@ a.connector-widget:focus-visible {
   gap: 0;
 }
 
+.cron-delivery-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cron-delivery-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  font-size: var(--font-13);
+}
+
+.cron-delivery-row:last-child {
+  border-bottom: 0;
+}
+
+.cron-delivery-who {
+  flex: 0 0 120px;
+  font-weight: 500;
+}
+
+.cron-delivery-where {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .cron-run-heading {
   display: flex;
   align-items: center;

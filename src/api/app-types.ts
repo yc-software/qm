@@ -206,6 +206,7 @@ export interface CronCopy {
   owner: string;
   enabled: boolean;
   forkedAt?: number;
+  deliversTo?: string;
 }
 
 export type VisibleCron = Cron & { scopeName?: string; copies?: CronCopy[]; sharedBy?: string };
