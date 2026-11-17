@@ -12,6 +12,8 @@ import { LitElement, html, nothing } from "lit";
 import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
+import { suggestedActivities } from "./suggested-activities";
+import { welcomeActivities } from "./welcome-ideas";
 
 interface ConnectedAccount {
   id: string;
@@ -19,9 +21,11 @@ interface ConnectedAccount {
   missingScopes?: string[];
 }
 import type { Me } from "./shell-state";
+import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
 import "./onboarding-welcome.css";
 import "./onboarding-slack";
 import "./slack-account";
+import "./welcome-about";
 import {
   connectionPreviewEnabled,
   previewParameters,
@@ -39,10 +43,13 @@ import {
 
 const continuedAttempts = new Set<string>();
 
+const HARNESS = "QM, your agent harness.";
+
 export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
     onMoreIdeas: { attribute: false },
+    onIdea: { attribute: false },
     onConnected: { attribute: false },
     ideasDisabled: { type: Boolean },
     animateWelcome: { type: Boolean },
@@ -59,10 +66,13 @@ export class OnboardingWelcome extends LitElement {
     connections: { state: true },
     connectionError: { state: true },
     workspaceConnected: { state: true },
+    slackLinked: { state: true },
     workspaceError: { state: true },
+    about: { state: true },
   };
   declare me: Me | null;
   declare onMoreIdeas: (() => void) | undefined;
+  declare onIdea: ((prompt: string) => void) | undefined;
   declare onConnected: ((name: string) => void) | undefined;
   declare ideasDisabled: boolean;
   declare animateWelcome: boolean;
@@ -79,6 +89,7 @@ export class OnboardingWelcome extends LitElement {
   private disconnecting = "";
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
+  private slackLinked = false;
   private workspaceError = false;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
@@ -95,6 +106,7 @@ export class OnboardingWelcome extends LitElement {
   private returned: PreviewAttempt | null = null;
   private pickerState: PickerState = { query: "", expanded: false };
   private retryService: PreviewAttempt["service"] | null = null;
+  declare about: boolean;
   declare connectionOutcome: "" | "checking" | "success" | "cancelled" | "failed" | "expired";
   private controller?: AbortController;
   private services: ConnectionService[] = [];
@@ -114,6 +126,7 @@ export class OnboardingWelcome extends LitElement {
     this.authorizing = "";
     this.authorizationError = "";
     this.connectionOutcome = "";
+    this.about = false;
   }
   protected createRenderRoot(): HTMLElement {
     return this;
@@ -122,14 +135,20 @@ export class OnboardingWelcome extends LitElement {
     return `${this.me?.org}:${this.me?.user}`;
   }
   private async refreshWorkspace(): Promise<void> {
-    if (this.widget === "apps" || (this.widget !== "slack-account" && this.me?.permissions?.includes("admin"))) return;
+    if (
+      this.widget === "apps" ||
+      (this.widget !== "slack-account" && this.me?.permissions?.includes("admin") && !this.seeded)
+    )
+      return;
     try {
       const response = await fetch(`${this.base}api/composio/slack`, {
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       });
       if (!response.ok) throw Error("Slack status unavailable");
-      this.workspaceConnected = (await response.json()).workspaceInstalled === true;
+      const status = await response.json();
+      this.workspaceConnected = status.workspaceInstalled === true;
+      this.slackLinked = status.connected === true;
       this.workspaceError = false;
     } catch {
       this.workspaceConnected = null;
@@ -239,6 +258,7 @@ export class OnboardingWelcome extends LitElement {
         (service) => this.authorize(service, this.staleAccount(service.id)),
         requested ? { query: "", expanded: false } : this.pickerState,
         requested,
+        !this.seeded,
       );
   }
   disconnectedCallback(): void {
@@ -435,6 +455,88 @@ export class OnboardingWelcome extends LitElement {
       this.authorizing = "";
     }
   }
+  private get seeded(): ActivitySeeds | undefined {
+    return this.setupOnly ? undefined : this.me?.welcome;
+  }
+  private async showAbout(about: boolean): Promise<void> {
+    this.about = about;
+    const scroller = this.closest(".chat-scroll");
+    if (scroller) scroller.scrollTop = 0;
+    await this.updateComplete;
+    this.drawPicker();
+  }
+  private intro(greeting: string, toolkits: string[]) {
+    const seeds = this.seeded;
+    if (!seeds) return this.standardIntro(greeting);
+    const names = new Map(this.services.map((service) => [service.id, service.name]));
+    const { activities, fresh } = welcomeActivities(
+      seeds,
+      [
+        ...(this.slackLinked ? [{ id: "slack", name: "Slack" }] : []),
+        ...[...new Set(toolkits)].map((id) => ({ id, name: names.get(id) ?? id })),
+      ],
+      ["", "success"].includes(this.connectionOutcome) ? (this.retryService?.id ?? "") : "",
+    );
+    return html`<div class="welcome-hero welcome-beat" style="--welcome-delay:0ms">
+        ${greeting ? html`<p>${greeting}</p>` : nothing}
+        <h1>Welcome to QM! <img src=${`${this.base}qm.png`} alt="" /></h1>
+        <p class="welcome-what">
+          <button type="button" class="welcome-more-ideas" @click=${() => void this.showAbout(true)}>
+            What is this?
+          </button>
+        </p>
+      </div>
+      <div class="welcome-section welcome-beat" style="--welcome-delay:300ms">
+        <h2>Where to start</h2>
+        ${this.me?.companyName?.trim() ? html`<h3>Ideas for ${this.me.companyName.trim()}</h3>` : nothing}
+        ${suggestedActivities(activities, {
+          onSelect: (activity) => this.onIdea?.(activity.prompt),
+          redraw: () => this.requestUpdate(),
+          count: activities.length,
+          fresh,
+        })}
+      </div>
+      <div class="welcome-section welcome-beat" style="--welcome-delay:600ms">
+        <h2>Connect your accounts</h2>
+        <p>It’s many times more useful with maximal context.</p>
+      </div>`;
+  }
+  private standardIntro(greeting: string) {
+    const cohort = this.me?.welcomeCohort;
+    const purpose = `Use it to research customers, build tools, and automate the everyday work of running ${this.me?.companyName?.trim() || "your company"}.`;
+    return html`${greeting ? html`<h1 class="welcome-beat" style="--welcome-delay:0ms">${greeting}</h1>` : nothing}
+    ${
+      cohort
+        ? html`<div class="welcome-cohort welcome-beat" style="--welcome-delay:700ms">
+            <span class="welcome-cohort-label">Welcome to ${cohort}!</span
+            ><span class="welcome-champagne" aria-hidden="true">🥂</span>
+            ${Array.from({ length: 18 }, (_, i) => {
+              const side = i % 2 ? 1 : -1;
+              const distance = 35 + ((i * 37) % 85);
+              const turn = side * (80 + ((i * 47) % 190));
+              return html`<span
+                aria-hidden="true"
+                class="welcome-flutter"
+                style=${`--flutter-color:${["#f26522", "#f5ad56", "#d5bb88", "#e8c899"][i % 4]};--flutter-delay:${1750 + (i % 6) * 65}ms;--flutter-mid:${side * distance * 0.7}px;--flutter-x:${side * distance}px;--flutter-peak:${-28 - ((i * 19) % 36)}px;--flutter-end:${15 + ((i * 11) % 20)}px;--flutter-turn:${turn}deg;--flutter-turn-end:${turn * 2}deg`}
+              ></span>`;
+            })}
+          </div>`
+        : nothing
+    }
+    ${
+      cohort
+        ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">And welcome to ${HARNESS}</p>
+            <p class="welcome-beat" style="--welcome-delay:2600ms">
+              ${purpose}
+              ${this.onMoreIdeas ? html`<button type="button" class="welcome-more-ideas" ?disabled=${this.ideasDisabled} @click=${this.onMoreIdeas}>More ideas</button>` : nothing}
+            </p>
+            <p class="welcome-beat" style="--welcome-delay:2800ms">
+              The more you use QM, the more context it has, and the more it can help.
+            </p>`
+        : html`<p class="welcome-beat" style="--welcome-delay:400ms">Welcome to ${HARNESS} ${purpose}</p>
+            <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
+    }`;
+  }
   protected render() {
     if (this.preview && previewParameters().has("connectionConsent")) {
       return html`<section class="connection-consent-preview">
@@ -463,8 +565,11 @@ export class OnboardingWelcome extends LitElement {
         <a href="?connectionDemo=1">Back to QM</a>
       </section>`;
     }
+    if (this.about) return html`<qm-welcome-about .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
     const name = this.me?.displayName?.trim().split(/\s+/)[0];
     const cohort = this.me?.welcomeCohort;
+    const seeds = this.seeded;
+    const paced = Boolean(cohort) && !seeds;
     const serviceName = this.retryService?.name ?? "App";
     const connected = this.preview
       ? previewConnections(this.previewUser())
@@ -495,56 +600,14 @@ export class OnboardingWelcome extends LitElement {
         detail: "We couldn’t confirm an active connection yet. Try checking again, or restart authorization.",
       },
     }[this.connectionOutcome];
-    return html`<section class="welcome-content">
+    return html`<section class="welcome-content ${seeds ? "welcome-seeded" : ""}">
       ${this.preview ? html`<div class="connection-preview-label">Connection preview · No accounts are linked <button @click=${() => resetPreview(this.previewUser())}>Reset</button></div>` : nothing}
-      ${
-        this.setupOnly
-          ? nothing
-          : html`<h1 class="welcome-beat" style="--welcome-delay:0ms">${name ? `Hi, ${name}.` : "Hi there."}</h1>
-              ${
-                cohort
-                  ? html`<div class="welcome-cohort welcome-beat" style="--welcome-delay:700ms">
-                      <span class="welcome-cohort-label">Welcome to ${cohort}!</span
-                      ><span class="welcome-champagne" aria-hidden="true">🥂</span>
-                      ${Array.from({ length: 18 }, (_, i) => {
-                        const side = i % 2 ? 1 : -1;
-                        const distance = 35 + ((i * 37) % 85);
-                        const turn = side * (80 + ((i * 47) % 190));
-                        return html`<span
-                          aria-hidden="true"
-                          class="welcome-flutter"
-                          style=${`--flutter-color:${["#f26522", "#f5ad56", "#d5bb88", "#e8c899"][i % 4]};--flutter-delay:${1750 + (i % 6) * 65}ms;--flutter-mid:${side * distance * 0.7}px;--flutter-x:${side * distance}px;--flutter-peak:${-28 - ((i * 19) % 36)}px;--flutter-end:${15 + ((i * 11) % 20)}px;--flutter-turn:${turn}deg;--flutter-turn-end:${turn * 2}deg`}
-                        ></span>`;
-                      })}
-                    </div>`
-                  : nothing
-              }
-              ${
-                cohort
-                  ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">
-                        And welcome to QM, the agent harness we use to run YC.
-                      </p>
-                      <p class="welcome-beat" style="--welcome-delay:2600ms">
-                        Use it to research customers and investors, fundraise, and automate the everyday work of running
-                        ${this.me?.companyName?.trim() || "your company"}.
-                        ${this.onMoreIdeas ? html`<button type="button" class="welcome-more-ideas" ?disabled=${this.ideasDisabled} @click=${this.onMoreIdeas}>More ideas</button>` : nothing}
-                      </p>
-                      <p class="welcome-beat" style="--welcome-delay:2800ms">
-                        Think of it as your YC partner in a box. The more you use QM, the more context we have, the more
-                        we can help.
-                      </p>`
-                  : html`<p class="welcome-beat" style="--welcome-delay:400ms">
-                        Welcome to QM, your agent harness. Use it to research customers, build tools, and automate the
-                        everyday work of running ${this.me?.companyName?.trim() || "your company"}.
-                      </p>
-                      <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
-              }`
-      }
+      ${this.setupOnly ? nothing : this.intro(name ? `Hi ${name}!` : "", connected)}
       ${
         !["apps", "slack-account"].includes(this.widget) && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack
               class="welcome-beat"
-              style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
+              style=${`--welcome-delay:${paced ? 3050 : 900}ms`}
               @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
                 this.workspaceConnected = event.detail.connected;
               }}
@@ -553,18 +616,18 @@ export class OnboardingWelcome extends LitElement {
       }
       ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
       ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
-      <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}>
-        ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+      <div class="welcome-beat" style=${`--welcome-delay:${paced ? 3250 : 1100}ms`}>
+        ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()} @slack-linked=${() => void this.refreshWorkspace()}></qm-slack-account>` : nothing}
       </div>
       ${
         ["slack", "slack-account"].includes(this.widget)
           ? nothing
-          : html`<div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3450 : 1300}ms`}>
+          : html`<div class="welcome-beat" style=${`--welcome-delay:${paced ? 3450 : 1300}ms`}>
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error
                   ? html`<div class="welcome-load">
-                      <strong>Connect your apps</strong>
+                      ${this.seeded ? nothing : html`<strong>Connect your apps</strong>`}
                       <p role="status">${this.error}</p>
                       <button
                         type="button"

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { suggestedActivityRoutes } from "../src/api/routes/suggested-activities.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SEEDS = [{ id: "app", title: "Build an app", prompt: "Build a private project tracker.", icon: "app" }];
 
@@ -14,12 +15,13 @@ async function request(body: unknown, enabled: boolean, actor = "alice") {
   assert.equal(route.auth, "source");
   await route.handle({
     body,
+    tenant: testTenant,
     actor: { p: actor, exp: Date.now() + 1000 },
     deps: enabled
       ? {
           web: { me: { suggestedActivities: SEEDS } },
           suggestedActivities: {
-            get: async (_principalId: string, configured: unknown) => {
+            get: async (_tenant: unknown, _principalId: string, configured: unknown) => {
               calls++;
               seeds = configured;
               return { activities: [], pending: false };

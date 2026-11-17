@@ -3,6 +3,7 @@ import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-conf
 import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
 import { parseSuggestedActivities, type SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
 import { orgId } from "../../config.ts";
+import { starterActivities } from "../../suggestions/company-seeds.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
@@ -50,7 +51,7 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, workspaceUrl, auth, branding] = await Promise.all([
+  const [permissions, workspaceUrl, auth, branding, starters] = await Promise.all([
     permissionsOf(ctx, user),
     app
       .directoryMeta()
@@ -58,6 +59,7 @@ async function me(ctx: ApiCtx): Promise<void> {
       .catch(swallowAs("web: /me directory meta", null)),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
+    starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
@@ -78,7 +80,8 @@ async function me(ctx: ApiCtx): Promise<void> {
     displayName: actor.n?.trim() || null,
     ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
-    ...(config.suggestedActivities.length && !generated ? { suggestedActivities: config.suggestedActivities } : {}),
+    ...(starters.welcome ? { welcome: starters.welcome } : {}),
+    ...(starters.activities.length && !generated ? { suggestedActivities: starters.activities } : {}),
     permissions,
   });
 }

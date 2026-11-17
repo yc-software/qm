@@ -1,7 +1,28 @@
+import type { ActivitySeeds, SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+
 export const welcomeIdeasPrompt = `Help me explore what I can do with QM. Skip onboarding and setup in this conversation; go straight to ideas. Keep your first response around 200 words: three concrete example bullets, followed by an offer to tailor more ideas and at most two focused questions. Avoid repeating permission disclaimers. Show these workflows as possibilities, not tasks to execute now:
 
-1. Recruiting: Check Work at a Startup every morning for new engineering candidates with Rust experience, notify me in Slack, and prepare Gmail outreach drafts in the tone of my previous emails.
-2. Building: Help implement a Stripe integration, check for an applicable YC Deal first, and prepare a pull request for my cofounder to review.
-3. Fundraising: Build a fundraising dashboard with investor prospects from the YC investor database and the web, matches based on what our company does, outreach drafts for my review, fundraising progress, and investor inbound from my inbox.
+1. Recruiting: Check a job board every morning for new engineering candidates with Rust experience, notify me in Slack, and prepare Gmail outreach drafts in the tone of my previous emails.
+2. Building: Help implement a Stripe integration and prepare a pull request for my cofounder to review.
+3. Sales: Build a pipeline dashboard with prospects from the web, matches based on what our company does, outreach drafts for my review, and inbound from my inbox.
 
-Then offer to help come up with more ideas tailored to my goals, our company's current needs, and our progress through the YC batch. Check whether the yc tool is available and use its context and tool discovery to identify my current company. When available and authorized, read company.get for that company's profile and description, and company.goals for dated goals and progress. Also read get_yc_application for historical application answers and founder background when available and authorized; it may return my latest application for another company or a draft, so verify it matches my current company before using it. Prefer my recent statements and dated current goals over old application answers, and do not treat historical answers as current facts or assume the company profile was recently updated. Combine this with available company context and memory; if tools or records are unavailable, continue with what you know. Do not assume today's goals or batch stage from old information. If context is missing, ask one or two focused questions. Suggest a few concrete next steps and help me choose one. Only discuss the examples for now; do not set up automations, send outreach, redeem deals, or modify external systems until I choose what to do.`;
+Then offer to help come up with more ideas tailored to my goals and our company's current needs. Combine available company context and memory, and prefer my recent statements over old information; if tools or records are unavailable, continue with what you know. If context is missing, ask one or two focused questions. Suggest a few concrete next steps and help me choose one. Only discuss the examples for now; do not set up automations, send outreach, or modify external systems until I choose what to do.`;
+
+export function welcomeActivities(
+  seeds: ActivitySeeds,
+  connected: ReadonlyArray<{ id: string; name: string }>,
+  justConnected: string,
+): { activities: SuggestedActivity[]; fresh: Set<string> } {
+  let activities = seeds.activities;
+  const fresh = new Set<string>();
+  for (const app of connected) {
+    const adds = seeds.apps[app.id] ?? [];
+    const replaced = new Set(adds.map((activity) => activity.replaces));
+    if (app.id === justConnected) for (const activity of adds) fresh.add(activity.id);
+    activities = [
+      ...adds.map(({ replaces: _replaces, ...activity }) => ({ ...activity, source: `from ${app.name}` })),
+      ...activities.filter((existing) => !replaced.has(existing.id)),
+    ];
+  }
+  return { activities, fresh };
+}
