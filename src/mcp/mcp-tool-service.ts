@@ -366,9 +366,9 @@ export function createMcpToolService(opts: {
   async function adoptShared(state: ReturnType<typeof tenantState>): Promise<void> {
     for (const server of state.servers.values()) {
       if (!shared(server) || state.snapshot.some((t) => t.serverId === server.id)) continue;
-      if (sharedListings.get(server.url)?.listing)
-        state.snapshot = unique([...state.snapshot, ...(await serverTools(server, []))]);
-      else
+      const listing = sharedListings.get(server.url)?.listing;
+      if (listing?.tools.length) state.snapshot = unique([...state.snapshot, ...(await serverTools(server, []))]);
+      else if (!listing)
         void sharedListings
           .fetch(server.url, { forceRefresh: true, context: server })
           .then((entry) => entry?.error && record("list", server.id, `error: ${errMessage(entry.error)}`));
