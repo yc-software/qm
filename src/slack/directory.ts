@@ -1,4 +1,3 @@
-import { companySlackActor, type ExternalSlackAccess } from "./external-access.ts";
 import {
   type ActorAssertion,
   type CachedUser,
@@ -19,6 +18,7 @@ import {
   slackUserTimezone,
   sleep,
 } from "./lib.ts";
+import { companySlackActor, type ExternalSlackAccess } from "./external-access.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
