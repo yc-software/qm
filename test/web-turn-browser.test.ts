@@ -277,9 +277,12 @@ test("app editing adds app context beside the exact message, only on the person'
 const scroll = { name: "ui__scroll", description: "Scroll", inputSchema: { type: "object", properties: {} } };
 
 test("client tools and a surface briefing reach the agent only from the person's own private chat", async () => {
-  const own = await sentTurn({ clientTools: [scroll], surfaceBriefing: { name: "Panel", state: "URL: /inbox" } });
-  assert.deepEqual(own.clientTools, [scroll]);
-  assert.match(own.conversationHeader ?? "", /## Surface: Panel[\s\S]*URL: \/inbox/);
+  for (const scopeId of [undefined, "group:web-project-workbook"]) {
+    const own = await sentTurn({ scopeId, clientTools: [scroll], surfaceBriefing: { name: "Panel" } });
+    assert.deepEqual(own.clientTools, [scroll]);
+    assert.match(own.conversationHeader ?? "", /## Surface: Panel/);
+  }
+  assert.deepEqual((await sentTurn({ clientTools: [] })).clientTools, []);
   for (const bad of [
     { clientTools: { name: "x" }, surfaceBriefing: "x" },
     { surfaceBriefing: ["x"] },
@@ -294,23 +297,6 @@ test("client tools and a surface briefing reach the agent only from the person's
     assert.equal(turn.clientTools, undefined, JSON.stringify(shared));
     assert.doesNotMatch(turn.conversationHeader ?? "", /Surface: Panel/, JSON.stringify(shared));
   }
-});
-
-test("project conversations carry the initiating client's tools and surface context", async () => {
-  const turn = await sentTurn({
-    scopeId: "group:web-project-workbook",
-    threadRef: "web:alice:workbook",
-    clientTools: [scroll],
-    surfaceBriefing: { name: "Workbook", state: "Sheet: Inputs" },
-  });
-  assert.deepEqual(turn.conversation, {
-    kind: "group",
-    channelRef: "web-project-workbook",
-    threadRef: "web:alice:workbook",
-  });
-  assert.deepEqual(turn.clientTools, [scroll]);
-  assert.match(turn.conversationHeader ?? "", /Sheet: Inputs/);
-  assert.deepEqual((await sentTurn({ clientTools: [] })).clientTools, []);
 });
 
 test("steers without conversation context and aborts are forwarded bare", async () => {

@@ -62,7 +62,7 @@ const clientToolsSchema = z
         .max(2_000)
         .refine((description) => description.trim() !== "", { message: "must not be blank" }),
       inputSchema: clientToolInputSchema,
-      timeoutMs: z.int().min(1_000).max(60_000).optional(),
+      timeoutMs: z.int().min(1_000).max(2_147_483_647).optional(),
     }),
   )
   .max(32)
