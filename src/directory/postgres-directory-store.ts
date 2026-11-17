@@ -122,7 +122,7 @@ function channelRow(r: Record<string, unknown>): DirectoryChannel {
 }
 
 export const UNIFIED_ROSTERS: PgMigrationDefinition = {
-  id: "directory/store/0014-unified-rosters",
+  id: "directory/store/0015-unified-rosters",
   statements: [
     "SET LOCAL lock_timeout = '5s'",
     `ALTER TABLE directory_channels ADD COLUMN kind TEXT NOT NULL DEFAULT 'channel' CHECK (kind IN ('channel', 'group')),
@@ -216,6 +216,10 @@ END $tenants_for_email$`,
     statements: [
       "CREATE INDEX CONCURRENTLY IF NOT EXISTS directory_members_slack_id ON directory_members (org_id, slack_id)",
     ],
+  },
+  {
+    id: "directory/store/0014-meta-app-icon",
+    statements: ["ALTER TABLE directory_meta ADD COLUMN app_icon_url TEXT"],
   },
   UNIFIED_ROSTERS,
 ];
@@ -371,8 +375,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   return {
     ...createDirectorySync({ q, pool, orgId }),
     async meta() {
-      const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
-      return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
+      const rows = await q("SELECT workspace_url, app_icon_url FROM directory_meta WHERE org_id = $1", [orgId]);
+      return {
+        workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null,
+        appIconUrl: (rows[0]?.app_icon_url as string | null) ?? null,
+      };
     },
 
     async tenantsForEmail(email) {

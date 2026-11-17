@@ -67,6 +67,7 @@ interface DirectoryPush {
   channelRosterIds?: string[];
   channelRevocations?: Array<{ channelId: string; principalId: string }>;
   workspaceUrl?: string;
+  appIconUrl?: string;
   membersSyncedAt?: number;
   channelsSyncedAt?: number;
   partialChannels?: boolean;
@@ -317,7 +318,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async pushDirectory(body) {
-      if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
+      if (body.workspaceUrl)
+        await deps.app.setDirectoryWorkspace({ workspaceUrl: body.workspaceUrl, appIconUrl: body.appIconUrl ?? null });
       let applied = true;
       if (body.members) applied = (await deps.app.upsertDirectory(body.members, body.membersSyncedAt)) && applied;
       if (body.channels) {

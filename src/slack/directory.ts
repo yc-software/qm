@@ -403,6 +403,12 @@ export function createDirectory(deps: {
       return false;
     }
     if (!members.length && !(fetched && fetched.channels.length)) return false;
+    const appIconUrl = await client.bots
+      .info({ bot: ids.ownBotId })
+      .then(
+        (res: any) => res.bot?.icons?.image_72 as string | undefined,
+        swallowAs("slack: bots.info for the app icon", undefined),
+      );
     try {
       const applied = await core.pushDirectory({
         members,
@@ -417,6 +423,7 @@ export function createDirectory(deps: {
             }
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
+        ...(appIconUrl ? { appIconUrl } : {}),
       });
       if (applied && fetched?.fullRosterFetchedAt !== undefined) lastFullRosterFetchAt = fetched.fullRosterFetchedAt;
       if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");

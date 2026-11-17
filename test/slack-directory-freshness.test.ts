@@ -47,6 +47,7 @@ function fixture(t: TestContext) {
         }
       },
       users: { info: async () => ({ user }) },
+      bots: { info: async () => ({ bot: { icons: { image_72: "https://avatars.slack-edge.com/app_72.png" } } }) },
     };
     const directory = createDirectory({
       core: {
@@ -103,6 +104,7 @@ test("a fresh listing discovers channels without replaying cached rosters", asyn
   assert.equal(pushed.channelsSyncedAt, Date.now());
   assert.deepEqual(pushed.channelRosterIds, []);
   assert.deepEqual(pushed.channelMembers, []);
+  assert.equal(pushed.appIconUrl, "https://avatars.slack-edge.com/app_72.png");
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 1);
 });

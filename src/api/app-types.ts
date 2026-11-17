@@ -577,7 +577,7 @@ export interface App {
     revocations?: ChannelMembership[],
     partial?: boolean,
   ): Promise<boolean>;
-  setDirectoryWorkspaceUrl(url: string): Promise<void>;
+  setDirectoryWorkspace(meta: DirectoryMeta): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;

@@ -154,6 +154,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
+  getMany(ids: readonly string[]): Promise<SandboxResource[]>;
   defaultBackend(): Promise<SandboxBackendName>;
 }
 
@@ -342,6 +343,10 @@ export function createSandboxResources(opts: {
     },
     initialize,
     get,
+    async getMany(ids) {
+      await initialize();
+      return opts.records.getMany(ids);
+    },
     use,
     recordLoad: (id, sample) => opts.loads.put(id, sample),
     load: (id) => opts.loads.get(id),

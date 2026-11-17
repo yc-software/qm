@@ -2,22 +2,20 @@ import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-export const CI_JOBS = [
+export const PR_JOBS = [
+  "Select tests",
   "Core typecheck",
-  ...Array.from({ length: 8 }, (_, i) => `Core tests (${i + 1}/8)`),
   "Core",
   "CLI",
   "Lint",
   "Production dependency audit",
   "Core Postgres tests",
   "Web UI plugin",
-  "Web UI plugin (tests 1/2)",
-  "Web UI plugin (tests 2/2)",
-  "Web UI plugin (core image)",
   "Auth plugin",
   "Portal plugin",
+  "Co-author trailers",
+  "Certify tested tree",
 ];
-export const PR_JOBS = [...CI_JOBS, "Co-author trailers", "Certify tested tree"];
 const success = (item: any) => item?.status === "completed" && item.conclusion === "success";
 const sha = (value: unknown) => assert.match(String(value), /^[a-f0-9]{40}$/);
 const workflow = ".github/workflows/cicd.yml";
@@ -50,31 +48,6 @@ async function passed(api: Api, run: any, names: string[]) {
       return;
   }
   return jobs.jobs;
-}
-
-export async function mergeQueueCi(api: Api, repository: string, release: string) {
-  sha(release);
-  const page = await api(`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`);
-  if (page.total_count > 100) return;
-  const run = page.workflow_runs.sort(
-    (a: any, b: any) => b.run_number - a.run_number || b.run_attempt - a.run_attempt,
-  )[0];
-  if (
-    !run ||
-    (run.status === "completed" && run.conclusion !== "success") ||
-    run.event !== "merge_group" ||
-    run.path !== workflow ||
-    run.head_sha !== release ||
-    !run.head_branch?.startsWith("gh-readonly-queue/main/") ||
-    run.head_repository?.full_name !== repository ||
-    run.repository?.full_name !== repository ||
-    !Number.isSafeInteger(run.id) ||
-    !Number.isSafeInteger(run.run_attempt) ||
-    run.run_attempt < 1
-  )
-    return;
-  if (!(await passed(api, run, CI_JOBS))) return;
-  return { sha: release, ci: { runId: run.id, attempt: run.run_attempt } };
 }
 
 export function queuedPull(ref: string) {
@@ -175,15 +148,7 @@ export async function reusableCi(
 }
 
 async function main() {
-  const {
-    GITHUB_TOKEN,
-    GITHUB_REPOSITORY,
-    GITHUB_SHA,
-    GITHUB_OUTPUT,
-    GITHUB_STEP_SUMMARY,
-    GITHUB_EVENT_NAME,
-    GITHUB_REF,
-  } = process.env;
+  const { GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY, GITHUB_REF } = process.env;
   assert.ok(GITHUB_REPOSITORY && GITHUB_SHA && GITHUB_TOKEN && GITHUB_OUTPUT && GITHUB_REF);
   const headers = {
     Authorization: `Bearer ${GITHUB_TOKEN}`,
@@ -201,32 +166,30 @@ async function main() {
   };
   let proof;
   try {
-    if (GITHUB_EVENT_NAME === "push") proof = await mergeQueueCi(api, GITHUB_REPOSITORY, GITHUB_SHA);
-    else
-      proof = await reusableCi(
-        api,
-        async (id) => {
-          const redirect = await fetch(url(`actions/jobs/${id}/logs`), {
-            headers,
-            redirect: "manual",
-            signal: AbortSignal.timeout(15_000),
-          });
-          assert.equal(redirect.status, 302);
-          const location = new URL(redirect.headers.get("location")!);
-          assert.equal(location.protocol, "https:");
-          const response = await fetch(location, { redirect: "error", signal: AbortSignal.timeout(15_000) });
-          assert.ok(response.ok && response.body);
-          let text = "";
-          for await (const chunk of response.body) {
-            text += Buffer.from(chunk).toString("utf8");
-            assert.ok(text.length < 128 * 1024);
-          }
-          return text;
-        },
-        GITHUB_REPOSITORY,
-        GITHUB_SHA,
-        queuedPull(GITHUB_REF),
-      );
+    proof = await reusableCi(
+      api,
+      async (id) => {
+        const redirect = await fetch(url(`actions/jobs/${id}/logs`), {
+          headers,
+          redirect: "manual",
+          signal: AbortSignal.timeout(15_000),
+        });
+        assert.equal(redirect.status, 302);
+        const location = new URL(redirect.headers.get("location")!);
+        assert.equal(location.protocol, "https:");
+        const response = await fetch(location, { redirect: "error", signal: AbortSignal.timeout(15_000) });
+        assert.ok(response.ok && response.body);
+        let text = "";
+        for await (const chunk of response.body) {
+          text += Buffer.from(chunk).toString("utf8");
+          assert.ok(text.length < 128 * 1024);
+        }
+        return text;
+      },
+      GITHUB_REPOSITORY,
+      GITHUB_SHA,
+      queuedPull(GITHUB_REF),
+    );
   } catch (error) {
     console.log(`No reusable CI proof: ${error instanceof Error ? error.message : String(error)}`);
   }

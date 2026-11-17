@@ -111,7 +111,7 @@ export function createMessagingMethods(
   | "setRunDeliveryState"
   | "upsertDirectory"
   | "upsertChannels"
-  | "setDirectoryWorkspaceUrl"
+  | "setDirectoryWorkspace"
   | "directoryMeta"
   | "channelMember"
   | "channelVisibleTo"
@@ -472,8 +472,8 @@ export function createMessagingMethods(
       await h.syncLinkedProjectRosters();
       return applied;
     },
-    async setDirectoryWorkspaceUrl(url) {
-      await deps.directory.setWorkspaceUrl(url);
+    async setDirectoryWorkspace(meta) {
+      await deps.directory.setWorkspace(meta);
     },
     directoryMeta() {
       return deps.directory.meta();

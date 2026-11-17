@@ -78,6 +78,7 @@ test("a fully migrated database skips the base schema and drops the retired obje
     await admin.query(`CREATE TABLE directory_channel_members(tenant_id TEXT, org_id TEXT, channel_id TEXT, principal_id TEXT,
       PRIMARY KEY (tenant_id, org_id, channel_id, principal_id))`);
     await admin.query("CREATE TABLE directory_members(org_id TEXT, principal_id TEXT, slack_id TEXT)");
+    await admin.query("CREATE TABLE directory_meta(org_id TEXT PRIMARY KEY, workspace_url TEXT)");
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY, thread_ref TEXT, spawn_meta TEXT)");
     await admin.query(
       "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, status TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT, preemptions INT NOT NULL DEFAULT 0)",

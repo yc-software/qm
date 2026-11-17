@@ -39,6 +39,7 @@ import {
   threadHasBotStake,
   stageSlackFiles,
 } from "./lib.ts";
+import { isOwnSlackMessage } from "./message-gating.ts";
 import type { GatewayContext } from "../types.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -496,7 +497,7 @@ export function createTurnHandler(deps: {
       const m = res?.message;
       if (!m) return undefined;
       return {
-        own: Boolean((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)),
+        own: isOwnSlackMessage(m, ids.botUserId, ids.ownBotId),
         text: decodeSlackEntities(slackMessageContent(m).text.trim()),
         ...(m.thread_ts && m.thread_ts !== ts ? { threadTs: String(m.thread_ts) } : {}),
         reactions: reactionTallies(m.reactions),

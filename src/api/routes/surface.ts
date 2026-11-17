@@ -926,7 +926,9 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   if (
     !skill ||
     (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
-      !(await app.listVisibleSkills(principalId, ownScopeBotWork)).some((row) => row.skill?.id === skill.id))
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork))
+        .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+        .some((visible) => visible.id === skill.id))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }

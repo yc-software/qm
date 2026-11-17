@@ -208,7 +208,7 @@ test("skills written into a persona show for everyone with a role on it, and nob
   assert.equal(await sees(CAROL), false);
 });
 
-test("a persona's page lists crons from conversations with it, only to people who can see them", async () => {
+test("a persona's page lists its skills and the crons from conversations with it, to people who can see them", async () => {
   const { built, personas, enable, sysprompt } = setup();
   for (const who of [ALICE, BOB]) await enable(who);
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
@@ -235,17 +235,21 @@ test("a persona's page lists crons from conversations with it, only to people wh
     );
   await cron("Ada digest", withAda.sessionId);
   await cron("Unrelated", plain.sessionId);
+  const notes = { name: "notes", description: "d", body: "b" };
+  await built.app.createOwnedSkill({ principalId: BOB, homeScope: scopeId("personal", BOB), ...notes });
+  await built.app.createOwnedSkill({ principalId: ALICE, homeScope: scopeId("persona", ada.id), ...notes });
   const server = createInsecureTestServer(built.app, { sessions: built.sessions });
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const cronsFor = async (who: string) => {
       const r = await fetch(`${base}/v1/personas/${ada.id}?principalId=${who}`);
-      const body = (await r.json()) as { persona: { crons: Array<{ title: string; enabled: boolean }> } };
-      return body.persona.crons.map((c) => [c.title, c.enabled]);
+      const { persona } = (await r.json()) as { persona: { crons: { title: string }[]; skills: { id: string }[] } };
+      const opens = await Promise.all(persona.skills.map((s) => fetch(`${base}/v1/skills/${s.id}?principalId=${who}`)));
+      return [...persona.crons.map((c) => c.title), ...opens.map((o) => o.status)];
     };
-    assert.deepEqual(await cronsFor(ALICE), [["Ada digest", true]]);
-    assert.deepEqual(await cronsFor(BOB), []);
+    assert.deepEqual(await cronsFor(ALICE), ["Ada digest", 200]);
+    assert.deepEqual(await cronsFor(BOB), [200]);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -502,7 +506,7 @@ test("what a persona conversation posts carries the persona, so Slack can name i
 });
 
 test("a persona pinned in a channel is worn by every conversation there until it's unpinned", async () => {
-  const { personas, enable, sysprompt } = setup();
+  const { built, personas, enable, sysprompt } = setup();
   for (const who of [ALICE, CAROL]) await enable(who);
   const ada = ok(await personas.create(ALICE, { name: "Ada", icon: { kind: "emoji", value: "🎨" } }));
   const bea = ok(await personas.create(ALICE, { name: "Bea" }));
@@ -522,7 +526,14 @@ test("a persona pinned in a channel is worn by every conversation there until it
     true,
   );
 
-  assert.match((await sysprompt(CAROL, thread(2))).reply, /## Persona: Ada/);
+  const pinnedTurn = await sysprompt(CAROL, thread(2));
+  assert.match(pinnedTurn.reply, /## Persona: Ada/);
+  const replies = (await built.sessions.getItems(pinnedTurn.sessionId)).filter((i) => i.kind === "AgentMessage");
+  assert.deepEqual(
+    replies.map((i) => i.body.personaId),
+    [ada.id],
+    "the reply records the persona that wore it",
+  );
 
   const second = await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]);
   assert.equal(second.status, "invalid");
