@@ -361,7 +361,7 @@ export function createMcpToolService(opts: {
   async function listServer(server: McpServer): Promise<McpListing> {
     if (!shared(server)) return clientFor(server).listTools({ headers: headersFor(server, undefined) });
     const entry = await sharedListings.fetch(server.url, { context: server });
-    if (!entry?.listing) throw entry?.error;
+    if (!entry?.listing) throw entry?.error ?? new Error("the shared tool listing expired before the server answered");
     return entry.listing;
   }
 
