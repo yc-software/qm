@@ -92,6 +92,7 @@ export interface AgentTurnInput {
     images?: TurnImage[];
     documents?: DocumentInput[];
     author?: string;
+    speakerId?: string;
     authorName?: string;
     withheld?: boolean;
   }>;

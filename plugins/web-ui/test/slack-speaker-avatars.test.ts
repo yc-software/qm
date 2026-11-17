@@ -59,7 +59,7 @@ test("Slack conversations show directory Slack photos on messages and in the hea
 
 test("a Slack channel transcript sets other people's messages apart and keeps a mid-turn post out of the turn", async () => {
   const session = { ...SESSION, type: "channel" as const, createdAt: 1, surface: "slack", canContinue: false };
-  const said = (kind: "UserMessage" | "SteeringMessage", seq: number, text: string, body: object) =>
+  const said = (kind: "UserMessage" | "SteeringMessage", seq: number, text: string, body: Record<string, unknown>) =>
     item(kind, { seq, createdAt: seq, turnId: "t", text, body });
   const h = await harness({
     path: `/s/${session.id}`,

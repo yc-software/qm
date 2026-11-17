@@ -50,8 +50,8 @@ test("Slack messages copied into a session keep the person who wrote them, even 
     [
       ["@qm why didn't you respond here", "Alice", "alice@example.com", undefined],
       ["On it.", undefined, undefined, "agent"],
-      ["sent from the web", "Alice", "alice@example.com", undefined],
-      ["PR merged", "GitHub", undefined, undefined],
+      ["sent from the web", "Alice", "alice@example.com", "bot"],
+      ["PR merged", "GitHub", undefined, "bot"],
     ],
   );
 });

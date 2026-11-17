@@ -2394,7 +2394,8 @@ export function createChatSurface(
 
   function fromSomeoneElse(message: AgentMessage): boolean {
     const { speakerId, overheard } = message as { speakerId?: string; overheard?: boolean };
-    return speakerId ? speakerId !== appState.me?.user : Boolean(overheard);
+    const viewer = appState.me?.user;
+    return speakerId ? Boolean(viewer) && speakerId !== viewer : Boolean(overheard);
   }
 
   function assistantDisplayText(text: string): string {

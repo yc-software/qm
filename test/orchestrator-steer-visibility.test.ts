@@ -55,7 +55,7 @@ for (const mode of ["retry", "handoff"] as const) {
         assert.match(turn.input, /Runtime switched/);
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
-      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible", author: "U2" });
+      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible", author: "U2", speakerId: "U2" });
     };
     try {
       if (mode === "retry") {
