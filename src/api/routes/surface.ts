@@ -38,7 +38,7 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, livePersonTurn, orgScope } from "./shared.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -1188,6 +1188,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   if (typeof b.type !== "string" || !isArtifactType(b.type)) {
     return sendJson(res, 400, { error: "bad_request", message: `type must be one of: ${ARTIFACT_TYPES.join(", ")}` });
   }
+  if (b.type === "deploy" && !(await livePersonTurn(ctx))) return;
   if (typeof b.id !== "string" || !b.id.trim())
     return sendJson(res, 400, { error: "bad_request", message: "id required" });
   if (
