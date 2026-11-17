@@ -23,8 +23,8 @@ export function slackAppIcon(
   message: AgentMessage,
   iconUrl: string | null | undefined,
 ): string | undefined {
-  const persona = session?.personaId || (message as { personaId?: string }).personaId;
-  return session?.surface === "slack" && !persona ? iconUrl || undefined : undefined;
+  const wornPersona = Boolean((message as { personaId?: string }).personaId);
+  return session?.surface === "slack" && !wornPersona ? iconUrl || undefined : undefined;
 }
 
 export function fromSomeoneElse(message: AgentMessage, viewer: string | undefined): boolean {
