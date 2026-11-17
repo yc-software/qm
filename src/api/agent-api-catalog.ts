@@ -409,7 +409,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/apps (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/apps/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/apps/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/apps/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/apps (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/apps/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/shares/deploy/:id with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/apps/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
     routes: [
       {
         method: "GET",
@@ -443,14 +443,15 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/apps/:id/share",
-        summary: "inspect access for an app you own (:id is its name or id) — returns {public, grantees}; owner-only",
+        path: "/v1/shares/:type/:id",
+        summary:
+          "inspect who can reach a resource you may share (:type deploy|cron|skill|file; an app's :id is its name or id) — returns {owner, offers, grantees[{scope, permission, status?}]}, plus {public, externalSharing} for apps",
       },
       {
         method: "POST",
-        path: "/v1/apps/:id/share",
+        path: "/v1/shares/:type/:id",
         summary:
-          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only, on a turn you sent, no redeploy',
+          'change who can reach a resource you may share (:type deploy|cron|skill|file). Target ONE of: `scope` — "org" or a scope id like personal:<id> or channel:<id>; `recipient` — a teammate\'s name; or (apps only) `email` — an exact address, view-only. `access`: view (default), manage, or none (stop sharing). Apps only: pass just `public` (boolean) for anonymous link access. `offers` from GET says which of these the resource allows. Apps: owner-only, on a turn you sent',
       },
       {
         method: "POST",
