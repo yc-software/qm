@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 
@@ -16,10 +16,6 @@ function rootTests() {
     .sort();
 }
 
-function readTimings() {
-  return existsSync(TIMINGS) ? JSON.parse(readFileSync(TIMINGS, "utf8")) : {};
-}
-
 function pack(files, total, timings) {
   const weight = (file) => timings[file] ?? DEFAULT_SECONDS;
   const share = files.reduce((sum, file) => sum + weight(file), 0) / total;
@@ -33,46 +29,22 @@ function pack(files, total, timings) {
   return shards.map((shard) => shard.files);
 }
 
-function record(log) {
-  const runs = new Map();
-  for (const [, file, seconds] of log.matchAll(/# (?:ok|FAIL) (test\/[^/\s]+\.test\.ts) \(([\d.]+)s\)/g)) {
-    runs.set(file, [...(runs.get(file) ?? []), Number(seconds)]);
-  }
-  const timings = readTimings();
-  for (const [file, seconds] of runs) {
-    timings[file] = Math.max(1, Math.round(seconds.reduce((sum, value) => sum + value, 0) / seconds.length));
-  }
-  const live = new Set(rootTests());
-  const kept = Object.entries(timings)
-    .filter(([file]) => live.has(file))
-    .sort(([a], [b]) => a.localeCompare(b));
-  writeFileSync(TIMINGS, `${JSON.stringify(Object.fromEntries(kept), null, 2)}\n`);
-  console.log(`Recorded ${runs.size} root test timings`);
-}
-
 const { values } = parseArgs({
   options: {
     shard: { type: "string", default: process.env.CORE_TEST_SHARD },
-    record: { type: "boolean" },
     list: { type: "boolean" },
   },
 });
 
-if (values.record) {
-  record(Buffer.concat(await Array.fromAsync(process.stdin)).toString("utf8"));
-} else {
-  const match = /^(\d+)\/(\d+)$/.exec(values.shard ?? "");
-  if (!match || Number(match[1]) < 1 || Number(match[1]) > Number(match[2])) {
-    throw new Error(`Pass --shard <index>/<total> or set CORE_TEST_SHARD, got ${values.shard}`);
-  }
-  const files = pack(rootTests(), Number(match[2]), readTimings())[Number(match[1]) - 1];
-  console.log(
-    `Root test shard ${values.shard} (${files.length} files):\n${files.map((file) => `  ${file}`).join("\n")}`,
+const match = /^(\d+)\/(\d+)$/.exec(values.shard ?? "");
+if (!match || Number(match[1]) < 1 || Number(match[1]) > Number(match[2])) {
+  throw new Error(`Pass --shard <index>/<total> or set CORE_TEST_SHARD, got ${values.shard}`);
+}
+const files = pack(rootTests(), Number(match[2]), JSON.parse(readFileSync(TIMINGS, "utf8")))[Number(match[1]) - 1];
+console.log(`Root test shard ${values.shard} (${files.length} files):\n${files.map((file) => `  ${file}`).join("\n")}`);
+if (!values.list) {
+  spawn(process.execPath, ["scripts/run-pg-tests.mjs", ...files], { cwd: ROOT, stdio: "inherit" }).on(
+    "exit",
+    (code, signal) => (signal ? process.kill(process.pid, signal) : process.exit(code ?? 1)),
   );
-  if (!values.list) {
-    spawn(process.execPath, ["scripts/run-pg-tests.mjs", ...files], { cwd: ROOT, stdio: "inherit" }).on(
-      "exit",
-      (code, signal) => (signal ? process.kill(process.pid, signal) : process.exit(code ?? 1)),
-    );
-  }
 }
