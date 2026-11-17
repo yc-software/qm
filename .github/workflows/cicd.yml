@@ -386,7 +386,9 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: |
-          npm run db:schema
+          printf '#!/bin/sh\nexec docker exec -i %s pg_dump "$@"\n' "${{ job.services.postgres.id }}" > "$RUNNER_TEMP/pg_dump"
+          chmod +x "$RUNNER_TEMP/pg_dump"
+          PG_DUMP="$RUNNER_TEMP/pg_dump" npm run db:schema
           git diff --exit-code -- db/schema.sql || {
             echo "::error file=db/schema.sql::db/schema.sql is stale. Run npm run db:schema against Postgres 16 with pgvector, or git apply the diff above."
             exit 1

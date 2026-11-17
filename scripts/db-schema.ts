@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +37,7 @@ function normalizeDump(dump: string): string {
   return `${HEADER}\n${lines.join("\n")}\n`;
 }
 
-async function dumpSchema(baseUrl: string, pgDump: string): Promise<string> {
+async function dumpSchema(baseUrl: string): Promise<string> {
   const scratch = `qm_schema_${randomBytes(4).toString("hex")}`;
   const scratchUrl = new URL(baseUrl);
   scratchUrl.pathname = `/${scratch}`;
@@ -44,8 +45,14 @@ async function dumpSchema(baseUrl: string, pgDump: string): Promise<string> {
   await admin.connect();
   try {
     const server = String((await admin.query("SHOW server_version_num")).rows[0].server_version_num).slice(0, -4);
+    const packaged = `/usr/lib/postgresql/${server}/bin/pg_dump`;
+    const pgDump = process.env.PG_DUMP ?? (existsSync(packaged) ? packaged : "pg_dump");
     const client = (await run(pgDump, ["--version"])).stdout.split(" ")[2]?.split(".")[0];
-    if (server !== client) throw new Error(`pg_dump ${client} cannot produce a stable dump of server ${server}`);
+    if (server !== client) {
+      throw new Error(
+        `${pgDump} is version ${client}; dumps differ across versions, so set PG_DUMP to a ${server} pg_dump`,
+      );
+    }
     await admin.query(`CREATE DATABASE ${scratch}`);
     await run(process.execPath, ["src/migrate-main.ts"], {
       cwd: ROOT,
@@ -79,5 +86,5 @@ if (!baseUrl) {
   console.error("Set DATABASE_URL to a Postgres server with pgvector where a scratch database may be created");
   process.exit(2);
 }
-await writeFile(SCHEMA_FILE, await dumpSchema(baseUrl, process.env.PG_DUMP ?? "pg_dump"));
+await writeFile(SCHEMA_FILE, await dumpSchema(baseUrl));
 console.log("[db:schema] wrote db/schema.sql");
