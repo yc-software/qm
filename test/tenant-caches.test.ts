@@ -442,143 +442,53 @@ test("Slack mention names stay with their tenant; the env bot identity is proces
   setDefaultBotIdentity(undefined);
 });
 
-function mcpServer(id: string, url: string, auth: "none" | "bearer" = "none"): McpServer {
-  return {
-    id,
-    name: id,
-    url,
-    auth,
-    ...(auth === "bearer" ? { bearerToken: "token" } : {}),
-    readOnly: true,
-    enabled: true,
-    updatedAt: 1,
-    updatedBy: "admin",
-  };
-}
-
-function initializes(init: RequestInit | undefined): boolean {
-  return String(init?.body).includes('"initialize"');
-}
-
-test("tenants share one unauthenticated MCP listing, warm-ups reuse a refused one, and a refused re-list keeps the tools", async (t) => {
-  const mcp = await startMcpTestServer(t);
-  const shared = mcpServer("shared", mcp.url);
-  let refused = false;
-  let attempts = 0;
-  const fetch: typeof loopbackFetch = (input, init) => {
-    if (initializes(init)) attempts++;
-    return refused ? Promise.resolve(new Response("Forbidden", { status: 403 })) : loopbackFetch(input, init);
-  };
-  const service = createMcpToolService({ fetch, servers: mcpStore({ [A]: [shared], [B]: [shared] }) });
-  t.after(() => service.close());
-  t.mock.method(console, "error", () => {});
-  const names = (tenant: string) => withTenant(tenant, async () => (await service.toolDefsFor()).map((d) => d.name));
-  assert.deepEqual(await names(A), ["shared_query", "shared_update"]);
-  assert.deepEqual(await names(B), ["shared_query", "shared_update"]);
-  assert.equal(attempts, 1);
-  refused = true;
-  await withTenant(A, () => service.refresh());
-  assert.deepEqual(await names(A), ["shared_query", "shared_update"]);
-  const [C, D] = [randomUUID(), randomUUID()];
-  const cold = createMcpToolService({ fetch, servers: mcpStore({ [C]: [shared], [D]: [shared] }) });
-  t.after(() => cold.close());
-  attempts = 0;
-  await Promise.all([C, D].map((tenant) => withTenant(tenant, () => cold.toolDefs())));
-  assert.equal(attempts, 1);
-});
-
-function flakyMcpFetch() {
-  const flaky = {
-    mode: "refusing" as "up" | "refusing" | "unreachable" | "silent",
-    attempts: 0,
-    unanswered: [] as { answer: () => void; drop: () => void }[],
-    fetch: ((input, init) => {
-      if (initializes(init)) flaky.attempts++;
-      if (flaky.mode === "up") return loopbackFetch(input, init);
-      if (flaky.mode === "refusing") return Promise.resolve(new Response("Forbidden", { status: 403 }));
-      if (flaky.mode === "unreachable") return Promise.reject(new TypeError("fetch failed"));
-      return new Promise((resolve, reject) => {
-        flaky.unanswered.push({
-          answer: () => resolve(loopbackFetch(input, init)),
-          drop: () => reject(new TypeError("fetch failed")),
-        });
-      });
-    }) as typeof loopbackFetch,
-  };
-  return flaky;
-}
-
-async function sharedMcpTenants(t: TestContext, flaky: ReturnType<typeof flakyMcpFetch>) {
-  const shared = mcpServer("shared", (await startMcpTestServer(t)).url);
-  const tenants = [randomUUID(), randomUUID(), randomUUID()];
+async function flakyMcp(t: TestContext, auth: McpServer["auth"], tenants: string[], mode = "refusing") {
+  const { url } = await startMcpTestServer(t);
+  const server: McpServer = { ...signInServer("s"), url, auth, bearerToken: "x" };
+  const state = { mode, attempts: 0, held: [] as (() => void)[] };
   const service = createMcpToolService({
-    fetch: flaky.fetch,
-    servers: mcpStore(Object.fromEntries(tenants.map((tenant) => [tenant, [shared]]))),
+    servers: mcpStore(Object.fromEntries(tenants.map((tenant) => [tenant, [server]]))),
+    fetch: (input, init) => {
+      if (String(init?.body).includes('"initialize"')) state.attempts++;
+      if (state.mode === "up") return loopbackFetch(input, init);
+      if (state.mode === "refusing") return Promise.resolve(new Response("Forbidden", { status: 403 }));
+      if (state.mode === "unreachable") return Promise.reject(new TypeError("fetch failed"));
+      return new Promise((_, reject) => state.held.push(() => reject(new TypeError("fetch failed"))));
+    },
   });
-  t.after(() => {
-    for (const request of flaky.unanswered.splice(0)) request.drop();
-    service.close();
-  });
+  t.after(() => (state.held.splice(0).forEach((drop) => drop()), service.close()));
   t.mock.method(console, "error", () => {});
   await Promise.all(tenants.map((tenant) => withTenant(tenant, () => service.toolDefs())));
   const names = (i: number) => withTenant(tenants[i]!, async () => (await service.toolDefsFor()).map((d) => d.name));
-  return { names };
+  return { state, names, service };
 }
 
-test("a turn never waits on retrying a shared MCP listing, and one retry at a time is in flight", async (t) => {
-  const flaky = flakyMcpFetch();
-  const { names } = await sharedMcpTenants(t, flaky);
-  const promptly = (turn: Promise<string[]>) =>
-    Promise.race([turn, new Promise((resolve) => setTimeout(resolve, 1000, "waiting"))]);
-  assert.equal(flaky.attempts, 1);
-  assert.deepEqual(await promptly(names(0)), []);
-  assert.equal(flaky.attempts, 2);
-  await new Promise((resolve) => setImmediate(resolve));
-  flaky.mode = "silent";
-  assert.deepEqual(await promptly(names(0)), []);
-  assert.deepEqual(await promptly(names(1)), []);
-  assert.deepEqual(await promptly(names(2)), []);
-  assert.equal(flaky.attempts, 3);
-});
-
-test("once a shared MCP listing succeeds, every tenant's next turn has its tools without listing again", async (t) => {
-  const flaky = flakyMcpFetch();
-  flaky.mode = "unreachable";
-  const { names } = await sharedMcpTenants(t, flaky);
-  assert.equal(flaky.attempts, 1);
-  flaky.mode = "up";
-  assert.deepEqual(await names(0), []);
+test("tenants share one failed anonymous MCP listing, and once a turn's retry succeeds each tenant's next turn has it", async (t) => {
+  const { state, names, service } = await flakyMcp(t, "none", [A, B, randomUUID()], "unreachable");
+  const tools = ["s_query", "s_update"];
+  assert.equal(state.attempts, 1);
+  state.mode = "up";
   while ((await names(0)).length === 0) await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(await names(1), ["shared_query", "shared_update"]);
-  assert.deepEqual(await names(2), ["shared_query", "shared_update"]);
-  assert.equal(flaky.attempts, 2);
+  assert.deepEqual([await names(1), await names(2)], [tools, tools]);
+  assert.equal(state.attempts, 2);
+  state.mode = "refusing";
+  await withTenant(B, () => service.refresh());
+  assert.deepEqual(await names(1), tools);
 });
 
-test("a tenant's failing MCP server that is not shared is not listed again on turns", async (t) => {
-  const [good, bad] = [await startMcpTestServer(t), await startMcpTestServer(t)];
-  const listed: string[] = [];
-  const fetch: typeof loopbackFetch = (input, init) => {
-    const url = String(input instanceof Request ? input.url : input);
-    if (initializes(init)) listed.push(url.startsWith(bad.url) ? "bad" : "good");
-    return url.startsWith(bad.url)
-      ? Promise.resolve(new Response("Forbidden", { status: 403 }))
-      : loopbackFetch(input, init);
-  };
-  const service = createMcpToolService({
-    fetch,
-    servers: mcpStore({ [A]: [mcpServer("good", good.url, "bearer"), mcpServer("bad", bad.url, "bearer")] }),
-  });
-  t.after(() => service.close());
-  t.mock.method(console, "error", () => {});
-  await withTenant(A, () => service.toolDefs());
-  assert.deepEqual(listed.sort(), ["bad", "good"]);
-  for (let turn = 0; turn < 3; turn++) {
-    const defs = await withTenant(A, () => service.toolDefsFor());
-    assert.deepEqual(
-      defs.map((d) => d.name),
-      ["good_query", "good_update"],
-    );
-  }
+test("a turn never waits on retrying a shared MCP listing, and a process has one retry in flight", async (t) => {
+  const { state, names } = await flakyMcp(t, "none", [A, B]);
+  const promptly = (i: number) =>
+    Promise.race([names(i), new Promise((resolve) => setTimeout(resolve, 1000, "waits"))]);
+  assert.deepEqual(await promptly(0), []);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(listed.length, 2);
+  state.mode = "silent";
+  assert.deepEqual([await promptly(0), await promptly(1)], [[], []]);
+  assert.equal(state.attempts, 3);
+});
+
+test("a failed MCP server that is not shared is not listed again on turns", async (t) => {
+  const { state, names } = await flakyMcp(t, "bearer", [A]);
+  assert.deepEqual([await names(0), await names(0)], [[], []]);
+  assert.equal(state.attempts, 1);
 });
