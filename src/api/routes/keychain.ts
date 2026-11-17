@@ -353,7 +353,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const humanOrigin = runRequest?.origin.kind === "human" ? runRequest.origin : undefined;
   const requesterMessageTs = humanOrigin?.messageTs;
   const ownerSurfaceUser =
-    humanOrigin && samePerson(actorId, cred.ownerId) ? runRequest?.surfaceOrigin?.author : undefined;
+    humanOrigin && samePerson(runRequest?.actor.id, cred.ownerId) ? runRequest?.surfaceOrigin?.author : undefined;
   const { ask, existing } = await kc.createAsk({
     ...(capability.triggered ? { triggered: true } : {}),
     credentialId: cred.id,
