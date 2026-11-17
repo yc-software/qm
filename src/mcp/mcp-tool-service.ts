@@ -216,6 +216,8 @@ export function createMcpToolService(opts: {
     ttl: refreshIntervalMs,
     ttlAutopurge: true,
     ttlResolution: 0,
+    ignoreFetchAbort: true,
+    allowStaleOnFetchAbort: true,
     perf: { now },
     fetchMethod: async (_url, _stale, { context }) => {
       try {
@@ -371,7 +373,8 @@ export function createMcpToolService(opts: {
       else if (!listing)
         void sharedListings
           .fetch(server.url, { forceRefresh: true, context: server })
-          .then((entry) => entry?.error && record("list", server.id, `error: ${errMessage(entry.error)}`));
+          .then((entry) => entry?.error && record("list", server.id, `error: ${errMessage(entry.error)}`))
+          .catch(reportFailureAs("mcp: list shared tools", undefined));
     }
   }
 

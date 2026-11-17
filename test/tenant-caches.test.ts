@@ -442,19 +442,31 @@ test("Slack mention names stay with their tenant; the env bot identity is proces
   setDefaultBotIdentity(undefined);
 });
 
-async function flakyMcp(t: TestContext, auth: McpServer["auth"], tenants: string[], mode = "refusing") {
+async function flakyMcp(
+  t: TestContext,
+  auth: McpServer["auth"],
+  tenants: string[],
+  mode = "refusing",
+  refreshIntervalMs?: number,
+) {
   const { url } = await startMcpTestServer(t);
   const server: McpServer = { ...signInServer("s"), url, auth, bearerToken: "x" };
-  const state = { mode, attempts: 0, clock: 1, held: [] as (() => void)[] };
+  const state = { mode, attempts: 0, ended: Promise.withResolvers<void>(), clock: 1, held: [] as (() => void)[] };
   const service = createMcpToolService({
     now: () => state.clock,
+    refreshIntervalMs,
     servers: mcpStore(Object.fromEntries(tenants.map((tenant) => [tenant, [server]]))),
     fetch: (input, init) => {
       if (String(init?.body).includes('"initialize"')) state.attempts++;
-      if (state.mode === "up") return loopbackFetch(input, init);
+      if (state.mode === "up")
+        return loopbackFetch(input, init).finally(() => init?.method === "DELETE" && state.ended.resolve());
       if (state.mode === "refusing") return Promise.resolve(new Response("Forbidden", { status: 403 }));
       if (state.mode === "unreachable") return Promise.reject(new TypeError("fetch failed"));
-      return new Promise((_, reject) => state.held.push(() => reject(new TypeError("fetch failed"))));
+      return new Promise((resolve, reject) =>
+        state.held.push(() =>
+          state.mode === "up" ? resolve(loopbackFetch(input, init)) : reject(new TypeError("fetch failed")),
+        ),
+      );
     },
   });
   t.after(() => (state.held.splice(0).forEach((drop) => drop()), service.close()));
@@ -488,4 +500,17 @@ test("a turn never waits on retrying a shared MCP listing, and a process has one
 test("a failed MCP server that is not shared is not listed again on turns", async (t) => {
   const { state, names } = await flakyMcp(t, "bearer", [A]);
   assert.deepEqual([await names(0), await names(0), state.attempts], [[], [], 1]);
+});
+
+test("a shared MCP listing retry that outlives its cache entry settles quietly and its answer is kept", async (t) => {
+  const { state, names } = await flakyMcp(t, "none", [A], "refusing", 1);
+  state.mode = "silent";
+  assert.deepEqual([await names(0), state.attempts, state.held.length], [[], 2, 1]);
+  state.clock += 2;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  state.mode = "up";
+  state.held.splice(0).forEach((answer) => answer());
+  await state.ended.promise;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([await names(0), state.attempts], [["s_query", "s_update"], 2]);
 });
