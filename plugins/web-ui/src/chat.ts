@@ -348,6 +348,7 @@ export function createChatSurface(
   };
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
+  const continuedSpeakerRows = new Set<AgentMessage>();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
@@ -377,6 +378,16 @@ export function createChatSurface(
       }
     }
     updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
+    continuedSpeakerRows.clear();
+    let previousSpeaker: string | undefined;
+    for (const message of messages) {
+      const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
+      if (hidden.opener || hidden.resumeAnchor || rendersInsideWork(message)) continue;
+      const { role, speaker, speakerId } = message as { role?: string; speaker?: string; speakerId?: string };
+      const key = role === "user" ? speakerId || speaker : undefined;
+      if (key && key === previousSpeaker) continuedSpeakerRows.add(message);
+      previousSpeaker = key;
+    }
   }
 
   function isSideChatSurface(): boolean {
@@ -420,7 +431,7 @@ export function createChatSurface(
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
-    if (!speaker) return nothing;
+    if (!speaker || continuedSpeakerRows.has(message)) return nothing;
     const member = speakerMember(message);
     return html`<div class="speaker-label">
       ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}<span
@@ -1977,8 +1988,8 @@ export function createChatSurface(
     const speaker = speakerLabelFor(message);
     const speakerLabel =
       message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
-        ? assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)
-        : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
+        ? `${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)}\n${slackAppIcon() ?? ""}`
+        : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}\n${continuedSpeakerRows.has(message)}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
     const day = new Date().toDateString();
@@ -2222,7 +2233,7 @@ export function createChatSurface(
           ${
             labeled
               ? html`<div class="speaker-label">
-                  ${brandMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
+                  ${assistantMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -2386,6 +2397,16 @@ export function createChatSurface(
   function workTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
     const timeline = messageWorkTimeline(work, finalText);
     return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
+  }
+
+  function slackAppIcon(): string | undefined {
+    const session = chatState.forkSession;
+    return session?.surface === "slack" && !session.personaId ? appState.me?.slackAppIconUrl || undefined : undefined;
+  }
+
+  function assistantMark(): TemplateResult {
+    const icon = slackAppIcon();
+    return icon ? avatarTpl({ key: brandName(), name: brandName(), avatarUrl: icon }) : brandMark();
   }
 
   function rendersInsideWork(message: AgentMessage): boolean {

@@ -34,6 +34,7 @@ export interface BotIdentity {
 interface UserSnapshot {
   byId: Map<string, CachedUser>;
   fetchedAt: number;
+  appIconUrl?: string;
 }
 
 interface ChannelRow {
@@ -127,8 +128,10 @@ export function createDirectory(deps: {
       mentionIndex.set(key, id);
     };
     let missingEmails = 0;
+    let appIconUrl: string | undefined;
     for await (const res of client.paginate("users.list", { limit: 1000 }) as AsyncIterable<any>) {
       for (const u of (res.members ?? []) as SlackUser[]) {
+        if (u?.id === ids.botUserId) appIconUrl = u.profile?.image_72;
         if (!u?.id || u.id === ids.botUserId) continue;
         const actor = deps.externalAccess
           ? companySlackActor(u, deps.externalAccess)
@@ -151,7 +154,7 @@ export function createDirectory(deps: {
         `[slack] email identity mode: ${missingEmails} own-team member(s) have no visible email (missing users:read.email scope?) — they fail closed to guest`,
       );
     }
-    return { byId, fetchedAt };
+    return { byId, fetchedAt, ...(appIconUrl ? { appIconUrl } : {}) };
   }
 
   async function listBotChannels(
@@ -471,6 +474,7 @@ export function createDirectory(deps: {
             }
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
+        ...(snap.appIconUrl ? { appIconUrl: snap.appIconUrl } : {}),
       });
       if (applied && fetched?.fullRosterFetchedAt !== undefined) lastFullRosterFetchAt = fetched.fullRosterFetchedAt;
       if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");

@@ -57,7 +57,7 @@ test("Slack conversations show directory Slack photos on messages and in the hea
   }
 });
 
-test("a Slack channel transcript sets other people's messages apart and keeps a mid-turn post out of the turn", async () => {
+test("a Slack channel transcript sets other people apart, groups a speaker's run and shows the Slack app icon", async () => {
   const session = { ...SESSION, type: "channel" as const, createdAt: 1, surface: "slack", canContinue: false };
   const said = (kind: "UserMessage" | "SteeringMessage", seq: number, text: string, body: Record<string, unknown>) =>
     item(kind, { seq, createdAt: seq, turnId: "t", text, body });
@@ -65,6 +65,10 @@ test("a Slack channel transcript sets other people's messages apart and keeps a 
     path: `/s/${session.id}`,
     session,
     listSessions: [session],
+    api: (path) =>
+      path === "/me"
+        ? Response.json({ user: "tester", org: "test", slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png" })
+        : undefined,
     items: [
       said("UserMessage", 1, "deploys broke", { name: "Pete", overheard: true }),
       said("UserMessage", 2, "@qm DM me", { name: "T", speakerId: "tester" }),
@@ -79,13 +83,21 @@ test("a Slack channel transcript sets other people's messages apart and keeps a 
     await h.boot();
     const rows = [...document.querySelectorAll(".message-stack > .message-row")];
     assert.deepEqual(
-      rows.map((row) => [row.classList.contains("others-row"), row.querySelector(".pin-content")?.textContent?.trim()]),
+      rows.map((row) => [
+        row.classList.contains("others-row"),
+        row.querySelector(".pin-content")?.textContent?.trim(),
+        row.querySelector(":scope > .speaker-label img")?.getAttribute("src"),
+      ]),
       [
-        [true, "deploys broke"],
-        [false, "@qm DM me"],
-        [false, "thanks!"],
-        [false, undefined],
+        [true, "deploys broke", undefined],
+        [false, "@qm DM me", undefined],
+        [false, "thanks!", undefined],
+        [false, undefined, "https://avatars.slack-edge.com/app_72.png"],
       ],
+    );
+    assert.deepEqual(
+      rows.map((row) => Boolean(row.querySelector(":scope > .speaker-label"))),
+      [true, true, false, true],
     );
     assert.equal(rows.at(-1)!.querySelectorAll(".user-row").length, 0);
   } finally {

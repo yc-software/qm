@@ -584,7 +584,7 @@ export interface App {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  setDirectoryWorkspaceUrl(url: string): Promise<void>;
+  setDirectoryWorkspace(meta: DirectoryMeta): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;

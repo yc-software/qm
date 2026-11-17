@@ -1952,6 +1952,7 @@ a.chat-row-open {
   right: auto;
 }
 .named-user-row > .speaker-label > .inbox-avatar,
+.named-assistant-row > .speaker-label > .inbox-avatar,
 .named-assistant-row > .speaker-label > .brand-mark {
   width: 20px;
   height: 20px;

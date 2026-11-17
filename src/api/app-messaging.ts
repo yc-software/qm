@@ -112,7 +112,7 @@ export function createMessagingMethods(
   | "upsertDirectory"
   | "upsertChannels"
   | "upsertGroups"
-  | "setDirectoryWorkspaceUrl"
+  | "setDirectoryWorkspace"
   | "directoryMeta"
   | "channelMember"
   | "channelVisibleTo"
@@ -476,8 +476,8 @@ export function createMessagingMethods(
     async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
       return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
     },
-    async setDirectoryWorkspaceUrl(url) {
-      await deps.directory.setWorkspaceUrl(url);
+    async setDirectoryWorkspace(meta) {
+      await deps.directory.setWorkspace(meta);
     },
     directoryMeta() {
       return deps.directory.meta();
