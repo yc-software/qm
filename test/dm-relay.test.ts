@@ -17,6 +17,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const SECRET = "dm-relay-secret".repeat(3);
 
@@ -74,11 +75,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
         { channelId: "C-secret", principalId: "U-carol" },
       ],
     );
-    await built.app.upsertGroups([
-      { groupId: "G-jrs", principalId: "U-carol" },
-      { groupId: "G-jrs", principalId: "U-alice" },
-      { groupId: "G-jrs", principalId: "U-sam1" },
-    ]);
+    await recordGroupRoster(built.directory, "slack", "G-jrs", ["U-carol", "U-alice", "U-sam1"]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

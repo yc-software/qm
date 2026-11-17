@@ -14,6 +14,7 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
@@ -606,10 +607,7 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.match(ambientNote, /Added to "Credentials › U2":(?:\n- .*)*`npm:/);
   assert.match(ambientNote, /Removed all of "Credentials › U1"/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
-  await b.directory.replaceGroups([
-    { groupId: "G1", principalId: "U1" },
-    { groupId: "G1", principalId: "U2" },
-  ]);
+  await recordGroupRoster(b.directory, "slack", "G1", ["U1", "U2"]);
   for (const origin of [{ kind: "human" }, { kind: "ambient", live: true }] as const) {
     assert.equal(
       await b.turn(selected(), true, "U1", {

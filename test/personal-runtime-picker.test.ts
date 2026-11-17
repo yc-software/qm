@@ -8,6 +8,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -93,10 +94,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
     await s.built.userModelCredentials.setApiKey("U2", "anthropic", "synthetic-anthropic");
     await s.built.config.setPersonalModelAuth("U1", true, "openai");
     await s.built.config.setPersonalModelAuth("U2", true, "anthropic");
-    await s.built.directory.replaceGroups([
-      { groupId: "room", principalId: "U1" },
-      { groupId: "room", principalId: "U2" },
-    ]);
+    await recordGroupRoster(s.built.directory, "slack", "room", ["U1", "U2"]);
     assert.ok((await s.get("U1", "group:room")).models.includes("gpt-5.6-terra"));
     assert.ok(!(await s.get("U2", "group:room")).models.includes("gpt-5.6-terra"));
     await s.built.config.setRuntimeSelection("personal:U1", { modelId: "gpt-5.6-terra" });

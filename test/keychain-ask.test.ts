@@ -43,6 +43,7 @@ import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-datab
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -1075,10 +1076,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         let scopeVersion: string | undefined;
         if (kind === "group") {
           scope = "group:G_SHARED";
-          await built.app.upsertGroups([
-            { groupId: "G_SHARED", principalId: "U_ALICE" },
-            { groupId: "G_SHARED", principalId: "U_BOB" },
-          ]);
+          await recordGroupRoster(built.directory, "slack", "G_SHARED", ["U_ALICE", "U_BOB"]);
         } else if (kind === "project") {
           const project = await built.app.createProject("U_ALICE", `Approval QA ${requesterId}`);
           assert.ok(project);
@@ -1163,10 +1161,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       { principalId: "U_EVE", displayName: "Eve", type: "internal" },
       { principalId: "U_EXTERNAL", displayName: "External", type: "guest" },
     ]);
-    await built.app.upsertGroups([
-      { groupId: "G_GUEST_QA", principalId: "U_ALICE" },
-      { groupId: "G_GUEST_QA", principalId: "U_EXTERNAL" },
-    ]);
+    await recordGroupRoster(built.directory, "slack", "G_GUEST_QA", ["U_ALICE", "U_EXTERNAL"]);
     const external = await built.keychain!.save({
       ownerId: "U_EXTERNAL",
       service: "external-gate",

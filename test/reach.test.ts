@@ -32,8 +32,8 @@ function fakeDirectory(): ReachDirectory & {
     { channelId: "C-eng", name: "eng" },
     { channelId: "C-secret", name: "secret", isPrivate: true },
   ];
-  const privateMembers: Record<string, Set<string>> = { "C-secret": new Set(["U-carol"]) };
   const groupMembers: Record<string, Set<string>> = { "G-jrs": new Set(["U-carol", "U-alice", "U-sam1"]) };
+  const privateMembers: Record<string, Set<string>> = { "C-secret": new Set(["U-carol"]), ...groupMembers };
   const setKey = (ids: Iterable<string>) => [...new Set([...ids].filter(Boolean))].sort().join(",");
   const norm = (s: string) => s.trim().toLowerCase().replace(/^[@#]/, "");
   return {
@@ -64,9 +64,6 @@ function fakeDirectory(): ReachDirectory & {
       if (!key) return { kind: "none" };
       const hit = Object.entries(groupMembers).find(([, set]) => setKey(set) === key);
       return hit ? { kind: "one", groupId: hit[0] } : { kind: "none" };
-    },
-    async groupMember(groupId, principalId) {
-      return groupMembers[groupId]?.has(principalId) ?? false;
     },
     async listChannelsFor(principalId) {
       return channels.filter((c) => !c.isPrivate || (privateMembers[c.channelId]?.has(principalId) ?? false));

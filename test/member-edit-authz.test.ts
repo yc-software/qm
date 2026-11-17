@@ -51,10 +51,9 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
   const directory = {
     listChannelsFor: async () => [] as { channelId: string; name: string; isPrivate?: boolean }[],
     channelMember: async (c: string, p: string) =>
-      (c === PRIV && privMembers.has(p)) || (c === PUB && pubMembers.has(p)),
-    groupMember: async (g: string, p: string) => g === GROUP && groupMembers.has(p),
+      (c === PRIV && privMembers.has(p)) || (c === PUB && pubMembers.has(p)) || (c === GROUP && groupMembers.has(p)),
     channelPrivacy: async (c: string): Promise<boolean | undefined> => {
-      if (c === PRIV) return true;
+      if (c === PRIV || c === GROUP) return true;
       if (c === PUB) return false;
       return undefined;
     },

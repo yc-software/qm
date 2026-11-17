@@ -21,7 +21,6 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
     failMembers: false,
     failUser: false,
     writes: 0,
-    groupRosters: [] as Array<{ groupId: string; principalIds: string[] }>,
   };
   const client = {
     async *paginate(method: string) {
@@ -53,9 +52,6 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
           body.channelRevocations,
           body.partialChannels,
         );
-      },
-      registerGroupRoster: async (groupId: string, principalIds: readonly string[]) => {
-        state.groupRosters.push({ groupId, principalIds: [...principalIds] });
       },
     } as unknown as SlackCoreClient,
     coreSingleton: !options.secondary,
@@ -116,13 +112,12 @@ test("removed speakers and failed member classification do not publish", async (
   }
 });
 
-test("unknown, external and group metadata never publish an ordinary channel", async () => {
+test("unknown and external metadata never publish a roster", async () => {
   for (const info of [
     {},
     { name: "room" },
     { name: "room", is_private: true, is_member: false },
     { name: "room", is_private: true, is_ext_shared: true },
-    { name: "room", is_private: true, is_mpim: true },
   ]) {
     const { state, observe } = fixture();
     await observe(info);
@@ -131,10 +126,11 @@ test("unknown, external and group metadata never publish an ordinary channel", a
 });
 
 test("a group DM records its verified roster as a group, not a channel", async () => {
-  const { state, observe } = fixture();
-  await observe({ name: "room", is_private: true, is_mpim: true });
-  assert.equal(state.writes, 0);
-  assert.deepEqual(state.groupRosters, [{ groupId: "C_ONE", principalIds: ["U_ONE"] }]);
+  const { store, observe } = fixture();
+  await observe({ name: "mpdm-one--two-1", is_private: true, is_mpim: true });
+  assert.equal(await store.channelMembership("C_ONE", "U_ONE"), true);
+  assert.deepEqual(await store.resolveGroupByParticipants(["U_ONE"], "slack"), { kind: "one", groupId: "C_ONE" });
+  assert.equal((await store.resolveChannel("C_ONE")).kind, "none");
 });
 
 test("newer removal rejects an older in-flight live observation", async () => {

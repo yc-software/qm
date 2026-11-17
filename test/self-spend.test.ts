@@ -13,6 +13,7 @@ import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const DAY = 86_400_000;
 const today = new Date(Math.floor(Date.now() / DAY) * DAY).toISOString().slice(0, 10);
@@ -74,11 +75,8 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
     await bill(sessions, "ch:P2:t1", "channel", scopeId("channel", "P2"), { costUsd: 5 });
     const project = (await s.built.app.createProject("alice", "Launch"))!;
     await bill(sessions, "web:alice:launch", "group", project.scopeId, { costUsd: 6 });
-    await s.built.app.upsertGroups([
-      { groupId: "G1", principalId: "alice" },
-      { groupId: "G1", principalId: "bob" },
-      { groupId: "G2", principalId: "bob" },
-    ]);
+    await recordGroupRoster(s.built.directory, "slack", "G1", ["alice", "bob"]);
+    await recordGroupRoster(s.built.directory, "slack", "G2", ["bob"]);
     for (const [group, costUsd] of [
       ["G1", 7],
       ["G2", 8],
@@ -150,10 +148,7 @@ test("self spend: your crons are split from the crons others made that you can s
       for (const cron of [yours, yoursInChannel, shared, toYou, bobsOwn, bobsPrivate, bobsGroup])
         await s.built.app.deleteCron(cron.id, { actorId: cron.owner });
     });
-    await s.built.app.upsertGroups([
-      { groupId: "G1", principalId: "alice" },
-      { groupId: "G1", principalId: "bob" },
-    ]);
+    await recordGroupRoster(s.built.directory, "slack", "G1", ["alice", "bob"]);
     const fire = (cron: Cron, scope: string, type: "dm" | "channel" | "group", costUsd: number) =>
       bill(sessions, `cron:${cron.id}:fire:abc123`, type, scope, { costUsd });
     await fire(yours, "personal:alice", "dm", 0.5);

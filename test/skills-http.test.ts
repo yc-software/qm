@@ -20,6 +20,7 @@ import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
 import { sleep } from "../src/util/async.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 function start() {
   const built = buildApp(
@@ -966,10 +967,7 @@ test("a PERSONAL-scope trigger (no liveActor) may still edit + delete its OWNER'
 test("a group-DM skill is editable by any group member (the group-DM analog of a private channel)", async () => {
   const srv = await startSecure();
   try {
-    await srv.directory.replaceGroups([
-      { groupId: "G7", principalId: "ann" },
-      { groupId: "G7", principalId: "bob" },
-    ]);
+    await recordGroupRoster(srv.directory, "slack", "G7", ["ann", "bob"]);
     const created = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: {
@@ -1018,10 +1016,7 @@ test("POST /v1/skills refuses to home a skill directly in an org or team scope (
 test("GET /v1/skills shows a group-DM skill to a member known only via directory membership", async () => {
   const srv = start();
   try {
-    await srv.directory.replaceGroups([
-      { groupId: "G7", principalId: "ann" },
-      { groupId: "G7", principalId: "bob" },
-    ]);
+    await recordGroupRoster(srv.directory, "slack", "G7", ["ann", "bob"]);
     await publish(srv.skills, scopeId("group", "G7"), "grouped", "shared in the group DM");
     const forBob = (await (await fetch(`${srv.base}/v1/skills?principalId=bob`)).json()) as { skills: SkillView[] };
     const g = forBob.skills.find((s) => s.name === "grouped");

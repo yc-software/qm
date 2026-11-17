@@ -26,6 +26,7 @@ import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { companyTest } from "./support/app-handle.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -298,7 +299,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
 
 test("shared-home members can approve and decline, outsiders cannot", async (t) => {
   const f = await fixture(t);
-  await f.directory.upsertGroup("G1", [owner, "carol@example.com"], "slack");
+  await recordGroupRoster(f.directory, "slack", "G1", [owner, "carol@example.com"]);
   await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
   assert.match(await f.decide("carol@example.com", false), /^Declined\./);
   assert.match(await f.decide("carol@example.com"), /^Approved\./);

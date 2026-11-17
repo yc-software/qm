@@ -33,7 +33,7 @@ import {
   type ScopeMembershipDeps,
 } from "../resolution/scope-membership.ts";
 import { samePerson } from "../directory/person.ts";
-import type { DirectoryMember } from "../directory/directory-store.ts";
+import { recordGroupRoster, type DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { PublishedApp } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
@@ -81,10 +81,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     resolveChannel: (q) => deps.directory.resolveChannel(q),
     channelMember: (c, p) => deps.directory.channelMember(c, p),
     resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, SLACK),
-    groupMember: (g, p) => deps.directory.groupMember(g, p),
     directoryMember: (p) => deps.directory.get(p),
     openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull(SLACK, query), parts),
-    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts, SLACK),
+    registerGroup: (g, parts) => recordGroupRoster(deps.directory, SLACK, g, parts),
   };
   const resolveReachTargetFor = (
     target: ReachTarget,
@@ -376,7 +375,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       const { kind, ref } = parseScopeId(scope.scopeId);
       if (scope.scopeId !== personal && kind !== "channel" && kind !== "group") continue;
       let ctx = byScope.get(scope.scopeId);
-      if (!ctx && kind === "group" && (await deps.directory.groupMember(ref, principalId))) {
+      if (!ctx && kind === "group" && (await deps.directory.channelMember(ref, principalId))) {
         ctx = {
           scopeId: scope.scopeId,
           kind: "group",
@@ -393,7 +392,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
     const slackGroups = [...byScope.values()].filter((ctx) => ctx.kind === "group" && !ctx.project);
     const rosters = await deps.directory
-      .groupRosters(slackGroups.map((ctx) => parseScopeId(ctx.scopeId).ref))
+      .conversationRosters(slackGroups.map((ctx) => parseScopeId(ctx.scopeId).ref))
       .catch(swallowAs("contexts: group DM rosters", new Map<string, DirectoryMember[]>()));
     for (const ctx of slackGroups) {
       const roster = rosters.get(parseScopeId(ctx.scopeId).ref);

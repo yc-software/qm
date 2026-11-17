@@ -11,6 +11,7 @@ import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideAppAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
+import type { DirectoryChannel } from "../directory/directory-store.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
@@ -61,19 +62,15 @@ interface DirectoryPush {
     avatarUrl?: string;
     isBot?: boolean;
   }>;
-  channels?: Array<{ channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean }>;
+  channels?: DirectoryChannel[];
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   channelRosterIds?: string[];
   channelRevocations?: Array<{ channelId: string; principalId: string }>;
-  groupMembers?: Array<{ groupId: string; principalId: string }>;
-  groupIds?: string[];
-  groupRosterIds?: string[];
   workspaceUrl?: string;
   appIconUrl?: string;
   membersSyncedAt?: number;
   channelsSyncedAt?: number;
   partialChannels?: boolean;
-  groupsSyncedAt?: number;
 }
 
 export interface SlackCoreClient {
@@ -103,7 +100,6 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
-  registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<void>;
@@ -334,16 +330,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             body.partialChannels,
           )) && applied;
       }
-      if (body.groupMembers) {
-        applied =
-          (await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt, body.groupIds, body.groupRosterIds)) &&
-          applied;
-      }
       return applied;
-    },
-
-    registerGroupRoster(groupId, principalIds) {
-      return deps.app.registerGroupRoster(groupId, principalIds);
     },
 
     serveDeliveries(tenant, lane) {

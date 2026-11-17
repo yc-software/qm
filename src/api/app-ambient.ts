@@ -251,10 +251,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const roster = await deps.directory.list().catch(swallowAs("ambient: roster read", [] as DirectoryMember[]));
     const member = roster.find((r) => samePerson(r.principalId, authorId) || samePerson(r.slackId, authorId));
     if (!member) return undefined;
-    if (batch.kind === "group") {
-      const inGroup = await deps.directory.groupMember(batch.container, member.principalId).catch(() => false);
-      return inGroup ? { message: asking, member } : undefined;
-    }
     const isPrivate = await deps.directory.channelPrivacy(batch.container).catch(() => undefined);
     if (isPrivate === undefined) return undefined;
     if (isPrivate && !(await deps.directory.channelMember(batch.container, member.principalId).catch(() => false)))
@@ -276,9 +272,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   }
 
   async function conversationAudience(batch: AmbientBatch): Promise<ActorAssertion[] | undefined> {
-    const members = await deps.directory
-      .conversationMembers(batch.kind === "group" ? "group" : "channel", batch.container)
-      .catch(() => undefined);
+    const members = await deps.directory.conversationMembers(batch.container).catch(() => undefined);
     if (!members?.length) return undefined;
     return members.map((member) => ({
       externalId: member.principalId,

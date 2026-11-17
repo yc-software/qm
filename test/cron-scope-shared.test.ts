@@ -103,7 +103,6 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
       get: async () => ({ displayName: "Owner" }),
       channelPrivacy: async () => isPrivate,
       channelMember: async () => true,
-      groupMember: async () => false,
       conversationMembers: async () => roster as never,
     };
     const spec = {
@@ -134,7 +133,6 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
         get: async () => ({ displayName: "Owner" }),
         channelPrivacy: async () => isPrivate,
         channelMember: async () => true,
-        groupMember: async () => false,
       };
       await runTrigger(deps, {
         owner: "U-carol",

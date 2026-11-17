@@ -16,14 +16,13 @@ function dir(): VisibilityDirectory & {
     { channelId: "C-eng", name: "eng" },
     { channelId: "C-secret", name: "secret", isPrivate: true },
   ];
-  const privateMembers: Record<string, Set<string>> = { "C-secret": new Set(["U-carol"]) };
-  const groupMembers: Record<string, Set<string>> = { "G-jrs": new Set(["U-carol"]) };
+  const privateMembers: Record<string, Set<string>> = {
+    "C-secret": new Set(["U-carol"]),
+    "G-jrs": new Set(["U-carol"]),
+  };
   return {
     async channelMember(channelId, principalId) {
       return privateMembers[channelId]?.has(principalId) ?? false;
-    },
-    async groupMember(groupId, principalId) {
-      return groupMembers[groupId]?.has(principalId) ?? false;
     },
     async listChannelsFor(principalId) {
       return channels.filter((c) => !c.isPrivate || (privateMembers[c.channelId]?.has(principalId) ?? false));
@@ -74,7 +73,7 @@ describe("isVisible: the shared action gate", () => {
 
   it("channel, privacy unknown but no listChannelsFor: fails closed", async () => {
     const d = dir();
-    const noList: VisibilityDirectory = { channelMember: d.channelMember, groupMember: d.groupMember };
+    const noList: VisibilityDirectory = { channelMember: d.channelMember };
     assert.equal(await isVisible(noList, "U-carol", { kind: "channel", channelId: "C-eng" }), false);
   });
 });

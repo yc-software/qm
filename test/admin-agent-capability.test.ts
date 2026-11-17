@@ -26,6 +26,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -652,10 +653,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
   test(`Open admin reads and writes from ${room} preserve live authorization and posture vetoes`, async () => {
     const s = await start();
     try {
-      await s.built.directory.replaceGroups([
-        { groupId: "G1", principalId: "admin-alice" },
-        { groupId: "G1", principalId: "U1" },
-      ]);
+      await recordGroupRoster(s.built.directory, "slack", "G1", ["admin-alice", "U1"]);
       await s.built.config.setSharingPosture(ORG, "open");
       const cap = await capFor("admin-alice", { scope: room });
       const headers = { "x-agent-capability": cap, "content-type": "application/json" };
@@ -754,10 +752,7 @@ for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1")
   test(`retired bulk import is equally unsupported from ${room}`, async () => {
     const s = await start();
     try {
-      await s.built.directory.replaceGroups([
-        { groupId: "G1", principalId: "admin-alice" },
-        { groupId: "G1", principalId: "U1" },
-      ]);
+      await recordGroupRoster(s.built.directory, "slack", "G1", ["admin-alice", "U1"]);
       const cap = await capFor("admin-alice", { scope: room });
       for (const posture of ["isolated", "open"] as const) {
         await s.built.config.setSharingPosture(ORG, posture);

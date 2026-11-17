@@ -35,11 +35,11 @@ function fixture(t: TestContext) {
     const pushes: Parameters<SlackCoreClient["pushDirectory"]>[0][] = [];
     const user = { id: "U_ONE", team_id: "T_TEST", profile: { email: "one@example.test" } };
     const client = {
-      async *paginate(method: string, args: { types?: string }) {
+      async *paginate(method: string) {
         if (method === "users.list") yield { members: [user, ...state.apps] };
         else if (method === "conversations.list") {
           if (state.failList) throw Error("list unavailable");
-          yield { channels: args.types === "mpim" ? [] : state.channels };
+          yield { channels: state.channels };
         } else if (method === "conversations.members") {
           state.memberCalls++;
           if (state.failMembers) throw Error("members unavailable");
@@ -68,11 +68,8 @@ function fixture(t: TestContext) {
                 body.channelRevocations,
               )
             : true;
-          const groups = body.groupMembers
-            ? await store.replaceGroups(body.groupMembers, body.groupsSyncedAt, body.groupIds, body.groupRosterIds)
-            : true;
           pushes.push(body);
-          return members && channels && groups;
+          return members && channels;
         },
       } as SlackCoreClient,
       ids: {
@@ -108,7 +105,6 @@ test("a fresh listing discovers channels without replaying cached rosters", asyn
   assert.equal(pushed.channelsSyncedAt, Date.now());
   assert.deepEqual(pushed.channelRosterIds, []);
   assert.deepEqual(pushed.channelMembers, []);
-  assert.equal(pushed.groupMembers, undefined);
   assert.equal(pushed.appIconUrl, "https://avatars.slack-edge.com/app_72.png");
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 1);

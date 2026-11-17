@@ -21,6 +21,7 @@ import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-dat
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -145,7 +146,7 @@ test("reachApp: shared-scope read grants require current channel or group member
     permission: "read",
     grantedBy: "U1",
   });
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U4" }]);
+  await recordGroupRoster(directory, "slack", "G1", ["U4"]);
   assert.equal((await app.reachApp(groupApp.id, "U4")).status, "ok");
 
   const session = await sessions.getOrCreateByThread("thread-g2", "group", scopeId("group", "G2"));
@@ -237,7 +238,7 @@ test("listAppsForViewer matches per-app permissions with store reads independent
     ],
     [{ channelId: "CPRIV", principalId: "U2" }],
   );
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }], Date.now(), ["G1"], ["G1"]);
+  await recordGroupRoster(directory, "slack", "G1", ["U2"]);
   const homes = [
     scopeId("personal", "U1"),
     scopeId("channel", "CPRIV"),

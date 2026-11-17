@@ -111,7 +111,7 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
     if (!state) return false;
     const home = conversationScope({ kind: state.kind ?? "channel", threadRef: container }, principal.id);
     if (!loadsScopeContext(principal.id, home, ownScopeBotWork)) return false;
-    if (state.kind === "group") return deps.directory.groupMember(container, principal.id);
+    if (state.kind === "group") return deps.directory.channelMember(container, principal.id);
     if (state.kind === "dm") {
       const members = await deps.surfaceCache!.members(container);
       return members.some((member) => samePerson(member, principal.id));

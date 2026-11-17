@@ -30,8 +30,6 @@ class FakeSlackClient {
   activeMembershipListings = 0;
   maxActiveMembershipListings = 0;
   firstMembershipListingStartedAt: number | undefined;
-  groupListings = 0;
-  failGroupListing = false;
   private postSequence = 0;
 
   readonly auth = {
@@ -137,13 +135,7 @@ class FakeSlackClient {
     }
     if (method === "conversations.list") {
       const types = String(args.types ?? "");
-      if (types === "mpim") {
-        this.groupListings++;
-        if (this.failGroupListing) throw new Error("missing mpim:read");
-      }
-      yield {
-        channels: [...this.channelsById.values()].filter((c) => (types === "mpim" ? c.is_mpim : !c.is_mpim)),
-      };
+      yield { channels: [...this.channelsById.values()].filter((c) => types.includes("mpim") || !c.is_mpim) };
       return;
     }
     if (method === "conversations.members") {
@@ -327,7 +319,6 @@ class FakeCore implements SlackCoreClient {
     this.directories.push(body);
     return true;
   }
-  async registerGroupRoster(): Promise<void> {}
   holdDirectorySync<T>(_team: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
     return fn(new Promise<void>(() => {}));
   }
@@ -1315,118 +1306,46 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
   }
 });
 
-test("a message from an unseen group DM resyncs the directory so it becomes addressable", async () => {
+test("a first mention in an unseen group DM records its roster as a group before the turn", async () => {
   const f = await fixture();
   try {
-    f.client.channelsById.set("G9", { id: "G9", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.channelsById.set("G9", {
+      id: "G9",
+      name: "mpdm-u1--u2-1",
+      is_member: true,
+      is_private: true,
+      is_mpim: true,
+    });
     f.client.membersByChannel.set("G9", ["U1", "U2", "UBOT"]);
-    const listedBefore = f.client.groupListings;
-    await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "hi", ts: "400.1" });
-    await waitFor(() => f.client.groupListings > listedBefore);
-    await waitFor(() => (f.core.directories.at(-1)?.groupMembers ?? []).some((g: any) => g.groupId === "G9"));
-    assert.deepEqual(
-      f.core.directories
-        .at(-1)
-        .groupMembers.filter((g: any) => g.groupId === "G9")
-        .map((g: any) => g.principalId)
-        .sort(),
-      ["U1", "U2"],
-      "the new group's internal roster reaches core, bot excluded",
-    );
-
-    const listedAfter = f.client.groupListings;
-    await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "again", ts: "400.2" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(f.client.groupListings, listedAfter, "a group DM already seen does not resync on every message");
+    const event = { channel: "G9", channel_type: "mpim", user: "U1", text: "<@UBOT> hi", ts: "400.1" };
+    await f.app.emitEvent("app_mention", event);
+    assert.equal(f.core.turns.length, 1);
+    const pushed = f.core.directories.find((d: any) => d.partialChannels && d.channels[0].channelId === "G9");
+    assert.equal(pushed.channels[0].kind, "group");
+    assert.deepEqual(pushed.channelMembers.map((m: any) => m.principalId).sort(), ["U1", "U2"]);
   } finally {
     await f.stop();
   }
 });
 
-test("a failed group listing pushes its fallback rows under the OLD stamp, never a fresh one", async () => {
+test("leaving a group DM refreshes only that roster and revokes the leaver", async () => {
   const f = await fixture();
   try {
-    f.client.channelsById.set("G7", { id: "G7", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G7", ["U1", "U2", "UBOT"]);
-    await f.app.emitMessage({ channel: "G7", channel_type: "mpim", user: "U1", text: "hi", ts: "402.1" });
-    await waitFor(() =>
-      f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G7")),
-    );
-    const goodStamp = f.core.directories.findLast((d: any) => d.groupsSyncedAt !== undefined).groupsSyncedAt;
-    assert.ok(goodStamp > 0);
-
-    f.client.failGroupListing = true;
-    f.client.channelsById.set("G6", { id: "G6", name: "", is_member: true, is_private: true, is_mpim: true });
-    await f.app.emitMessage({ channel: "G6", channel_type: "mpim", user: "U1", text: "hi", ts: "402.2" });
-    await waitFor(() => f.core.directories.findLast((d: any) => d.channels)?.channelsSyncedAt > goodStamp);
-    const last = f.core.directories.findLast((d: any) => d.channels);
-    assert.equal(
-      last.groupMembers,
-      undefined,
-      "a failed group listing must omit the groups section, never ship rows under a fresh stamp",
-    );
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a failed group member read marks only that roster unknown", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G5", { id: "G5", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G5", ["U1", "U2", "UBOT"]);
-    await f.app.emitMessage({ channel: "G5", channel_type: "mpim", user: "U1", text: "hi", ts: "403.1" });
-    await waitFor(() =>
-      f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G5")),
-    );
-    const good = f.core.directories.findLast((d: any) => d.groupsSyncedAt !== undefined);
-    f.client.membershipFailures.add("G5");
+    f.client.channelsById.set("G5", {
+      id: "G5",
+      name: "mpdm-u1--u2-1",
+      is_member: true,
+      is_private: true,
+      is_mpim: true,
+    });
+    f.client.membersByChannel.set("G5", ["U1", "UBOT"]);
     const pushes = f.core.directories.length;
-    await f.app.emitMessage({ channel: "G5", channel_type: "mpim", subtype: "group_join", ts: "403.2" });
+    await f.app.emitMessage({ channel: "G5", channel_type: "mpim", subtype: "group_leave", user: "U2", ts: "403.2" });
     await waitFor(() => f.core.directories.length > pushes);
     const last = f.core.directories.at(-1);
-    assert.ok(last.groupsSyncedAt > good.groupsSyncedAt);
-    assert.ok(last.groupIds.includes("G5"));
-    assert.ok(!last.groupRosterIds.includes("G5"));
-    assert.equal(last.groupMembers.filter((member: any) => member.groupId === "G5").length, 0);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("all listed group DMs reach the directory past the legacy private-channel cap", async () => {
-  const f = await fixture();
-  try {
-    for (let i = 0; i < 51; i++) {
-      const id = `G${i}`;
-      f.client.channelsById.set(id, { id, name: "", is_member: true, is_private: true, is_mpim: true });
-      f.client.membersByChannel.set(id, ["U1", "U2", "UBOT"]);
-    }
-    const pushes = f.core.directories.length;
-    await f.app.emitMessage({ channel: "G0", channel_type: "mpim", subtype: "group_join", ts: "403.3" });
-    await waitFor(() => f.core.directories.length > pushes);
-    assert.equal(new Set(f.core.directories.at(-1).groupMembers.map((member: any) => member.groupId)).size, 51);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a group DM whose listing fails is retried at most once, never once per message", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G8", { id: "G8", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G8", ["U1", "U2", "UBOT"]);
-    f.client.failGroupListing = true;
-    const listedBefore = f.client.groupListings;
-    for (const ts of ["401.1", "401.2", "401.3"]) {
-      await f.app.emitMessage({ channel: "G8", channel_type: "mpim", user: "U1", text: "hi", ts });
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.equal(
-      f.client.groupListings - listedBefore,
-      1,
-      "a failing listing must not make every message trigger another full sync",
-    );
+    assert.deepEqual(last.channelRosterIds, ["G5"]);
+    assert.deepEqual(last.channelRevocations, [{ channelId: "G5", principalId: "U2" }]);
+    assert.ok(last.channels.some((c: any) => c.channelId === "G5" && c.kind === "group"));
   } finally {
     await f.stop();
   }

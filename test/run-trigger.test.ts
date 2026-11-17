@@ -16,7 +16,6 @@ const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScop
 function directory(member: boolean) {
   return {
     channelMember: async () => member,
-    groupMember: async () => member,
     listChannelsFor: async () =>
       member
         ? [
@@ -126,10 +125,9 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal((await d.deliveries.pending("slack")).length, 1, "output delivered");
   });
 
-  it("a group-DM home destination (slack-typed, group audience scope) is gated by the GROUPS tables, not the channel tables", async () => {
+  it("a group-DM home destination (slack-typed, group audience scope) is gated by the group roster", async () => {
     const mpimOnly = {
-      channelMember: async () => false,
-      groupMember: async (id: string, who: string) => id === "C-mpim" && who === "U1",
+      channelMember: async (id: string, who: string) => id === "C-mpim" && who === "U1",
       listChannelsFor: async () => [],
       channelPrivacy: async () => undefined,
       get: async () => null,
@@ -159,7 +157,6 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
   it("a group-DM destination whose owner LEFT the mpim still fails closed", async () => {
     const noOne = {
       channelMember: async () => false,
-      groupMember: async () => false,
       listChannelsFor: async () => [],
       channelPrivacy: async () => undefined,
       get: async () => null,

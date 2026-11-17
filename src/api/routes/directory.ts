@@ -1,5 +1,5 @@
 import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
-import type { DirectoryMember } from "../../directory/directory-store.ts";
+import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { cleanDisplayName } from "../../identity/user-store.ts";
 import { personLabel } from "../../identity/person-names.ts";
@@ -66,21 +66,14 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     channelMembers?: unknown;
     channelRosterIds?: unknown;
     channelRevocations?: unknown;
-    groupMembers?: unknown;
-    groupIds?: unknown;
-    groupRosterIds?: unknown;
     workspaceUrl?: unknown;
     appIconUrl?: unknown;
     membersSyncedAt?: unknown;
     channelsSyncedAt?: unknown;
     partialChannels?: unknown;
-    groupsSyncedAt?: unknown;
   };
-  if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "members[], channels[], and/or groupMembers[] required",
-    });
+  if (!Array.isArray(b.members) && !Array.isArray(b.channels)) {
+    return sendJson(res, 400, { error: "bad_request", message: "members[] and/or channels[] required" });
   }
   if (
     b.partialChannels !== undefined &&
@@ -128,8 +121,11 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   let channelCount: number | undefined;
   if (Array.isArray(b.channels)) {
     const channels = b.channels.filter(
-      (c): c is { channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean } =>
-        isObj(c) && typeof c.channelId === "string" && typeof c.name === "string",
+      (c): c is DirectoryChannel =>
+        isObj(c) &&
+        typeof c.channelId === "string" &&
+        typeof c.name === "string" &&
+        (c.kind === undefined || c.kind === "channel" || c.kind === "group"),
     );
     const channelMembers = Array.isArray(b.channelMembers)
       ? b.channelMembers.filter(
@@ -157,26 +153,10 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     if (b.partialChannels && !applied) return sendJson(res, 409, { error: "stale_directory_observation" });
     channelCount = channels.length;
   }
-  let groupMemberCount: number | undefined;
-  if (Array.isArray(b.groupMembers)) {
-    const groupMembers = b.groupMembers.filter(
-      (m): m is { groupId: string; principalId: string } =>
-        isObj(m) && typeof m.groupId === "string" && typeof m.principalId === "string",
-    );
-    const groupIds = Array.isArray(b.groupIds)
-      ? b.groupIds.filter((groupId): groupId is string => typeof groupId === "string")
-      : undefined;
-    const groupRosterIds = Array.isArray(b.groupRosterIds)
-      ? b.groupRosterIds.filter((groupId): groupId is string => typeof groupId === "string")
-      : undefined;
-    await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt), groupIds, groupRosterIds);
-    groupMemberCount = groupMembers.length;
-  }
   return sendJson(res, 200, {
     ok: true,
     ...(memberCount !== undefined ? { members: memberCount } : {}),
     ...(channelCount !== undefined ? { channels: channelCount } : {}),
-    ...(groupMemberCount !== undefined ? { groupMembers: groupMemberCount } : {}),
   });
 }
 

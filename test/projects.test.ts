@@ -36,6 +36,7 @@ import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-dat
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const asMember = { actorId: "member" };
 const asOwner = { actorId: "owner" };
@@ -281,14 +282,14 @@ test("managed groups override Slack membership and historical sessions grant no 
   const deps = {
     managedGroups: projects,
     directory: {
-      channelMember: async (_channelId: string, principalId: string) => principalId === "owner",
-      groupMember: async (_groupId: string, principalId: string) => principalId === "outsider",
+      channelMember: async (channelId: string, principalId: string) =>
+        principalId === (channelId === "slack-group" ? "outsider" : "owner"),
       channelPrivacy: async (channelId: string) => channelId !== "public-channel",
       list: async () => [{ principalId: "owner" }, { principalId: "outsider" }],
-      channelMembership: async (channelId: string, principalId: string) =>
-        channelId === "private-channel" ? principalId === "owner" : undefined,
-      groupMembership: async (groupId: string, principalId: string) =>
-        groupId === "slack-group" ? principalId === "outsider" : undefined,
+      channelMembership: async (channelId: string, principalId: string) => {
+        if (channelId === "slack-group") return principalId === "outsider";
+        return channelId === "private-channel" ? principalId === "owner" : undefined;
+      },
     },
   };
   const canRead = createCanReadScope(deps);
@@ -327,15 +328,16 @@ test("capability scope checks follow current shared rosters", async () => {
     [
       { channelId: "C-public", name: "public" },
       { channelId: "C-private", name: "private", isPrivate: true },
+      { channelId: "G1", name: "", kind: "group" },
     ],
     [
       { channelId: "C-public", principalId: "member" },
       { channelId: "C-private", principalId: "member" },
       { channelId: "C-private", principalId: "B1" },
+      { channelId: "G1", principalId: "member" },
     ],
     1,
   );
-  await built.directory.replaceGroups([{ groupId: "G1", principalId: "member" }], 1);
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), true);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "B1", scopeId: "channel:C-private" }), true);
@@ -350,7 +352,6 @@ test("capability scope checks follow current shared rosters", async () => {
     [],
     2,
   );
-  await built.directory.replaceGroups([], 2);
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), false);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), false);
@@ -367,7 +368,7 @@ test("capability scope checks honor a linked identity's room membership", async 
     [{ channelId: "C-private", principalId: "slack-person@example.com" }],
     1,
   );
-  await built.directory.replaceGroups([{ groupId: "G1", principalId: "slack-person@example.com" }], 1);
+  await recordGroupRoster(built.directory, "slack", "G1", ["slack-person@example.com"]);
   const check = (actorId: string, scopeId: string) => built.app.authorizesCapabilityScope({ actorId, scopeId });
 
   assert.equal(await check("web-person", "channel:C-private"), false);
