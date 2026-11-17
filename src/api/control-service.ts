@@ -34,6 +34,7 @@ import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
+import { PERSON_REQUIRED } from "./http.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -790,6 +791,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
+      if (req.type === "deploy" && !personAtKeyboard(capability))
+        return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
