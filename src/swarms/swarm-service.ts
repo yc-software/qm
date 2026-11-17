@@ -93,6 +93,7 @@ export interface SwarmService {
     computer: Pick<SandboxResource, "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
+  botComputerRule(swarmIds: readonly string[]): Promise<Pick<SwarmService, "botMayUseComputer">>;
   authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(
@@ -257,6 +258,16 @@ export function createSwarmService(deps: {
       if (error instanceof SandboxAccessError) return null;
       throw error;
     });
+  const botComputerRule = async (swarmIds: readonly string[]): Promise<Pick<SwarmService, "botMayUseComputer">> => {
+    const loaded = new Map((await store.getMany(swarmIds)).map((swarm) => [swarm.id, swarm]));
+    return {
+      async botMayUseComputer(computer, turn) {
+        if (!computer.swarmId) return false;
+        const swarm = loaded.get(computer.swarmId) ?? (await store.get(computer.swarmId));
+        return !!swarm && botMayDirect(swarm, turn.actorId);
+      },
+    };
+  };
   const cutOffBot = async (before: Swarm, swarm: Swarm, reason: string): Promise<void> => {
     if (!botLostSwarm(swarm)) return;
     const computers = new Set(swarm.members.flatMap((member) => (member.sandboxId ? [member.sandboxId] : [])));
@@ -924,10 +935,8 @@ export function createSwarmService(deps: {
       }
     },
     authorizes: (claims) => deps.authorize(claims),
-    async botMayUseComputer(computer, turn) {
-      const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
-      return !!swarm && botMayDirect(swarm, turn.actorId);
-    },
+    botComputerRule,
+    botMayUseComputer: async (computer, turn) => (await botComputerRule([])).botMayUseComputer(computer, turn),
     notePersonUse,
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
