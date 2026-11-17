@@ -147,10 +147,10 @@ for (const action of ["Archive session", "Share conversation"]) {
         document.querySelector<HTMLButtonElement>(".session-share-dialog .project-dialog-actions button")!.click();
       }
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const expected = action === "Archive session" ? "POST /api/sessions/a" : "POST /api/shares/session/a";
+      const expected = action === "Archive session" ? "POST /api/sessions/a" : "POST /api/sessions/a/share";
       assert.ok(requests.includes(expected), JSON.stringify(requests));
       assert.ok(!requests.includes("POST /api/sessions/b"));
-      assert.ok(!requests.includes("POST /api/shares/session/b"));
+      assert.ok(!requests.includes("POST /api/sessions/b/share"));
       if (action === "Archive session") assert.ok(!group.isConnected);
     });
   });

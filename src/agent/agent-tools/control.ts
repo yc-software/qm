@@ -420,8 +420,7 @@ export function controlPlaneTools(kit: ToolKit) {
           id,
           ...(params.toScope ? splitToScope(params.toScope) : {}),
           ...(params.email !== undefined ? { email: params.email } : {}),
-          ...(params.permission === "none" ? { remove: true } : {}),
-          ...(params.permission === "read" || params.permission === "write" ? { permission: params.permission } : {}),
+          ...(params.permission !== undefined ? { permission: params.permission } : {}),
           ...(params.notify !== undefined ? { notify: params.notify } : {}),
         });
         if (isUnavailable(r)) return unavailable(callId, tool);

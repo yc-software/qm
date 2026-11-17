@@ -22,7 +22,7 @@ import {
   type SkillStatusFilter,
 } from "./skill-registry";
 import { listBackLink, listPageTpl } from "./list-page";
-import { openShare } from "./share-dialog";
+import { shareButton } from "./share-dialog";
 import { scopeTitle } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
@@ -274,13 +274,7 @@ function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
         ${archived ? html`<span class="badge">Archived</span>` : nothing}
         ${
           s.id && s.scopeId && !archived && s.scopeId === `personal:${appState.me?.user}`
-            ? html`<button
-                class="btn"
-                type="button"
-                @click=${() => void openShare({ type: "skill", id: s.id!, title: `/${s.name}`, owner: s.scopeId! })}
-              >
-                Share
-              </button>`
+            ? shareButton({ type: "skill", id: s.id, title: `/${s.name}`, owner: s.scopeId })
             : nothing
         }
       </div>

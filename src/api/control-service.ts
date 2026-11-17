@@ -834,6 +834,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (req.type === "deploy" && !personAtKeyboard(capability))
         return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
+      const remove = req.permission === "none";
       const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
       if (!home)
@@ -875,10 +876,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const toKind = parseScopeId(toScope).kind;
 
       const isOrg = toKind === "org";
-      const orgSkillCede = isOrg && req.type === "skill" && !req.remove;
+      const orgSkillCede = isOrg && req.type === "skill" && !remove;
 
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
-      if (!req.remove && permission === "write" && !shareOffers(req.type, home).manage)
+      if (!remove && permission === "write" && !shareOffers(req.type, home).manage)
         return {
           ok: false,
           code: "bad_request",
@@ -896,7 +897,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (
-        !req.remove &&
+        !remove &&
         (toKind === "channel" || toKind === "group" || toKind === "team") &&
         !(await app.belongsToScope(capability.actorId, toScope))
       ) {
@@ -958,9 +959,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           return { ok: true, verb: "move", ...shared };
         }
 
-        const verb = req.remove ? "unshare" : "share";
+        const verb = remove ? "unshare" : "share";
         const invite =
-          req.type === "deploy" && req.email !== undefined && permission === "read" && !req.remove
+          req.type === "deploy" && req.email !== undefined && permission === "read" && !remove
             ? await app.inviteToApp(
                 home.id,
                 req.email,
@@ -969,7 +970,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
               )
             : undefined;
         if (invite) return { ok: true, verb, ...shared, invitation: invite.invitation };
-        if (req.remove) await app.revokeGrant(tenant, home.ownerScopeId, home.grantRef, toScope, capability.actorId);
+        if (remove) await app.revokeGrant(tenant, home.ownerScopeId, home.grantRef, toScope, capability.actorId);
         else
           await app.grant(
             tenant,
@@ -987,8 +988,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
-        if (e instanceof DeployAccessError && e.code === "external_sharing_disabled")
-          return { ok: false, code: e.code, message: errMessage(e) };
+        if (e instanceof DeployAccessError) return { ok: false, code: e.code, message: errMessage(e) };
         return { ok: false, code: "share_failed", message: errMessage(e) };
       }
     },

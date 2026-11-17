@@ -1,4 +1,4 @@
-import { openShare } from "./share-dialog";
+import { openSessionShare } from "./session-share";
 import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
@@ -1022,7 +1022,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
                 type="button"
                 ${tip("Share conversation")}
                 aria-label=${`Share ${sessionTitle(s)}`}
-                @click=${() => void openShare({ type: "session", id: s.id })}
+                @click=${() => void openSessionShare(s.id)}
               >
                 ${icon(Link, 13.5)}
               </button>
@@ -1255,7 +1255,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
                 aria-label=${`Share ${sessionTitle(s)}`}
                 @click=${(e: Event) => {
                   e.stopPropagation();
-                  void openShare({ type: "session", id: s.id });
+                  void openSessionShare(s.id);
                 }}
               >
                 ${icon(Link, 13.5)}

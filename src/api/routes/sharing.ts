@@ -3,22 +3,10 @@ import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/depl
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, livePersonTurn } from "./shared.ts";
-import { parseScopeId, scopeId } from "../../types.ts";
+import { scopeId } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { isArtifactType, personAtKeyboard, type ArtifactType, type ShareAccess } from "../artifact-share.ts";
-import { createShare } from "./session-sharing.ts";
+import { isArtifactType, personAtKeyboard, type ArtifactType } from "../artifact-share.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
-
-export const SHARE_ERROR_STATUS: Record<string, number> = {
-  bad_request: 400,
-  not_found: 404,
-  forbidden: 403,
-  human_consent_required: 403,
-  external_sharing_disabled: 403,
-  recipient_not_found: 404,
-  ambiguous_recipient: 409,
-  share_failed: 400,
-};
 
 const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   not_found: 404,
@@ -27,6 +15,14 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   public_links_unavailable: 409,
   unknown_connector: 400,
   human_consent_required: 403,
+};
+
+export const SHARE_ERROR_STATUS: Record<string, number> = {
+  ...DEPLOY_ACCESS_STATUS,
+  bad_request: 400,
+  recipient_not_found: 404,
+  ambiguous_recipient: 409,
+  share_failed: 400,
 };
 
 export function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
@@ -43,20 +39,19 @@ function claimsOf(ctx: ApiCtx): CapabilityClaims | null {
     : null;
 }
 
-function reachOf(grantees: readonly ShareAccess[]): string {
-  const org = grantees.find((g) => parseScopeId(g.scope).kind === "org");
-  if (org) return `everyone in ${parseScopeId(org.scope).ref}`;
-  if (grantees.length) return `${grantees.length} grantee${grantees.length === 1 ? "" : "s"}`;
-  return "owner-only";
-}
-
 async function shareView(ctx: ApiCtx, type: ArtifactType, id: string, claims: CapabilityClaims) {
   const r = await ctx.deps.control.shareAccess(type, id, claims, tenantOf(ctx));
   if (!r.ok) return r;
-  const view = { ok: true as const, owner: r.owner, offers: r.offers, grantees: r.access, reach: reachOf(r.access) };
+  const view = { ok: true as const, owner: r.owner, offers: r.offers, grantees: r.access };
   if (type !== "deploy") return view;
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, r.owner);
   return { ...view, public: (await ctx.app.getApp(r.id))?.public === true && externalSharing, externalSharing };
+}
+
+function sendView(ctx: ApiCtx, view: Awaited<ReturnType<typeof shareView>>, extra: object = {}): void {
+  if (!view.ok)
+    return sendJson(ctx.res, SHARE_ERROR_STATUS[view.code] ?? 400, { error: view.code, message: view.message });
+  return sendJson(ctx.res, 200, { ...view, ...extra });
 }
 
 export async function readShares(ctx: ApiCtx): Promise<void> {
@@ -64,14 +59,11 @@ export async function readShares(ctx: ApiCtx): Promise<void> {
   const claims = claimsOf(ctx);
   if (!claims) return sendJson(res, 403, { error: "forbidden" });
   if (!isArtifactType(params.type!)) return sendJson(res, 404, { error: "not_found" });
-  const view = await shareView(ctx, params.type, params.id!, claims);
-  if (!view.ok) return sendJson(res, SHARE_ERROR_STATUS[view.code] ?? 400, { error: view.code, message: view.message });
-  return sendJson(res, 200, view);
+  return sendView(ctx, await shareView(ctx, params.type, params.id!, claims));
 }
 
 export async function changeShares(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
-  if (params.type === "session") return createShare(ctx);
   const claims = claimsOf(ctx);
   if (!claims)
     return sendJson(res, 403, {
@@ -103,8 +95,7 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
     } catch (e) {
       return sendShareFailure(res, e);
     }
-    const view = await shareView(ctx, type, params.id!, claims);
-    return sendJson(res, 200, view.ok ? view : { ok: true });
+    return sendView(ctx, await shareView(ctx, type, params.id!, claims));
   }
   for (const field of ["scope", "recipient", "email"] as const)
     if (b[field] !== undefined && typeof b[field] !== "string")
@@ -119,8 +110,7 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
       ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
       ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
       ...(typeof b.email === "string" ? { email: b.email } : {}),
-      permission: access === "manage" ? "write" : "read",
-      ...(access === "none" ? { remove: true } : {}),
+      permission: ({ view: "read", manage: "write", none: "none" } as const)[access],
       ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },
     claims,
@@ -131,9 +121,7 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
       message: r.message,
       ...(r.candidates ? { candidates: r.candidates.map((c) => ({ principalId: c.id, displayName: c.label })) } : {}),
     });
-  const view = await shareView(ctx, type, r.id, claims);
-  return sendJson(res, 200, {
-    ...(view.ok ? view : { ok: true }),
+  return sendView(ctx, await shareView(ctx, type, r.id, claims), {
     target: r.target,
     access,
     ...(r.invitation ? { invitation: r.invitation } : {}),
