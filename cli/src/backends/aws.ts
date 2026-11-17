@@ -1286,11 +1286,11 @@ async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): 
     if (failures.some((reason) => reason !== "MISSING")) {
       throw new CliError(`AWS ${kind} task ${taskArn} failed (${failures.join(", ")})`);
     }
-    if (task?.lastStatus === "STOPPED") {
-      const core = task.containers?.find((container) => container.name === "core");
+    const core = task?.containers?.find((container) => container.name === "core");
+    if (task?.lastStatus === "STOPPED" || core?.exitCode !== undefined) {
       if (core?.exitCode === 0) return;
       throw new CliError(
-        `AWS ${kind} task ${taskArn} exited ${core?.exitCode ?? "without a code"}: ${[core?.reason, task.stoppedReason].filter(Boolean).join("; ") || "unknown reason"}`,
+        `AWS ${kind} task ${taskArn} exited ${core?.exitCode ?? "without a code"}: ${[core?.reason, task?.stoppedReason].filter(Boolean).join("; ") || "unknown reason"}`,
       );
     }
     if (Date.now() > deadline) {
