@@ -5,14 +5,7 @@ import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClie
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
-import {
-  createMcpClient,
-  McpCallError,
-  mcpResultText,
-  type McpAuth,
-  type McpClient,
-  type McpListing,
-} from "./mcp-client.ts";
+import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestsInAudience, attestedPerson, OutsideAudience, type AttestingTurn } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
@@ -105,11 +98,15 @@ export interface McpToolService {
 class SignInRequired extends Error {}
 
 type RemoteTool = NonNullable<McpServer["tools"]>[number];
-type ListFailure = "refused" | "silent";
-const UNANSWERED_STATUSES = new Set([408, 504]);
+type SharedListing = { listing: Promise<McpListing>; listed?: McpListing; failed?: true };
 
-function answered(error: unknown): boolean {
-  return error instanceof McpCallError && error.status !== undefined && !UNANSWERED_STATUSES.has(error.status);
+function shared(server: McpServer): boolean {
+  return !server.catalog && server.auth === "none" && !server.attestActor;
+}
+
+function unique(tools: McpToolDescriptor[]): McpToolDescriptor[] {
+  const seen = new Set<string>();
+  return tools.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
 }
 
 function catalogDescriptor(server: McpServer): McpToolDescriptor {
@@ -215,7 +212,7 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
-  const sharedListings = new LRUCache<string, { listing: Promise<McpListing>; refused?: true }>({
+  const sharedListings = new LRUCache<string, SharedListing>({
     ttl: refreshIntervalMs,
     ttlAutopurge: true,
     ttlResolution: 0,
@@ -230,7 +227,6 @@ export function createMcpToolService(opts: {
     loadedAt?: number;
     version?: string;
     pending?: Promise<void>;
-    listFailed?: ListFailure;
   }>(() => ({
     clients: new Map(),
     snapshot: [],
@@ -343,9 +339,9 @@ export function createMcpToolService(opts: {
     return resultText(result);
   }
 
-  function refresh(fresh = false, retryRefused = false): Promise<void> {
+  function refresh(fresh = false): Promise<void> {
     const state = tenantState();
-    const run = load(state, fresh, retryRefused).finally(() => {
+    const run = load(state, fresh).finally(() => {
       state.loadedAt = now();
       if (state.pending === run) state.pending = undefined;
     });
@@ -353,26 +349,36 @@ export function createMcpToolService(opts: {
     return run;
   }
 
-  function listServer(server: McpServer, fresh: boolean, retryRefused: boolean): Promise<McpListing> {
-    if (server.auth !== "none" || server.attestActor)
-      return clientFor(server).listTools({ headers: headersFor(server, undefined) });
-    const cached = fresh ? undefined : sharedListings.get(server.url);
-    if (cached && !(retryRefused && cached.refused)) return cached.listing;
-    const entry: { listing: Promise<McpListing>; refused?: true } = { listing: clientFor(server).listTools({}) };
+  function listShared(server: McpServer): SharedListing {
+    const entry: SharedListing = { listing: clientFor(server).listTools({}) };
+    entry.listing.then(
+      (listed) => (entry.listed = listed),
+      () => (entry.failed = true),
+    );
     sharedListings.set(server.url, entry);
-    entry.listing.catch(() => {
-      entry.refused = true;
-    });
-    return entry.listing;
+    return entry;
+  }
+
+  function listServer(server: McpServer, fresh: boolean): Promise<McpListing> {
+    if (!shared(server)) return clientFor(server).listTools({ headers: headersFor(server, undefined) });
+    return ((!fresh && sharedListings.get(server.url)) || listShared(server)).listing;
+  }
+
+  async function adoptShared(state: ReturnType<typeof tenantState>): Promise<void> {
+    for (const server of state.servers.values()) {
+      if (!shared(server) || state.snapshot.some((t) => t.serverId === server.id)) continue;
+      const entry = sharedListings.get(server.url);
+      if (entry?.listed) state.snapshot = unique([...state.snapshot, ...(await serverTools(server, [], false))]);
+      else if (!entry || entry.failed) listShared(server);
+    }
   }
 
   async function serverTools(
     server: McpServer,
     previous: McpToolDescriptor[],
     fresh: boolean,
-    retryRefused: boolean,
-  ): Promise<{ tools: McpToolDescriptor[]; failed?: ListFailure }> {
-    if (server.catalog) return { tools: [catalogDescriptor(server)] };
+  ): Promise<McpToolDescriptor[]> {
+    if (server.catalog) return [catalogDescriptor(server)];
     const next: McpToolDescriptor[] = [];
     try {
       let tools: NonNullable<McpServer["tools"]>;
@@ -390,13 +396,9 @@ export function createMcpToolService(opts: {
           needsApproval: false,
         });
         tools = server.tools ?? [];
-        if (!tools.length) return { tools: next };
+        if (!tools.length) return next;
       } else {
-        const listing = await listServer(
-          server,
-          fresh,
-          retryRefused && !previous.some((t) => t.serverId === server.id),
-        );
+        const listing = await listServer(server, fresh);
         tools = listing.tools;
         about = listing.about ?? about;
       }
@@ -417,23 +419,20 @@ export function createMcpToolService(opts: {
     } catch (e) {
       record("list", server.id, `error: ${errMessage(e)}`);
       const kept = previous.filter((t) => t.serverId === server.id);
-      return kept.length ? { tools: kept } : { tools: next, failed: answered(e) ? "refused" : "silent" };
+      if (kept.length) return kept;
     }
-    return { tools: next };
+    return next;
   }
 
-  async function load(state: ReturnType<typeof tenantState>, fresh: boolean, retryRefused: boolean): Promise<void> {
+  async function load(state: ReturnType<typeof tenantState>, fresh: boolean): Promise<void> {
     state.catalogs.clear();
     const version = await opts.servers.version();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
     const previous = state.snapshot;
-    const listed = await Promise.all(servers.map((s) => serverTools(s, previous, fresh, retryRefused)));
-    const next = listed.flatMap((l) => l.tools);
-    state.listFailed = listed.some((l) => l.failed === "silent") ? "silent" : listed.find((l) => l.failed)?.failed;
-    const seen = new Set<string>();
-    state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+    const next = await Promise.all(servers.map((s) => serverTools(s, previous, fresh)));
+    state.snapshot = unique(next.flat());
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
     state.servers = new Map(servers.map((s) => [s.id, s]));
     state.version = version;
@@ -466,10 +465,9 @@ export function createMcpToolService(opts: {
     const state = await loaded();
     if (closed) return state;
     const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
-    const changed = version !== state.version;
-    if (!changed && !state.listFailed) return state;
-    const run = (state.pending ?? refresh(changed, true)).catch(reportFailureAs("mcp: refresh tools", undefined));
-    if (changed || state.listFailed === "refused") await run;
+    if (version !== state.version)
+      await (state.pending ?? refresh(true)).catch(reportFailureAs("mcp: refresh tools", undefined));
+    else await adoptShared(state);
     return state;
   }
 
