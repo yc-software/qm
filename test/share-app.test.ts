@@ -73,7 +73,7 @@ function apiHarness(directory?: Dir) {
 }
 
 const cap = (actorId: string, orgId = "acme"): CapabilityClaims =>
-  ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999 }) as CapabilityClaims;
+  ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999, liveActor: true }) as CapabilityClaims;
 
 const one = (principalId: string, displayName: string): RecipientResolution => ({
   kind: "one",

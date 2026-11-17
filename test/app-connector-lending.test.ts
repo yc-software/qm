@@ -25,6 +25,7 @@ import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-dat
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { createControlService } from "../src/api/control-service.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -179,6 +180,19 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.ok(trail.some((l) => /^deploy_connectors \S+ gmail\.googleapis\.com,slack\.com$/.test(l)));
   assert.ok(trail.some((l) => /^deploy_connectors \S+ \(none\)$/.test(l)));
 
+  const unshared = await h.app.appGrantees(h.d.id);
+  const viaTool = await createControlService(h.app).shareArtifact(
+    { type: "deploy", id: h.d.id, scope: "org" },
+    {
+      ...liveRunClaims(PUBLISHER),
+      actorId: PUBLISHER,
+      scopeId: personalScope(PUBLISHER),
+      botActor: true,
+      exp: Date.now() + 60_000,
+    },
+  );
+  assert.equal(viaTool.ok || viaTool.code, "human_consent_required");
+  assert.deepEqual(await h.app.appGrantees(h.d.id), unshared);
   for (const [path, body, claims] of [
     [`/v1/apps/${h.d.id}/share`, { scope: "org" }, { triggered: true }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
