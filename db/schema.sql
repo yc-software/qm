@@ -1333,6 +1333,13 @@ CREATE FUNCTION public.memory_facts_text_hash() RETURNS trigger
         RETURN NEW;
       END $$;
 
+CREATE FUNCTION public.pending_delivery_heads(text[]) RETURNS TABLE(tenant_id uuid, id text)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$ SELECT DISTINCT tenant_id, jsonb_build_array(destination->>'type', destination->>'target')::text
+             FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = ANY($1) AND tenant_id IN (SELECT qm_serving_tenants()) $_$;
+
 CREATE FUNCTION public.qm_boot_tenant() RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'pg_catalog', 'public'
@@ -3695,6 +3702,8 @@ CREATE INDEX idx_cron_fires_cron_fired_at ON public.cron_fires USING btree (cron
 CREATE INDEX idx_cron_fires_thread_ref ON public.cron_fires USING btree (thread_ref);
 
 CREATE INDEX idx_deliveries_pending ON public.deliveries USING btree (((destination ->> 'type'::text)), created_at) WHERE (delivered_at IS NULL);
+
+CREATE INDEX idx_deliveries_pending_heads ON public.deliveries USING btree (tenant_id, ((destination ->> 'type'::text)), ((destination ->> 'target'::text)), created_at, id) WHERE ((delivered_at IS NULL) AND (expired_at IS NULL) AND (NOT shadow));
 
 CREATE INDEX idx_deliveries_pending_live ON public.deliveries USING btree (((destination ->> 'type'::text)), created_at) WHERE ((delivered_at IS NULL) AND (expired_at IS NULL));
 
