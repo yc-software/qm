@@ -41,7 +41,7 @@ export function createDirectorySync(deps: {
   q: PgPool["q"];
   pool: PgPool["pool"];
   orgId: string;
-}): Pick<DirectoryStore, "replace" | "replaceChannels" | "setWorkspaceUrl" | "replaceGroups" | "upsertGroup"> {
+}): Pick<DirectoryStore, "replace" | "replaceChannels" | "setWorkspace" | "replaceGroups" | "upsertGroup"> {
   const { q, pool, orgId } = deps;
 
   async function swapIfChanged(
@@ -229,11 +229,12 @@ export function createDirectorySync(deps: {
       );
     },
 
-    async setWorkspaceUrl(url) {
+    async setWorkspace(meta) {
       await q(
-        `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
-        [orgId, url, Date.now()],
+        `INSERT INTO directory_meta (org_id, workspace_url, app_icon_url, updated_at) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url,
+           app_icon_url = COALESCE(EXCLUDED.app_icon_url, directory_meta.app_icon_url), updated_at = EXCLUDED.updated_at`,
+        [orgId, meta.workspaceUrl, meta.appIconUrl, Date.now()],
       );
     },
 

@@ -299,6 +299,7 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       conversations: { info: async () => ({ channel: undefined }) },
       async *paginate(method: string, args: Record<string, unknown>) {
         if (method === "users.list") {
@@ -347,6 +348,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         listedMethods.push(method);
         if (method === "users.list") {
@@ -389,6 +391,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         if (method === "users.list") {
           yield {
@@ -443,6 +446,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         if (method === "users.list") {
           yield {
@@ -493,6 +497,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         if (method === "users.list") {
           yield { members: [{ id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } }] };
