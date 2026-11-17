@@ -5872,11 +5872,14 @@ a.connector-widget:focus-visible {
 }
 
 .cron-run-detail {
+  display: -webkit-box;
   min-width: 0;
   flex: 1 1 100%;
   order: 1;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: var(--muted-foreground);
 }
 
