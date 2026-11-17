@@ -836,8 +836,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const orgSkillCede = isOrg && req.type === "skill";
 
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
-      const copyTo = cron && toKind === "personal" && !req.move ? parseScopeId(toScope).ref : undefined;
-      if (cron && permission === "write" && !copyTo && cron.ownerScopeId.startsWith("personal:"))
+      const copyTo =
+        cron && toKind === "personal" && permission === "read" && !req.move ? parseScopeId(toScope).ref : undefined;
+      if (cron && permission === "write" && cron.ownerScopeId.startsWith("personal:"))
         return {
           ok: false,
           code: "bad_request",
