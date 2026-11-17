@@ -20,19 +20,8 @@ const RUN_ALL = {
 };
 const RUNNERS = ["test/support/boot-tenant-entry.ts", "test/support/test-tenant.ts"];
 const WEB_UI = ["plugins/web-ui/"];
-const CORE_IMAGE = [
-  "src/",
-  "plugins/",
-  "skills-seed/",
-  "cli/src/",
-  "cli/templates/",
-  "deploy/core/",
-  "deploy/connector-sdk/",
-  "docs/images/",
-  "desktop/assets/",
-  "scripts/smoke-core-image.sh",
-  ".dockerignore",
-];
+const IMAGE = "deploy/core/Dockerfile";
+const IMAGE_CHECKS = ["deploy/core", "scripts/smoke-core-image.sh", ".dockerignore"];
 const CLI = ["cli/", "deploy/stacks/"];
 const ROOT_PACKAGE = ["src/", "test/", "scripts/"];
 const MODULES = [".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs"];
@@ -42,6 +31,12 @@ type Selection = { core: string[] | "all"; webUi: boolean; cli: boolean; coreIma
 const ALL: Selection = { core: "all", webUi: true, cli: true, coreImage: true };
 
 const under = (path: string, prefixes: string[]) => prefixes.some((prefix) => path.startsWith(prefix));
+const copied = (dockerfile: string) =>
+  dockerfile
+    .split("\n")
+    .filter((line) => line.startsWith("COPY "))
+    .flatMap((line) => line.split(" ").slice(1, -1))
+    .filter((source) => !source.startsWith("--"));
 const runsAll = (path: string) => RUN_ALL.exact.includes(path) || under(path, RUN_ALL.prefixes);
 const isModule = (path: string) => MODULES.includes(posix.extname(path));
 const isCoreTest = (path: string) => posix.dirname(path) === "test" && path.endsWith(".test.ts");
@@ -96,6 +91,7 @@ export function select(changed: string[], tracked: string[], read: (path: string
   if (changed.some(runsAll)) return ALL;
   if (changed.some((path) => path.startsWith("src/") && !isModule(path))) return ALL;
   const files = new Set(tracked);
+  const image = [...IMAGE_CHECKS, ...(files.has(IMAGE) ? copied(read(IMAGE)) : [])];
   const dirs = new Set(tracked.flatMap((path) => [...path.matchAll(/\//g)].map((slash) => path.slice(0, slash.index))));
   const importers = new Map<string, string[]>();
   const reached = new Set(changed);
@@ -112,7 +108,7 @@ export function select(changed: string[], tracked: string[], read: (path: string
     core: paths.filter((path) => isCoreTest(path) && files.has(path)).sort(),
     webUi: paths.some((path) => under(path, WEB_UI)),
     cli: paths.some((path) => under(path, CLI)),
-    coreImage: changed.some((path) => under(path, CORE_IMAGE)),
+    coreImage: changed.some((path) => image.some((source) => path === source || path.startsWith(`${source}/`))),
   };
 }
 

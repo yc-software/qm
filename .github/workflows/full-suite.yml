@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: read
@@ -16,16 +17,3 @@ jobs:
     uses: ./.github/workflows/cicd.yml
     with:
       full: true
-
-  report:
-    name: Report
-    needs: ci
-    if: always() && needs.ci.result != 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions: {}
-    steps:
-      - name: Hold automatic releases
-        run: |
-          echo "The full suite failed on main $GITHUB_SHA. Automatic qm-yc releases hold until a later full suite run on main passes." >>"$GITHUB_STEP_SUMMARY"
-          exit 1

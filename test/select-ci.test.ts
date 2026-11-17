@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { plan, select } from "../scripts/select-ci.ts";
 
@@ -25,6 +24,7 @@ const tree: Record<string, string> = {
   "plugins/web-ui/src/view.ts": 'import { b } from "../../../src/b.ts";\n',
   "cli/src/cli.ts": 'execFileSync("node", ["src/migrate-main.ts"]);\n',
   "docs/guide.md": "Guide\n",
+  "deploy/core/Dockerfile": "COPY --from=build /out ./out\nCOPY src ./src\nCOPY plugins/web-ui/src ./web\n",
 };
 const run = (...changed: string[]) => select(changed, Object.keys(tree), (path) => tree[path]!);
 
@@ -62,16 +62,9 @@ test("dependencies, CI, runners and runtime files under src run everything", () 
 test("files no suite can reach select nothing, and suites run on their own paths", () => {
   assert.deepEqual(run("docs/guide.md"), { core: [], webUi: false, cli: false, coreImage: false });
   assert.deepEqual(run("plugins/web-ui/src/view.ts"), { core: [], webUi: true, cli: false, coreImage: true });
-  assert.deepEqual(run("cli/src/cli.ts"), { core: [], webUi: false, cli: true, coreImage: true });
+  assert.deepEqual(run("cli/src/cli.ts"), { core: [], webUi: false, cli: true, coreImage: false });
+  assert.deepEqual(run("deploy/core/Dockerfile"), { core: [], webUi: false, cli: false, coreImage: true });
   assert.deepEqual(run(), { core: [], webUi: false, cli: false, coreImage: false });
-});
-
-test("every file the core image copies in rebuilds and boots the image", () => {
-  const dockerfile = readFileSync(new URL("../deploy/core/Dockerfile", import.meta.url), "utf8");
-  const sources = [...dockerfile.matchAll(/^COPY (?!--from)(.+) \S+$/gm)].flatMap((copy) => copy[1]!.split(" "));
-  assert.ok(sources.includes("src"));
-  for (const source of [...sources, "deploy/core/Dockerfile", ".dockerignore", "scripts/smoke-core-image.sh"])
-    assert.equal(run(`${source}/file.ts`).coreImage || run(source).coreImage, true, source);
 });
 
 test("shards scale with the selected test time", () => {
