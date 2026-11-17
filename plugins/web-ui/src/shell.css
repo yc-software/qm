@@ -5502,6 +5502,13 @@ a.connector-widget:focus-visible {
   align-items: center;
   gap: 7px;
 }
+.resource-heading > .actions {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+.resource-heading > h2 {
+  min-width: 0;
+}
 .copyrow {
   display: flex;
   align-items: center;
@@ -5828,6 +5835,7 @@ a.connector-widget:focus-visible {
 
 .cron-run-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
 }
 
@@ -5845,8 +5853,9 @@ a.connector-widget:focus-visible {
 
 .cron-run-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;
   padding: 6px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   font-size: 12px;
@@ -5864,7 +5873,7 @@ a.connector-widget:focus-visible {
 
 .cron-run-detail {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--muted-foreground);
