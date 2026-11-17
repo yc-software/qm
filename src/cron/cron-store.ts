@@ -32,6 +32,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   loopId?: string;
   sessionRef?: string;
   script?: CronScript;
+  sharedFrom?: string;
 }
 
 export interface CronPatch {
@@ -47,6 +48,7 @@ export interface CronPatch {
   taskAuthor?: "automation" | null;
   sessionRef?: string | null;
   script?: CronScript | null;
+  forkedAt?: number;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -61,6 +63,7 @@ export interface CronStore {
   list(ids?: readonly string[]): Promise<Cron[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
+  copiesOf(id: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
@@ -132,6 +135,7 @@ export function createCronStore(
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
         ...(input.script ? [contentPart(input.script)] : []),
+        ...(input.sharedFrom ? [contentPart(input.sharedFrom)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -145,6 +149,7 @@ export function createCronStore(
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.script ? { script: input.script } : {}),
+        ...(input.sharedFrom ? { sharedFrom: input.sharedFrom } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -156,6 +161,8 @@ export function createCronStore(
     },
     claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
+    copiesOf: async (id) =>
+      (await backing.select({ where: { field: "sharedFrom", anyOfFold: [id] } })).filter((c) => c.sharedFrom === id),
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
@@ -178,6 +185,7 @@ export function createCronStore(
       if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
       if (patch.script !== undefined) fields.script = patch.script ?? undefined;
+      if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;
       return backing.merge(id, fields);
     },
     delete: (id) => backing.delete(id),

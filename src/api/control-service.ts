@@ -30,6 +30,7 @@ import {
 } from "./artifact-share.ts";
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
+import { withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
@@ -510,7 +511,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
       const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
-      const administered = all.filter((_, i) => admits[i]);
+      const administered = all.filter((_, i) => admits[i]).map((c) => withSharing(c, all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
     },
@@ -518,7 +519,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async getCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (await canAdministerCron(app, cron, capability)) return { ok: true, cron };
+      if (await canAdministerCron(app, cron, capability))
+        return { ok: true, cron: withSharing(cron, await app.listCrons()) };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
       return { ok: false, code: "forbidden", message: "not your cron" };
@@ -834,7 +836,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const orgSkillCede = isOrg && req.type === "skill";
 
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
-      if (cron && permission === "write" && cron.ownerScopeId.startsWith("personal:"))
+      const copyTo = cron && toKind === "personal" && !req.move ? parseScopeId(toScope).ref : undefined;
+      if (cron && permission === "write" && !copyTo && cron.ownerScopeId.startsWith("personal:"))
         return {
           ok: false,
           code: "bad_request",
@@ -869,6 +872,20 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
 
       try {
+        if (copyTo) {
+          if (await app.samePerson(copyTo, capability.actorId))
+            return { ok: false, code: "bad_request", message: "that cron is already yours" };
+          const { copy, existed } = await app.shareCron(home.id, copyTo, capability.actorId);
+          return {
+            ok: true,
+            verb: "share",
+            type: req.type,
+            id: home.id,
+            target: { scope: toScope, label: target.label },
+            permission,
+            copy: { id: copy.id, enabled: copy.enabled, existed },
+          };
+        }
         if (orgSkillCede) {
           const promoted = await app.promoteSkill(
             home.id,
