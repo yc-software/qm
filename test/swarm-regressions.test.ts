@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { testMap } from "./support/test-database.ts";
 
 test("explicit self-recipient remains in shared history without waking itself", async () => {
@@ -42,7 +43,7 @@ test("a swarm turn resumed after a shutdown hand-back keeps its dispatch provena
   await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
   await f.service.sweep();
   const run = (await f.runs.list()).find((item) => item.request.swarm)!;
-  assert.ok(await f.service.binding({ ...run.request, runId: run.id, resumeCause: { kind: "shutdown" } }));
+  assert.ok(await f.service.binding(testTenant, { ...run.request, runId: run.id, resumeCause: { kind: "shutdown" } }));
 });
 test("settings validate shape before creating a swarm", async () => {
   for (const settings of [

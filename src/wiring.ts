@@ -6,7 +6,13 @@ import { nonDeploymentCredential, withDeploymentCredentials } from "./credential
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks, createReplyCheck, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
+import {
+  createDecisionHooks,
+  createPersonaRouter,
+  createReplyCheck,
+  routeTurnRuntime,
+  turnStartState,
+} from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -63,7 +69,9 @@ import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/br
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
+  CLEAR_BOT_SET_DEFAULTS_MIGRATION,
   createSandboxResources,
+  MARK_ADMIN_CREATED_COMPUTERS_MIGRATION,
   type SandboxResource,
   type SandboxDefault,
   type SandboxResources,
@@ -502,6 +510,7 @@ export interface BuiltApp {
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   modelRoutes: ModelRoutes;
+  runtimeFallback: { readonly modelId: string };
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
   modelRegistry: ModelOverlayStore;
@@ -1167,6 +1176,7 @@ export function buildApp(
       client: renderClient,
       base: renderBase,
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
+      ...(render.egressProxyUrl ? { egressProxyUrl: render.egressProxyUrl } : {}),
       store: renderBodies,
       scratchStore: renderScratch,
       cleanupStore: renderCleanup,
@@ -1303,6 +1313,13 @@ export function buildApp(
       "CREATE TABLE IF NOT EXISTS keychain_grants (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
       `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture')`,
       `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/keychain_credentials/0003-delete-kernel-writer-markers",
+    statements: [
+      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active')`,
+      `DELETE FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active'`,
     ],
   });
   const credentialStore: Keychain = createKeychain({
@@ -2020,6 +2037,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
+  pgArtifactMap.pool.registerMigration(CLEAR_BOT_SET_DEFAULTS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
     statements: [
@@ -2034,6 +2052,7 @@ export function buildApp(
       "UPDATE sandbox_resources SET json = json - 'machineId' WHERE json ? 'machineId'",
     ],
   });
+  pgArtifactMap.pool.registerMigration(MARK_ADMIN_CREATED_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/retired-tables/0001-drop",
     statements: [
@@ -2288,7 +2307,9 @@ export function buildApp(
     projects,
     personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
-    ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
+    ...(decisions
+      ? { replyCheck: createReplyCheck(decisions, decide), routePersona: createPersonaRouter(decide) }
+      : {}),
     environments,
     brokeredTools,
     deploymentLayer,
@@ -3189,6 +3210,7 @@ export function buildApp(
   };
   return {
     app,
+    runtimeFallback: fallback,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
       if (boundTenant()) await configStore.hydrate?.();
@@ -3306,7 +3328,6 @@ export function serverDeps(
   slackEnvironmentState: "absent" | "configured" | "partial" = "absent",
   slackEnvBotToken?: string,
 ): Omit<ServerDeps, "control"> {
-  const deploymentModel = configuredModel(config);
   const subscriptionAuth = companySubscriptionAuth(config);
   return {
     externalSlackPolicies: config.externalSlackPolicies,
@@ -3334,7 +3355,7 @@ export function serverDeps(
     replayDedupe: built.replayDedupe,
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
-    ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
+    baseModelDefault: configuredModel(config) ?? built.runtimeFallback.modelId,
     modelProviders: providerKeysPresent(config),
     providerKeys: providerKeysPresent(config),
     modelCredentials: built.modelCredentials,

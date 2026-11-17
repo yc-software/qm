@@ -3,13 +3,17 @@ const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
   turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
-  turn_end: { actions: ["keep", "retry", "prod"], decide: "most_confident" },
+  turn_end: { actions: ["keep", "retry", "prod"], decide: "most_confident", keepOnError: true },
+  persona: { actions: ["keep", "use_persona"], decide: "most_confident", keepOnError: true },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
-} as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
+} as const satisfies Record<
+  string,
+  { actions: readonly string[]; decide: "most_restrictive" | "most_confident"; keepOnError?: true }
+>;
 export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
 type DecisionAction<H extends DecisionHook = DecisionHook> = (typeof DECISION_HOOK_POINTS)[H]["actions"][number];
 const DECISION_HOOKS = Object.keys(DECISION_HOOK_POINTS) as DecisionHook[];
-const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start", "turn_end"];
+const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start", "turn_end", "persona"];
 const rank = (hook: DecisionHook, action: string) =>
   (DECISION_HOOK_POINTS[hook].actions as readonly string[]).indexOf(action);
 
@@ -39,6 +43,7 @@ interface DecisionOption {
   action: DecisionAction;
   message?: string;
   runtime?: RuntimeParams;
+  persona?: string;
 }
 
 export interface DecisionRule {
@@ -57,6 +62,7 @@ export interface DecisionResult {
   action: DecisionAction;
   message?: string;
   runtime?: RuntimeParams;
+  persona?: string;
   probabilities: Record<string, number>;
   mode: DecisionRule["mode"];
   error?: string;
@@ -144,6 +150,10 @@ export function parseDecisionRule(
     const rt = o.runtime as Record<string, unknown> | undefined;
     if ((o.action === "use_runtime") !== (rt !== undefined))
       return { error: `${r.id}.${key}: runtime is required with use_runtime and only allowed there` };
+    if ((o.action === "use_persona") !== (o.persona !== undefined))
+      return { error: `${r.id}.${key}: persona is required with use_persona and only allowed there` };
+    if (o.persona !== undefined && (typeof o.persona !== "string" || !ID.test(o.persona)))
+      return { error: `${r.id}.${key}: persona must be a persona id` };
     if ((o.action === "retry" || o.action === "prod") && !(typeof o.message === "string" && o.message.trim()))
       return { error: `${r.id}.${key}: ${String(o.action)} needs a message telling the agent what to do` };
     if (
@@ -171,14 +181,15 @@ export function parseDecisionRule(
             },
           }
         : {}),
+      ...(o.persona ? { persona: o.persona as string } : {}),
     };
   }
   const count = Object.keys(options).length;
   if (count < 2 || count > MAX_OPTIONS) return { error: `${r.id}: needs 2 to ${MAX_OPTIONS} options` };
   if (typeof r.onError !== "string" || !Object.hasOwn(options, r.onError))
     return { error: `${r.id}: onError must name one of its options` };
-  if (r.hook === "turn_end" && options[r.onError]!.action !== "keep")
-    return { error: `${r.id}: onError must name a keep option; a classifier failure must not change the reply` };
+  if ("keepOnError" in DECISION_HOOK_POINTS[r.hook as DecisionHook] && options[r.onError]!.action !== "keep")
+    return { error: `${r.id}: onError must name a keep option; a classifier failure must not change the turn` };
   const m = (r.model ?? {}) as Record<string, unknown>;
   if (typeof m.provider !== "string" || !providers.some((p) => p.id === m.provider))
     return { error: `${r.id}: model.provider must name a configured decision provider` };
@@ -258,6 +269,7 @@ function settle(rule: DecisionRule, answer: Record<string, number> | Error | und
     action: opt.action,
     ...(opt.message ? { message: opt.message } : {}),
     ...(opt.runtime ? { runtime: opt.runtime } : {}),
+    ...(opt.persona ? { persona: opt.persona } : {}),
     probabilities,
     mode: rule.mode,
     ...(error ? { error } : {}),

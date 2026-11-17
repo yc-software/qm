@@ -173,6 +173,7 @@ test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unl
     proxied.smolmachinesSandbox,
     proxied.porterSandbox,
     proxied.agent37Sandbox,
+    proxied.renderSandbox,
   ])
     assert.equal(provider.egressProxyUrl, "https://egress.test");
   const exempted = loadConfig({

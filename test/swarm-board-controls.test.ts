@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { processRun } from "../src/runs/worker.ts";
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -142,7 +143,8 @@ test("a run claimed before a pause lands is held at the start gate and runs once
   const [worker] = await f.service.spawn(f.caller, { requestId: "one", text: "Work" });
   await f.service.sweep();
   const runId = (await f.store.get(f.root.id))!.messages[0]!.notifications[worker!.id]!.runId!;
-  const handleTurn = async (input: OrchestratorInput) => (await f.service.binding(input), { status: "ok" }) as never;
+  const handleTurn = async (input: OrchestratorInput) =>
+    (await f.service.binding(testTenant, input), { status: "ok" }) as never;
   const run = async (claimed: Parameters<typeof processRun>[1] | null) =>
     processRun({ runs: f.runs, leaseTtlMs: 60_000, orchestrator: { handleTurn } as never }, claimed!);
   const claimed = await f.runs.claimById(runId, "t", 60_000);

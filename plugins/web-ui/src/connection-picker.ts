@@ -19,6 +19,7 @@ export function mountConnectionPicker(
   onSelect: (service: ConnectionService) => void,
   state: { query: string; expanded: boolean } = { query: "", expanded: false },
   only?: ConnectionService,
+  titled = true,
 ): void {
   let query = state.query;
   let expanded = state.expanded;
@@ -32,11 +33,15 @@ export function mountConnectionPicker(
     const shown = expanded || words.length ? matches : matches.slice(0, 6);
     render(
       html`<section class="connection-picker" aria-label=${only ? `Connect ${only.name}` : "Connect your apps"}>
-        <header class="connection-picker-header">
-          <div>
-            <h3>${only ? `Connect ${only.name}` : "Connect your apps"}</h3>
-          </div>
-        </header>
+        ${
+          titled
+            ? html`<header class="connection-picker-header">
+                <div>
+                  <h3>${only ? `Connect ${only.name}` : "Connect your apps"}</h3>
+                </div>
+              </header>`
+            : nothing
+        }
         ${
           only
             ? nothing

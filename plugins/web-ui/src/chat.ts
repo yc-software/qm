@@ -11,7 +11,7 @@ import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
-import { isWelcomeConversation } from "./welcome-session";
+import { welcomeLayout } from "./welcome-session";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -181,8 +181,10 @@ import {
   workingWave,
 } from "./ui";
 import { icon } from "./icons";
+import { animateDetailsToggle } from "./details-motion";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { hasWelcomeScreen } from "./shell-state";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
@@ -526,11 +528,13 @@ export function createChatSurface(
     connectedConnectors.clear();
   }
 
-  function newChat(context?: { scopeId: string; name: string | null }): string {
+  function newChat(
+    context?: { scopeId: string; name: string | null },
+    threadRef = `web:${appState.me?.user ?? "anon"}:${crypto.randomUUID()}`,
+  ): string {
     appState.currentView = "chats";
     renderSidebarTop();
     const user = appState.me?.user ?? "anon";
-    const threadRef = `web:${user}:${crypto.randomUUID()}`;
     const carried = storedDraft(newChatDraftKey(user));
     if (carried) saveDraft(threadRef, carried);
     ctx.composer.resetComposer();
@@ -708,7 +712,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof itemsToMessages>,
   ): boolean {
-    if (ctx.inbox || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
+    if (ctx.inbox || hasWelcomeScreen(appState.me) || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
       !shouldStartProactiveOpener({
         started: proactiveOpenerStarted,
@@ -1503,6 +1507,7 @@ export function createChatSurface(
             .me=${appState.me}
             .animateWelcome=${animate}
             .onMoreIdeas=${showWelcomeIdeas}
+            .onIdea=${(prompt: string) => chatState.agent && ctx.composer.fillSuggestedPrompt(prompt, chatState.agent)}
             .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
           ></qm-onboarding-welcome>
@@ -1710,12 +1715,16 @@ export function createChatSurface(
     prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
-    const showWelcome =
-      !ctx.inbox &&
-      !editingApp &&
-      (appState.me?.welcomeCohort
-        ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
-        : isNewUser && !messages.length);
+    const welcome = welcomeLayout({
+      me: appState.me,
+      sessions: sessionsState.list,
+      threadRef: chatState.threadRef,
+      scopeId: chatState.scopeId,
+      isNewUser,
+      empty: !messages.length,
+      draft: Boolean(ctx.composer.state.draft),
+    });
+    const showWelcome = !ctx.inbox && !editingApp && welcome.show;
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
     if (messages.length) {
@@ -1731,7 +1740,7 @@ export function createChatSurface(
       !ctx.inbox &&
       emptyChat &&
       !editingApp &&
-      !(isNewUser && appState.me?.welcomeCohort) &&
+      !welcome.hideSuggestions &&
       !glanceTier &&
       (!ctx.pane || tier === "full") &&
       !chatState.sessionId &&
@@ -1822,7 +1831,8 @@ export function createChatSurface(
             </section>
             <div class="chat-bottom-dock">
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
-              ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
+              ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}
+              ${showWelcome && welcome.hideComposer ? nothing : ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
             </div>
           </div>
@@ -1871,7 +1881,7 @@ export function createChatSurface(
             onClick: () => void forkOriginController.navigate(),
           }
         : null,
-      persona: sessionPersonaChip(currentSession, () => drawActiveChat()),
+      persona: sessionPersonaChip(currentSession),
       onCrumb: crumb && scope ? () => openProjectPage(scope) : null,
       toolCount: scope ? (t) => scopeToolCount(t, scope, () => drawActiveChat()) : null,
       onTool: (tool) => {
@@ -3361,7 +3371,7 @@ export function createChatSurface(
           else openThinking.delete(key);
         }}
       >
-        <summary class="thinking-summary">
+        <summary class="thinking-summary" @click=${animateDetailsToggle}>
           <span class="tool-icon">${icon(Brain, 15)}</span><span class="thinking-title">${thought.title}</span>
           <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
         </summary>
@@ -3378,7 +3388,7 @@ export function createChatSurface(
 
   function retractedRow(reason: string, text: string): TemplateResult {
     return html`<details class="thinking-row retracted-reply">
-      <summary class="thinking-summary">
+      <summary class="thinking-summary" @click=${animateDetailsToggle}>
         <span class="tool-icon">${icon(RotateCcw, 15)}</span><span class="thinking-title">Retracted: ${reason}</span>
         <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
       </summary>
