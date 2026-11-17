@@ -12,6 +12,7 @@ import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
+const RETRY_FAILED_LIST_MS = 15_000;
 const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
@@ -217,6 +218,7 @@ export function createMcpToolService(opts: {
     loadedAt?: number;
     version?: string;
     pending?: Promise<void>;
+    listFailed?: boolean;
   }>(() => ({
     clients: new Map(),
     snapshot: [],
@@ -346,6 +348,10 @@ export function createMcpToolService(opts: {
     if (cached) return cached;
     const listing = clientFor(server).listTools({});
     sharedListings.set(server.url, listing);
+    listing.catch(() => {
+      if (sharedListings.peek(server.url) === listing)
+        sharedListings.set(server.url, listing, { ttl: RETRY_FAILED_LIST_MS });
+    });
     return listing;
   }
 
@@ -353,8 +359,8 @@ export function createMcpToolService(opts: {
     server: McpServer,
     previous: McpToolDescriptor[],
     fresh: boolean,
-  ): Promise<McpToolDescriptor[]> {
-    if (server.catalog) return [catalogDescriptor(server)];
+  ): Promise<{ tools: McpToolDescriptor[]; failed?: true }> {
+    if (server.catalog) return { tools: [catalogDescriptor(server)] };
     const next: McpToolDescriptor[] = [];
     try {
       let tools: NonNullable<McpServer["tools"]>;
@@ -372,7 +378,7 @@ export function createMcpToolService(opts: {
           needsApproval: false,
         });
         tools = server.tools ?? [];
-        if (!tools.length) return next;
+        if (!tools.length) return { tools: next };
       } else {
         const listing = await listServer(server, fresh);
         tools = listing.tools;
@@ -395,9 +401,9 @@ export function createMcpToolService(opts: {
     } catch (e) {
       record("list", server.id, `error: ${errMessage(e)}`);
       const kept = previous.filter((t) => t.serverId === server.id);
-      return kept.length ? kept : next;
+      return kept.length ? { tools: kept } : { tools: next, failed: true };
     }
-    return next;
+    return { tools: next };
   }
 
   async function load(state: ReturnType<typeof tenantState>, fresh: boolean): Promise<void> {
@@ -407,7 +413,9 @@ export function createMcpToolService(opts: {
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
     const previous = state.snapshot;
-    const next = (await Promise.all(servers.map((s) => serverTools(s, previous, fresh)))).flat();
+    const listed = await Promise.all(servers.map((s) => serverTools(s, previous, fresh)));
+    const next = listed.flatMap((l) => l.tools);
+    state.listFailed = listed.some((l) => l.failed);
     const seen = new Set<string>();
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
@@ -442,8 +450,11 @@ export function createMcpToolService(opts: {
     const state = await loaded();
     if (closed) return state;
     const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
-    if (version !== state.version)
-      await (state.pending ?? refresh(true)).catch(reportFailureAs("mcp: refresh tools", undefined));
+    const retryFailed = state.listFailed && now() - (state.loadedAt ?? -Infinity) >= RETRY_FAILED_LIST_MS;
+    if (version !== state.version || retryFailed)
+      await (state.pending ?? refresh(version !== state.version)).catch(
+        reportFailureAs("mcp: refresh tools", undefined),
+      );
     return state;
   }
 
