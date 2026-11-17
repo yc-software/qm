@@ -5033,4 +5033,3 @@ ALTER TABLE public.webhook_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.webhooks ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.webui_model_configs ENABLE ROW LEVEL SECURITY;
-CREATE TABLE stale_check_probe(id int);
