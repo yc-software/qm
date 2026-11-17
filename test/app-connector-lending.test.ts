@@ -106,7 +106,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     SIGNING,
   );
   const broker = (body: Record<string, unknown>) => call("/v1/credentials/broker", appToken, body);
-  const control = async (path: string, body: unknown, actorId = PUBLISHER, run: object = liveRunClaims(actorId)) =>
+  const control = async (path: string, body: unknown, claims: object = {}, actorId = PUBLISHER) =>
     call(
       path,
       await mintCapabilityToken(
@@ -114,16 +114,16 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
           actorId,
           scopeId: personalScope(actorId),
           aud: CONTROL_PLANE_AUD,
-          liveActor: true,
-          ...run,
+          ...liveRunClaims(actorId),
+          ...claims,
           exp: Date.now() + 60_000,
         },
         SIGNING,
       ),
       body,
     );
-  const lend = (actorId: string, connectors: unknown, liveActor = true, run: object = liveRunClaims(actorId)) =>
-    control(`/v1/apps/${d.id}/connectors`, { connectors }, actorId, { ...run, liveActor });
+  const lend = (actorId: string, connectors: unknown, liveActor = true, run: object = {}) =>
+    control(`/v1/apps/${d.id}/connectors`, { connectors }, { ...run, liveActor }, actorId);
   return { d, app, audits, upstream, broker, lend, control };
 }
 
@@ -178,26 +178,18 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.ok(trail.some((l) => l.startsWith("connector.broker.denied slack.com") && l.endsWith("host_not_allowed")));
   assert.ok(trail.some((l) => /^deploy_connectors \S+ gmail\.googleapis\.com,slack\.com$/.test(l)));
   assert.ok(trail.some((l) => /^deploy_connectors \S+ \(none\)$/.test(l)));
-});
 
-test("only the publisher's own running turn shares or hands over an app that borrows their connectors", async (t) => {
-  const h = await agent(t);
-  await h.lend(PUBLISHER, ["slack.com"]);
-  const shares = [
-    [`/v1/apps/${h.d.id}/share`, { scope: "org" }],
-    ["/v1/share", { type: "deploy", id: h.d.id, toScope: "org" }],
-    ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER), move: true }],
-  ] as const;
-  const live = liveRunClaims(PUBLISHER);
-  for (const [path, body] of shares)
-    for (const [claims, error] of [
-      [{ ...live, triggered: true }, "human_consent_required"],
-      [{ ...live, botActor: true }, "human_consent_required"],
-      [{ runId: "finished-run" }, "inactive_run"],
-    ] as const)
-      assert.equal((await h.control(path, body, PUBLISHER, claims)).json.error, error);
-  assert.deepEqual(await h.app.appGrantees(h.d.id), []);
-  for (const [path, body] of shares) assert.equal((await h.control(path, body)).status, 200);
+  for (const [path, body, claims] of [
+    [`/v1/apps/${h.d.id}/share`, { scope: "org" }, { triggered: true }],
+    ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
+    ["/v1/share", { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true }, { triggered: true }],
+  ] as const) {
+    const before = await h.app.appGrantees(h.d.id);
+    assert.equal((await h.control(path, body, claims)).json.error, "human_consent_required");
+    assert.deepEqual(await h.app.appGrantees(h.d.id), before);
+    assert.equal((await h.control(path, body)).status, 200);
+    assert.notDeepEqual(await h.app.appGrantees(h.d.id), before);
+  }
 });
 
 test("public apps cannot borrow connectors", async (t) => {

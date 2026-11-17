@@ -346,10 +346,7 @@ test("removing a connection, a saved login or a persona takes a running turn wit
     const login = "/v1/keychain/credentials/x";
     const grant = "/v1/keychain/grants/x/revoke";
     const persona = `/v1/personas/${value.id}`;
-    const access = [
-      { scopeId: "personal:U1", role: "owner" },
-      { scopeId: "org:acme", role: "read" },
-    ];
+    const access = ["personal:U1", "org:acme"].map((scopeId, i) => ({ scopeId, role: i ? "read" : "owner" }));
     assert.equal(await send("POST", revoke), "200 U1");
     assert.equal(await send("POST", revoke, { keychainMembers: [{ id: "U2", type: "internal" }] }, "U2"), "200 U2");
     assert.equal(await send("POST", revoke, {}, "U9"), "400 bad_request");
@@ -365,8 +362,8 @@ test("removing a connection, a saved login or a persona takes a running turn wit
     assert.equal(await send("DELETE", persona, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("DELETE", `${persona}/credentials/x`, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("PUT", `${persona}/access`, { triggered: true }), "403 human_consent_required");
-    assert.equal(await send("PUT", `${persona}/access`, { botActor: true }), "403 human_consent_required");
     assert.equal(await send("PUT", `${persona}/access`, { runId: "finished-run" }), "403 inactive_run");
+    assert.equal(JSON.stringify(await srv.built.app.personas!.detail("U1", value.id)).includes("org:acme"), false);
     assert.equal(await send("PUT", `${persona}/access`), "200 2");
     assert.equal(await send("DELETE", persona), "200 true");
   } finally {

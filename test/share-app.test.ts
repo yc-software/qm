@@ -114,13 +114,7 @@ function callManage(
   return handle(ctx).then(() => out);
 }
 
-const callShare = (
-  app: ReturnType<typeof createApp>,
-  capability: CapabilityClaims | null,
-  id: string,
-  body: unknown,
-  featureFlags = externalSharingOn,
-) => callManage(shareApp, app, capability, id, body, featureFlags);
+const callShare = callManage.bind(null, shareApp);
 
 const callDetail = (app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) =>
   callManage(getApp, app, capability, id, undefined);
