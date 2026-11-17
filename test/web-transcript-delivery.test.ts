@@ -480,7 +480,7 @@ test("concurrent Slack receipt writers record one item and preserve distinct equ
         writer.enqueue({
           destination: {
             ...webDestination("dm:D123"),
-            webTranscript: { kind: "slack_reply", sessionId: session.id, ts, name: "Alice", speakerId: "alice@example.com" },
+            webTranscript: { kind: "slack_reply", sessionId: session.id, ...sentAsAlice, ts },
           },
           text: "App test!",
           idempotencyKey: `slack-reply:${session.id}:D123:${ts}`,

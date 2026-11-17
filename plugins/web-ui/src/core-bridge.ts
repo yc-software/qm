@@ -1972,6 +1972,7 @@ interface HistoryUserMessage {
   steered?: boolean;
   speaker?: string;
   speakerId?: string;
+  overheard?: boolean;
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
@@ -2145,6 +2146,7 @@ export function userItemMessage(item: Item): HistoryUserMessage | null {
     ...(mail ? { subagentMail: mail } : {}),
     ...(item.kind === "SteeringMessage" ? { steered: true } : {}),
     ...(typeof speakerId === "string" && speakerId ? { speakerId } : {}),
+    ...(item.body.overheard === true ? { overheard: true } : {}),
     ...(typeof name === "string" && name.trim() ? { speaker: name.trim() } : {}),
     ...(ts ? { ts } : {}),
     ...(attachments.length

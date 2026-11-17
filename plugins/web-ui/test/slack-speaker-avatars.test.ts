@@ -56,3 +56,39 @@ test("Slack conversations show directory Slack photos on messages and in the hea
     await h.close();
   }
 });
+
+test("a Slack channel transcript sets other people's messages apart and keeps a mid-turn post out of the turn", async () => {
+  const session = { ...SESSION, type: "channel" as const, createdAt: 1, surface: "slack", canContinue: false };
+  const said = (kind: "UserMessage" | "SteeringMessage", seq: number, text: string, body: object) =>
+    item(kind, { seq, createdAt: seq, turnId: "t", text, body });
+  const h = await harness({
+    path: `/s/${session.id}`,
+    session,
+    listSessions: [session],
+    items: [
+      said("UserMessage", 1, "deploys broke", { name: "Pete", overheard: true }),
+      said("UserMessage", 2, "@qm DM me", { name: "T", speakerId: "tester" }),
+      item("ToolCall", { seq: 3, turnId: "t", callId: "c", tool: "slack", body: { action: "reach" } }),
+      item("ToolResult", { seq: 4, turnId: "t", callId: "c", tool: "slack", body: { ok: true } }),
+      said("SteeringMessage", 5, "thanks!", { name: "T", speakerId: "tester" }),
+      item("AgentMessage", { seq: 6, turnId: "t", body: { workStartedAt: 1, workFinishedAt: 6 } }),
+    ],
+  });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    const rows = [...document.querySelectorAll(".message-stack > .message-row")];
+    assert.deepEqual(
+      rows.map((row) => [row.classList.contains("others-row"), row.querySelector(".pin-content")?.textContent?.trim()]),
+      [
+        [true, "deploys broke"],
+        [false, "@qm DM me"],
+        [false, "thanks!"],
+        [false, undefined],
+      ],
+    );
+    assert.equal(rows.at(-1)!.querySelectorAll(".user-row").length, 0);
+  } finally {
+    await h.close();
+  }
+});

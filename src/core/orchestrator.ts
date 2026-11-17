@@ -2226,7 +2226,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
               Object.assign(body, swarmEntryProvenance);
               delete body.speakerId;
-              if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
+              const speakerId = steered
+                ? entry.author
+                : humanInput && !syntheticPrompt && !continuation && !overheard && actor.id;
+              if (speakerId) body.speakerId = speakerId;
               const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
               if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
                 body.name = actor.displayName.trim();

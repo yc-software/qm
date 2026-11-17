@@ -1941,6 +1941,16 @@ a.chat-row-open {
   max-width: 72%;
   margin-right: 12px;
 }
+.user-row.others-row {
+  align-items: flex-start;
+}
+.named-user-row.others-row > .speaker-label {
+  margin-right: 0;
+}
+.user-row.others-row .message-meta {
+  left: 0;
+  right: auto;
+}
 .named-user-row > .speaker-label > .inbox-avatar,
 .named-assistant-row > .speaker-label > .brand-mark {
   width: 20px;

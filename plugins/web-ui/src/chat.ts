@@ -357,7 +357,7 @@ export function createChatSurface(
     );
     for (const message of messages) {
       const activity = (message as AssistantWork).work?.activity;
-      if (!activity) continue;
+      if (!activity || isReadOnlySlackView()) continue;
       let steers = steerMessageCache.get(activity);
       if (!steers) {
         steers = activityItems(activity).flatMap((item) => {
@@ -1956,7 +1956,7 @@ export function createChatSurface(
     index: number,
     isStreaming: boolean,
   ): TemplateResult | typeof nothing {
-    if ((message as { steered?: boolean }).steered) return nothing;
+    if (rendersInsideWork(message)) return nothing;
     const msg = message as AssistantWork & {
       stopReason?: string;
       errorMessage?: string;
@@ -2034,7 +2034,7 @@ export function createChatSurface(
     const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
     if (hidden.opener || hidden.resumeAnchor) return nothing;
     const role = (message as { role?: string }).role;
-    if (!inline && (message as { steered?: boolean }).steered) return nothing;
+    if (!inline && rendersInsideWork(message)) return nothing;
     if (role === "user" || role === "user-with-attachments") {
       const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
       if (mail) {
@@ -2056,7 +2056,6 @@ export function createChatSurface(
       const displayText = excerpt && rawText.startsWith(excerpt) ? rawText.slice(excerpt.length) : rawText;
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
-      const steered = Boolean((message as { steered?: boolean }).steered);
       const speaker = speakerLabelFor(message);
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
@@ -2079,7 +2078,7 @@ export function createChatSurface(
         });
       return html`
         <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${steered ? "steered-row" : ""}"
+          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message) ? "others-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
@@ -2166,8 +2165,7 @@ export function createChatSurface(
       const showWork =
         (msg as AssistantWork & { approvalDecision?: string }).approvalDecision !== "denied" &&
         shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
-      const steeringOnly =
-        !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
+      const steeringOnly = !showWork && work ? workTimeline(work, text).filter((item) => item.kind === "steer") : [];
       let workView: TemplateResult | typeof nothing =
         work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
       if (showWork) {
@@ -2385,6 +2383,20 @@ export function createChatSurface(
     return !chatState.agent && chatState.forkSession?.surface === "slack";
   }
 
+  function workTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
+    const timeline = messageWorkTimeline(work, finalText);
+    return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
+  }
+
+  function rendersInsideWork(message: AgentMessage): boolean {
+    return Boolean((message as { steered?: boolean }).steered) && !isReadOnlySlackView();
+  }
+
+  function fromSomeoneElse(message: AgentMessage): boolean {
+    const { speakerId, overheard } = message as { speakerId?: string; overheard?: boolean };
+    return speakerId ? speakerId !== appState.me?.user : Boolean(overheard);
+  }
+
   function assistantDisplayText(text: string): string {
     return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
   }
@@ -2498,7 +2510,7 @@ export function createChatSurface(
   }
 
   function shouldShowWork(work: WorkBlock | null | undefined, finalText: string): work is WorkBlock {
-    return Boolean(work && (messageWorkTimeline(work, finalText).length || work.pendingApprovals?.length));
+    return Boolean(work && (workTimeline(work, finalText).length || work.pendingApprovals?.length));
   }
 
   let readonlyRedraw: (() => void) | null = null;
@@ -3177,7 +3189,7 @@ export function createChatSurface(
       isStreaming &&
       currentTextPhase(work)?.phase !== "final_answer" &&
       (work.status === "working" || work.status === "thinking");
-    const segments = workTimelineSegments(messageWorkTimeline(work, active ? "" : text));
+    const segments = workTimelineSegments(workTimeline(work, active ? "" : text));
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
