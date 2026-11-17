@@ -42,7 +42,11 @@ function setup(
   const namespaceStore = testMap<StoredRenderNamespace>();
   const advisoryLock = options.advisoryLock ?? testAdvisoryLock();
   const errors: Array<{ code: string; message: string }> = [];
-  let golden = { ref: BASE_REF, snapshotId: fake.seedGolden(BASE_REF) };
+  let golden: { ref: string; snapshotId: string; tools?: string[] } = {
+    ref: BASE_REF,
+    snapshotId: fake.seedGolden(BASE_REF),
+    tools: ["git", "curl", "gh", "aws (CLI v2)"],
+  };
   const base: RenderBase = {
     ready: async () => golden,
     prepare: async () => {},
@@ -51,10 +55,11 @@ function setup(
     golden = { ref, snapshotId: fake.seedGolden(ref) };
     return golden.snapshotId;
   };
-  const make = (checkpointIntervalMs = -1, goldens = base) =>
+  const make = (checkpointIntervalMs = -1, goldens = base, egressProxyUrl?: string) =>
     createRenderSandbox({
       client,
       base: goldens,
+      ...(egressProxyUrl ? { egressProxyUrl } : {}),
       store,
       scratchStore,
       cleanupStore,
@@ -175,13 +180,61 @@ test("Render resumes from its native checkpoint through transient API errors and
   );
 });
 
-test("Render declares the tools and resources of the base image", (t) => {
-  const { make } = setup(t);
-  const { spec } = make().profile;
-  for (const tool of ["git", "curl", "wget", "jq", "python3", "gh", "aws (CLI v2)"])
-    assert.ok(spec?.tools?.includes(tool), tool);
-  for (const tool of ["gcloud", "kubectl", "flyctl", "glab"]) assert.ok(spec?.notInstalled?.includes(tool), tool);
+test("Render declares the tools its golden image provides and the resources of its plan", async (t) => {
+  const { make, scope } = setup(t);
+  const sandbox = make();
+  const { spec } = sandbox.profile;
+  assert.deepEqual([spec?.tools, spec?.notInstalled], [[], []]);
+  await sandbox.teardown(await sandbox.provision(scope));
+  assert.deepEqual(spec?.tools, ["git", "curl", "gh", "aws (CLI v2)"]);
+  assert.deepEqual(spec?.notInstalled, [
+    "wget",
+    "jq",
+    "unzip",
+    "gnupg",
+    "python3",
+    "gcloud",
+    "kubectl",
+    "flyctl",
+    "glab",
+  ]);
   assert.deepEqual([spec?.cpus, spec?.memoryMb, spec?.diskGb], [2, 4096, 10]);
+});
+
+test("Render admits only the egress proxy from computers and disposable sandboxes when a proxy is set", async (t) => {
+  const { make, fake, store, scope } = setup(t, { http: true });
+  for (const url of ["http://proxy.example.com", "https://proxy.example.com:8443", "https://10.0.0.1"])
+    assert.throws(() => make(-1, undefined, url), /https URL with a host name on port 443/, url);
+  const sandbox = make(-1, undefined, "https://Proxy.example.com:443");
+  assert.equal(sandbox.profile.egressEnforcement, "domain");
+  const computer = await sandbox.provision(scope, { egressToken: "turn-token" });
+  const disposable = await sandbox.provision(scope, { scratch: { key: "job" }, egressToken: "turn-token" });
+  for (const [handle, id] of [
+    [computer, (await store.get(scope))!.sandboxId],
+    [disposable, disposable.providerSandboxId!],
+  ] as const) {
+    assert.deepEqual(fake.allowlistOf(id), ["proxy.example.com"]);
+    assert.equal((await sandbox.run(handle, "echo $HTTPS_PROXY")).stdout, "https://x:turn-token@proxy.example.com\n");
+  }
+});
+
+test("Render restarts a computer from its checkpoint when the egress proxy setting changes", async (t) => {
+  const { make, fake, store, scope } = setup(t, { http: true });
+  const open = make();
+  const handle = await open.provision(scope);
+  await open.writeFile(handle, "kept", "before the proxy");
+  await open.teardown(handle);
+  const before = (await store.get(scope))!;
+  const proxied = make(-1, undefined, "https://proxy.example.com");
+  const restored = await proxied.provision(scope);
+  const after = (await store.get(scope))!;
+  assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
+  assert.deepEqual(fake.allowlistOf(after.sandboxId), ["proxy.example.com"]);
+  assert.equal(await proxied.readFile(restored, "kept"), "before the proxy");
+  await proxied.provision(scope);
+  assert.equal((await store.get(scope))!.sandboxId, after.sandboxId);
+  await open.provision(scope);
+  assert.equal(fake.allowlistOf((await store.get(scope))!.sandboxId), undefined);
 });
 
 test("Render starts computers and disposable sandboxes from the golden snapshot and keeps a computer's base image", async (t) => {
@@ -535,8 +588,8 @@ test("Render disposes a new native checkpoint when its staging record write fail
 test("Render retains the provider reason when a native checkpoint fails", async (t) => {
   const { make, fake, store, scope } = setup(t);
   const create = fake.client.createSnapshot;
-  fake.client.createSnapshot = async (id, name) => {
-    const saved = fake.snapshots.get((await create(id, name)).id)!;
+  fake.client.createSnapshot = async (...args) => {
+    const saved = fake.snapshots.get((await create(...args)).id)!;
     saved.status = "failed";
     saved.error = "Provider: insufficient snapshot capacity";
     return { ...saved };
@@ -582,7 +635,7 @@ test("Render removes a destroyed scope at once and deletes a retired checkpoint 
   const handle = await sandbox.provision(scope);
   await sandbox.teardown(handle);
   const before = (await store.get(scope))!;
-  const stray = await fake.client.createSnapshot(before.sandboxId, "qm-stray");
+  const stray = await fake.client.createSnapshot(before.sandboxId, "qm-stray", "runtime");
   fake.snapshots.get(stray.id)!.status = "creating";
   await store.merge(scope, { retiredResources: [{ checkpoint: { ...stray, status: "creating" } }] });
   await assert.rejects(sandbox.destroyScope!(scope), /snapshot_creating/);
@@ -676,8 +729,8 @@ test("Render refuses a write that starts during its idle-stop checkpoint", async
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   const create = fake.client.createSnapshot;
   let late: Promise<unknown> | undefined;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     late ??= sandbox.writeFile(handle, "late", "refused").catch((error: unknown) => error);
     await late;
     return snapshot;
@@ -703,8 +756,8 @@ test("Render reports a write that finishes during a restart instead of losing it
     landed.resolve();
   });
   const create = fake.client.createSnapshot;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     gate.resolve();
     await landed.promise;
     return snapshot;
@@ -847,8 +900,8 @@ test("Render preserves a write that arrives during native snapshot capture", asy
   const captured = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const create = fake.client.createSnapshot;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     captured.resolve();
     await release.promise;
     return snapshot;
@@ -1262,8 +1315,8 @@ test("Render keeps process reads available during a background checkpoint", asyn
   const captured = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const create = fake.client.createSnapshot;
-  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
-    const snapshot = await create(id, name);
+  t.mock.method(fake.client, "createSnapshot", async (...args: Parameters<typeof create>) => {
+    const snapshot = await create(...args);
     captured.resolve();
     await release.promise;
     return snapshot;
@@ -1359,9 +1412,27 @@ test("Render restarts a computer from its checkpoint so the same turn keeps work
   const restarted = (await store.get(scope))!;
   assert.equal(fake.sandboxes.get(first)?.status, "terminated");
   assert.notEqual(restarted.sandboxId, first);
+  assert.equal(fake.snapshotSource(restarted.checkpoint!.id)?.kind, "filesystem");
   assert.equal(restarted.stopped, undefined);
   assert.equal((await sandbox.run(handle, "cat restart-marker.txt")).stdout, "still here");
   assert.equal(computerVerdict(await sandbox.computerStatus!(scope)), "ok");
+});
+
+test("Render restores a stopped computer and then boots it fresh on restart", async (t) => {
+  const { make, fake, store, scope } = setup(t, { http: true });
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  await sandbox.writeFile(handle, "kept", "before the stop");
+  await sandbox.teardown(handle);
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+  assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 1 });
+  const stopped = (await store.get(scope))!;
+  assert.equal(fake.snapshotSource(stopped.checkpoint!.id)?.kind, "runtime");
+  await sandbox.restartComputer!(scope);
+  const restarted = (await store.get(scope))!;
+  assert.equal(fake.snapshotSource(restarted.checkpoint!.id)?.kind, "filesystem");
+  assert.deepEqual(fake.createdFrom.slice(-2), [stopped.checkpoint!.id, restarted.checkpoint!.id]);
+  assert.equal(await sandbox.readFile(await sandbox.provision(scope), "kept"), "before the stop");
 });
 
 test("Render reports a stopped computer that has a checkpoint as paused without probing it", async (t) => {

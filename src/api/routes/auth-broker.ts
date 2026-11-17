@@ -264,7 +264,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const now = Date.now();
   if (
     !isObj(claims) ||
-    claims.purpose !== "teammate-invite" ||
+    claims.purpose !== "invite" ||
     claims.org !== orgScope(deps) ||
     claims.aud !== trimTrailingSlashes(deps.portalUrl) ||
     typeof claims.email !== "string" ||
@@ -284,14 +284,13 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const member = deps.identity.externalMember(claims.email);
   if (
     !member ||
-    member.kind !== "teammate" ||
     !member.inviteId ||
     member.inviteId !== claims.inviteId ||
     !externalMemberActive(member) ||
     deps.identity.classify(claims.email).type !== "internal"
   )
     return sendJson(res, 403, { error: "invitation_revoked" });
-  if (!(await deps.replayDedupe.claim(`teammate-invite:${claims.jti}`, claims.exp)))
+  if (!(await deps.replayDedupe.claim(`invite:${claims.jti}`, claims.exp)))
     return sendJson(res, 400, { error: "invitation_used" });
   audit(ctx, {
     principalId: claims.email,

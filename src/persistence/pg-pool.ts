@@ -33,6 +33,10 @@ const connectionTimeoutMs = 10_000;
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
+export function queryPoolSize(): number {
+  return poolingConfig.queryMax ?? 20;
+}
+
 async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
   const pg = (await import("pg")).default;
   const key = `${kind}:${connectionString}`;
@@ -41,7 +45,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     existing.users++;
     return existing.pool;
   }
-  const max = { query: poolingConfig.queryMax ?? 20, session: poolingConfig.sessionMax ?? 64, migration: 1 }[kind];
+  const max = { query: queryPoolSize(), session: poolingConfig.sessionMax ?? 64, migration: 1 }[kind];
   const connection = pgConnectionOptions(
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,

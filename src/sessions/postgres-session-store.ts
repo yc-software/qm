@@ -22,7 +22,7 @@ import { createSessionAdminReads } from "./session-admin-reads.ts";
 import { createSessionParticipants, participantSessionsSql } from "./session-participants.ts";
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
-import { TENANT } from "./items.ts";
+import { authoredUserTurn, TENANT } from "./items.ts";
 import {
   GENERIC_CHAT_TENANT,
   SLACK_TENANTS,
@@ -352,6 +352,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async scopeHasSessions(scope): Promise<boolean> {
       const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1) AS present", [scope]);
+      return Boolean(rows[0]?.present);
+    },
+
+    async personHasAuthoredTurns(tenant, principalIds): Promise<boolean> {
+      const rows = await db.forTenant(tenant).q(
+        `SELECT EXISTS(SELECT 1 FROM items
+                        WHERE tenant_id = $1 AND author = ANY($2) AND ${authoredUserTurn("items")}) AS present`,
+        [tenant.id, principalIds],
+      );
       return Boolean(rows[0]?.present);
     },
 

@@ -4,6 +4,7 @@ import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyAppShared } from "../deploy/share-notice.ts";
 import { appShareScope } from "../deploy/email-access.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import { sessionVisibleTo } from "../sessions/session-rows.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
@@ -1212,7 +1213,10 @@ export function createSessionMethods(
     },
 
     async grant(tenant, g, opts) {
-      if (parseRef(g.ref).kind === "deploy") {
+      const ref = parseRef(g.ref);
+      const publishedApp = ref.kind === "deploy" ? await deps.deploy.getApp(ref.id) : null;
+      if (ref.kind === "deploy") {
+        if (!publishedApp) throw new DeployAccessError("not_found", `no such app: ${ref.id}`);
         g = {
           ...g,
           granteeScopeId: await appShareScope(
@@ -1223,7 +1227,7 @@ export function createSessionMethods(
               (await h.directoryMember(email))?.type === "internal",
           ),
         };
-        await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
+        await deps.deploy.assertShareAllowed(publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
       }
       await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
@@ -1233,9 +1237,8 @@ export function createSessionMethods(
         resource: g.ref,
         scopeLabel: g.granteeScopeId,
       });
-      const ref = parseRef(g.ref);
-      if (ref.kind === "deploy" && opts?.notify !== false)
-        await notifyAppShared(deps, deps.deploy.getApp(ref.id), g.granteeScopeId, g.permission, g.grantedBy);
+      if (publishedApp && opts?.notify !== false)
+        await notifyAppShared(deps, publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
     },
     async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(

@@ -20,6 +20,7 @@ import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-not
 import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
 import {
   personAtKeyboard,
   resolveShareTarget,
@@ -33,6 +34,7 @@ import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
+import { PERSON_REQUIRED } from "./http.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -789,6 +791,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
+      if (req.type === "deploy" && !personAtKeyboard(capability))
+        return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
@@ -955,7 +959,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           permission,
         };
       } catch (e) {
-        if (e instanceof AdminError) {
+        if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         return { ok: false, code: "share_failed", message: errMessage(e) };

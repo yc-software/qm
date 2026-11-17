@@ -106,6 +106,8 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
       "gpt-6-astra",
       "gpt-6-astra-ultrafast",
       "gpt-6.1-sol",
@@ -117,6 +119,8 @@ test("the curated catalog contains only current model families", () => {
     ],
   );
   assert.equal(getRequiredModel("gpt-5.6-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6.2-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6.2-astra").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-astra").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-sol").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-luna").contextWindow, 1_050_000);
@@ -137,6 +141,19 @@ test("the curated catalog contains only current model families", () => {
   assert.equal(sol61.thinkingLevelMap?.max, "max");
   assert.equal(modelSupportsFastMode("gpt-6.1-sol"), true);
   assert.equal(contextTokenBudgetForModel("gpt-6.1-sol"), 150_000);
+  const sol62 = getRequiredModel("gpt-6.2-sol");
+  assert.deepEqual(sol62.cost, sol61.cost);
+  assert.equal(sol62.thinkingLevelMap?.off, null);
+  assert.equal(sol62.thinkingLevelMap?.minimal, null);
+  const astra62 = getRequiredModel("gpt-6.2-astra");
+  assert.deepEqual(astra62.cost, {
+    input: 8,
+    output: 40,
+    cacheRead: 0.4,
+    cacheWrite: 10,
+    tiers: [{ inputTokensAbove: 272_000, input: 16, output: 60, cacheRead: 0.8, cacheWrite: 20 }],
+  });
+  assert.equal(astra62.thinkingLevelMap?.off, null);
   assert.deepEqual(getRequiredModel("gpt-6-sol").cost, {
     input: 2,
     output: 10,
@@ -276,7 +293,15 @@ test("personal models retain canonical endpoints when org endpoints are overridd
 });
 
 test("registered OpenAI clones retain exact model identity on the Codex subscription transport", () => {
-  for (const id of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]) {
+  for (const id of [
+    "gpt-6.2-sol",
+    "gpt-6.2-astra",
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+  ]) {
     const api = getRequiredModel(id);
     const subscription = getRequiredModel(codexSubscriptionModelId(id));
     assert.equal(subscription.id, `codex/${id}`);

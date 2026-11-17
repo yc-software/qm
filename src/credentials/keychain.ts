@@ -3,12 +3,13 @@ import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { SurfaceUser } from "../surfaces/contract.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
-import { mergeCredentialFiles } from "./file-merge.ts";
+import { mergeCredentialFiles, type CredentialFileMerge } from "./file-merge.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
@@ -94,6 +95,7 @@ export interface KeychainCredential {
   fingerprint: string;
   origin?: string;
   expiresAt?: number;
+  writer?: { holder: string; until: number };
   createdAt: number;
   updatedAt: number;
 }
@@ -133,6 +135,7 @@ export interface KeychainAsk {
   requesterThreadRef?: string;
   requesterSeq?: number;
   requesterMessageTs?: string;
+  ownerSurfaceUser?: Pick<SurfaceUser, "surface" | "account" | "id">;
   purpose: string;
   requestedMode?: GrantMode;
   botActor?: boolean;
@@ -325,6 +328,7 @@ interface CreateAskInput {
   requesterThreadRef?: string;
   requesterSeq?: number;
   requesterMessageTs?: string;
+  ownerSurfaceUser?: Pick<SurfaceUser, "surface" | "account" | "id">;
   purpose: string;
   requestedMode?: GrantMode;
   botActor?: boolean;
@@ -363,6 +367,7 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
+  live?: boolean;
   baseline?: Record<string, string>;
 }
 
@@ -384,7 +389,14 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
-  updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<string[]>;
+  create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
+  withLoginTicket<T>(ticketId: string, fn: () => Promise<T>): Promise<T>;
+  claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
+  releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean | null>;
+  updateFiles(
+    materialized: Extract<MaterializedCred, { kind: "file" }>,
+    files: CredentialFile[],
+  ): Promise<CredentialFileSave>;
   writebackBaseline(
     source: FileCredentialSource,
     fileHashes: Record<string, string>,
@@ -452,7 +464,10 @@ export interface FileCredentialSource {
   service: string;
   grantId?: string;
   writeback?: boolean;
+  live?: boolean;
 }
+
+export type CredentialFileSave = Pick<CredentialFileMerge, "overruled" | "withheld">;
 
 function credentialFilesFingerprint(files: CredentialFile[]): string {
   return fileCredentialFingerprint(
@@ -478,6 +493,10 @@ function keychainFilePath(path: string): string {
   } catch {
     throw new KeychainError(400, `file path must be home-relative: ${path}`);
   }
+}
+
+export function keychainService(service: string): string {
+  return service.trim().toLowerCase();
 }
 
 function credId(ownerId: string, service: string, slot: string): string {
@@ -526,7 +545,7 @@ function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: num
 }
 
 function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: string }): KeychainCredentialMeta {
-  const { secretEnc: _, ...meta } = rec;
+  const { secretEnc: _, writer: __, ...meta } = rec;
   return {
     ...meta,
     ...((rec.kind === "env" || rec.kind === "file") && !isBackendCredential(rec)
@@ -878,8 +897,8 @@ export function createKeychain(deps: {
     return unexpiredAccessToken(rec);
   }
 
-  async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
-    const service = input.service.trim().toLowerCase();
+  function credentialRecord(input: SaveCredentialInput) {
+    const service = keychainService(input.service);
     if (!service) throw new KeychainError(400, "service required");
     let files: CredentialFile[] | undefined;
     if (input.files?.length) {
@@ -940,13 +959,18 @@ export function createKeychain(deps: {
         fingerprint: fingerprintOf(secret),
         ...(input.origin ? { origin: input.origin } : {}),
         ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        ...(prior?.writer ? { writer: prior.writer } : {}),
         createdAt: prior?.createdAt ?? t,
         updatedAt: t,
       };
     };
-    const rec = buildRec(await deps.creds.get(id));
-    await deps.creds.put(id, rec);
-    return toMeta(rec);
+    return { id, buildRec };
+  }
+
+  async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
+    const { id, buildRec } = credentialRecord(input);
+    const [rec] = await deps.creds.mutateMany([{ id, apply: buildRec }]);
+    return toMeta(rec!);
   }
 
   async function materializeConnectorEnv(
@@ -1095,15 +1119,47 @@ export function createKeychain(deps: {
   return {
     save: saveCredential,
 
+    async create(input) {
+      const { id, buildRec } = credentialRecord(input);
+      const rec = buildRec();
+      return (await deps.creds.insertIfAbsent(id, rec)) ? toMeta(rec) : null;
+    },
+
+    withLoginTicket: (ticketId, fn) => lock.withLock(`keychain-login-ticket:${ticketId}`, fn),
+
+    async claimWriter(ownerId, id, writer) {
+      let claimed: boolean | null = null;
+      await deps.creds.update(id, (current) => {
+        if (!samePerson(current.ownerId, ownerId)) return current;
+        claimed = !current.writer || current.writer.holder === writer.holder || current.writer.until <= now();
+        return claimed ? { ...current, writer } : current;
+      });
+      return claimed;
+    },
+
+    async releaseWriter(ownerId, id, holder) {
+      let released: boolean | null = null;
+      await deps.creds.update(id, (current) => {
+        if (!samePerson(current.ownerId, ownerId)) return current;
+        released = !current.writer || current.writer.holder === holder || current.writer.until <= now();
+        if (!released) return current;
+        const { writer: _, ...rest } = current;
+        return rest;
+      });
+      return released;
+    },
+
     async updateFiles(materialized, files) {
-      if (!materialized.writeback) return [];
+      const unchanged = { overruled: [], withheld: [] };
+      if (!materialized.writeback) return unchanged;
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
       const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
       const ours = Object.entries(credentialFileHashes(normalized));
-      if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return [];
+      if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return unchanged;
       let overruled: string[] = [];
+      let withheld: CredentialFileMerge["withheld"] = [];
       let byExpiry: Array<{ path: string; kept: string }> = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
@@ -1115,8 +1171,10 @@ export function createKeychain(deps: {
           stored: currentFiles,
           refreshed: normalized,
           hash: (file) => fingerprint([file]),
+          refreshOnly: !materialized.live,
         });
         overruled = merged.overruled;
+        withheld = merged.withheld;
         byExpiry = merged.byExpiry;
         const next = checkedFiles(merged.files);
         if (!next.length) {
@@ -1140,11 +1198,15 @@ export function createKeychain(deps: {
         console.warn(
           `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
         );
+      if (withheld.length)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn saves only token refreshes`,
+        );
       for (const { path, kept } of byExpiry)
         console.warn(
           `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
         );
-      return overruled;
+      return { overruled, withheld };
     },
 
     async writebackBaseline(source, fileHashes) {
@@ -1161,6 +1223,7 @@ export function createKeychain(deps: {
         baseline: fileHashes,
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
+        ...(source.live ? { live: true } : {}),
       };
     },
 
@@ -1295,6 +1358,7 @@ export function createKeychain(deps: {
         ...(input.requesterThreadRef ? { requesterThreadRef: input.requesterThreadRef } : {}),
         ...(input.requesterSeq !== undefined ? { requesterSeq: input.requesterSeq } : {}),
         ...(input.requesterMessageTs ? { requesterMessageTs: input.requesterMessageTs } : {}),
+        ...(input.ownerSurfaceUser ? { ownerSurfaceUser: input.ownerSurfaceUser } : {}),
         purpose,
         ...(input.requestedMode ? { requestedMode: input.requestedMode } : {}),
         ...(input.botActor ? { botActor: true } : {}),

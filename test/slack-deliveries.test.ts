@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { createSlackDeliverer } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
 
 const mixedFiles = [
@@ -36,7 +36,6 @@ async function deliver(
     attachments: mixedFiles,
     createdAt: row.createdAt ?? Date.now(),
   };
-  const queues = new Map<string, unknown[]>([[String(delivery.destination.type), [delivery]]]);
   const acknowledgements: string[] = [];
   const uploads: Record<string, unknown>[] = [];
   const posts: Record<string, unknown>[] = [];
@@ -53,10 +52,8 @@ async function deliver(
     };
   };
   const core = {
-    holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
-    claimDeliveries: async (type: string) => queues.get(type)?.splice(0) ?? [],
     failDelivery: async (id: string, code: string) => void failures.push([id, code]),
     ackDelivery: async (id: string) => {
       if (row.loseAck) throw new Error("acknowledgement lost");
@@ -93,7 +90,7 @@ async function deliver(
       },
     },
   };
-  const poller = createDeliveryPoller({
+  const deliverer = createSlackDeliverer({
     core: core as never,
     webUiPublicUrl,
     flow: {
@@ -105,7 +102,7 @@ async function deliver(
     clientForIdentity: () => client,
   });
 
-  await poller.pollDeliveries(client);
+  await deliverer.deliver(client, delivery as never);
   return { acknowledgements, uploads, posts, updates, failures, marks, probes, conversationsOpened };
 }
 

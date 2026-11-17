@@ -9,11 +9,10 @@ export function refuseImpersonated(res: ServerResponse): void {
   sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
 }
 
+export const PERSON_REQUIRED = "Only the person can take this step. Ask them to do it themselves.";
+
 export function refuseWithoutPerson(res: ServerResponse): void {
-  sendJson(res, 403, {
-    error: "human_consent_required",
-    message: "Only the person can take this step. Ask them to do it themselves.",
-  });
+  sendJson(res, 403, { error: "human_consent_required", message: PERSON_REQUIRED });
 }
 
 export function sendProblem(res: ServerResponse, status: number, problem: Record<string, unknown>): void {

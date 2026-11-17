@@ -59,7 +59,8 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
   );
   const home = `persona:${result.value.id}`;
   const skills = (await ctx.app.listVisibleSkills(principalId, isOwnScopeBotWork(ctx.capability)))
-    .flatMap((row) => (row.skill?.scopeId === home ? [row.skill] : []))
+    .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+    .filter((skill) => skill.scopeId === home)
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const crons = await personaCrons(ctx, principalId, result.value.id);
@@ -152,7 +153,7 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId) return;
+  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
   const access = isObj(ctx.body) ? ctx.body.access : undefined;
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
