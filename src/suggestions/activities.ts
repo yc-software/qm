@@ -7,6 +7,7 @@ import type { Scheduler } from "../cron/scheduler.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
 import { scopeId } from "../types.ts";
 import { personIds } from "../directory/person.ts";
+import type { Tenant } from "../tenants/context.ts";
 import type { Cron } from "../triggers/types.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate five suggested activities for the owner of this personal session's new-chat screen.
@@ -105,6 +106,7 @@ export function createSuggestedActivityService(deps: {
 
   return {
     async get(
+      tenant: Tenant,
       principalId: string,
       seeds: SuggestedActivity[],
       {
@@ -118,7 +120,7 @@ export function createSuggestedActivityService(deps: {
       new Intl.DateTimeFormat("en-US", { timeZone: timezone });
       let profile = await deps.store.get(principalId);
       if (!profile) {
-        if (!(await deps.sessions.personHasAuthoredTurns(personIds(principalId)))) return ungenerated;
+        if (!(await deps.sessions.personHasAuthoredTurns(tenant, personIds(principalId)))) return ungenerated;
         profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
       }
       const seen = poll ? {} : { lastSeenAt: now() };

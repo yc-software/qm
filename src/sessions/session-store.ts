@@ -480,7 +480,7 @@ export interface SessionStore {
 
   scopeHasSessions(scope: ScopeId): Promise<boolean>;
 
-  personHasAuthoredTurns(principalIds: readonly string[]): Promise<boolean>;
+  personHasAuthoredTurns(tenant: Tenant, principalIds: readonly string[]): Promise<boolean>;
 
   sessionsByThreadRefs(threadRefs: readonly string[]): Promise<SessionRef[]>;
 

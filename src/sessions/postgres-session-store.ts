@@ -350,11 +350,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Boolean(rows[0]?.present);
     },
 
-    async personHasAuthoredTurns(principalIds): Promise<boolean> {
-      const rows = await q(
+    async personHasAuthoredTurns(tenant, principalIds): Promise<boolean> {
+      const rows = await db.forTenant(tenant).q(
         `SELECT EXISTS(SELECT 1 FROM items
-                        WHERE tenant_id = ${TENANT} AND author = ANY($1) AND ${authoredUserTurn("items")}) AS present`,
-        [principalIds],
+                        WHERE tenant_id = $1 AND author = ANY($2) AND ${authoredUserTurn("items")}) AS present`,
+        [tenant.id, principalIds],
       );
       return Boolean(rows[0]?.present);
     },

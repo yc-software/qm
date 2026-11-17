@@ -1,6 +1,6 @@
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import type { Route } from "./route.ts";
+import { tenantOf, type Route } from "./route.ts";
 import { starterActivities } from "../../suggestions/company-seeds.ts";
 import { isObj, orgScope } from "./shared.ts";
 
@@ -18,7 +18,8 @@ export const suggestedActivityRoutes: Route[] = [
     browser: true,
     actor: "body.principalId",
     auth: "source",
-    handle: async ({ res, deps, body, actor }) => {
+    handle: async (ctx) => {
+      const { res, deps, body, actor } = ctx;
       if (!deps.suggestedActivities) return sendJson(res, 404, { error: "not_found" });
       if (!isObj(body) || typeof body.principalId !== "string" || !body.principalId || body.principalId.length > 200) {
         return sendJson(res, 400, { error: "bad_request" });
@@ -39,7 +40,7 @@ export const suggestedActivityRoutes: Route[] = [
       return sendJson(
         res,
         200,
-        await deps.suggestedActivities.get(body.principalId, starters.activities, {
+        await deps.suggestedActivities.get(tenantOf(ctx), body.principalId, starters.activities, {
           timezone,
           poll: body.poll === true,
           refresh: body.refresh === true,
