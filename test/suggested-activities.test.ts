@@ -130,7 +130,10 @@ test("someone who has not sent QM a message gets the seeds and no generation job
 
 test("concurrent enrollment shares one cron and one first run", async () => {
   const f = fixture();
-  await Promise.all([f.service.get(tenant, "alice", []), createSuggestedActivityService(f.deps).get(tenant, "alice", [])]);
+  await Promise.all([
+    f.service.get(tenant, "alice", []),
+    createSuggestedActivityService(f.deps).get(tenant, "alice", []),
+  ]);
   await f.settle();
   assert.equal((await f.crons.list()).length, 1);
   assert.equal(f.calls.length, 1);
