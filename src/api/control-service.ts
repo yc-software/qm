@@ -883,6 +883,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
       const copyTo =
         cron && toKind === "personal" && permission === "read" && !req.move ? parseScopeId(toScope).ref : undefined;
+      const copyTo =
+        cron && toKind === "personal" && permission === "read" && !req.move ? parseScopeId(toScope).ref : undefined;
       if (!remove && permission === "write" && !shareOffers(req.type, home).manage)
         return {
           ok: false,
