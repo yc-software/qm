@@ -15,6 +15,7 @@ import { renameApp, archiveApp, restoreApp, getApp, setAppDisplayName } from "..
 import { getAppShares, resolveShareTarget, shareApp } from "../src/api/routes/app-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
@@ -72,7 +73,7 @@ function apiHarness(directory?: Dir) {
 }
 
 const cap = (actorId: string, orgId = "acme"): CapabilityClaims =>
-  ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999 }) as CapabilityClaims;
+  ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999, liveActor: true }) as CapabilityClaims;
 
 const one = (principalId: string, displayName: string): RecipientResolution => ({
   kind: "one",
@@ -98,42 +99,25 @@ function callManage(
       out.body = d ? JSON.parse(d) : undefined;
     },
   };
-  const actor = person ? { p: person, exp: Date.now() + 60_000 } : null;
-  const ctx = { res, app, deps: { featureFlags }, params: { id }, body, capability, actor } as unknown as ApiCtx;
-  return handle(ctx).then(() => out);
-}
-
-const callShare = (
-  app: ReturnType<typeof createApp>,
-  capability: CapabilityClaims | null,
-  id: string,
-  body: unknown,
-  featureFlags = externalSharingOn,
-) => callManage(shareApp, app, capability, id, body, featureFlags);
-
-function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) {
-  const out: { status?: number; body?: any } = {};
-  const res = {
-    getHeader() {},
-    writeHead(s: number) {
-      out.status = s;
-    },
-    end(d?: string) {
-      out.body = d ? JSON.parse(d) : undefined;
-    },
-  };
   const ctx = {
     res,
     app,
     params: { id },
-    capability,
+    body,
+    capability: capability && { ...liveRunClaims(capability.actorId), ...capability },
+    actor: person ? { p: person, exp: Date.now() + 60_000 } : null,
     secret: "test-secret",
-    deps: { apiBaseUrl: "https://api.example", publicUrl: "https://web.example" },
+    deps: { featureFlags, runs: liveRunStore(), apiBaseUrl: "https://api.example", publicUrl: "https://web.example" },
     url: new URL(`http://localhost/v1/apps/${id}`),
     req: { headers: { host: "localhost" } },
   } as unknown as ApiCtx;
-  return getApp(ctx).then(() => out);
+  return handle(ctx).then(() => out);
 }
+
+const callShare = callManage.bind(null, shareApp);
+
+const callDetail = (app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) =>
+  callManage(getApp, app, capability, id, undefined);
 
 test("manage endpoints (rename/display-name/archive): agent capability is owner-scoped, no principal is refused", async () => {
   const { app, deploy } = apiHarness();

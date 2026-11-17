@@ -30,6 +30,7 @@ import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-dat
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { createControlService } from "../src/api/control-service.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -61,6 +62,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   const app = createApp({
     deploy,
     acl,
+    auditLog,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -110,23 +112,25 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     SIGNING,
   );
   const broker = (body: Record<string, unknown>) => call("/v1/credentials/broker", appToken, body);
-  const lend = async (actorId: string, connectors: unknown, liveActor = true, run: object = liveRunClaims(actorId)) =>
+  const control = async (path: string, body: unknown, claims: object = {}, actorId = PUBLISHER) =>
     call(
-      `/v1/apps/${d.id}/connectors`,
+      path,
       await mintCapabilityToken(
         {
           actorId,
           scopeId: personalScope(actorId),
           aud: CONTROL_PLANE_AUD,
-          ...run,
-          liveActor,
+          ...liveRunClaims(actorId),
+          ...claims,
           exp: Date.now() + 60_000,
         },
         SIGNING,
       ),
-      { connectors },
+      body,
     );
-  return { d, app, deploy, audits, upstream, broker, lend };
+  const lend = (actorId: string, connectors: unknown, liveActor = true, run: object = {}) =>
+    control(`/v1/apps/${d.id}/connectors`, { connectors }, { ...run, liveActor }, actorId);
+  return { d, app, deploy, audits, upstream, broker, lend, control };
 }
 
 const get = (host: string, path = "/v1/me") => ({ connector: host, url: `https://${host}${path}` });
@@ -180,6 +184,31 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.ok(trail.some((l) => l.startsWith("connector.broker.denied slack.com") && l.endsWith("host_not_allowed")));
   assert.ok(trail.some((l) => /^deploy_connectors \S+ gmail\.googleapis\.com,slack\.com$/.test(l)));
   assert.ok(trail.some((l) => /^deploy_connectors \S+ \(none\)$/.test(l)));
+
+  const unshared = await h.app.appGrantees(h.d.id);
+  const viaTool = await createControlService(h.app).shareArtifact(
+    { type: "deploy", id: h.d.id, scope: "org" },
+    {
+      ...liveRunClaims(PUBLISHER),
+      actorId: PUBLISHER,
+      scopeId: personalScope(PUBLISHER),
+      botActor: true,
+      exp: Date.now() + 60_000,
+    },
+  );
+  assert.equal(viaTool.ok || viaTool.code, "human_consent_required");
+  assert.deepEqual(await h.app.appGrantees(h.d.id), unshared);
+  for (const [path, body, claims] of [
+    [`/v1/apps/${h.d.id}/share`, { scope: "org" }, { triggered: true }],
+    ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
+    ["/v1/share", { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true }, { triggered: true }],
+  ] as const) {
+    const before = await h.app.appGrantees(h.d.id);
+    assert.equal((await h.control(path, body, claims)).json.error, "human_consent_required");
+    assert.deepEqual(await h.app.appGrantees(h.d.id), before);
+    assert.equal((await h.control(path, body)).status, 200);
+    assert.notDeepEqual(await h.app.appGrantees(h.d.id), before);
+  }
 });
 
 test("public apps cannot borrow connectors", async (t) => {

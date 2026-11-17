@@ -54,8 +54,8 @@ Checks sit where every path already flows: turn resolution (below) and the scope
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
 write. Only an owner can attach a credential, only their own, and only on a turn they
 sent that is still running; readers use it through the persona but never hold it.
-Detaching a credential and deleting the persona also take an owner, on a turn they sent
-that is still running.
+Detaching a credential, changing who holds a role and deleting the persona also take an
+owner, on a turn they sent that is still running.
 
 **Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
 default admin becomes an owner: the active org admin with the oldest grant, so the admins named

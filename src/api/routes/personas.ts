@@ -152,7 +152,7 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId) return;
+  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
   const access = isObj(ctx.body) ? ctx.body.access : undefined;
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
