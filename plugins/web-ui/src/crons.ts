@@ -562,12 +562,12 @@ function cronCopyStatus(copy: NonNullable<CronView["copies"]>[number]): string {
   return copy.enabled ? "On" : "Pending";
 }
 
-function destinationLabel(d: NonNullable<CronView["destination"]>): TemplateResult | string {
+function destinationLabel(d: NonNullable<CronView["destination"]>, mine = false): TemplateResult | string {
   if (d.type === "web") {
     const session = sessionsState.list.find((s) => s.threadRef === d.target);
-    return session
-      ? html`<a href=${deepLinkPath(UI_BASE, "chats", session.id)}>${sessionTitle(session)}</a>`
-      : "A chat";
+    if (!session) return mine ? "Your chat" : "A chat";
+    const link = html`<a href=${deepLinkPath(UI_BASE, "chats", session.id)}>${sessionTitle(session)}</a>`;
+    return mine ? html`Your chat: ${link}` : link;
   }
   if (d.type === "principal") return `${friendlyPrincipal(d.target)}'s DM`;
   if (d.audienceScopeId) return scopeChip(d.audienceScopeId);
@@ -598,7 +598,7 @@ function cronSharingFields(c: CronView, mine: boolean): TemplateResult {
     origin = c.enabled
       ? "Linked: edits to the original reach this copy until you edit it."
       : "Waiting for you: turn it on to accept, or delete it to decline.";
-  const own = c.destination ? destinationLabel(c.destination) : "Nowhere yet";
+  const own = c.destination ? destinationLabel(c.destination, mine) : "Nowhere yet";
   const copies = c.copies ?? [];
   return html`
     ${
