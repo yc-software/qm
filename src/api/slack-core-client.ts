@@ -102,6 +102,7 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
+  registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
@@ -340,6 +341,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           applied;
       }
       return applied;
+    },
+
+    registerGroupRoster(groupId, principalIds) {
+      return deps.app.registerGroupRoster(groupId, principalIds);
     },
 
     claimDeliveries(type, claimMs) {

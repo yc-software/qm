@@ -1006,6 +1006,34 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(run?.request.botActor, true);
   });
 
+  it("an ask records the chat user who started the turn as the owner's chat identity only when they own the credential", async () => {
+    const author = { surface: "partner-chat", account: "7001", id: "5" };
+    const askFrom = async (actorId: string, service: string, threadRef: string) => {
+      const { credential } = (await (
+        await post("/v1/keychain/credentials", { service, secret: "s" }, await capFor("U_ALICE"))
+      ).json()) as any;
+      const { run } = await built.runs.enqueue({
+        sessionId: threadRef,
+        request: {
+          surface: "partner-chat",
+          actor: { id: actorId, type: "internal" },
+          conversation: { kind: "channel", channelRef: "C_INFRA", threadRef, audience: [] },
+          origin: { kind: "human", messageTs: "1700000000.000100" },
+          surfaceOrigin: { author, workspace: "7001", audience: "internal" },
+          text: "deploy it",
+        },
+        maxAttempts: 1,
+      });
+      const cap = await capFor(actorId, "channel:C_INFRA", { threadRef, runId: run.id });
+      const made = (await (
+        await post("/v1/keychain/asks", { credential: credential.id, purpose: "deploy" }, cap)
+      ).json()) as any;
+      return (await built.keychain!.getAsk(made.ask.id))!;
+    };
+    assert.deepEqual((await askFrom("U_ALICE", "chat-owned", "ch:C_INFRA-owner")).ownerSurfaceUser, author);
+    assert.equal((await askFrom("U_BOB", "chat-borrowed", "ch:C_INFRA-borrower")).ownerSurfaceUser, undefined);
+  });
+
   it("bot work in a person's name can't ask for a person's credential", async () => {
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "deploy-key", secret: "s" }, await capFor("U_ALICE"))
