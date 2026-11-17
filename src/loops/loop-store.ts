@@ -266,10 +266,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
   };
 }
 
-export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
-  id: "users/v2/0011-hold-bot-loop-ships",
-  statements: [
-    `DO $$
+export const holdBotLoopShips = (by: string): string => `DO $$
     BEGIN
       IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('loops') IS NULL
          OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
@@ -300,7 +297,7 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
         RETURNING l.tenant_id
       ), revoked AS (
         UPDATE loop_ship_grants g
-           SET json = g.json || jsonb_build_object('revokedAt', ${msOf("now()")}, 'revokedBy', 'system:migration')
+           SET json = g.json || jsonb_build_object('revokedAt', ${msOf("now()")}, 'revokedBy', '${by}')
           FROM granted x WHERE g.tenant_id = x.tenant_id AND g.id = x.id
         RETURNING g.tenant_id
       ), versions AS (
@@ -309,11 +306,14 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
             OR tbl = 'loop_ship_grants' AND tenant_id IN (SELECT tenant_id FROM revoked)
       )
       INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
-      SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, id, scope, detail::text
+      SELECT tenant_id, ${msOf("now()")}, '${by}', action, id, scope, detail::text
         FROM (SELECT tenant_id, 'loop_update' AS action, id, scope, jsonb_build_object('heldShipActions', actions) AS detail
                 FROM gated
               UNION ALL
               SELECT tenant_id, 'ship_grant_revoke', id, scope, jsonb_build_object('loopId', loop_id) FROM granted) entries;
-    END $$`,
-  ],
+    END $$`;
+
+export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
+  id: "users/v2/0011-hold-bot-loop-ships",
+  statements: [holdBotLoopShips("system:migration")],
 };

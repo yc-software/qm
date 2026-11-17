@@ -7,6 +7,8 @@ import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { BACKFILL_BOT_MARKER_MIGRATION } from "../triggers/trigger-store.ts";
+import { holdBotLoopShips } from "../loops/loop-store.ts";
 
 export { fold };
 
@@ -362,6 +364,8 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
   return winner;
 }
 
+const BOT_WORK = [...BACKFILL_BOT_MARKER_MIGRATION.statements, holdBotLoopShips("system")];
+
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
@@ -471,13 +475,16 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     },
     async markApps(ids) {
       if (!ids.length) return 0;
-      const rows = await q(
-        `UPDATE users SET kind = 'app'
-          WHERE kind <> 'app' AND id IN (SELECT user_id FROM user_links WHERE alias_id = ANY($1::text[]))
-          RETURNING id`,
-        [ids.map((id) => foldPrincipalId(id))],
-      );
-      return rows.length;
+      return transaction(async (client) => {
+        const { rows } = await client.query(
+          `UPDATE users SET kind = 'app'
+            WHERE kind <> 'app' AND id IN (SELECT user_id FROM user_links WHERE alias_id = ANY($1::text[]))
+            RETURNING id`,
+          [ids.map((id) => foldPrincipalId(id))],
+        );
+        if (rows.length) for (const statement of BOT_WORK) await client.query(statement);
+        return rows.length;
+      });
     },
     async setDisplayName(alias, raw) {
       const name = cleanDisplayName(raw);

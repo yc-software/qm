@@ -8,11 +8,12 @@ import { personLabel, UNKNOWN_PERSON } from "../src/identity/person-names.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { recordUser } from "../src/core/orchestrator/intake.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
-const url = testDatabaseUrl();
+const url = testMigratedDatabaseUrl();
 const store = (): UserStore => createPostgresUserStore(url);
 const unique = (name: string) => `${name}-${randomUUID().slice(0, 8)}@example.com`;
 
@@ -29,16 +30,37 @@ test("a person joins the roster once, folded to one row, and keeps their first a
   assert.equal((await roster.list()).filter((u) => u.principalId === pat).length, 1);
 });
 
-test("a user is a person until marked as an app; marking never creates a row", async () => {
-  const bot = `U-${randomUUID().slice(0, 8)}`;
-  const absent = `U-${randomUUID().slice(0, 8)}`;
-  const roster = store();
-  await roster.record({ id: bot, source: "turn", at: Date.now() });
+test("a user is a person until QM records it as an app; then what its sign-ins made is bot work, and a person's is not", async () => {
+  const [roster, pg] = [store(), createPgPool(url)];
+  const [bot, synced, pat, absent] = [unique("bot"), unique("synced"), unique("pat"), unique("absent")];
+  for (const id of [bot, synced, pat]) await roster.record({ id, source: "turn", at: 1 });
+  const creators = { crons: "createdBy", monitors: "createdBy", keychain_asks: "requesterId", loops: "createdBy" };
+  const put = (table: string, id: string, json: object) =>
+    pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [id, { id, ownerScopeId: "channel:C1", ...json }]);
+  const shipActions = [{ action: "send_email", gate: "auto" }];
+  for (const [table, creator] of Object.entries(creators))
+    for (const who of [bot, pat]) await put(table, who, { [creator]: who, shipActions });
+  for (const who of [bot, synced, pat]) await put("loop_ship_grants", who, { loopId: pat, actorId: who });
+  await put("loops", "marked", { createdBy: bot, botActor: true, shipActions });
+  const rowsSql = `SELECT concat_ws(' ', t, id, json ->> 'botActor', json #>> '{shipActions,0,gate}', json ->> 'revokedBy') AS r
+    FROM (${[...Object.keys(creators), "loop_ship_grants"].map((t) => `SELECT '${t}' t, * FROM ${t}`).join(" UNION ")}) x`;
+  const rows = async () => (await pg.q(rowsSql)).map((r) => r.r as string).sort();
+  const bots = (t: string) => `${t} ${bot} true ${t === "loops" ? "hold" : "auto"}`;
+  const made = [...Object.keys(creators).flatMap((t) => [bots(t), `${t} ${pat} auto`]), "loops marked true hold"];
+  const grants = (...apps: string[]) =>
+    [bot, synced, pat].map((who) => `loop_ship_grants ${who}${apps.includes(who) ? " system" : ""}`);
   assert.equal((await roster.get(bot))?.kind, "person");
-  assert.equal(await roster.markApps([bot, absent]), 1);
+  await recordUser(roster, bot, true);
   assert.equal((await roster.get(bot))?.kind, "app");
-  assert.equal(await roster.markApps([bot]), 0, "marking again changes nothing");
-  assert.equal(await roster.get(absent), null);
+  assert.deepEqual(await rows(), [...made, ...grants(bot)].sort());
+  assert.equal(await roster.markApps([synced, bot, absent]), 1, "marking an app again changes nothing");
+  assert.deepEqual(await rows(), [...made, ...grants(bot, synced)].sort());
+  assert.equal(await roster.get(absent), null, "marking never creates a row");
+  const audit = `SELECT string_agg(action || ' ' || resource, ', ' ORDER BY action, resource) AS r FROM audit_log
+    WHERE principal_id = 'system'`;
+  const logged = `loop_update ${bot}, loop_update marked, ship_grant_revoke ${bot}, ship_grant_revoke ${synced}`;
+  assert.equal((await pg.q(audit))[0]!.r, logged);
+  await pg.close();
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {
