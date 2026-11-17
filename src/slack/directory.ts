@@ -620,7 +620,15 @@ export function createDirectory(deps: {
     } catch {
       return { audience: [actor, externalMarker()] };
     }
-    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {
+    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && info?.is_mpim) {
+      if (membership.publishMembers)
+        await core.registerGroupRoster(
+          channel,
+          membership.publishMembers.map((member) => member.externalId),
+        );
+      return membership;
+    }
+    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot) {
       if (!info?.name || typeof info.is_private !== "boolean" || info.is_member === false || observedAt === undefined)
         return { audience: [actor, externalMarker()] };
       if (membership.publishMembers) {
