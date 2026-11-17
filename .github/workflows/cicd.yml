@@ -75,8 +75,6 @@ jobs:
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
-    outputs:
-      full: ${{ steps.plan.outputs.full }}
     strategy:
       fail-fast: false
       matrix:
@@ -100,29 +98,20 @@ jobs:
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         if: needs.reuse.outputs.reusable != 'true'
-        with:
-          fetch-depth: 2
-      - name: Pick this shard's root test files
-        id: plan
-        if: needs.reuse.outputs.reusable != 'true'
-        env:
-          CORE_TEST_SHARD: ${{ matrix.shard }}/8
-          CORE_TEST_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
-        run: node scripts/run-root-test-shard.mjs > "$RUNNER_TEMP/root-tests"
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
+        if: needs.reuse.outputs.reusable != 'true'
         with:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
-        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm ci
       - name: Build connector SDK
-        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
+        if: needs.reuse.outputs.reusable != 'true'
         run: npm run build:connector-sdk
       - name: Install Helm for chart tests
-        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
+        if: needs.reuse.outputs.reusable != 'true'
         run: |
           cd "$(mktemp -d)"
           curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
@@ -131,7 +120,7 @@ jobs:
           tar -xzf helm-v3.19.0-linux-amd64.tar.gz
           sudo install linux-amd64/helm /usr/local/bin/helm
       - name: Configure test Postgres
-        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
+        if: needs.reuse.outputs.reusable != 'true'
         run: |
           for setting in "max_connections = 1000" "fsync = off" "synchronous_commit = off" "full_page_writes = off"; do
             docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET $setting"
@@ -139,17 +128,16 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
       - name: Root tests
-        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
+        if: needs.reuse.outputs.reusable != 'true'
         env:
+          CORE_TEST_SHARD: ${{ matrix.shard }}/8
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: xargs node scripts/run-pg-tests.mjs < "$RUNNER_TEMP/root-tests"
+        run: npm run test:root:shard
       - name: Render runner tests as root
-        if: needs.reuse.outputs.reusable != 'true' && steps.plan.outputs.run == 'true'
+        if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 8
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: |
-          grep -qx test/render-deploy-runner.test.ts "$RUNNER_TEMP/root-tests" || exit 0
-          sudo env "PATH=$PATH" "DATABASE_URL=$DATABASE_URL" node scripts/run-pg-tests.mjs test/render-deploy-runner.test.ts
+        run: sudo env "PATH=$PATH" "DATABASE_URL=$DATABASE_URL" node scripts/run-pg-tests.mjs test/render-deploy-runner.test.ts
 
   core:
     name: Core
@@ -159,8 +147,6 @@ jobs:
     needs:
       - core-typecheck
       - core-tests
-    outputs:
-      full: ${{ needs.core-tests.outputs.full }}
     steps:
       - name: Core checks passed
         env:
@@ -516,7 +502,6 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Record the immutable tested tree
-        if: needs.core.outputs.full == 'true'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
