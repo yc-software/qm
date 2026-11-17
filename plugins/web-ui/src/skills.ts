@@ -273,7 +273,7 @@ function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
         <h2 dir="auto">/${s.name}</h2>
         ${archived ? html`<span class="badge">Archived</span>` : nothing}
         ${
-          s.id && s.scopeId && !archived && s.scopeId === `personal:${appState.me?.user}`
+          s.id && s.scopeId && !archived && skillActions(s).edit
             ? shareButton({ type: "skill", id: s.id, title: `/${s.name}`, owner: s.scopeId })
             : nothing
         }
