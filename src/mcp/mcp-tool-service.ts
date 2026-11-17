@@ -206,6 +206,7 @@ export function createMcpToolService(opts: {
   const sharedListings = new LRUCache<string, Promise<McpListing>>({
     ttl: refreshIntervalMs,
     ttlAutopurge: true,
+    ttlResolution: 0,
     perf: { now },
   });
   const tenantState = perTenant<{
@@ -348,7 +349,8 @@ export function createMcpToolService(opts: {
     const listing = clientFor(server).listTools({});
     sharedListings.set(server.url, listing);
     listing.catch(() => {
-      if (sharedListings.peek(server.url) === listing) sharedListings.delete(server.url);
+      if (sharedListings.peek(server.url) === listing)
+        sharedListings.set(server.url, listing, { ttl: RETRY_FAILED_LIST_MS });
     });
     return listing;
   }
@@ -399,7 +401,7 @@ export function createMcpToolService(opts: {
     } catch (e) {
       record("list", server.id, `error: ${errMessage(e)}`);
       const kept = previous.filter((t) => t.serverId === server.id);
-      return { tools: kept.length ? kept : next, failed: true };
+      return kept.length ? { tools: kept } : { tools: next, failed: true };
     }
     return { tools: next };
   }
@@ -449,7 +451,7 @@ export function createMcpToolService(opts: {
     if (closed) return state;
     const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
     const retryFailed = state.listFailed && now() - (state.loadedAt ?? -Infinity) >= RETRY_FAILED_LIST_MS;
-    if (version !== state.version || retryFailed || (state.listFailed && state.pending))
+    if (version !== state.version || retryFailed)
       await (state.pending ?? refresh(version !== state.version)).catch(
         reportFailureAs("mcp: refresh tools", undefined),
       );
