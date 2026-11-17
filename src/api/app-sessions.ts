@@ -120,6 +120,7 @@ export function createSessionMethods(
   | "forkSession"
   | "grant"
   | "revokeGrant"
+  | "grantees"
   | "promoteSkill"
   | "belongsToScope"
   | "canManageArtifactHome"
@@ -1238,7 +1239,11 @@ export function createSessionMethods(
         };
         await deps.deploy.assertShareAllowed(publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
       }
-      await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
+      const author = await artifactAuthor(g.ownerScopeId, g.ref);
+      const held = await deps.acl.grantsFor(tenant, g.ownerScopeId, g.ref);
+      if (held.some((h) => h.granteeScopeId === g.granteeScopeId && h.permission !== g.permission))
+        await deps.acl.revoke(tenant, g.ownerScopeId, g.ref, g.granteeScopeId, g.grantedBy, author);
+      await deps.acl.grant(tenant, g, author);
       deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,
@@ -1248,6 +1253,12 @@ export function createSessionMethods(
       });
       if (publishedApp && opts?.notify !== false)
         await notifyAppShared(deps, publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
+    },
+    async grantees(tenant, ownerScopeId, ref) {
+      return (await deps.acl.grantsFor(tenant, ownerScopeId, ref)).map((g) => ({
+        scope: g.granteeScopeId,
+        permission: g.permission,
+      }));
     },
     async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(

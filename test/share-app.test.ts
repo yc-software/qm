@@ -12,7 +12,8 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { renameApp, archiveApp, restoreApp, getApp, setAppDisplayName } from "../src/api/routes/apps.ts";
-import { getAppShares, resolveShareTarget, shareApp } from "../src/api/routes/app-sharing.ts";
+import { getAppShares, shareApp } from "../src/api/routes/app-sharing.ts";
+import { resolveShareTarget as resolveTarget } from "../src/api/artifact-share.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
@@ -66,6 +67,8 @@ function apiHarness(directory?: Dir) {
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
+    acl,
+    auditLog: { record() {} },
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     ...(directory ? { directory } : {}),
   } as unknown as Parameters<typeof createApp>[0]);
@@ -106,8 +109,15 @@ function callManage(
     body,
     capability: capability && { ...liveRunClaims(capability.actorId), ...capability },
     actor: person ? { p: person, exp: Date.now() + 60_000 } : null,
+    tenant,
     secret: "test-secret",
-    deps: { featureFlags, runs: liveRunStore(), apiBaseUrl: "https://api.example", publicUrl: "https://web.example" },
+    deps: {
+      featureFlags,
+      control: createControlService(app),
+      runs: liveRunStore(),
+      apiBaseUrl: "https://api.example",
+      publicUrl: "https://web.example",
+    },
     url: new URL(`http://localhost/v1/apps/${id}`),
     req: { headers: { host: "localhost" } },
   } as unknown as ApiCtx;
@@ -340,6 +350,8 @@ test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→pers
     },
   };
   const { app } = apiHarness(directory);
+  const resolveShareTarget = (app: ReturnType<typeof createApp>, input: { scope?: string; recipient?: string }) =>
+    resolveTarget(app, input, { invalidScope: (scope) => scope, targetRequired: "target required" });
   assert.deepEqual(await resolveShareTarget(app, { scope: "org" }), {
     kind: "ok",
     scope: "org:default-org",
@@ -590,10 +602,12 @@ test("the apps tool and the share action change public access only with a person
 });
 
 test("with external app sharing off, public links and outside emails are refused while org sharing still works", async () => {
-  const { deploy } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
+  const { deploy, acl } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
+    acl,
+    auditLog: { record() {} },
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const off = { enabled: async () => false } as unknown as FeatureFlagStore;

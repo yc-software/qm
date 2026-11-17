@@ -95,13 +95,39 @@ export interface ShareArtifactRequest {
   email?: string;
   permission?: Permission;
   move?: boolean;
+  remove?: boolean;
   notify?: boolean;
 }
+
+export interface ShareAccess {
+  scope: ScopeId;
+  permission: Permission;
+}
+
+export interface ShareOffers {
+  org: boolean;
+  manage: boolean;
+  email: boolean;
+  public: boolean;
+}
+
+export function shareOffers(type: ArtifactType, home: ArtifactHome): ShareOffers {
+  return {
+    org: type !== "skill",
+    manage: type !== "cron" || !home.ownerScopeId.startsWith("personal:"),
+    email: type === "deploy",
+    public: type === "deploy",
+  };
+}
+
+export type ShareAccessResult =
+  | { ok: true; type: ArtifactType; id: string; owner: ScopeId; offers: ShareOffers; access: ShareAccess[] }
+  | { ok: false; code: "not_found" | "forbidden"; message: string };
 
 export type ShareArtifactResult =
   | {
       ok: true;
-      verb: "share" | "move" | "promote";
+      verb: "share" | "unshare" | "move" | "promote";
       type: ArtifactType;
       id: string;
       target: { scope: ScopeId; label: string };
@@ -115,6 +141,7 @@ export type ShareArtifactResult =
         | "not_found"
         | "forbidden"
         | "human_consent_required"
+        | "external_sharing_disabled"
         | "recipient_not_found"
         | "ambiguous_recipient"
         | "share_failed";

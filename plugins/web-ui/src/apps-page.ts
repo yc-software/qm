@@ -1,4 +1,4 @@
-import { openAppPermissions } from "./app-permissions";
+import { openShare } from "./share-dialog";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
@@ -297,7 +297,7 @@ function drawAppDetail(d: AppView, loading = false): void {
             ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="app-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
             ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="app-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
           </div>
-          ${d.ownerScopeId === `personal:${appState.me?.user}` ? html`<button class="btn" type="button" @click=${() => void openAppPermissions(d.id, appTitle(d), d.ownerScopeId!)}>Permissions</button>` : permissionBadge(d)}
+          ${d.ownerScopeId === `personal:${appState.me?.user}` ? html`<button class="btn" type="button" @click=${() => void openShare({ type: "deploy", id: d.id, title: appTitle(d), owner: d.ownerScopeId! })}>Permissions</button>` : permissionBadge(d)}
         </div>
 
         ${

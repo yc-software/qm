@@ -375,8 +375,8 @@ export function controlPlaneTools(kit: ToolKit) {
             }
           : {}),
         permission: Type.Optional(
-          Type.Union([Type.Literal("read"), Type.Literal("write")], {
-            description: "read (default) or write (manage).",
+          Type.Union([Type.Literal("read"), Type.Literal("write"), Type.Literal("none")], {
+            description: "read (default), write (manage), or none (remove their access).",
           }),
         ),
       }),
@@ -386,7 +386,7 @@ export function controlPlaneTools(kit: ToolKit) {
           toScope?: string;
           email?: string;
           public?: boolean;
-          permission?: "read" | "write";
+          permission?: "read" | "write" | "none";
           notify?: boolean;
         };
         const tc = ref.current;
@@ -420,7 +420,8 @@ export function controlPlaneTools(kit: ToolKit) {
           id,
           ...(params.toScope ? splitToScope(params.toScope) : {}),
           ...(params.email !== undefined ? { email: params.email } : {}),
-          ...(params.permission !== undefined ? { permission: params.permission } : {}),
+          ...(params.permission === "none" ? { remove: true } : {}),
+          ...(params.permission === "read" || params.permission === "write" ? { permission: params.permission } : {}),
           ...(params.notify !== undefined ? { notify: params.notify } : {}),
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
@@ -446,7 +447,9 @@ export function controlPlaneTools(kit: ToolKit) {
           callId,
           { tool, action: "share", verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
           text(
-            `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
+            r.verb === "unshare"
+              ? `Removed ${r.target.label}'s access to ${r.type} ${r.id}.`
+              : `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
           ),
         );
       },
