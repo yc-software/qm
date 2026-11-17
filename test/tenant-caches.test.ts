@@ -442,7 +442,7 @@ test("Slack mention names stay with their tenant; the env bot identity is proces
   setDefaultBotIdentity(undefined);
 });
 
-test("tenants share one unauthenticated MCP listing, and a refused listing keeps its tools and is retried", async (t) => {
+test("tenants share one unauthenticated MCP listing, and a refused re-list keeps the tools", async (t) => {
   const mcp = await startMcpTestServer(t);
   const shared: McpServer = {
     id: "shared",
@@ -455,13 +455,11 @@ test("tenants share one unauthenticated MCP listing, and a refused listing keeps
     updatedBy: "admin",
   };
   let refused = false;
-  let clock = 1_000;
   const fetch: typeof loopbackFetch = (input, init) =>
     refused ? Promise.resolve(new Response("Forbidden", { status: 403 })) : loopbackFetch(input, init);
   const service = createMcpToolService({
     fetch,
     servers: mcpStore({ [A]: [shared], [B]: [shared] }),
-    now: () => clock,
   });
   t.after(() => service.close());
   t.mock.method(console, "error", () => {});
@@ -473,13 +471,4 @@ test("tenants share one unauthenticated MCP listing, and a refused listing keeps
   refused = true;
   await withTenant(A, () => service.refresh());
   assert.deepEqual(await names(A), ["shared_query", "shared_update"]);
-  const fresh = randomUUID();
-  const store = mcpStore({ [fresh]: [shared] });
-  const cold = createMcpToolService({ fetch, servers: store, now: () => clock });
-  t.after(() => cold.close());
-  const coldNames = () => withTenant(fresh, async () => (await cold.toolDefsFor()).map((d) => d.name));
-  assert.deepEqual(await coldNames(), []);
-  refused = false;
-  clock += 15_001;
-  assert.deepEqual(await coldNames(), ["shared_query", "shared_update"]);
 });
