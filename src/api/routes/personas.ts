@@ -58,7 +58,8 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
   );
   const home = `persona:${result.value.id}`;
   const skills = (await ctx.app.listVisibleSkills(principalId, isOwnScopeBotWork(ctx.capability)))
-    .flatMap((row) => (row.skill?.scopeId === home ? [row.skill] : []))
+    .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+    .filter((skill) => skill.scopeId === home)
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const crons = await personaCrons(ctx, principalId, result.value.id);
