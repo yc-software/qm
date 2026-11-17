@@ -168,7 +168,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
       ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(origin ? { origin } : {}),
-      ...(clientTools?.length ? { clientTools } : {}),
+      ...(clientTools !== undefined ? { clientTools } : {}),
     },
   };
 }

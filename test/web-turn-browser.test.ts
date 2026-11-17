@@ -296,6 +296,23 @@ test("client tools and a surface briefing reach the agent only from the person's
   }
 });
 
+test("project conversations carry the initiating client's tools and surface context", async () => {
+  const turn = await sentTurn({
+    scopeId: "group:web-project-workbook",
+    threadRef: "web:alice:workbook",
+    clientTools: [scroll],
+    surfaceBriefing: { name: "Workbook", state: "Sheet: Inputs" },
+  });
+  assert.deepEqual(turn.conversation, {
+    kind: "group",
+    channelRef: "web-project-workbook",
+    threadRef: "web:alice:workbook",
+  });
+  assert.deepEqual(turn.clientTools, [scroll]);
+  assert.match(turn.conversationHeader ?? "", /Sheet: Inputs/);
+  assert.deepEqual((await sentTurn({ clientTools: [] })).clientTools, []);
+});
+
 test("steers without conversation context and aborts are forwarded bare", async () => {
   for (const body of [
     { kind: "steer", text: "louder" },
