@@ -154,7 +154,7 @@ export const projectRoutes: ReadonlyArray<Route<ApiCtx>> = [
     {
       method: "POST",
       path: "/v1/projects",
-      browser: true,
+      browser: "embed",
       auth: "either",
       allowedInStrict: true,
       handle: createProject,

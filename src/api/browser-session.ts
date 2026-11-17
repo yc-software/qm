@@ -81,6 +81,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/sessions/:id/expand", "/v1/sessions/:id/expand"],
   ["POST /api/sessions/:id/fork", "/v1/sessions/:id/fork"],
   ["PUT /api/ui-state", "/v1/ui-state"],
+  ["POST /api/skills/:id/share", "/v1/skills/:id/share"],
   ["POST /api/skills", "/v1/skills"],
   ["PUT /api/skills/:id", "/v1/skills/:id"],
   ["DELETE /api/skills/:id", "/v1/skills/:id"],

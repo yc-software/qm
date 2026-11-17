@@ -1,3 +1,4 @@
+import { refuseImpersonated } from "../http.ts";
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
@@ -39,7 +40,7 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, personalCapability } from "./shared.ts";
 import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
@@ -1191,6 +1192,23 @@ const SHARE_ERROR_STATUS: Record<string, number> = {
   share_failed: 400,
 };
 
+async function publishSkillFromBrowser(ctx: ApiCtx): Promise<void> {
+  if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
+  const claims = personalCapability(ctx);
+  if (!claims) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  const capability = ctx.capability ?? { ...claims, liveActor: true, liveAuthor: true };
+  await shareArtifact({
+    ...ctx,
+    capability,
+    body: {
+      type: "skill",
+      id: ctx.params.id,
+      toScope: isObj(ctx.body) ? ctx.body.toScope : undefined,
+      permission: "read",
+    },
+  });
+}
+
 export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!capability)
@@ -1496,6 +1514,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/memory/search", auth: "either", allowedInStrict: true, handle: searchMemory },
   { method: "POST", path: "/v1/grants", actor: "system", auth: "source", handle: createGrant },
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
+  { method: "POST", path: "/v1/skills/:id/share", browser: "embed", auth: "either", handle: publishSkillFromBrowser },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
   { method: "GET", path: "/v1/custom-emoji", browser: true, actor: "person", auth: "source", handle: getCustomEmoji },
@@ -1516,7 +1535,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id", browser: true, auth: "source", handle: patchSession },
     { method: "PATCH", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
     { method: "DELETE", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
-    { method: "POST", path: "/v1/skills", browser: true, auth: "either", handle: createSkill },
+    { method: "POST", path: "/v1/skills", browser: "embed", auth: "either", handle: createSkill },
     { method: "PUT", path: "/v1/skills/:id", browser: true, auth: "either", handle: updateSkill },
     { method: "DELETE", path: "/v1/skills/:id", browser: true, auth: "either", handle: deleteSkill },
     {
