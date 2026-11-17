@@ -83,6 +83,7 @@ export async function shareApp(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
   const notify = { notify: b.notify };
   if (b.public !== undefined) {
+    if (!(await livePersonTurn(ctx))) return;
     if (typeof b.public !== "boolean")
       return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });
     if (b.scope !== undefined || b.recipient !== undefined || b.email !== undefined || b.access !== undefined)
