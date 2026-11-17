@@ -102,6 +102,7 @@ export interface ShareArtifactRequest {
 export interface ShareAccess {
   scope: ScopeId;
   permission: Permission;
+  status?: "pending" | "on" | "edited";
 }
 
 export interface ShareOffers {

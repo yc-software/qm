@@ -43,3 +43,23 @@ test("a cron shared with a person becomes their paused linked copy until they ed
     [["U2", true]],
   );
 });
+
+test("unsharing a cron withdraws a pending copy and detaches an accepted one", async () => {
+  const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-unshare-")) }));
+  const source = await app.createCron({
+    ownerScopeId: "personal:U1",
+    owner: "U1",
+    createdBy: "U1",
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "weather in SF",
+  });
+  const pending = (await app.shareCron(testTenant, source.id, "U2", "U1")).copy;
+  const accepted = (await app.shareCron(testTenant, source.id, "U3", "U1")).copy;
+  await app.updateCron(accepted.id, { enabled: true }, { actorId: "U3" });
+
+  await app.unshareCron(source.id, "U2");
+  await app.unshareCron(source.id, "U3");
+  assert.equal(await app.getCron(pending.id), null);
+  assert.equal((await app.getCron(accepted.id))?.enabled, true);
+  assert.deepEqual(await app.cronCopies(source.id), []);
+});

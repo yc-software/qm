@@ -521,6 +521,8 @@ export interface App {
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
   shareCron(tenant: Tenant, id: string, recipient: string, by: string): Promise<{ copy: Cron; existed: boolean }>;
+  cronCopies(id: string): Promise<Cron[]>;
+  unshareCron(id: string, recipient: string): Promise<void>;
   updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;

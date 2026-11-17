@@ -45,8 +45,15 @@ export async function propagateCronEdit(crons: AppDeps["crons"], id: string, cha
   }
 }
 
-export function createCronShareMethods(deps: AppDeps, app: App): Pick<App, "shareCron"> {
+export function createCronShareMethods(deps: AppDeps, app: App): Pick<App, "shareCron" | "cronCopies" | "unshareCron"> {
   return {
+    cronCopies: (id) => deps.crons.copiesOf(id),
+    async unshareCron(id, recipient) {
+      const copy = (await deps.crons.copiesOf(id)).find((c) => samePerson(c.owner, recipient));
+      if (!copy) return;
+      if (copy.enabled || copy.forkedAt) await deps.crons.update(copy.id, { sharedFrom: null });
+      else await deps.crons.delete(copy.id);
+    },
     async shareCron(tenant, id, recipient, by) {
       const source = await deps.crons.get(id);
       if (!source) throw new Error(`no cron ${id}`);

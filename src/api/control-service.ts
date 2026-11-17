@@ -33,7 +33,7 @@ import {
   type ShareArtifactResult,
   isMultiMemberSkillScope,
 } from "./artifact-share.ts";
-import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
+import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import { withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
@@ -204,6 +204,11 @@ function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
   if (e instanceof SoulVersionConflictError) return "soul_version_conflict";
   return "soul_update_failed";
 }
+
+const copyStatus = (c: Cron): "pending" | "on" | "edited" => {
+  if (c.forkedAt) return "edited";
+  return c.enabled ? "on" : "pending";
+};
 
 async function mayShare(
   app: App,
@@ -825,10 +830,16 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         id: home.id,
         owner: home.ownerScopeId,
         offers: shareOffers(type, home),
-        access:
-          type === "deploy"
+        access: [
+          ...(type === "deploy"
             ? await app.appGrantees(home.id)
-            : await app.grantees(tenant, home.ownerScopeId, home.grantRef),
+            : await app.grantees(tenant, home.ownerScopeId, home.grantRef)),
+          ...(cron ? await app.cronCopies(cron.id) : []).map((c) => ({
+            scope: scopeId("personal", c.owner),
+            permission: "read" as const,
+            status: copyStatus(c),
+          })),
+        ],
       };
     },
 
@@ -883,8 +894,6 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
       const copyTo =
         cron && toKind === "personal" && permission === "read" && !req.move ? parseScopeId(toScope).ref : undefined;
-      const copyTo =
-        cron && toKind === "personal" && permission === "read" && !req.move ? parseScopeId(toScope).ref : undefined;
       if (!remove && permission === "write" && !shareOffers(req.type, home).manage)
         return {
           ok: false,
@@ -917,7 +926,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const tenant = ambientTenant();
       const shared = { type: req.type, id: home.id, target: { scope: toScope, label: target.label }, permission };
       try {
-        if (copyTo) {
+        if (copyTo && remove) await app.unshareCron(home.id, copyTo);
+        if (copyTo && !remove) {
           if (await app.samePerson(copyTo, capability.actorId))
             return { ok: false, code: "bad_request", message: "that cron is already yours" };
           const { copy, existed } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
