@@ -1881,7 +1881,7 @@ export function createChatSurface(
             onClick: () => void forkOriginController.navigate(),
           }
         : null,
-      persona: sessionPersonaChip(currentSession, () => drawActiveChat()),
+      persona: sessionPersonaChip(currentSession),
       onCrumb: crumb && scope ? () => openProjectPage(scope) : null,
       toolCount: scope ? (t) => scopeToolCount(t, scope, () => drawActiveChat()) : null,
       onTool: (tool) => {
