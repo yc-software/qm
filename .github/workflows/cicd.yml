@@ -59,6 +59,10 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci --ignore-scripts
       - name: Select the tests this change can reach
         id: select
         env:

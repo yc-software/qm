@@ -3,33 +3,42 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 
-const RUN_ALL = [
-  /^test\/support\/test-template\.ts$/,
-  /^package(-lock)?\.json$/,
-  /^tsconfig[^/]*\.json$/,
-  /^\.(npmrc|node-version)$/,
-  /^\.github\//,
-  /^vendor\//,
-  /^scripts\/(run-pg-tests\.mjs|run-root-test-shard\.mjs|select-ci\.ts)$/,
-];
+const RUN_ALL = {
+  exact: [
+    "package.json",
+    "package-lock.json",
+    ".npmrc",
+    ".node-version",
+    "scripts/run-pg-tests.mjs",
+    "scripts/run-root-test-shard.mjs",
+    "scripts/select-ci.ts",
+    "test/support/test-template.ts",
+  ],
+  prefixes: [".github/", "vendor/", "tsconfig"],
+};
 const RUNNERS = ["test/support/boot-tenant-entry.ts", "test/support/test-tenant.ts"];
-const WEB_UI = /^(plugins\/web-ui\/|deploy\/core\/|scripts\/smoke-core-image\.sh$|\.dockerignore$)/;
-const CLI = /^(cli|deploy\/stacks)\//;
-const ROOT_PACKAGE = /^(src|test|scripts)\//;
-const MODULE = /\.(?:[cm]?[jt]s|tsx)$/;
-const CORE_TEST = /^test\/[^/]+\.test\.ts$/;
-const IMPORT = /(?<![\w$.])(?:(?:import|export)\s[^"'`;]*?\sfrom\s*|import\s*\(\s*|import\s+)(["'])([^"'\n]+)\1/g;
-const TOKEN = /[\w@.-]*\/[\w@./-]+|[\w@-][\w@.-]*\.[A-Za-z]{1,5}\b/g;
+const WEB_UI = ["plugins/web-ui/", "deploy/core/", "scripts/smoke-core-image.sh", ".dockerignore"];
+const CLI = ["cli/", "deploy/stacks/"];
+const ROOT_PACKAGE = ["src/", "test/", "scripts/"];
+const MODULES = [".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs"];
 const EXTENSIONS = ["", ".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.js"];
 
 type Selection = { core: string[] | "all"; webUi: boolean; cli: boolean };
 const ALL: Selection = { core: "all", webUi: true, cli: true };
 
+const under = (path: string, prefixes: string[]) => prefixes.some((prefix) => path.startsWith(prefix));
+const runsAll = (path: string) => RUN_ALL.exact.includes(path) || under(path, RUN_ALL.prefixes);
+const isModule = (path: string) => MODULES.includes(posix.extname(path));
+const isCoreTest = (path: string) => posix.dirname(path) === "test" && path.endsWith(".test.ts");
+
 function runtimeCode(path: string, source: string) {
+  if (![".ts", ".mts", ".cts"].includes(posix.extname(path))) return source;
   try {
-    return /\.[cm]?ts$/.test(path) ? stripTypeScriptTypes(source) : source;
-  } catch {
+    return stripTypeScriptTypes(source);
+  } catch (error) {
+    console.log(`${path}: ${error instanceof Error ? error.message : String(error)}; reading its type imports too.`);
     return source;
   }
 }
@@ -40,35 +49,45 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
   const add = (target: string, candidates: string[]) => {
     const file = candidates.map((candidate) => posix.normalize(candidate)).find((candidate) => files.has(candidate));
     const dir = posix.normalize(target).replace(/\/$/, "");
-    if (file && !RUN_ALL.some((rule) => rule.test(file))) found.files.add(file);
+    if (file && !runsAll(file)) found.files.add(file);
     else if (!file && dirs.has(dir)) found.dirs.add(dir);
   };
-  const rest = runtimeCode(path, source).replace(IMPORT, (_, _quote, specifier: string) => {
+  const importEdge = (specifier: string) => {
+    if (!specifier.startsWith(".")) return;
     const target = posix.join(here, specifier);
-    if (specifier.startsWith(".")) {
-      add(target, [...EXTENSIONS.map((extension) => target + extension), target.replace(/\.js$/, ".ts")]);
+    add(target, [...EXTENSIONS.map((extension) => target + extension), target.replace(/\.js$/, ".ts")]);
+  };
+  const literalEdges = (text: string) => {
+    for (const piece of text.split(/[\s=,:;()"']+/)) {
+      if (!piece.replaceAll(".", "").replaceAll("/", "") || !(piece.includes("/") || posix.extname(piece))) continue;
+      add(posix.join(here, piece), [posix.join(here, piece)]);
+      if (!piece.startsWith(".")) add(piece.replace(/^\/+/, ""), [piece.replace(/^\/+/, "")]);
     }
-    return "";
-  });
-  if (!ROOT_PACKAGE.test(path)) return found;
-  for (const token of rest.match(TOKEN) ?? []) {
-    if (/^[./]*$/.test(token)) continue;
-    add(posix.join(here, token), [posix.join(here, token)]);
-    if (!token.startsWith(".")) add(token.replace(/^\/+/, ""), [token.replace(/^\/+/, "")]);
-  }
+  };
+  const literals = under(path, ROOT_PACKAGE);
+  const visit = (node: ts.Node): void => {
+    const specifier = (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier;
+    const loaded =
+      ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0];
+    if (loaded && ts.isStringLiteralLike(loaded)) return importEdge(loaded.text);
+    if (specifier && ts.isStringLiteralLike(specifier)) return importEdge(specifier.text);
+    if (literals && (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node))) literalEdges(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(ts.createSourceFile(path, runtimeCode(path, source), ts.ScriptTarget.Latest));
   return found;
 }
 
 export function select(changed: string[], tracked: string[], read: (path: string) => string): Selection {
   if (changed.length === 0) return { core: [], webUi: false, cli: false };
-  if (changed.some((path) => RUN_ALL.some((rule) => rule.test(path)))) return ALL;
-  if (changed.some((path) => path.startsWith("src/") && !MODULE.test(path))) return ALL;
+  if (changed.some(runsAll)) return ALL;
+  if (changed.some((path) => path.startsWith("src/") && !isModule(path))) return ALL;
   const files = new Set(tracked);
   const dirs = new Set(tracked.flatMap((path) => [...path.matchAll(/\//g)].map((slash) => path.slice(0, slash.index))));
   const importers = new Map<string, string[]>();
   const reached = new Set(changed);
   for (const path of tracked) {
-    if (!MODULE.test(path)) continue;
+    if (!isModule(path)) continue;
     const found = references(path, read(path), files, dirs);
     for (const target of found.files) importers.set(target, [...(importers.get(target) ?? []), path]);
     if ([...found.dirs].some((dir) => changed.some((file) => file.startsWith(`${dir}/`)))) reached.add(path);
@@ -77,9 +96,9 @@ export function select(changed: string[], tracked: string[], read: (path: string
   if (RUNNERS.some((runner) => reached.has(runner))) return ALL;
   const paths = [...reached];
   return {
-    core: paths.filter((path) => CORE_TEST.test(path) && files.has(path)).sort(),
-    webUi: paths.some((path) => WEB_UI.test(path)),
-    cli: paths.some((path) => CLI.test(path)),
+    core: paths.filter((path) => isCoreTest(path) && files.has(path)).sort(),
+    webUi: paths.some((path) => under(path, WEB_UI)),
+    cli: paths.some((path) => under(path, CLI)),
   };
 }
 
