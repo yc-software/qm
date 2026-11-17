@@ -530,7 +530,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
       const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
-      const administered = all.filter((_, i) => admits[i]).map((c) => withSharing(c, all));
+      const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
     },
@@ -539,7 +539,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (await canAdministerCron(app, cron, capability))
-        return { ok: true, cron: withSharing(cron, await app.listCrons()) };
+        return { ok: true, cron: withSharing(await app.listCrons())(cron) };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
       return { ok: false, code: "forbidden", message: "not your cron" };

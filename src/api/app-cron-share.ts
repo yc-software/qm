@@ -17,12 +17,19 @@ export function linkedChanges(before: Cron, patch: CronPatch): CronPatch {
   );
 }
 
-export function withSharing(cron: VisibleCron, all: readonly Cron[]): VisibleCron {
-  const copies: CronCopy[] = all
-    .filter((c) => c.sharedFrom === cron.id)
-    .map((c) => ({ id: c.id, owner: c.owner, enabled: c.enabled, ...(c.forkedAt ? { forkedAt: c.forkedAt } : {}) }));
-  const source = cron.sharedFrom ? all.find((c) => c.id === cron.sharedFrom) : undefined;
-  return { ...cron, ...(copies.length ? { copies } : {}), ...(source ? { sharedBy: source.owner } : {}) };
+export function withSharing(all: readonly Cron[]): (cron: VisibleCron) => VisibleCron {
+  const owners = new Map(all.map((c) => [c.id, c.owner]));
+  const copies = new Map<string, CronCopy[]>();
+  for (const c of all) {
+    if (!c.sharedFrom) continue;
+    const copy = { id: c.id, owner: c.owner, enabled: c.enabled, ...(c.forkedAt ? { forkedAt: c.forkedAt } : {}) };
+    copies.set(c.sharedFrom, [...(copies.get(c.sharedFrom) ?? []), copy]);
+  }
+  return (cron) => {
+    const mine = copies.get(cron.id);
+    const sharedBy = cron.sharedFrom ? owners.get(cron.sharedFrom) : undefined;
+    return { ...cron, ...(mine ? { copies: mine } : {}), ...(sharedBy ? { sharedBy } : {}) };
+  };
 }
 
 function scheduleText(s: CronSchedule): string {

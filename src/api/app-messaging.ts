@@ -219,13 +219,14 @@ export function createMessagingMethods(
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
-      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c)).map((c) => withSharing(c, all));
+      const sharing = withSharing(all);
+      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c)).map(sharing);
       const visible = all
         .filter((c) => !viewersOwn(c.owner))
         .filter(canSee)
         .map((c) => {
           const name = scopeNames.get(c.ownerScopeId);
-          return withSharing(name ? { ...c, scopeName: name } : c, all);
+          return sharing(name ? { ...c, scopeName: name } : c);
         });
       return { owned, visible };
     },
