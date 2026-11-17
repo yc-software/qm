@@ -364,5 +364,5 @@ intentionally deferred.
 Operators can set `SWARMS_ENABLED=false` to disable the swarm service, API,
 agent discovery, and background reconciliation. Existing swarm records and
 computers are retained. Already queued swarm turns fail without model execution
-and are not retried. The default is `true`. Restart core and workers after changing
-this deployment setting.
+and are not retried. The default is `true`. After changing this deployment setting,
+restart core and workers.
