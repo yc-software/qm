@@ -1789,9 +1789,10 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       ts: "200.4",
       blocks: [
         {
-          type: "plan",
-          title: "Waiting on subagents",
-          tasks: [{ task_id: "qm_status:test:child", title: "Child", status: "in_progress" }],
+          type: "task_card",
+          task_id: "qm_status:test",
+          title: "Still working: reading Slack docs",
+          status: "in_progress",
         },
       ],
     });

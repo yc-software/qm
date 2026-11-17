@@ -46,13 +46,13 @@ for selected people or conversation scopes. It is off by default. The Slack app 
 support [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block)
 blocks and have `chat:write`.
 
-After QM has been working for ten seconds, one card is posted in the existing reply thread
-and updated in place. Its title is the current step's tool `purpose`, a background job's or
-watch's purpose, or **Waiting on subagents**, prefixed with the acknowledgement emoji.
-Subagents of the thread, including their own subagents, jobs and watches, appear as plan
-rows with their latest step. A subtle **Follow via QM Web** link opens the exact web
-conversation with normal authorization; without a configured web URL, it is omitted.
-Quiet ambient turns, unthreaded DMs and turns that finish within ten seconds do not create
+After QM has been working for thirty seconds, one flat task card is posted in the existing
+reply thread and updated in place. Its title is the acknowledgement emoji and **Still working:**
+followed by the current step's tool `purpose`; while subagents do the work, a subagent's latest
+step is used instead. Background jobs and watches show their own purpose. The card's details
+line (for example "Working on it · 2m") links to the exact web conversation with normal
+authorization; without a configured web URL, it is plain text.
+Quiet ambient turns, unthreaded DMs and turns that finish within thirty seconds do not create
 cards. Cards are visible to everyone in their thread; own status cards and edits are
 excluded from conversation history.
 
