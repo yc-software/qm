@@ -17,7 +17,7 @@ const tree: Record<string, string> = {
     'let lazy: typeof import("../src/lazy.ts");\nlet value: import("../src/lazy.ts").Lazy;\nexport { lazy, value };\n',
   "test/dynamic.test.ts": 'await import("../src/lazy.ts");\n',
   "test/upgrade.test.ts": 'execFileSync("node", ["src/migrate-main.ts"]);\n',
-  "test/plain.test.ts": 'const mode = "test";\nconst root = `${mode}/src`;\n',
+  "test/plain.test.ts": 'const mode = "test";\nconst root = "src";\n',
   "test/helper.test.ts": 'import { fixture } from "./support/fixture.ts";\n',
   "test/support/fixture.ts": "export const fixture = 1;\n",
   "test/support/test-tenant.ts": 'import "../../src/tenants/context.ts";\n',
