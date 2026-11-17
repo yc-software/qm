@@ -6,12 +6,17 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: cicd-${{ github.ref }}
+  group: cicd-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
@@ -19,7 +24,7 @@ jobs:
     name: Resolve exact tested tree
     timeout-minutes: 3
     continue-on-error: true
-    if: github.event_name == 'merge_group'
+    if: github.event_name == 'merge_group' || (github.event_name == 'push' && !inputs.full)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,6 +56,7 @@ jobs:
       render-runner: ${{ steps.select.outputs.render-runner }}
       web-ui: ${{ steps.select.outputs.web-ui }}
       cli: ${{ steps.select.outputs.cli }}
+      core-image: ${{ steps.select.outputs.core-image }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -422,14 +428,16 @@ jobs:
       fail-fast: false
       matrix:
         check: [tests 1/2, tests 2/2, core image]
+    env:
+      SELECTED: ${{ matrix.check == 'core image' && needs.select.outputs.core-image || needs.select.outputs.web-ui }}
     steps:
       - name: Reuse the exact tested tree or skip an unaffected suite
-        if: needs.reuse.outputs.reusable == 'true' || needs.select.outputs.web-ui != 'true'
+        if: needs.reuse.outputs.reusable == 'true' || env.SELECTED != 'true'
         run: echo "Already tested for this exact tree, or this change cannot reach this suite; see Resolve exact tested tree and Select tests."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.web-ui == 'true'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.web-ui == 'true' && matrix.check != 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check != 'core image'
         with:
           node-version-file: .node-version
           cache: npm
@@ -437,10 +445,10 @@ jobs:
             package-lock.json
             plugins/web-ui/package-lock.json
       - name: Install core dependencies
-        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.web-ui == 'true' && matrix.check != 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check != 'core image'
         run: npm ci
       - name: Install, typecheck, test
-        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.web-ui == 'true' && matrix.check != 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check != 'core image'
         working-directory: plugins/web-ui
         env:
           SHARD: ${{ matrix.check }}
@@ -449,7 +457,7 @@ jobs:
           npm run typecheck
           node --test --test-shard="${SHARD#tests }" "test/**/*.test.ts"
       - name: Build and boot the core image's web front door
-        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.web-ui == 'true' && matrix.check == 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check == 'core image'
         run: bash scripts/smoke-core-image.sh
 
   web-ui-plugin:
@@ -553,7 +561,7 @@ jobs:
     name: Notify deployments of green main
     timeout-minutes: 3
     continue-on-error: true
-    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.full
     needs: [core, cli, lint, dependency-audit, core-postgres, web-ui-plugin, auth-plugin, portal-plugin]
     runs-on: ubuntu-latest
     permissions: {}

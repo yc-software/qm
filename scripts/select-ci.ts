@@ -19,14 +19,27 @@ const RUN_ALL = {
   prefixes: [".github/", "vendor/", "tsconfig"],
 };
 const RUNNERS = ["test/support/boot-tenant-entry.ts", "test/support/test-tenant.ts"];
-const WEB_UI = ["plugins/web-ui/", "deploy/core/", "scripts/smoke-core-image.sh", ".dockerignore"];
+const WEB_UI = ["plugins/web-ui/"];
+const CORE_IMAGE = [
+  "src/",
+  "plugins/",
+  "skills-seed/",
+  "cli/src/",
+  "cli/templates/",
+  "deploy/core/",
+  "deploy/connector-sdk/",
+  "docs/images/",
+  "desktop/assets/",
+  "scripts/smoke-core-image.sh",
+  ".dockerignore",
+];
 const CLI = ["cli/", "deploy/stacks/"];
 const ROOT_PACKAGE = ["src/", "test/", "scripts/"];
 const MODULES = [".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs"];
 const EXTENSIONS = ["", ".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.js"];
 
-type Selection = { core: string[] | "all"; webUi: boolean; cli: boolean };
-const ALL: Selection = { core: "all", webUi: true, cli: true };
+type Selection = { core: string[] | "all"; webUi: boolean; cli: boolean; coreImage: boolean };
+const ALL: Selection = { core: "all", webUi: true, cli: true, coreImage: true };
 
 const under = (path: string, prefixes: string[]) => prefixes.some((prefix) => path.startsWith(prefix));
 const runsAll = (path: string) => RUN_ALL.exact.includes(path) || under(path, RUN_ALL.prefixes);
@@ -79,7 +92,7 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
 }
 
 export function select(changed: string[], tracked: string[], read: (path: string) => string): Selection {
-  if (changed.length === 0) return { core: [], webUi: false, cli: false };
+  if (changed.length === 0) return { core: [], webUi: false, cli: false, coreImage: false };
   if (changed.some(runsAll)) return ALL;
   if (changed.some((path) => path.startsWith("src/") && !isModule(path))) return ALL;
   const files = new Set(tracked);
@@ -99,6 +112,7 @@ export function select(changed: string[], tracked: string[], read: (path: string
     core: paths.filter((path) => isCoreTest(path) && files.has(path)).sort(),
     webUi: paths.some((path) => under(path, WEB_UI)),
     cli: paths.some((path) => under(path, CLI)),
+    coreImage: changed.some((path) => under(path, CORE_IMAGE)),
   };
 }
 
@@ -135,8 +149,9 @@ function main() {
     "render-runner": String(core === "all" || core.includes("test/render-deploy-runner.test.ts")),
     "web-ui": String(selection.webUi),
     cli: String(selection.cli),
+    "core-image": String(selection.coreImage),
   };
-  const summary = `Core tests: ${core === "all" ? "all" : core.length} files, ${Math.round(100 * share)}% of test-seconds, ${shards} shards. Web UI plugin: ${selection.webUi}. CLI: ${selection.cli}.`;
+  const summary = `Core tests: ${core === "all" ? "all" : core.length} files, ${Math.round(100 * share)}% of test-seconds, ${shards} shards. Web UI plugin: ${selection.webUi}. CLI: ${selection.cli}. Core image: ${selection.coreImage}.`;
   console.log([summary, ...(core === "all" ? [] : core)].join("\n"));
   const { GITHUB_OUTPUT, GITHUB_STEP_SUMMARY } = process.env;
   if (GITHUB_OUTPUT)

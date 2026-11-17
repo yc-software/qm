@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { plan, select } from "../scripts/select-ci.ts";
 
@@ -32,6 +33,7 @@ test("a change selects the root tests whose runtime imports reach it", () => {
     core: ["test/a.test.ts", "test/upgrade.test.ts"],
     webUi: true,
     cli: false,
+    coreImage: true,
   });
   assert.deepEqual(run("test/support/fixture.ts").core, ["test/helper.test.ts"]);
   assert.deepEqual(run("src/migrate-main.ts").core, ["test/upgrade.test.ts"]);
@@ -54,20 +56,35 @@ test("dependencies, CI, runners and runtime files under src run everything", () 
     "src/prompt.md",
     "src/tenants/context.ts",
   ])
-    assert.deepEqual(run(path), { core: "all", webUi: true, cli: true }, path);
+    assert.deepEqual(run(path), { core: "all", webUi: true, cli: true, coreImage: true }, path);
 });
 
 test("files no suite can reach select nothing, and suites run on their own paths", () => {
-  assert.deepEqual(run("docs/guide.md"), { core: [], webUi: false, cli: false });
-  assert.deepEqual(run("plugins/web-ui/src/view.ts"), { core: [], webUi: true, cli: false });
-  assert.deepEqual(run("cli/src/cli.ts"), { core: [], webUi: false, cli: true });
-  assert.deepEqual(run(), { core: [], webUi: false, cli: false });
+  assert.deepEqual(run("docs/guide.md"), { core: [], webUi: false, cli: false, coreImage: false });
+  assert.deepEqual(run("plugins/web-ui/src/view.ts"), { core: [], webUi: true, cli: false, coreImage: true });
+  assert.deepEqual(run("cli/src/cli.ts"), { core: [], webUi: false, cli: true, coreImage: true });
+  assert.deepEqual(run(), { core: [], webUi: false, cli: false, coreImage: false });
+});
+
+test("every file the core image copies in rebuilds and boots the image", () => {
+  const dockerfile = readFileSync(new URL("../deploy/core/Dockerfile", import.meta.url), "utf8");
+  const sources = [...dockerfile.matchAll(/^COPY (?!--from)(.+) \S+$/gm)].flatMap((copy) => copy[1]!.split(" "));
+  assert.ok(sources.includes("src"));
+  for (const source of [...sources, "deploy/core/Dockerfile", ".dockerignore", "scripts/smoke-core-image.sh"])
+    assert.equal(run(`${source}/file.ts`).coreImage || run(source).coreImage, true, source);
 });
 
 test("shards scale with the selected test time", () => {
   const timings = { "test/a.test.ts": 600, "test/b.test.ts": 200, "test/c.test.ts": 1120 };
-  assert.deepEqual(plan({ core: "all", webUi: true, cli: true }, timings), { seconds: 1920, share: 1, shards: 8 });
-  assert.equal(plan({ core: ["test/a.test.ts", "test/b.test.ts"], webUi: false, cli: false }, timings).shards, 2);
-  assert.equal(plan({ core: ["test/b.test.ts"], webUi: false, cli: false }, timings).shards, 1);
-  assert.equal(plan({ core: [], webUi: false, cli: false }, timings).shards, 0);
+  assert.deepEqual(plan({ core: "all", webUi: true, cli: true, coreImage: true }, timings), {
+    seconds: 1920,
+    share: 1,
+    shards: 8,
+  });
+  assert.equal(
+    plan({ core: ["test/a.test.ts", "test/b.test.ts"], webUi: false, cli: false, coreImage: false }, timings).shards,
+    2,
+  );
+  assert.equal(plan({ core: ["test/b.test.ts"], webUi: false, cli: false, coreImage: false }, timings).shards, 1);
+  assert.equal(plan({ core: [], webUi: false, cli: false, coreImage: false }, timings).shards, 0);
 });
