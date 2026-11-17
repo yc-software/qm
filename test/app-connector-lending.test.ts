@@ -213,11 +213,14 @@ test("only the live publisher can lend, per app and per connected-app host", asy
 
 test("public apps cannot borrow connectors", async (t) => {
   const h = await agent(t);
-  await h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER });
+  await h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER, personAtKeyboard: true });
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /public app cannot borrow/);
-  await h.app.setAppPublic(h.d.id, false, { createdBy: PUBLISHER });
+  await h.app.setAppPublic(h.d.id, false, { createdBy: PUBLISHER, personAtKeyboard: true });
   await h.lend(PUBLISHER, ["slack.com"]);
-  await assert.rejects(h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER }), /cannot be public/);
+  await assert.rejects(
+    h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER, personAtKeyboard: true }),
+    /cannot be public/,
+  );
 });
 
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {

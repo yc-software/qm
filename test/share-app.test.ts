@@ -381,7 +381,7 @@ const appSandbox = (): Sandbox => {
   } as unknown as Sandbox;
 };
 
-function toolCtx(deploy: DeployService): ToolContext {
+function toolCtx(deploy: DeployService, controlClaims = cap("U1")): ToolContext {
   return createToolContext({
     sandbox: appSandbox(),
     provision: async () => ({}) as SandboxHandle,
@@ -393,6 +393,7 @@ function toolCtx(deploy: DeployService): ToolContext {
     deploy,
     acl: {} as never,
     createdBy: "U1",
+    controlClaims,
   } as never);
 }
 
@@ -464,7 +465,7 @@ test("republish, rename and rollback never change visibility; only the separate 
   assert.equal(after?.public, undefined);
   assert.equal(after?.name, "vis");
   assert.equal((await deploy.reachApp("vis", "U2")).status, "denied");
-  await deploy.setAppPublic(d.id, true, { createdBy: "U1" });
+  await deploy.setAppPublic(d.id, true, { createdBy: "U1", personAtKeyboard: true });
   assert.equal((await deploy.getApp(d.id))?.public, true);
   await deploy.deployOrUpdate({ ...owner, name: "vis" });
   await deploy.deployOrUpdate({ ...owner, name: "vis2", renameFrom: "vis" });
@@ -564,6 +565,32 @@ test("without an apps domain, a public link is refused on the share route and th
   await assert.rejects(() => toolCtx(deploy).setAppPublic("path-only", true), /Public links need an apps domain/);
   assert.equal((await app.getApp("path-only"))?.public, undefined);
   assert.equal((await callShare(app, cap("U1"), "path-only", { public: false })).status, 200);
+});
+
+test("the apps tool and the share action change public access only with a person at the keyboard", async () => {
+  const { deploy } = makeDeploy();
+  const app = createApp({
+    advisoryLock: testAdvisoryLock(),
+    deploy,
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+  } as unknown as Parameters<typeof createApp>[0]);
+  await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "solo",
+  });
+  const fired = { ...cap("U1"), triggered: true };
+  await assert.rejects(() => toolCtx(deploy, fired).setAppPublic("solo", true), /Only the person/);
+  assert.equal((await callShare(app, fired, "solo", { public: true })).body.error, "human_consent_required");
+  assert.equal(
+    (await callShare(app, { ...cap("U1"), runId: "ended" }, "solo", { public: true })).body.error,
+    "inactive_run",
+  );
+  assert.equal((await app.getApp("solo"))?.public, undefined);
+  assert.equal((await toolCtx(deploy).setAppPublic("solo", true)).public, true);
+  assert.equal((await callShare(app, null, "solo", { public: false }, externalSharingOn, "U1")).body.public, false);
 });
 
 test("with external app sharing off, public links and outside emails are refused while org sharing still works", async () => {
