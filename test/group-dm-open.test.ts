@@ -293,7 +293,8 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
         pushes.push(body);
         return true;
       },
-      holdDirectorySync: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+      holdDirectorySync: (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) =>
+        fn(new Promise<void>(() => {})),
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
@@ -384,7 +385,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
         pushes.push(body);
         return true;
       },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) =>
+      holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) =>
         locked ? null : fn(new Promise<void>(() => {})),
     };
     const client = {
@@ -440,7 +441,8 @@ describe("the directory crawl when another instance holds the sync lease", () =>
         pushes.push(body);
         return refusals-- <= 0;
       },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+      holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) =>
+        fn(new Promise<void>(() => {})),
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
@@ -491,7 +493,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
         pushes.push(body);
         return true;
       },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(Promise.resolve()),
+      holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) => fn(Promise.resolve()),
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },

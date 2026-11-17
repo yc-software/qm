@@ -51,7 +51,8 @@ function fixture(t: TestContext) {
     };
     const directory = createDirectory({
       core: {
-        holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<boolean>) => fn(new Promise(() => {})),
+        holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<boolean>) =>
+          fn(new Promise(() => {})),
         pushDirectory: async (body: Parameters<SlackCoreClient["pushDirectory"]>[0]) => {
           if (state.rejectPush) {
             pushes.push(body);
