@@ -67,7 +67,7 @@ jobs:
           if [ -n "$CI_BASE" ] && ! git cat-file -e "$CI_BASE^{commit}"; then
             git fetch --no-tags --depth=1 origin "$CI_BASE" || true
           fi
-          node scripts/select-ci.ts
+          node --disable-warning=ExperimentalWarning scripts/select-ci.ts
 
   core-typecheck:
     name: Core typecheck

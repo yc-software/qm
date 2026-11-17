@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -18,14 +19,20 @@ const CLI = /^(cli|deploy\/stacks)\//;
 const ROOT_PACKAGE = /^(src|test|scripts)\//;
 const MODULE = /\.(?:[cm]?[jt]s|tsx)$/;
 const CORE_TEST = /^test\/[^/]+\.test\.ts$/;
-const STATEMENT =
-  /(?<![\w$.])(?:(import|export)(\s+type(?=[\s{*]))?\s+[^"'`;]*?\sfrom\s*|(typeof\s+)?import\s*\(\s*|import\s+)(["'])([^"'\n]+)\4/g;
-const TYPE_POSITION = /^\s*\)\s*\.(?!then\b|catch\b|finally\b)\w/;
+const IMPORT = /(?<![\w$.])(?:(?:import|export)\s[^"'`;]*?\sfrom\s*|import\s*\(\s*|import\s+)(["'])([^"'\n]+)\1/g;
 const TOKEN = /[\w@.-]*\/[\w@./-]+|[\w@-][\w@.-]*\.[A-Za-z]{1,5}\b/g;
 const EXTENSIONS = ["", ".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.js"];
 
 type Selection = { core: string[] | "all"; webUi: boolean; cli: boolean };
 const ALL: Selection = { core: "all", webUi: true, cli: true };
+
+function runtimeCode(path: string, source: string) {
+  try {
+    return /\.[cm]?ts$/.test(path) ? stripTypeScriptTypes(source) : source;
+  } catch {
+    return source;
+  }
+}
 
 function references(path: string, source: string, files: Set<string>, dirs: Set<string>) {
   const here = posix.dirname(path);
@@ -36,11 +43,9 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
     if (file && !RUN_ALL.some((rule) => rule.test(file))) found.files.add(file);
     else if (!file && dirs.has(dir)) found.dirs.add(dir);
   };
-  const rest = source.replace(STATEMENT, (match, kind, type, typeOf, _quote, specifier: string, at: number) => {
+  const rest = runtimeCode(path, source).replace(IMPORT, (_, _quote, specifier: string) => {
     const target = posix.join(here, specifier);
-    const after = source.slice(at + match.length, at + match.length + 40);
-    const typeOnly = kind ? type : typeOf || TYPE_POSITION.test(after);
-    if (!typeOnly && specifier.startsWith(".")) {
+    if (specifier.startsWith(".")) {
       add(target, [...EXTENSIONS.map((extension) => target + extension), target.replace(/\.js$/, ".ts")]);
     }
     return "";
