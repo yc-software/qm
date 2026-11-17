@@ -9,6 +9,7 @@ export interface AppView {
   id: string;
   status?: "running" | "stopped" | "archived" | string;
   ownerScopeId?: string;
+  canShare?: boolean;
   createdBy?: string;
   ownerName?: string;
   createdByName?: string;
@@ -45,10 +46,6 @@ export function appListRefreshCanRedraw(activeId?: string): boolean {
 
 export function appCanManage(d: AppView): boolean {
   return d.permission === "write";
-}
-
-export function appCanShare(d: AppView, me: string | undefined): boolean {
-  return d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId === `personal:${me}` : appCanManage(d);
 }
 
 export function appContextScope(d: AppView): string | undefined {

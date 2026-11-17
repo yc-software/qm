@@ -17,7 +17,6 @@ import {
   appActionView,
   appArchiveUndoAvailable,
   appCanManage as canManage,
-  appCanShare,
   appContextScope,
   appInScope,
   appListRefreshCanRedraw,
@@ -298,7 +297,7 @@ function drawAppDetail(d: AppView, loading = false): void {
             ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="app-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
             ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="app-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
           </div>
-          ${appCanShare(d, appState.me?.user) ? shareButton({ type: "deploy", id: d.id, title: appTitle(d), owner: d.ownerScopeId! }) : permissionBadge(d)}
+          ${d.canShare ? shareButton({ type: "deploy", id: d.id, title: appTitle(d), owner: d.ownerScopeId! }) : permissionBadge(d)}
         </div>
 
         ${
