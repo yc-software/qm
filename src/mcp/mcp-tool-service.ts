@@ -217,13 +217,13 @@ export function createMcpToolService(opts: {
     ttlAutopurge: true,
     ttlResolution: 0,
     perf: { now },
-    fetchMethod: (_url, _stale, { context }) =>
-      clientFor(context)
-        .listTools({})
-        .then(
-          (listing) => ({ listing }),
-          (error: unknown) => ({ error }),
-        ),
+    fetchMethod: async (_url, _stale, { context }) => {
+      try {
+        return { listing: await clientFor(context).listTools({}) };
+      } catch (error) {
+        return { error };
+      }
+    },
   });
   const tenantState = perTenant<{
     clients: Map<string, { client: McpClient; server: McpServer }>;
