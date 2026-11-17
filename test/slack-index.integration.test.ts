@@ -238,7 +238,6 @@ class FakeCore implements SlackCoreClient {
   readonly turns: any[] = [];
   readonly ingests: any[][] = [];
   readonly directories: any[] = [];
-  readonly groupRosters: any[] = [];
   readonly ackPicks: Array<{ text: string; candidates: readonly string[] }> = [];
   externalParticipants = false;
   result: TurnResult = { status: "ok", reply: "agent reply" };
@@ -328,9 +327,7 @@ class FakeCore implements SlackCoreClient {
     this.directories.push(body);
     return true;
   }
-  async registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void> {
-    this.groupRosters.push({ groupId, principalIds: [...principalIds], turnsBefore: this.turns.length });
-  }
+  async registerGroupRoster(): Promise<void> {}
   holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
     return fn(new Promise<void>(() => {}));
   }
@@ -1319,28 +1316,6 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
     );
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a group-DM mention records the group's roster in core before the turn is admitted", async () => {
-  const f = await fixture();
-  try {
-    f.client.channelsById.set("G7", { id: "G7", name: "", is_member: true, is_private: true, is_mpim: true });
-    f.client.membersByChannel.set("G7", ["U1", "U2", "UBOT"]);
-    await f.app.emitEvent("app_mention", {
-      channel: "G7",
-      channel_type: "mpim",
-      user: "U1",
-      text: "<@UBOT> hi",
-      ts: "500.1",
-    });
-    assert.equal(f.core.turns.length, 1);
-    const recorded = f.core.groupRosters.find((r: any) => r.groupId === "G7");
-    assert.ok(recorded, "the group roster reaches core");
-    assert.deepEqual([...recorded.principalIds].sort(), ["U1", "U2"]);
-    assert.equal(recorded.turnsBefore, 0, "the roster lands before the turn is submitted");
   } finally {
     await f.stop();
   }
