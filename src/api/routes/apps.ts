@@ -1337,8 +1337,10 @@ async function listApps(ctx: ApiCtx): Promise<void> {
   const publishedApps = await Promise.all(
     visible.map(async (d) => {
       const owner = ownerOf(d);
+      const canShare = !!d.ownerScopeId && (await app.canManageArtifactHome(d.ownerScopeId, d.createdBy, principalId));
       const named = {
         ...d,
+        canShare,
         ...(owner ? { ownerName: names.get(owner)! } : {}),
         ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
       };
