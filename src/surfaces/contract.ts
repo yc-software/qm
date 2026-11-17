@@ -47,6 +47,7 @@ export interface SurfaceAction {
   id: string;
   label: string;
   style: "primary" | "danger" | "default";
+  userIds?: readonly string[];
 }
 
 export interface SurfaceCapabilities {
