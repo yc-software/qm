@@ -1111,7 +1111,7 @@ test("a saved document is read and downloaded by artifact id", async () => {
       "bytes are downloadable by id",
     );
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 

@@ -31,6 +31,7 @@ import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import type { Run } from "../src/runs/run-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
@@ -663,10 +664,15 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       await capFor("B-RELEASE", scopeId("personal", "B-RELEASE"), { botActor: true, liveActor: true, threadRef }),
     );
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const dm = { kind: "dm", threadRef } as const;
+    await built.app.turn({ surface: "test", actor: { externalId: "B-RELEASE" }, conversation: dm, text: "note" });
     assert.equal((await redeem(dropId, { secret: "sig" }, "B-RELEASE", linkToken(formPath))).status, 200);
-    await settle(async () => (await built.runs.list({ threadRef })).length > 0);
-    const [run] = await built.runs.list({ threadRef });
-    assert.equal(run?.request.botActor, true);
+    let run: Run | undefined;
+    await settle(
+      async () => (run = (await built.runs.list({ threadRef })).find((r) => r.request.botActor))?.status === "done",
+    );
+    assert.deepEqual([run?.request.botActor, run?.result?.status], [true, "silent"]);
+    assert.equal((await built.sessions.getByThread(threadRef))?.spawnMeta?.botActor, undefined);
   });
 
   it("a live bot attestation survives mint and private-scope redemption", async () => {

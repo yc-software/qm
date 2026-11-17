@@ -96,7 +96,7 @@ test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async 
     assert.equal(await afterAbort.text(), "/after-abort");
     assert.equal(sessionCount, 1, "aborting one SSE stream keeps the shared session alive");
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
     for (const session of sessions) session.destroy();
     await new Promise<void>((r) => upstream.close(() => r()));
   }

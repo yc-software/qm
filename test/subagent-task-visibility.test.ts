@@ -7,6 +7,7 @@ import { settle } from "./support/settle.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 
 async function conversation(built: ReturnType<typeof buildApp>, threadRef: string, extra: Partial<TurnRequest> = {}) {
   await built.app.turn({
@@ -25,13 +26,8 @@ async function conversation(built: ReturnType<typeof buildApp>, threadRef: strin
   return { run, session, bind, syscalls: bind() };
 }
 
-test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
+test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async () => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
-  t.after(async () => {
-    built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
-    await built.runtime.stop();
-  });
   const { syscalls } = await conversation(built, "dm:U1:subagent-visibility", { surfaceTools: true });
   await built.config.setPersonalModelAuth("U1", true, "openai");
   const finished = async (lookup: () => Promise<Run | null | undefined>) => {
@@ -64,9 +60,20 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   assert.deepEqual(await userEntry(second), { hidden: false, display: "Check the tests too" });
 });
 
-test("a wake runs with a Slack bot's restrictions when either the woken conversation or its sender does a bot's work", async () => {
-  const built = buildApp(testConfig({ memoryCapture: "off" }));
+test("a wake runs with a Slack bot's restrictions when either side does a bot's work, and never bot-flagged in a person's conversation", async () => {
+  const note = "person-only note";
+  const botTurns: unknown[] = [];
+  const mock = createMockAgent();
+  const runTurn: typeof mock.runTurn = async (turn) => {
+    const syscalls = turn.tools.sessionSyscalls!;
+    if (turn.botActor && turn.session.threadRef === "dm:U1:person")
+      botTurns.push(await syscalls.write({ target: bot.session.id, text: JSON.stringify(turn.history) }));
+    if (turn.input !== "what came back?") return mock.runTurn(turn);
+    return { reply: JSON.stringify(await syscalls.receive!()), modelCalls: 1 };
+  };
+  const built = buildApp(testConfig({ memoryCapture: "off" }), { agent: { ...mock, runTurn } });
   const person = await conversation(built, "dm:U1:person");
+  await conversation(built, "dm:U1:person", { text: note });
   const bot = await conversation(built, "dm:U1:bot", { botActor: true });
   const other = await conversation(built, "dm:U1:other");
   const spare = await conversation(built, "dm:U1:spare");
@@ -91,9 +98,22 @@ test("a wake runs with a Slack bot's restrictions when either the woken conversa
   const wakes = [bot, other, spare, person].map(({ session }) => built.runs.inFlightForThread(session.threadRef));
   const marks = (await Promise.all(wakes)).map(([wake]) => wake!.request.botActor);
   assert.deepEqual(marks, [true, undefined, undefined, true]);
+  const { session: fork, bind } = await conversation(built, "dm:U1:fork");
+  await built.sessions.updateForkProvenance(fork.id, { forkedFrom: { sessionId: child.id }, forkBoundarySeq: 1 });
+  assert.ok((await bind({ botActor: true }).open({ task: "check the fork" })).ok);
+  built.runtime.start();
+  let wake: Run | null | undefined;
+  await settle(async () => (wake = await built.runs.getByDedupKey(`subagent-return:${run!.id}`))?.status === "done");
+  assert.equal(JSON.stringify(await bot.syscalls.receive!()).includes(note), false, "bot work reads the person's note");
+  assert.deepEqual([wake!.result?.status, botTurns], ["silent", []]);
+  const next = await conversation(built, "dm:U1:person", { text: "what came back?" });
+  assert.ok(next.run.result?.reply?.includes(child.id), next.run.result?.reply);
+  const forkRuns = () => built.runs.list({ threadRef: fork.threadRef, limit: 1 });
+  await settle(async () => !!(wake = (await forkRuns())[0])?.request.sessionSenderId && wake?.status === "done");
+  assert.equal(wake!.result?.status, "ok");
 });
 
-test("human-origin delegated input is screened before model execution", async (t) => {
+test("human-origin delegated input is screened before model execution", async () => {
   const screened: string[] = [];
   const built = buildApp(testConfig({ memoryCapture: "off", securityPosture: "strict" }), {
     securityScreener: {
@@ -110,11 +130,6 @@ test("human-origin delegated input is screened before model execution", async (t
       },
     },
   });
-  t.after(async () => {
-    built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
-    await built.runtime.stop();
-  });
   const { syscalls } = await conversation(built, "dm:U1:screen-delegation", { text: "inspect a task" });
   const opened = await syscalls.open({ task: "UNTRUSTED_TASK" });
   assert.ok(opened.ok);
@@ -128,14 +143,9 @@ test("human-origin delegated input is screened before model execution", async (t
 });
 
 for (const fork of [false, true]) {
-  test(`a human-initiated ${fork ? "fork" : "new session"} shows its seed without claiming human authorship`, async (t) => {
+  test(`a human-initiated ${fork ? "fork" : "new session"} shows its seed without claiming human authorship`, async () => {
     const { startSession } = await import("../src/api/start-session.ts");
     const built = buildApp(testConfig({ memoryCapture: "off" }));
-    t.after(async () => {
-      built.scheduler.stop();
-      built.deploymentLayerRefresh.stop();
-      await built.runtime.stop();
-    });
     const { run: parent, session } = await conversation(built, `web:U1:seed-${fork}`, {
       surface: "web",
       text: "start another task",

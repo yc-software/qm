@@ -141,13 +141,13 @@ struct NativeGroupAvatars: View {
         }
         .frame(width: 22, height: 22)
         .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.paper, lineWidth: 1.5) }
+        .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.sidebar, lineWidth: 1.5) }
       }
       if remaining > 0 {
         Text("+\(remaining)").font(.system(size: 9, weight: .medium))
           .frame(width: 22, height: 22)
           .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 5))
-          .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.paper, lineWidth: 1.5) }
+          .overlay { RoundedRectangle(cornerRadius: 5).stroke(QMTheme.sidebar, lineWidth: 1.5) }
       }
     }
     .fixedSize()
@@ -233,7 +233,7 @@ struct NativeConversationSections<Actions: View>: View {
       .buttonStyle(.plain)
       .listRowInsets(EdgeInsets(top: 0, leading: 32, bottom: 0, trailing: 16))
       .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
+      .listRowBackground(QMTheme.sidebar)
       .contextMenu { actions(conversation) }
       .swipeActions(edge: .trailing, allowsFullSwipe: false) {
         actions(conversation)
@@ -256,7 +256,7 @@ struct NativeConversationSections<Actions: View>: View {
       )
       .listRowInsets(EdgeInsets(top: 0, leading: 40, bottom: 0, trailing: 16))
       .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
+      .listRowBackground(QMTheme.sidebar)
     }
   }
 

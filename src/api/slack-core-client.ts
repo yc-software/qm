@@ -82,6 +82,7 @@ export interface SlackCoreClient {
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
+  invitedExternal(email: string): boolean;
   ackEmojiOverride(): Promise<string[] | null>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
@@ -172,6 +173,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   const orgScope: ScopeId = scopeId("org", configOrgId());
 
   return {
+    invitedExternal: (email) =>
+      deps.identity.externalMember(email) !== undefined && deps.identity.classify(email).type === "internal",
     decideAppAccess: (value, actor, approve) =>
       decideAppAccess(ambientTenant(), deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
