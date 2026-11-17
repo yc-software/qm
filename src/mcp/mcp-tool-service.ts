@@ -12,7 +12,6 @@ import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
-const RETRY_FAILED_LIST_MS = 15_000;
 const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
@@ -203,7 +202,7 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
-  const sharedListings = new LRUCache<string, Promise<McpListing>>({
+  const sharedListings = new LRUCache<string, { listing: Promise<McpListing>; refused?: true }>({
     ttl: refreshIntervalMs,
     ttlAutopurge: true,
     ttlResolution: 0,
@@ -331,9 +330,9 @@ export function createMcpToolService(opts: {
     return resultText(result);
   }
 
-  function refresh(fresh = false): Promise<void> {
+  function refresh(fresh = false, retryRefused = false): Promise<void> {
     const state = tenantState();
-    const run = load(state, fresh).finally(() => {
+    const run = load(state, fresh, retryRefused).finally(() => {
       state.loadedAt = now();
       if (state.pending === run) state.pending = undefined;
     });
@@ -341,24 +340,24 @@ export function createMcpToolService(opts: {
     return run;
   }
 
-  function listServer(server: McpServer, fresh: boolean): Promise<McpListing> {
+  function listServer(server: McpServer, fresh: boolean, retryRefused: boolean): Promise<McpListing> {
     if (server.auth !== "none" || server.attestActor)
       return clientFor(server).listTools({ headers: headersFor(server, undefined) });
     const cached = fresh ? undefined : sharedListings.get(server.url);
-    if (cached) return cached;
-    const listing = clientFor(server).listTools({});
-    sharedListings.set(server.url, listing);
-    listing.catch(() => {
-      if (sharedListings.peek(server.url) === listing)
-        sharedListings.set(server.url, listing, { ttl: RETRY_FAILED_LIST_MS });
+    if (cached && !(retryRefused && cached.refused)) return cached.listing;
+    const entry: { listing: Promise<McpListing>; refused?: true } = { listing: clientFor(server).listTools({}) };
+    sharedListings.set(server.url, entry);
+    entry.listing.catch(() => {
+      entry.refused = true;
     });
-    return listing;
+    return entry.listing;
   }
 
   async function serverTools(
     server: McpServer,
     previous: McpToolDescriptor[],
     fresh: boolean,
+    retryRefused: boolean,
   ): Promise<{ tools: McpToolDescriptor[]; failed?: true }> {
     if (server.catalog) return { tools: [catalogDescriptor(server)] };
     const next: McpToolDescriptor[] = [];
@@ -380,7 +379,11 @@ export function createMcpToolService(opts: {
         tools = server.tools ?? [];
         if (!tools.length) return { tools: next };
       } else {
-        const listing = await listServer(server, fresh);
+        const listing = await listServer(
+          server,
+          fresh,
+          retryRefused && !previous.some((t) => t.serverId === server.id),
+        );
         tools = listing.tools;
         about = listing.about ?? about;
       }
@@ -406,14 +409,14 @@ export function createMcpToolService(opts: {
     return { tools: next };
   }
 
-  async function load(state: ReturnType<typeof tenantState>, fresh: boolean): Promise<void> {
+  async function load(state: ReturnType<typeof tenantState>, fresh: boolean, retryRefused: boolean): Promise<void> {
     state.catalogs.clear();
     const version = await opts.servers.version();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
     const previous = state.snapshot;
-    const listed = await Promise.all(servers.map((s) => serverTools(s, previous, fresh)));
+    const listed = await Promise.all(servers.map((s) => serverTools(s, previous, fresh, retryRefused)));
     const next = listed.flatMap((l) => l.tools);
     state.listFailed = listed.some((l) => l.failed);
     const seen = new Set<string>();
@@ -450,9 +453,8 @@ export function createMcpToolService(opts: {
     const state = await loaded();
     if (closed) return state;
     const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
-    const retryFailed = state.listFailed && now() - (state.loadedAt ?? -Infinity) >= RETRY_FAILED_LIST_MS;
-    if (version !== state.version || retryFailed)
-      await (state.pending ?? refresh(version !== state.version)).catch(
+    if (version !== state.version || state.listFailed)
+      await (state.pending ?? refresh(version !== state.version, true)).catch(
         reportFailureAs("mcp: refresh tools", undefined),
       );
     return state;
