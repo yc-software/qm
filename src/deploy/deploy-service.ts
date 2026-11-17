@@ -167,7 +167,12 @@ export interface DeployService {
     opts?: { notify?: boolean },
   ): Promise<AppGrantee[]>;
   assertAppOwner(d: PublishedApp, actor: AppActor): Promise<void>;
-  assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null): Promise<void>;
+  assertShareAllowed(
+    d: PublishedApp,
+    grantee: ScopeId,
+    permission: Permission | null,
+    grantedBy: string,
+  ): Promise<void>;
   transferAppOwner(
     idOrName: string,
     toScope: ScopeId,
@@ -267,10 +272,21 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   const deployQueue = createKeyedQueue();
   const externalSharingAllowed = (ownerScopeId: ScopeId): Promise<boolean> =>
     deps.externalSharingAllowed?.(ownerScopeId) ?? Promise.resolve(false);
-  async function assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null) {
+  async function assertShareAllowed(
+    d: PublishedApp,
+    grantee: ScopeId,
+    permission: Permission | null,
+    grantedBy: string,
+  ) {
+    if (permission === null) return;
+    if (d.connectors && !samePerson(d.createdBy, grantedBy))
+      throw new DeployAccessError(
+        "forbidden",
+        `only the person who published "${d.name ?? d.id}" can share it while it borrows their connectors`,
+      );
     const { kind, ref } = parseScopeId(grantee);
-    if (permission === null || kind !== "personal" || !ref?.includes("@")) return;
-    if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
+    if (kind !== "personal" || !ref?.includes("@")) return;
+    if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(d.ownerScopeId))) return;
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
   const recordAudit = (e: AuditEvent): void => recordAuditInBinding(deps.auditLog, e);
@@ -1039,7 +1055,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       await this.assertAppOwner(d, actor);
       grantee = await appShareScope(grantee, permission, deps.canManageEmail);
-      await assertShareAllowed(d.ownerScopeId, grantee, permission);
+      await assertShareAllowed(d, grantee, permission, actor.createdBy);
       const ref = appRef(d.id);
       const tenant = ambientTenant();
       await deps.acl.revoke(tenant, d.ownerScopeId, ref, grantee, actor.createdBy);

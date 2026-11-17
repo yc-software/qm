@@ -15,7 +15,7 @@ import { testTenant } from "./support/test-tenant.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { personalScope } from "../src/types.ts";
+import { personalScope, scopeId } from "../src/types.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
@@ -244,6 +244,34 @@ test("moving the app out of its publisher's library withdraws the loan", async (
   await h.deploy.transferAppOwner(h.d.id, personalScope(CO_MANAGER), { callerId: PUBLISHER });
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");
   assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.detail?.includes("moved out of")));
+});
+
+test("while the app borrows connectors, only the publisher can share it", async (t) => {
+  const h = await agent(t);
+  const d = await h.app.deploy({
+    ownerScopeId: scopeId("group", "home"),
+    createdBy: PUBLISHER,
+    entrypoint: "x",
+    files: [],
+  });
+  const lend = (connectors: string[]) => h.deploy.setAppConnectors(d.id, connectors, { createdBy: PUBLISHER });
+  const share = (grantedBy: string) =>
+    h.app.grant(
+      testTenant,
+      {
+        ownerScopeId: d.ownerScopeId,
+        ref: `deployment:${d.id}`,
+        granteeScopeId: personalScope("outsider"),
+        permission: "read",
+        grantedBy,
+      },
+      { notify: false },
+    );
+  await lend(["slack.com"]);
+  await assert.rejects(share(CO_MANAGER), /only the person who published/);
+  await share(PUBLISHER);
+  await lend([]);
+  await share(CO_MANAGER);
 });
 
 test("an upgrade withdraws loans on apps outside their publisher's library", async () => {
