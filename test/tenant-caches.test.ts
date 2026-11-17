@@ -445,8 +445,9 @@ test("Slack mention names stay with their tenant; the env bot identity is proces
 async function flakyMcp(t: TestContext, auth: McpServer["auth"], tenants: string[], mode = "refusing") {
   const { url } = await startMcpTestServer(t);
   const server: McpServer = { ...signInServer("s"), url, auth, bearerToken: "x" };
-  const state = { mode, attempts: 0, held: [] as (() => void)[] };
+  const state = { mode, attempts: 0, clock: 1, held: [] as (() => void)[] };
   const service = createMcpToolService({
+    now: () => state.clock,
     servers: mcpStore(Object.fromEntries(tenants.map((tenant) => [tenant, [server]]))),
     fetch: (input, init) => {
       if (String(init?.body).includes('"initialize"')) state.attempts++;
@@ -457,7 +458,6 @@ async function flakyMcp(t: TestContext, auth: McpServer["auth"], tenants: string
     },
   });
   t.after(() => (state.held.splice(0).forEach((drop) => drop()), service.close()));
-  t.mock.method(console, "error", () => {});
   await Promise.all(tenants.map((tenant) => withTenant(tenant, () => service.toolDefs())));
   const names = (i: number) => withTenant(tenants[i]!, async () => (await service.toolDefsFor()).map((d) => d.name));
   return { state, names, service };
@@ -469,26 +469,23 @@ test("tenants share one failed anonymous MCP listing, and once a turn's retry su
   assert.equal(state.attempts, 1);
   state.mode = "up";
   while ((await names(0)).length === 0) await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual([await names(1), await names(2)], [tools, tools]);
-  assert.equal(state.attempts, 2);
+  assert.deepEqual([await names(1), await names(2), state.attempts], [tools, tools, 2]);
   state.mode = "refusing";
+  state.clock += 3_600_000;
   await withTenant(B, () => service.refresh());
-  assert.deepEqual(await names(1), tools);
+  assert.deepEqual([await names(1), state.attempts], [tools, 3]);
 });
 
 test("a turn never waits on retrying a shared MCP listing, and a process has one retry in flight", async (t) => {
   const { state, names } = await flakyMcp(t, "none", [A, B]);
-  const promptly = (i: number) =>
-    Promise.race([names(i), new Promise((resolve) => setTimeout(resolve, 1000, "waits"))]);
+  const promptly = (i: number) => Promise.race([names(i), new Promise((r) => setTimeout(r, 1000, "waits"))]);
   assert.deepEqual(await promptly(0), []);
   await new Promise((resolve) => setImmediate(resolve));
   state.mode = "silent";
-  assert.deepEqual([await promptly(0), await promptly(1)], [[], []]);
-  assert.equal(state.attempts, 3);
+  assert.deepEqual([await promptly(0), await promptly(1), state.attempts], [[], [], 3]);
 });
 
 test("a failed MCP server that is not shared is not listed again on turns", async (t) => {
   const { state, names } = await flakyMcp(t, "bearer", [A]);
-  assert.deepEqual([await names(0), await names(0)], [[], []]);
-  assert.equal(state.attempts, 1);
+  assert.deepEqual([await names(0), await names(0), state.attempts], [[], [], 1]);
 });
