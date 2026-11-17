@@ -365,7 +365,11 @@ test("pg directory: workspace URL and app icon survive roster swaps and read bac
   assert.deepEqual(await store.meta(), acme);
 
   await store.setWorkspace({ workspaceUrl: "https://acme2.slack.com", appIconUrl: null });
-  assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme2.slack.com", appIconUrl: null });
+  assert.deepEqual(
+    await store.meta(),
+    { ...acme, workspaceUrl: "https://acme2.slack.com" },
+    "a push without an icon keeps it",
+  );
 });
 
 test("pg directory: a swap stamped older than the stored snapshot is refused", { skip }, async () => {

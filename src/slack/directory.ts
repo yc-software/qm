@@ -34,7 +34,6 @@ export interface BotIdentity {
 interface UserSnapshot {
   byId: Map<string, CachedUser>;
   fetchedAt: number;
-  appIconUrl?: string;
 }
 
 interface ChannelRow {
@@ -128,10 +127,8 @@ export function createDirectory(deps: {
       mentionIndex.set(key, id);
     };
     let missingEmails = 0;
-    let appIconUrl: string | undefined;
     for await (const res of client.paginate("users.list", { limit: 1000 }) as AsyncIterable<any>) {
       for (const u of (res.members ?? []) as SlackUser[]) {
-        if (u?.id === ids.botUserId) appIconUrl = u.profile?.image_72;
         if (!u?.id || u.id === ids.botUserId) continue;
         const actor = deps.externalAccess
           ? companySlackActor(u, deps.externalAccess)
@@ -154,7 +151,7 @@ export function createDirectory(deps: {
         `[slack] email identity mode: ${missingEmails} own-team member(s) have no visible email (missing users:read.email scope?) — they fail closed to guest`,
       );
     }
-    return { byId, fetchedAt, ...(appIconUrl ? { appIconUrl } : {}) };
+    return { byId, fetchedAt };
   }
 
   async function listBotChannels(
@@ -452,6 +449,12 @@ export function createDirectory(deps: {
       return false;
     }
     if (!members.length && !(fetched && fetched.channels.length)) return false;
+    const appIconUrl = await client.bots
+      .info({ bot: ids.ownBotId })
+      .then(
+        (res: any) => res.bot?.icons?.image_72 as string | undefined,
+        swallowAs("slack: bots.info for the app icon", undefined),
+      );
     try {
       const applied = await core.pushDirectory({
         members,
@@ -474,7 +477,7 @@ export function createDirectory(deps: {
             }
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
-        ...(snap.appIconUrl ? { appIconUrl: snap.appIconUrl } : {}),
+        ...(appIconUrl ? { appIconUrl } : {}),
       });
       if (applied && fetched?.fullRosterFetchedAt !== undefined) lastFullRosterFetchAt = fetched.fullRosterFetchedAt;
       if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");

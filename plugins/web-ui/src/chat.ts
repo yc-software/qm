@@ -381,8 +381,7 @@ export function createChatSurface(
     continuedSpeakerRows.clear();
     let previousSpeaker: string | undefined;
     for (const message of messages) {
-      const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
-      if (hidden.opener || hidden.resumeAnchor || rendersInsideWork(message)) continue;
+      if (hiddenMessage(message) || rendersInsideWork(message)) continue;
       const { role, speaker, speakerId } = message as { role?: string; speaker?: string; speakerId?: string };
       const key = role === "user" ? speakerId || speaker : undefined;
       if (key && key === previousSpeaker) continuedSpeakerRows.add(message);
@@ -2042,8 +2041,7 @@ export function createChatSurface(
     isStreaming = false,
     inline = false,
   ): TemplateResult | typeof nothing {
-    const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
-    if (hidden.opener || hidden.resumeAnchor) return nothing;
+    if (hiddenMessage(message)) return nothing;
     const role = (message as { role?: string }).role;
     if (!inline && rendersInsideWork(message)) return nothing;
     if (role === "user" || role === "user-with-attachments") {
@@ -2397,6 +2395,11 @@ export function createChatSurface(
   function workTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
     const timeline = messageWorkTimeline(work, finalText);
     return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
+  }
+
+  function hiddenMessage(message: AgentMessage): boolean {
+    const { opener, resumeAnchor } = message as { opener?: boolean; resumeAnchor?: boolean };
+    return Boolean(opener || resumeAnchor);
   }
 
   function slackAppIcon(): string | undefined {

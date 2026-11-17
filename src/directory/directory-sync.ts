@@ -233,7 +233,7 @@ export function createDirectorySync(deps: {
       await q(
         `INSERT INTO directory_meta (org_id, workspace_url, app_icon_url, updated_at) VALUES ($1, $2, $3, $4)
          ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url,
-           app_icon_url = EXCLUDED.app_icon_url, updated_at = EXCLUDED.updated_at`,
+           app_icon_url = COALESCE(EXCLUDED.app_icon_url, directory_meta.app_icon_url), updated_at = EXCLUDED.updated_at`,
         [orgId, meta.workspaceUrl, meta.appIconUrl, Date.now()],
       );
     },
