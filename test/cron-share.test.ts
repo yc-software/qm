@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("a cron shared with a person becomes their paused linked copy until they edit it", async () => {
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-share-")) }));
@@ -19,14 +20,14 @@ test("a cron shared with a person becomes their paused linked copy until they ed
     action: "weather in SF",
   });
 
-  const { copy } = await app.shareCron(source.id, "U2", "U1");
+  const { copy } = await app.shareCron(testTenant, source.id, "U2", "U1");
   assert.equal(copy.owner, "U2");
   assert.equal(copy.ownerScopeId, "personal:U2");
   assert.equal(copy.enabled, false);
   assert.equal(copy.destination?.type, "web");
   const notice = (await app.pendingDeliveries("web")).find((d) => d.destination.target === copy.destination?.target);
   assert.match(notice?.text ?? "", new RegExp(`turning cron ${copy.id} on`));
-  assert.equal((await app.shareCron(source.id, "U2", "U1")).copy.id, copy.id);
+  assert.equal((await app.shareCron(testTenant, source.id, "U2", "U1")).copy.id, copy.id);
 
   await app.updateCron(source.id, { action: "weather in Oakland" }, { actorId: "U1" });
   assert.equal((await app.getCron(copy.id))?.action, "weather in Oakland");

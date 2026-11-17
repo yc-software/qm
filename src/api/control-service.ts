@@ -920,7 +920,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         if (copyTo) {
           if (await app.samePerson(copyTo, capability.actorId))
             return { ok: false, code: "bad_request", message: "that cron is already yours" };
-          const { copy, existed } = await app.shareCron(home.id, copyTo, capability.actorId);
+          const { copy, existed } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
           return {
             ok: true,
             verb: "share",

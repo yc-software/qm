@@ -5,7 +5,6 @@ import type { Cron, CronSchedule } from "../triggers/types.ts";
 import { scopeId, type Destination } from "../types.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
-import { ambientTenant } from "../tenants/context.ts";
 
 const LINKED_FIELDS = ["runtime", "title", "action", "message", "schedule"] as const;
 
@@ -48,15 +47,14 @@ export async function propagateCronEdit(crons: AppDeps["crons"], id: string, cha
 
 export function createCronShareMethods(deps: AppDeps, app: App): Pick<App, "shareCron"> {
   return {
-    async shareCron(id, recipient, by) {
+    async shareCron(tenant, id, recipient, by) {
       const source = await deps.crons.get(id);
       if (!source) throw new Error(`no cron ${id}`);
       if (source.script)
         throw new Error("a cron with a script can't be shared with a person: its script runs with the owner's access");
       const existing = (await deps.crons.copiesOf(id)).find((c) => samePerson(c.owner, recipient));
       if (existing) return { copy: existing, existed: true };
-      const started =
-        (await deps.admin?.adminStatusOf(ambientTenant(), { id: by, type: "internal" }))?.isAdmin === true;
+      const started = (await deps.admin?.adminStatusOf(tenant, { id: by, type: "internal" }))?.isAdmin === true;
       const ownerScopeId = scopeId("personal", recipient);
       const title = source.title ?? "Shared cron";
       const onSlack = (await app.directoryMember(recipient))?.slackId !== undefined;
