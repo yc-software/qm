@@ -163,6 +163,7 @@ import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
 import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
@@ -348,7 +349,7 @@ export function createChatSurface(
   };
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
-  const continuedSpeakerRows = new Set<AgentMessage>();
+  let continuedSpeakerRows = new Set<AgentMessage>();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
@@ -378,15 +379,7 @@ export function createChatSurface(
       }
     }
     updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
-    continuedSpeakerRows.clear();
-    let previousSpeaker: string | undefined;
-    for (const message of messages) {
-      if (hiddenMessage(message) || rendersInsideWork(message)) continue;
-      const { role, speaker, speakerId } = message as { role?: string; speaker?: string; speakerId?: string };
-      const key = role === "user" ? speakerId || speaker : undefined;
-      if (key && key === previousSpeaker) continuedSpeakerRows.add(message);
-      previousSpeaker = key;
-    }
+    continuedSpeakerRows = continuedSpeakers(messages.filter((m) => !hiddenMessage(m) && !rendersInsideWork(m)));
   }
 
   function isSideChatSurface(): boolean {
@@ -1987,7 +1980,7 @@ export function createChatSurface(
     const speaker = speakerLabelFor(message);
     const speakerLabel =
       message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
-        ? `${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)}\n${slackAppIcon() ?? ""}`
+        ? `${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)}\n${slackAppIcon(chatState.forkSession, appState.me?.slackAppIconUrl) ?? ""}`
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}\n${continuedSpeakerRows.has(message)}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -2087,7 +2080,7 @@ export function createChatSurface(
         });
       return html`
         <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message) ? "others-row" : ""}"
+          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
@@ -2397,29 +2390,13 @@ export function createChatSurface(
     return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
   }
 
-  function hiddenMessage(message: AgentMessage): boolean {
-    const { opener, resumeAnchor } = message as { opener?: boolean; resumeAnchor?: boolean };
-    return Boolean(opener || resumeAnchor);
-  }
-
-  function slackAppIcon(): string | undefined {
-    const session = chatState.forkSession;
-    return session?.surface === "slack" && !session.personaId ? appState.me?.slackAppIconUrl || undefined : undefined;
-  }
-
   function assistantMark(): TemplateResult {
-    const icon = slackAppIcon();
+    const icon = slackAppIcon(chatState.forkSession, appState.me?.slackAppIconUrl);
     return icon ? avatarTpl({ key: brandName(), name: brandName(), avatarUrl: icon }) : brandMark();
   }
 
   function rendersInsideWork(message: AgentMessage): boolean {
     return Boolean((message as { steered?: boolean }).steered) && !isReadOnlySlackView();
-  }
-
-  function fromSomeoneElse(message: AgentMessage): boolean {
-    const { speakerId, overheard } = message as { speakerId?: string; overheard?: boolean };
-    const viewer = appState.me?.user;
-    return speakerId ? Boolean(viewer) && speakerId !== viewer : Boolean(overheard);
   }
 
   function assistantDisplayText(text: string): string {
