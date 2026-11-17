@@ -5879,7 +5879,8 @@ a.connector-widget:focus-visible {
 
 .cron-run-detail {
   min-width: 0;
-  flex: 1 1 220px;
+  flex: 1 1 100%;
+  order: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--muted-foreground);
