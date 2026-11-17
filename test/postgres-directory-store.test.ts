@@ -353,18 +353,23 @@ test("pg directory: concurrent pushes for one org serialize instead of 500ing on
   assert.equal(await stores[0]!.channelMember("C-shared", "U-shared"), true);
 });
 
-test("pg directory: workspace URL survives roster swaps and reads back per org", { skip }, async () => {
+test("pg directory: workspace URL and app icon survive roster swaps and read back per org", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
+  const acme = { workspaceUrl: "https://acme.slack.com", appIconUrl: "https://avatars.slack-edge.com/app_72.png" };
 
-  assert.deepEqual(await store.meta(), { workspaceUrl: null });
-  await store.setWorkspaceUrl("https://acme.slack.com");
-  assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme.slack.com" });
+  assert.deepEqual(await store.meta(), { workspaceUrl: null, appIconUrl: null });
+  await store.setWorkspace(acme);
+  assert.deepEqual(await store.meta(), acme);
 
   await seed(store);
-  assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme.slack.com" });
+  assert.deepEqual(await store.meta(), acme);
 
-  await store.setWorkspaceUrl("https://acme2.slack.com");
-  assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme2.slack.com" });
+  await store.setWorkspace({ workspaceUrl: "https://acme2.slack.com", appIconUrl: null });
+  assert.deepEqual(
+    await store.meta(),
+    { ...acme, workspaceUrl: "https://acme2.slack.com" },
+    "a push without an icon keeps it",
+  );
 });
 
 test("pg directory: a swap stamped older than the stored snapshot is refused", { skip }, async () => {

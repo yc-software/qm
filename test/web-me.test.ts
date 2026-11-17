@@ -50,7 +50,10 @@ async function me(cookie: string, at = base): Promise<Record<string, unknown>> {
 }
 
 test("/me describes the signed-in person, the company and the web app's settings, in the relay's shape", async () => {
-  await built.app.setDirectoryWorkspaceUrl("https://acme.slack.com");
+  await built.app.setDirectoryWorkspace({
+    workspaceUrl: "https://acme.slack.com",
+    appIconUrl: "https://avatars.slack-edge.com/app_72.png",
+  });
   await built.config.setBranding(orgScope() as ScopeId, { orgName: " Acme " });
   const body = await me(browserSessionCookie("bob@example.com", { name: " Bob " }));
   assert.deepEqual(body, {
@@ -62,6 +65,7 @@ test("/me describes the signed-in person, the company and the web app's settings
     browserErrors: { dsn: "https://public@sentry.example.com/1", release: "release-1" },
     mode: "portal",
     slackWorkspaceUrl: "https://acme.slack.com",
+    slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png",
     chatSurfaces: [{ kind: "slack", label: "Slack" }],
     individualModelAuth: false,
     modelAuthConnected: false,

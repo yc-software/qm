@@ -685,6 +685,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                       attachments: prepared?.attachments,
                       images: prepared?.images,
                       author: prepared?.author,
+                      speakerId: prepared?.speakerId,
                       authorName: prepared?.authorName,
                       withheld: prepared?.withheld,
                       acknowledge,
