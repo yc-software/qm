@@ -482,12 +482,11 @@ export function dbMigrations(vector: boolean): PgMigration[] {
   ];
 }
 
-export function migrateDatabase(connectionString: string): Promise<void> {
+export function migrateDatabase(connectionString: string, { vector = false } = {}): Promise<void> {
   return migrationQueue(connectionString, async () => {
     const pool = await retainPool(connectionString, "migration");
     try {
-      const vector = await pool.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'");
-      await applyPgMigrations(pool, dbMigrations(vector.rows.length > 0));
+      await applyPgMigrations(pool, dbMigrations(vector));
     } finally {
       await releasePool(connectionString, pool, "migration");
     }

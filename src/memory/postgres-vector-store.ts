@@ -1,4 +1,4 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, migrateDatabase, type PgPool } from "../persistence/pg-pool.ts";
 import { PGVECTOR_MAX_DIMENSIONS, unitVector } from "../model/embeddings.ts";
 import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
 
@@ -52,7 +52,15 @@ function vectorWidth(dimensions: number | undefined): number | null {
 }
 
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
-  const db = createPgPool(connectionString);
+  const pg = createPgPool(connectionString);
+  let migrated: Promise<void> | undefined;
+  const db = async (): Promise<PgPool> => {
+    await (migrated ??= migrateDatabase(connectionString, { vector: true }).catch((error: unknown) => {
+      migrated = undefined;
+      throw error;
+    }));
+    return pg;
+  };
   return {
     async search(input) {
       if (!Number.isInteger(input.limit) || input.limit < 1)
@@ -60,7 +68,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       if (!input.ids.length) return [];
       const vector = unitVector(input.vector);
       const minSimilarity = input.minSimilarity ?? 0.2;
-      const rows = await db.q(
+      const rows = await (
+        await db()
+      ).q(
         `WITH sketches AS MATERIALIZED (
           SELECT fact_id, fact_hash, embedding_bits <~> binary_quantize($4::vector) AS approx
           FROM memory_fact_vectors
@@ -115,7 +125,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           { ...row, vector: unitVector(row.vector) },
         ]),
       );
-      await db.q(
+      await (
+        await db()
+      ).q(
         `WITH input AS (
           SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(scope text, model text, "factId" bigint, hash text, vector jsonb)
         ),
@@ -134,7 +146,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
     },
     async missing(model, limit, dimensions, signal, afterId) {
-      const rows = await db.q(
+      const rows = await (
+        await db()
+      ).q(
         `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
            ON v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
@@ -153,7 +167,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       }));
     },
     async prune(model, limit, dimensions, signal) {
-      const { rowCount } = await db.query(
+      const { rowCount } = await (
+        await db()
+      ).query(
         `DELETE FROM memory_fact_vectors v USING (
           SELECT s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (
@@ -169,7 +185,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
       return rowCount;
     },
-    claimTenants: () => claimRows(db, "claim_memory_tenants"),
-    close: () => db.close(),
+    claimTenants: async () => claimRows(await db(), "claim_memory_tenants"),
+    close: () => pg.close(),
   };
 }
