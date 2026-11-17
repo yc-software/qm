@@ -578,14 +578,10 @@ export type AssistantWork = AssistantMessage & {
   personaId?: string;
 };
 
-function tagPersona(item: Item, out: AgentMessage[]): void {
+function tagPersona(item: Item, turnRows: AgentMessage[]): void {
   const personaId = item.body.personaId;
   if (typeof personaId !== "string") return;
-  for (let i = out.length - 1; i >= 0 && out[i]!.role === "assistant"; i--) {
-    const row = out[i] as AssistantWork;
-    if (row.personaId) break;
-    row.personaId = personaId;
-  }
+  for (const row of turnRows) if (row.role === "assistant") (row as AssistantWork).personaId = personaId;
 }
 
 export interface RunPoll {
@@ -2313,7 +2309,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     pending = [];
     deliveryFiles = [];
   };
+  let turn = { id: null as string | null, start: 0 };
   for (const e of items) {
+    if (e.turnId !== turn.id) turn = { id: e.turnId, start: out.length };
     const text = e.text ?? "";
     if (e.kind === "ElicitationResponse") {
       const decision = approvalDecisionMessage(e);
@@ -2402,7 +2400,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
           flushWork(text, e.createdAt, !posted, timing, stopped, [e.seq]);
         }
       }
-      tagPersona(e, out);
+      tagPersona(e, out.slice(turn.start));
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));
