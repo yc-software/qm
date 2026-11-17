@@ -12,6 +12,8 @@ interface PrincipalLinkInput {
   linkedBy: string;
 }
 
+export const APP_IS_NOT_A_PERSON = "that principal is a Slack bot or app, not a person, so it cannot be linked to one";
+
 export class PrincipalLinkError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {

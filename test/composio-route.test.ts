@@ -1131,6 +1131,7 @@ test("Slack replies use only the viewer's verified user connection and server-si
     sessionId: "session",
     ts: "123.789",
     name: "Alice",
+    speakerId: "alice",
   });
   const request = JSON.parse(String(f.calls.at(-1)!.init!.body));
   assert.equal(request.connected_account_id, "ca_alice");
@@ -1261,6 +1262,7 @@ test("native Slack replies use the authenticated user's token and server destina
     sessionId: "session",
     ts: "123.789",
     name: "Alice",
+    speakerId: "alice",
   });
   assert.equal(f.calls.length, 0);
   const sent = f.nativeCalls.at(-1)!;

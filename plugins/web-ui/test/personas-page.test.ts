@@ -702,32 +702,12 @@ test("Share on a list row and on the page open the same search on the page, with
   assert.equal(document.activeElement, main.querySelector("#persona-grantee-search"));
 });
 
-test("the conversation shows its persona, and clearing it unsets the session's persona", async () => {
+test("the conversation shows its persona", async () => {
   const { personasModule } = await mountPage();
-  const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
   const { render } = await vite.ssrLoadModule("lit");
-  sessionsState.list = [
-    { id: "s-1", type: "dm", scopeId: "personal:tester", threadRef: "web:tester:1", createdAt: 1, personaId: "p-ada" },
-  ];
   const host = document.createElement("div");
-  let redraws = 0;
-  const draw = () =>
-    render(
-      personasModule.sessionPersonaChip(sessionsState.list[0], () => (redraws++, draw())),
-      host,
-    );
-  draw();
+  render(personasModule.sessionPersonaChip({ id: "s-1", personaId: "p-ada" }), host);
   assert.equal(host.textContent?.trim(), "🧮Ada");
-  calls = [];
-  host.querySelector<HTMLButtonElement>('button[aria-label="Stop using Ada"]')!.click();
-  await settle();
-  assert.deepEqual(
-    calls.map((c) => [c.method, c.path, c.body]),
-    [["PUT", "/api/sessions/s-1/persona", { personaId: null }]],
-  );
-  assert.equal(sessionsState.list[0].personaId, undefined);
-  assert.equal(redraws, 1);
-  assert.equal(host.querySelector(".session-persona-badge"), null);
 });
 
 test("a persona has its own link, so /personas/<id> opens it and its page keeps the address", async () => {

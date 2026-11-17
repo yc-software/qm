@@ -18,8 +18,8 @@ const live = (job: ProcessRecord): boolean => job.status === "running" || Boolea
 
 export function claimBarredBotJobs(deps: {
   processes: Pick<ProcessRegistry, "claimLiveBotJobs" | "getMany">;
-  resources: Pick<SandboxResources, "get" | "resolve">;
-  swarms: Pick<SwarmService, "botMayUseComputer"> | undefined;
+  resources: Pick<SandboxResources, "get" | "getMany" | "resolve">;
+  swarms: Pick<SwarmService, "botComputerRule"> | undefined;
 }): Promise<ClaimedRow[]> {
   return claimThenLoad(deps.processes.claimLiveBotJobs, async (ids, tenant) => {
     const reads = new Map<string, Promise<boolean>>();
@@ -29,15 +29,24 @@ export function claimBarredBotJobs(deps: {
       reads.set(id, known);
       return known;
     };
-    const { swarms } = deps;
-    const swarmRule: Pick<SwarmService, "botMayUseComputer"> | undefined = swarms && {
-      botMayUseComputer: (computer, turn) =>
-        once(["swarm", computer.swarmId, turn.actorId], () => swarms.botMayUseComputer(computer, turn)),
+    const jobs = (await deps.processes.getMany(tenant, ids)).filter(
+      (job): job is ProcessRecord & { botActor: string } => Boolean(job.botActor),
+    );
+    const sandboxIds = new Set(jobs.flatMap((job) => job.sandboxId ?? []));
+    const computers = new Map(
+      (await deps.resources.getMany([...sandboxIds])).map((computer) => [computer.id, computer]),
+    );
+    const swarmRule = await deps.swarms?.botComputerRule([
+      ...new Set([...computers.values()].flatMap((computer) => computer.swarmId ?? [])),
+    ]);
+    const resources = {
+      get: async (id: string) => computers.get(id) ?? deps.resources.get(id),
+      resolve: deps.resources.resolve,
     };
     const barred = (job: ProcessRecord & { botActor: string }): Promise<boolean> =>
       once(["computer", job.scopeId, job.sandboxId, job.botActor], () =>
         assertBotMayUseComputer(
-          deps.resources,
+          resources,
           job.scopeId,
           job.sandboxId,
           botMayUseComputers(swarmRule, { actorId: job.botActor, threadRef: "", sessionId: "" }),
@@ -49,9 +58,6 @@ export function claimBarredBotJobs(deps: {
           },
         ),
       );
-    const jobs = (await deps.processes.getMany(tenant, ids)).filter(
-      (job): job is ProcessRecord & { botActor: string } => Boolean(job.botActor),
-    );
     const stops = await Promise.all(jobs.map(async (job) => ((await barred(job)) ? [{ id: job.processId }] : [])));
     return stops.flat();
   });

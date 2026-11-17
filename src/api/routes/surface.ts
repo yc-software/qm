@@ -39,7 +39,7 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
-import { audit, isObj, orgScope, runIsActive } from "./shared.ts";
+import { activeRun, audit, isObj, orgScope, runIsActive } from "./shared.ts";
 import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
@@ -944,7 +944,9 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   if (
     !skill ||
     (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
-      !(await app.listVisibleSkills(principalId, ownScopeBotWork)).some((row) => row.skill?.id === skill.id))
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork))
+        .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+        .some((visible) => visible.id === skill.id))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
@@ -1185,6 +1187,7 @@ const SHARE_ERROR_STATUS: Record<string, number> = {
   bad_request: 400,
   not_found: 404,
   forbidden: 403,
+  human_consent_required: 403,
   recipient_not_found: 404,
   ambiguous_recipient: 409,
   share_failed: 400,
@@ -1206,6 +1209,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   if (typeof b.type !== "string" || !isArtifactType(b.type)) {
     return sendJson(res, 400, { error: "bad_request", message: `type must be one of: ${ARTIFACT_TYPES.join(", ")}` });
   }
+  if (b.type === "deploy" && !(await activeRun(ctx))) return;
   if (typeof b.id !== "string" || !b.id.trim())
     return sendJson(res, 400, { error: "bad_request", message: "id required" });
   if (

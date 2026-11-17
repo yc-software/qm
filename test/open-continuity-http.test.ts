@@ -259,6 +259,49 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   );
 });
 
+test("HTTP a cron may refresh its owner's saved login token cache, and only the owner's live turn changes the rest", async (t) => {
+  const b = await fixture(t);
+  const keychain = b.keychain!;
+  const encode = (text: string) => Buffer.from(text).toString("base64");
+  const token = (startUrl: string, accessToken: string) => JSON.stringify({ startUrl, accessToken });
+  const credential = await keychain.save({
+    ownerId: "alice",
+    service: "aws",
+    files: [
+      { path: ".aws/sso/cache/session.json", contentBase64: encode(token("https://alice.example", "t0")) },
+      { path: ".aws/config", contentBase64: encode("[profile alice]") },
+    ],
+  });
+  const proof = (session: string, config: string) =>
+    `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: `printf %s '${session}' | tee "$HOME/.aws/sso/cache/session.json"; printf %s '${config}' | tee "$HOME/.aws/config"` })}`;
+  const saved = async () =>
+    Object.fromEntries(
+      (await keychain.materializeOwnFiles("alice"))[0]!.files.map((f) => [
+        f.path,
+        Buffer.from(f.contentBase64, "base64").toString(),
+      ]),
+    );
+  const owner = await b.cap("alice");
+  for (const [session, config, expected] of [
+    [token("https://alice.example", "t1"), "[profile cron]", token("https://alice.example", "t1")],
+    [token("https://other.example", "t2"), "[profile cron]", token("https://alice.example", "t1")],
+  ]) {
+    const created = await b.request("POST", "/v1/crons", owner, {
+      title: "Refresh proof",
+      schedule: { everyMs: 3600000 },
+      task: proof(session!, config!),
+    });
+    assert.equal((await b.request("POST", `/v1/crons/${created.body.cron.id}/run`, owner, {})).status, 200);
+    await b.awaitFire(created.body.cron.id, owner);
+    assert.deepEqual(await saved(), { ".aws/config": "[profile alice]", ".aws/sso/cache/session.json": expected });
+  }
+  await b.turn(proof(token("https://other.example", "t3"), "[profile live]"), "alice");
+  assert.deepEqual(await saved(), {
+    ".aws/config": "[profile live]",
+    ".aws/sso/cache/session.json": token("https://other.example", "t3"),
+  });
+});
+
 for (const isPrivate of [false, true]) {
   for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
     test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {

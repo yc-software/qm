@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { createSlackDeliverer } from "../src/slack/deliveries.ts";
 import { statusPlaceholderKey } from "../src/slack/lib.ts";
 
 const RECOVERED_AGE_MS = 60_000;
@@ -30,18 +30,15 @@ function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<
   };
   const acknowledgements: string[] = [];
   const checkpoints: Array<[string, string]> = [];
-  const queue: unknown[] = [];
   const core = {
     reportRunEditRef: async (runId: string, editRef: string) => {
       checkpoints.push([runId, editRef]);
     },
-    holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-    claimDeliveries: async () => queue.splice(0),
     ackDelivery: async (id: string) => {
       acknowledgements.push(id);
     },
   };
-  const poller = createDeliveryPoller({
+  const deliverer = createSlackDeliverer({
     core: core as never,
     flow: { inFlightRuns: new Set<string>() } as never,
     threads: { mark: () => {} } as never,
@@ -58,14 +55,13 @@ function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<
       text?: string;
       ageMs?: number;
     }) => {
-      queue.push({
+      await deliverer.deliver(client, {
         id: "D1",
         idempotencyKey: row.idempotencyKey ?? "post:k1",
         text: row.text ?? "",
         destination: { type: "slack", target: "C1:100.200", ...row.destination },
         createdAt: Date.now() - (row.ageMs ?? 0),
-      });
-      await poller.pollDeliveries(client);
+      } as never);
     },
   };
 }

@@ -254,7 +254,7 @@ test("a deploy ownership transfer to a person takes a LIVE actor — an autonomo
     cap("U1", undefined, false),
   );
   assert.equal(r.ok, false);
-  if (!r.ok) assert.equal(r.code, "forbidden");
+  if (!r.ok) assert.equal(r.code, "human_consent_required");
   assert.equal(state.moves.length, 0);
 });
 

@@ -12,7 +12,7 @@ upstream; `upstream-pr` checks that boundary when a contribution is requested.
 ## Creating a layer
 
 ```bash
-node cli/bin/qm.ts init deploy/layers/<org> --org <slug> --target <fly-or-aws>
+node cli/bin/qm.ts init deploy/layers/<org> --org <slug> --target <aws|render|fly>
 ```
 
 `qm init` writes the deployment config, the secret-name example, the sandbox and provider

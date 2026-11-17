@@ -1941,7 +1941,18 @@ a.chat-row-open {
   max-width: 72%;
   margin-right: 12px;
 }
+.user-row.others-row {
+  align-items: flex-start;
+}
+.named-user-row.others-row > .speaker-label {
+  margin-right: 0;
+}
+.user-row.others-row .message-meta {
+  left: 0;
+  right: auto;
+}
 .named-user-row > .speaker-label > .inbox-avatar,
+.named-assistant-row > .speaker-label > .inbox-avatar,
 .named-assistant-row > .speaker-label > .brand-mark {
   width: 20px;
   height: 20px;
@@ -3053,7 +3064,7 @@ qm-markdown .tok-in {
   color: color-mix(in srgb, var(--muted-foreground) 70%, var(--background));
 }
 .thinking-row {
-  display: block;
+  display: flow-root;
   min-width: 0;
 }
 .continuing-note {
@@ -3085,6 +3096,17 @@ qm-markdown .tok-in {
 .thinking-row[open] > .thinking-summary > .icon:last-child,
 .thinking-row[open] > .thinking-summary > .activity-chevron {
   transform: rotate(90deg);
+}
+.thinking-row > .thinking-summary > .activity-chevron {
+  transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.thinking-row[data-closing] > .thinking-summary > .activity-chevron {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-row > .thinking-summary > .activity-chevron {
+    transition: none;
+  }
 }
 .thinking-body {
   margin: 5px 0 8px 19px;
@@ -3494,7 +3516,7 @@ qm-markdown .tok-in {
   padding-bottom: 0;
 }
 .message-stack > .suggested-activities {
-  margin-bottom: 6px;
+  margin-bottom: 24px;
 }
 @keyframes suggested-activity-enter {
   from {
@@ -3564,7 +3586,7 @@ qm-markdown .tok-in {
   justify-content: center;
   width: 28px;
   height: 28px;
-  margin-right: 5px;
+  margin-right: 4px;
   padding: 0;
   border: 0;
   border-radius: 8px;
@@ -3593,13 +3615,64 @@ qm-markdown .tok-in {
   outline-offset: -2px;
 }
 .suggested-activity-title {
+  flex: 1;
+  min-width: 0;
   font-size: var(--font-14);
   line-height: 1.4;
   letter-spacing: -0.1px;
   overflow-wrap: anywhere;
+  color: color-mix(in srgb, var(--foreground) 70%, var(--muted-foreground));
 }
-.dark .suggested-activity-title {
-  color: rgb(94 112 130);
+.suggested-activity:hover .suggested-activity-title {
+  color: var(--foreground);
+}
+.suggested-activity-note {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.suggested-activity:has(+ .suggested-activity-dismiss) {
+  padding-right: 0;
+}
+.suggested-activity:has(.suggested-activity-go) {
+  position: relative;
+  padding-right: 32px;
+}
+@container chat (max-width: 540px) {
+  .suggested-activity:has(.suggested-activity-note) {
+    flex-wrap: wrap;
+    row-gap: 1px;
+  }
+  .suggested-activity-title {
+    flex-basis: calc(100% - 31px);
+  }
+  .suggested-activity-note {
+    flex-basis: 100%;
+    max-width: none;
+    padding-left: 31px;
+  }
+}
+.suggested-activity-go {
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  display: inline-flex;
+  opacity: 0.5;
+  transform: translateY(-50%);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+}
+.suggested-activity:hover .suggested-activity-go,
+.suggested-activity:focus-visible .suggested-activity-go {
+  opacity: 1;
+  transform: translate(1px, calc(-50% - 1px));
+}
+.suggested-activity-note.is-new {
+  color: var(--primary);
 }
 .suggested-activity-icon {
   display: flex;
@@ -13317,9 +13390,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .dv-tab:not(.dv-active-tab) .session-persona-badge {
   pointer-events: none;
 }
-.dv-tab:not(.dv-active-tab) .session-persona-clear {
-  display: none;
-}
 .persona-skill-list {
   display: flex;
   flex-direction: column;
@@ -13357,18 +13427,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.session-persona-clear {
-  display: inline-flex;
-  align-items: center;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-.session-persona-clear:hover {
-  color: var(--foreground);
 }
 @media (max-width: 700px) {
   .persona-row {

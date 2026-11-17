@@ -44,7 +44,7 @@ describe("POST /v1/emoji", async () => {
     });
     await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));
     const directory = createPostgresDirectoryStore(testDatabaseUrl());
-    await directory.setWorkspaceUrl("https://acme.slack.com/");
+    await directory.setWorkspace({ workspaceUrl: "https://acme.slack.com/", appIconUrl: null });
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

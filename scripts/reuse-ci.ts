@@ -3,8 +3,8 @@ import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const CI_JOBS = [
+  "Select tests",
   "Core typecheck",
-  ...Array.from({ length: 5 }, (_, i) => `Core tests (${i + 1}/5)`),
   "Core",
   "CLI",
   "Lint",
@@ -178,8 +178,8 @@ async function main() {
     GITHUB_SHA,
     GITHUB_OUTPUT,
     GITHUB_STEP_SUMMARY,
-    GITHUB_EVENT_NAME,
     GITHUB_REF,
+    GITHUB_EVENT_NAME,
   } = process.env;
   assert.ok(GITHUB_REPOSITORY && GITHUB_SHA && GITHUB_TOKEN && GITHUB_OUTPUT && GITHUB_REF);
   const headers = {
@@ -233,8 +233,8 @@ async function main() {
     appendFileSync(
       GITHUB_STEP_SUMMARY,
       proof
-        ? `Reusing full CI from https://github.com/${GITHUB_REPOSITORY}/actions/runs/${proof.ci.runId}/attempts/${proof.ci.attempt}.\n`
-        : "No exact tested tree proof; running full CI.\n",
+        ? `Reusing CI from https://github.com/${GITHUB_REPOSITORY}/actions/runs/${proof.ci.runId}/attempts/${proof.ci.attempt}.\n`
+        : "No exact tested tree proof; running CI.\n",
     );
 }
 

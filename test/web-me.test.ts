@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { webMeConfig } from "../src/api/routes/web-me.ts";
+import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 import { orgId, orgScope } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
@@ -49,7 +50,10 @@ async function me(cookie: string, at = base): Promise<Record<string, unknown>> {
 }
 
 test("/me describes the signed-in person, the company and the web app's settings, in the relay's shape", async () => {
-  await built.app.setDirectoryWorkspaceUrl("https://acme.slack.com");
+  await built.app.setDirectoryWorkspace({
+    workspaceUrl: "https://acme.slack.com",
+    appIconUrl: "https://avatars.slack-edge.com/app_72.png",
+  });
   await built.config.setBranding(orgScope() as ScopeId, { orgName: " Acme " });
   const body = await me(browserSessionCookie("bob@example.com", { name: " Bob " }));
   assert.deepEqual(body, {
@@ -61,6 +65,7 @@ test("/me describes the signed-in person, the company and the web app's settings
     browserErrors: { dsn: "https://public@sentry.example.com/1", release: "release-1" },
     mode: "portal",
     slackWorkspaceUrl: "https://acme.slack.com",
+    slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png",
     chatSurfaces: [{ kind: "slack", label: "Slack" }],
     individualModelAuth: false,
     modelAuthConnected: false,
@@ -110,4 +115,40 @@ test("with suggestion generation on, /me leaves the fallback suggestions to the 
   const body = await me(browserSessionCookie("bob@example.com"), generating);
   assert.equal(body.suggestedActivitiesGeneration, true);
   assert.equal(body.suggestedActivities, undefined);
+});
+
+test("/me carries the activity seeds set on the organization, and a rejected write names the entry", async () => {
+  const cookie = browserSessionCookie("bob@example.com");
+  const before = await me(cookie);
+  assert.equal("welcome" in before, false);
+  assert.deepEqual(before.suggestedActivities, activities);
+  const idea = { id: "crm", icon: "📇", title: "Track the harbor pilots", prompt: "Track the harbor pilots" };
+  const seeds = {
+    activities: [{ ...idea, source: "from your goals" }],
+    apps: {
+      gmail: [{ id: "g1", icon: "📥", title: "Find replies I owe", prompt: "Find replies I owe", replaces: "crm" }],
+    },
+  };
+  const resource = ADMIN_RESOURCES.find((entry) => entry.id === "activity-seeds")!;
+  const write = (body: unknown, scope: string = orgScope()) =>
+    resource.apply({ body, deps: { config: built.config } } as never, { id: "admin" }, scope);
+  assert.deepEqual(await write({ seeds }), { ok: true });
+  assert.deepEqual(await me(cookie), before);
+  await built.featureFlags.setEnabled("company_welcome", orgScope() as ScopeId, true, "test");
+  const seeded = await me(cookie);
+  assert.deepEqual(seeded.welcome, seeds);
+  assert.deepEqual(seeded.suggestedActivities, seeds.activities);
+  assert.match(
+    JSON.stringify(await write({ seeds: { activities: [idea, { id: "bare", title: "No icon", prompt: "No icon" }] } })),
+    /seeds\.activities\.1\.icon: /,
+  );
+  assert.match(
+    JSON.stringify(await write({ seeds: { activities: [{ ...idea, replaces: "crm" }] } })),
+    /activities\.0: .*replaces/,
+  );
+  assert.match(JSON.stringify(await write({ seeds }, "personal:bob@example.com")), /org-wide/);
+  assert.deepEqual((await me(cookie)).welcome, seeds);
+  assert.deepEqual(await write({ seeds: null }), { ok: true });
+  assert.equal("welcome" in (await me(cookie)), false);
+  await built.featureFlags.setEnabled("company_welcome", orgScope() as ScopeId, false, "test");
 });

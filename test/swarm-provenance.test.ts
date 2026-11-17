@@ -37,19 +37,19 @@ function reverseKeys(value: unknown): unknown {
 
 test("durable request provenance is independent of JSON object key order", async () => {
   const f = await dispatch();
-  assert.ok(await f.service.binding(f.input));
-  assert.ok(await f.service.binding(reverseKeys(f.input) as OrchestratorInput));
+  assert.ok(await f.service.binding(testTenant, f.input));
+  assert.ok(await f.service.binding(testTenant, reverseKeys(f.input) as OrchestratorInput));
 });
 
 test("a swarm worker started by a Slack bot's turn keeps the bot marker and binds", async () => {
   const f = await dispatch({ runtime: { botActor: true } });
   assert.equal(f.input.botActor, true);
-  assert.ok(await f.service.binding(f.input));
+  assert.ok(await f.service.binding(testTenant, f.input));
   const { botActor: _botActor, ...unmarked } = f.input;
-  await assert.rejects(f.service.binding(unmarked), /forged swarm provenance/);
+  await assert.rejects(f.service.binding(testTenant, unmarked), /forged swarm provenance/);
 });
 
-test("a turn doing a bot's work starts a swarm whose workers do the bot's work", async () => {
+test("a turn doing a bot's work starts a swarm whose workers do the bot's work and mail a hidden root unless it is a fork", async () => {
   const f = await swarmFixture({ claims: { botActor: true } });
   const runId = f.caller.kind === "agent" ? f.caller.claims.runId! : "";
   await f.runs.markBotLimited(testTenant, runId);
@@ -59,6 +59,19 @@ test("a turn doing a bot's work starts a swarm whose workers do the bot's work",
   await service.sweep();
   const caller = await f.workerCaller(worker!.id);
   assert.equal(caller.kind === "agent" && caller.claims.botActor, true);
+  await service.send(caller, { requestId: "report", audience: [f.root.id], text: "done" });
+  await service.sweep();
+  await f.sessions.updateForkProvenance(f.root.id, { forkedFrom: { sessionId: randomUUID() }, forkBoundarySeq: 1 });
+  await service.send(caller, { requestId: "fork-report", audience: [f.root.id], text: "done in the fork" });
+  await service.sweep();
+  const states = (await f.store.get(f.root.id))!.messages.slice(-2).map((m) => m.notifications[f.root.id]!.state);
+  assert.deepEqual(states, ["mailbox", "queued"]);
+  const queued = (await f.runs.list()).find((run) => run.request.swarm?.recipientId === f.root.id)!;
+  const person = await f.sessions.getOrCreateByThread(`web:alice:${randomUUID()}`, f.root.type, f.root.scopeId);
+  await f.sessions.updateForkProvenance(f.root.id, { forkedFrom: { sessionId: person.id }, forkBoundarySeq: 1 });
+  await service.binding(testTenant, { ...queued.request, runId: queued.id });
+  await service.sweep();
+  assert.equal((await f.store.get(f.root.id))!.messages.at(-1)!.notifications[f.root.id]!.state, "mailbox");
   await service.notePersonUse({ swarmId: f.root.id });
   assert.ok(aborted.includes(runId), "a person's use of the swarm's computers stops the turn that started it");
 });
@@ -222,7 +235,7 @@ test("a person's turn cannot add workers to a swarm a Slack bot started", async 
 test("execution metadata does not change stable dispatch provenance", async () => {
   const f = await dispatch();
   assert.ok(
-    await f.service.binding({
+    await f.service.binding(testTenant, {
       ...f.input,
       attempt: f.run.attempts,
       runLeaseToken: f.run.leaseToken!,
@@ -306,7 +319,7 @@ for (const [name, mutate] of Object.entries(mutations))
     const f = await dispatch();
     const input = structuredClone(f.input);
     mutate(input);
-    await assert.rejects(f.service.binding(input));
+    await assert.rejects(f.service.binding(testTenant, input));
   });
 
 test("tampered durable request cannot authorize a payload absent from the shared message", async () => {
@@ -317,5 +330,5 @@ test("tampered durable request cannot authorize a payload absent from the shared
     const run = await get(key);
     return run ? { ...run, request: { ...run.request, text: input.text } } : null;
   };
-  await assert.rejects(f.service.binding(input));
+  await assert.rejects(f.service.binding(testTenant, input));
 });

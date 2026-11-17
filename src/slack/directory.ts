@@ -132,7 +132,7 @@ export function createDirectory(deps: {
         if (!u?.id || u.id === ids.botUserId) continue;
         const actor = deps.externalAccess
           ? companySlackActor(u, deps.externalAccess)
-          : classifyUser(u, ids.ownTeamId, ids.identityMode);
+          : classifyUser(u, ids.ownTeamId, ids.identityMode, core.invitedExternal);
         if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
           missingEmails++;
         const timezone = slackUserTimezone(u);
@@ -405,7 +405,7 @@ export function createDirectory(deps: {
     if (!CORE_SINGLETON) return true;
     let pushed: boolean | null;
     try {
-      pushed = await core.holdDirectorySync(async (lost) => {
+      pushed = await core.holdDirectorySync(`${ids.ownTeamId}:${ids.botUserId}`, async (lost) => {
         let lostFlag = false;
         void lost.then(() => {
           lostFlag = true;
@@ -440,7 +440,7 @@ export function createDirectory(deps: {
           type: "internal" as const,
           ...(slackId && slackId !== a.externalId ? { slackId } : {}),
           ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
-          ...(a.isBot ? { isBot: true } : {}),
+          isBot: a.isBot === true,
         };
       });
     const fetched = await fetchChannels(client, invalidations, targetChannelIds);
@@ -449,6 +449,12 @@ export function createDirectory(deps: {
       return false;
     }
     if (!members.length && !(fetched && fetched.channels.length)) return false;
+    const appIconUrl = await client.bots
+      .info({ bot: ids.ownBotId })
+      .then(
+        (res: any) => res.bot?.icons?.image_72 as string | undefined,
+        swallowAs("slack: bots.info for the app icon", undefined),
+      );
     try {
       const applied = await core.pushDirectory({
         members,
@@ -471,6 +477,7 @@ export function createDirectory(deps: {
             }
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
+        ...(appIconUrl ? { appIconUrl } : {}),
       });
       if (applied && fetched?.fullRosterFetchedAt !== undefined) lastFullRosterFetchAt = fetched.fullRosterFetchedAt;
       if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");
@@ -573,7 +580,7 @@ export function createDirectory(deps: {
       const user = (await client.users.info({ user: userId })).user as SlackUser | undefined;
       const actor = deps.externalAccess
         ? companySlackActor(user, deps.externalAccess)
-        : classifyUser(user, ids.ownTeamId, ids.identityMode);
+        : classifyUser(user, ids.ownTeamId, ids.identityMode, core.invitedExternal);
       const timezone = slackUserTimezone(user);
       const classified = { actor, ...(timezone ? { timezone } : {}) };
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
@@ -620,7 +627,15 @@ export function createDirectory(deps: {
     } catch {
       return { audience: [actor, externalMarker()] };
     }
-    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {
+    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && info?.is_mpim) {
+      if (membership.publishMembers)
+        await core.registerGroupRoster(
+          channel,
+          membership.publishMembers.map((member) => member.externalId),
+        );
+      return membership;
+    }
+    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot) {
       if (!info?.name || typeof info.is_private !== "boolean" || info.is_member === false || observedAt === undefined)
         return { audience: [actor, externalMarker()] };
       if (membership.publishMembers) {

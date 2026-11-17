@@ -584,7 +584,8 @@ export interface App {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  setDirectoryWorkspaceUrl(url: string): Promise<void>;
+  registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
+  setDirectoryWorkspace(meta: DirectoryMeta): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
@@ -667,7 +668,11 @@ export interface App {
   setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
   setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
-  setAppPublic(idOrName: string, isPublic: boolean, actor: AppActor): Promise<PublishedApp>;
+  setAppPublic(
+    idOrName: string,
+    isPublic: boolean,
+    actor: AppActor & { personAtKeyboard: boolean },
+  ): Promise<PublishedApp>;
   setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
@@ -732,7 +737,7 @@ export interface AppDeps {
   resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
-  users?: Pick<UserStore, "resolve">;
+  users?: Pick<UserStore, "resolve" | "botSignIns">;
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;

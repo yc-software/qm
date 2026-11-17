@@ -89,7 +89,7 @@ import type {
   ControlOk,
   ControlErr,
 } from "../api/control-service.ts";
-import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
+import { personAtKeyboard, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
@@ -1143,6 +1143,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.setAppPublic(id, isPublic, {
         createdBy: deps.createdBy,
         botActor: deps.botActor,
+        personAtKeyboard: personAtKeyboard(deps.controlClaims),
       });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },

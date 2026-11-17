@@ -16,7 +16,13 @@ import { settle } from "./support/settle.ts";
 
 function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite?: boolean } = {}) {
   const store = createPostgresDirectoryStore(testDatabaseUrl());
-  const state = { memberIds: ["U_ONE"], failMembers: false, failUser: false, writes: 0 };
+  const state = {
+    memberIds: ["U_ONE"],
+    failMembers: false,
+    failUser: false,
+    writes: 0,
+    groupRosters: [] as Array<{ groupId: string; principalIds: string[] }>,
+  };
   const client = {
     async *paginate(method: string) {
       if (method === "conversations.members") {
@@ -47,6 +53,9 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
           body.channelRevocations,
           body.partialChannels,
         );
+      },
+      registerGroupRoster: async (groupId: string, principalIds: readonly string[]) => {
+        state.groupRosters.push({ groupId, principalIds: [...principalIds] });
       },
     } as unknown as SlackCoreClient,
     coreSingleton: !options.secondary,
@@ -119,6 +128,13 @@ test("unknown, external and group metadata never publish an ordinary channel", a
     await observe(info);
     assert.equal(state.writes, 0);
   }
+});
+
+test("a group DM records its verified roster as a group, not a channel", async () => {
+  const { state, observe } = fixture();
+  await observe({ name: "room", is_private: true, is_mpim: true });
+  assert.equal(state.writes, 0);
+  assert.deepEqual(state.groupRosters, [{ groupId: "C_ONE", principalIds: ["U_ONE"] }]);
 });
 
 test("newer removal rejects an older in-flight live observation", async () => {
