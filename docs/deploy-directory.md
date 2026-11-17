@@ -188,7 +188,7 @@ files, and so on) as them, the same way apps use org credentials through the bro
 Nothing is lent by default. The publisher opts in per app and per connected-app host with
 `POST /v1/apps/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
 withdraws. Only the publisher may call it, from a live turn or a signed-in session, and
-sharing the app (`POST /v1/apps/:id/share`, or `POST /v1/share` for a deploy) takes the
+sharing the app (`POST /v1/shares/deploy/:id`, or `POST /v1/share` for a deploy) takes the
 same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
