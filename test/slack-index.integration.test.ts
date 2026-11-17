@@ -1758,7 +1758,7 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
     bot_id: "BBOT",
     text: "Working",
     ts: "200.1",
-    blocks: [{ type: "rich_text", block_id: "qm_status:test", elements: [] }],
+    blocks: [{ type: "task_card", task_id: "qm_status:test", title: "Working", status: "in_progress" }],
   };
   try {
     await f.app.emitMessage({ channel: "C1", channel_type: "channel", ...status });

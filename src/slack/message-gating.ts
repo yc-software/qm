@@ -21,8 +21,7 @@ export function isOwnStatusCard(
     Array.isArray(message.blocks) &&
     message.blocks.some(
       (block) =>
-        isObj(block) &&
-        [block.block_id, block.task_id].some((id) => typeof id === "string" && id.startsWith(SLACK_STATUS_TASK_PREFIX)),
+        isObj(block) && typeof block.task_id === "string" && block.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
     ),
   );
 }
