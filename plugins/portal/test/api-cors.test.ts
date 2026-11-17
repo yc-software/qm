@@ -52,8 +52,8 @@ function preflight(path: string, origin: string, method = "POST"): Promise<Respo
   });
 }
 
-test("an allowlisted origin's preflight for a chat route is answered without a session", async () => {
-  const r = await preflight("/api/turn", EMBEDDER);
+test("project creation from an embedded client gets a preflight response instead of a cross-origin refusal", async () => {
+  const r = await preflight("/api/projects", EMBEDDER);
   assert.equal(r.status, 204);
   assert.equal(r.headers.get("access-control-allow-origin"), EMBEDDER);
   assert.equal(r.headers.get("access-control-allow-credentials"), "true");
@@ -160,6 +160,7 @@ test("the chat API route set is exact on method and shape", () => {
   assert.ok(!isChatApiRoute("PATCH", "/api/runs/r1/input"));
   assert.ok(!isChatApiRoute("POST", "/api/runs/r1/events"));
   assert.ok(!isChatApiRoute("GET", "/api/runs/r1/events/extra"));
+  assert.ok(!isChatApiRoute("GET", "/api/runs//events"));
   assert.ok(!isChatApiRoute("POST", "/api/sessions/s1"));
   assert.ok(!isChatApiRoute("POST", "/api/sessions/s1/share"));
 });

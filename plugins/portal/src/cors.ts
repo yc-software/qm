@@ -1,3 +1,4 @@
+import { compilePath } from "../../chassis/src/router.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const ALLOWED_METHODS = "GET, POST";
@@ -5,23 +6,26 @@ const ALLOWED_HEADERS = "content-type";
 const EXPOSED_HEADERS = "content-disposition";
 const PREFLIGHT_MAX_AGE_S = 600;
 
-const ID = "[^/]+";
-const FILE_ID = "(?!by-name(?:/|$))[^/]+";
-const CHAT_API_ROUTES: ReadonlyArray<{ method: string; re: RegExp }> = [
-  { method: "GET", re: /^\/me$/ },
-  { method: "POST", re: /^\/api\/turn$/ },
-  { method: "GET", re: /^\/api\/runs\/active$/ },
-  { method: "GET", re: new RegExp(`^/api/runs/${ID}$`) },
-  { method: "GET", re: new RegExp(`^/api/runs/${ID}/events$`) },
-  { method: "POST", re: new RegExp(`^/api/runs/${ID}/signal$`) },
-  { method: "POST", re: new RegExp(`^/api/runs/${ID}/withdraw$`) },
-  { method: "GET", re: /^\/api\/sessions$/ },
-  { method: "GET", re: new RegExp(`^/api/sessions/${ID}$`) },
-  { method: "GET", re: new RegExp(`^/api/sessions/${ID}/approvals$`) },
-  { method: "POST", re: new RegExp(`^/api/approvals/${ID}$`) },
-  { method: "POST", re: /^\/api\/blobs$/ },
-  { method: "GET", re: new RegExp(`^/api/files/${FILE_ID}/content(?:/${ID})?$`) },
-];
+const CHAT_API_ROUTES = [
+  { method: "GET", path: "/me" },
+  { method: "POST", path: "/api/turn" },
+  { method: "GET", path: "/api/contexts" },
+  { method: "POST", path: "/api/projects" },
+  { method: "POST", path: "/api/skills" },
+  { method: "POST", path: "/api/skills/:skillId/share" },
+  { method: "GET", path: "/api/runs/active" },
+  { method: "GET", path: "/api/runs/:runId" },
+  { method: "GET", path: "/api/runs/:runId/events" },
+  { method: "POST", path: "/api/runs/:runId/signal" },
+  { method: "POST", path: "/api/runs/:runId/withdraw" },
+  { method: "GET", path: "/api/sessions" },
+  { method: "GET", path: "/api/sessions/:sessionId" },
+  { method: "GET", path: "/api/sessions/:sessionId/approvals" },
+  { method: "POST", path: "/api/approvals/:approvalId" },
+  { method: "POST", path: "/api/blobs" },
+  { method: "GET", path: "/api/files/:fileId/content" },
+  { method: "GET", path: "/api/files/:fileId/content/:name" },
+].map(({ method, path }) => ({ method, match: compilePath(path) }));
 
 export function parseAllowedOrigins(raw: string | undefined): { origins: Set<string>; problems: string[] } {
   const origins = new Set<string>();
@@ -51,7 +55,13 @@ export function parseAllowedOrigins(raw: string | undefined): { origins: Set<str
 }
 
 export function isChatApiRoute(method: string, pathname: string): boolean {
-  return CHAT_API_ROUTES.some((route) => route.method === method && route.re.test(pathname));
+  return CHAT_API_ROUTES.some((route) => {
+    if (route.method !== method) return false;
+    const params: Record<string, string> = {};
+    return (
+      route.match.test(method, pathname, params) && Object.values(params).every(Boolean) && params.fileId !== "by-name"
+    );
+  });
 }
 
 export function prepareCors(
