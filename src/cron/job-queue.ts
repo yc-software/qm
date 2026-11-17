@@ -1,4 +1,4 @@
-import { PgBoss } from "pg-boss";
+import { PgBoss, type ConstructorOptions } from "pg-boss";
 import pgBossPackage from "pg-boss/package.json" with { type: "json" };
 import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
@@ -31,15 +31,17 @@ const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 const FIRE_QUEUE = "cron-fire";
 const FIRE_QUEUE_OPTIONS = { policy: "short", notify: true } as const;
 
+export function poolBoss(pg: () => PgPool, options: Omit<ConstructorOptions, "db">): PgBoss {
+  return new PgBoss({
+    ...options,
+    db: { executeSql: async (text, values) => (await pg().pool()).query(text, values) },
+  });
+}
+
 export async function installCronQueue(databaseUrl: string, schema: string = "pgboss"): Promise<void> {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error(`invalid cron queue schema: ${schema}`);
   const pg = createPgPool(databaseUrl);
-  const boss = new PgBoss({
-    schema,
-    supervise: false,
-    schedule: false,
-    db: { executeSql: async (text, values) => (await pg.pool()).query(text, values) },
-  });
+  const boss = poolBoss(() => pg, { schema, supervise: false, schedule: false });
   try {
     await boss.start();
     await boss.createQueue(FIRE_QUEUE, FIRE_QUEUE_OPTIONS);
@@ -69,16 +71,13 @@ export function createPgBossCronQueue(
   fireConcurrency: number = 1,
 ): CronJobQueue {
   let pg: PgPool | null = null;
-  const boss = new PgBoss({
-    schema,
-    migrate: false,
-    db: {
-      executeSql: async (text, values) => {
-        if (!pg) throw new Error("Cron queue database is closed");
-        return (await pg.pool()).query(text, values);
-      },
+  const boss = poolBoss(
+    () => {
+      if (!pg) throw new Error("Cron queue database is closed");
+      return pg;
     },
-  });
+    { schema, migrate: false },
+  );
   async function closePool() {
     const previous = pg;
     pg = null;

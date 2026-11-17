@@ -113,7 +113,7 @@ export function createMessagingMethods(
   | "upsertChannels"
   | "upsertGroups"
   | "registerGroupRoster"
-  | "setDirectoryWorkspaceUrl"
+  | "setDirectoryWorkspace"
   | "directoryMeta"
   | "channelMember"
   | "channelVisibleTo"
@@ -480,8 +480,8 @@ export function createMessagingMethods(
     registerGroupRoster(groupId, principalIds) {
       return deps.directory.upsertGroup(groupId, principalIds, SLACK);
     },
-    async setDirectoryWorkspaceUrl(url) {
-      await deps.directory.setWorkspaceUrl(url);
+    async setDirectoryWorkspace(meta) {
+      await deps.directory.setWorkspace(meta);
     },
     directoryMeta() {
       return deps.directory.meta();

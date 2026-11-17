@@ -186,6 +186,7 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
         };
     const by = {
       author,
+      ...(speaker.origin.kind !== "automation" && !speaker.fromSession ? { speakerId: author } : {}),
       ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
     };
     let said =

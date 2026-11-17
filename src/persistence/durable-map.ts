@@ -27,6 +27,7 @@ export interface DurableMap<T> {
     query: DurableMapSelect<T, K>,
   ): Promise<Array<[string, Omit<T, K>]>>;
   get(id: string): Promise<T | null>;
+  getMany(ids: readonly string[]): Promise<T[]>;
   put(id: string, value: T): Promise<void>;
   putIfAbsent(id: string, value: T): Promise<T>;
   insertIfAbsent(id: string, value: T): Promise<boolean>;
@@ -317,6 +318,11 @@ export function createPostgresMap<T>(
       await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);
       return rows.length ? (rows[0]!.json as T) : null;
+    },
+    async getMany(ids) {
+      if (!ids.length) return [];
+      await ready();
+      return (await pg.q(`SELECT json FROM ${table} WHERE id = ANY($1::text[])`, [ids])).map((row) => row.json as T);
     },
     async put(id, value) {
       await withBump((client) =>

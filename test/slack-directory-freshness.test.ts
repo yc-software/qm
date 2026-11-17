@@ -47,10 +47,12 @@ function fixture(t: TestContext) {
         }
       },
       users: { info: async () => ({ user }) },
+      bots: { info: async () => ({ bot: { icons: { image_72: "https://avatars.slack-edge.com/app_72.png" } } }) },
     };
     const directory = createDirectory({
       core: {
-        holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<boolean>) => fn(new Promise(() => {})),
+        holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<boolean>) =>
+          fn(new Promise(() => {})),
         pushDirectory: async (body: Parameters<SlackCoreClient["pushDirectory"]>[0]) => {
           if (state.rejectPush) {
             pushes.push(body);
@@ -107,6 +109,7 @@ test("a fresh listing discovers channels without replaying cached rosters", asyn
   assert.deepEqual(pushed.channelRosterIds, []);
   assert.deepEqual(pushed.channelMembers, []);
   assert.equal(pushed.groupMembers, undefined);
+  assert.equal(pushed.appIconUrl, "https://avatars.slack-edge.com/app_72.png");
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 1);
 });

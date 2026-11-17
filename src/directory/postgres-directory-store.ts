@@ -191,6 +191,10 @@ END $tenants_for_email$`,
       "CREATE INDEX CONCURRENTLY IF NOT EXISTS directory_members_slack_id ON directory_members (org_id, slack_id)",
     ],
   },
+  {
+    id: "directory/store/0014-meta-app-icon",
+    statements: ["ALTER TABLE directory_meta ADD COLUMN app_icon_url TEXT"],
+  },
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
@@ -369,8 +373,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   return {
     ...createDirectorySync({ q, pool, orgId }),
     async meta() {
-      const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
-      return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
+      const rows = await q("SELECT workspace_url, app_icon_url FROM directory_meta WHERE org_id = $1", [orgId]);
+      return {
+        workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null,
+        appIconUrl: (rows[0]?.app_icon_url as string | null) ?? null,
+      };
     },
 
     async tenantsForEmail(email) {

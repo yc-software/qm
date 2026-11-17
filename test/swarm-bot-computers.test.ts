@@ -422,6 +422,34 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   assert.deepEqual(stopped, [[worker.sandboxId, botRun.id]]);
 });
 
+test("the process reaper reads a tenant's bot job computers and swarms once per sweep, however many jobs run on them", async (t) => {
+  const f = await botSwarm();
+  const swarm = (await f.store.get(f.root.id))!;
+  const processes = createPostgresProcessRegistry(f.url);
+  const botRun = (await f.runs.list()).find((run) => run.sessionId === f.root.threadRef && run.request.botActor)!;
+  const computers = [swarm.board!.sandboxId, ...swarm.members.flatMap((member) => member.sandboxId ?? [])];
+  for (const [i, sandboxId] of [...computers, ...computers].entries())
+    await processes.register({
+      processId: `job-${f.root.id}-${i}`,
+      scopeId: f.root.scopeId,
+      sandboxId,
+      kind: "background",
+      command: "npm run build",
+      purpose: "the build",
+      ttlMs: 600_000,
+      runId: botRun.id,
+    });
+  const reads = [t.mock.method(f.sandboxes, "get"), t.mock.method(f.store, "get")];
+  assert.deepEqual(await claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: f.service }), []);
+  assert.deepEqual(
+    reads.map((read) => read.mock.callCount()),
+    [0, 0],
+  );
+  await f.records.delete(computers[0]!);
+  const owed = await claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: f.service });
+  assert.deepEqual(owed.map((row) => row.id).sort(), [0, computers.length].map((i) => `job-${f.root.id}-${i}`).sort());
+});
+
 function assertKeptIn(observed: Record<string, unknown>, bot = true): void {
   const kept = {
     directs: "accepted",
