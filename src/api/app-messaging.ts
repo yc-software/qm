@@ -20,8 +20,7 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
-import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
-import { externalMemberActive } from "../identity/external-members.ts";
+import { signInMembers } from "../directory/sign-in-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
@@ -36,7 +35,6 @@ import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-import { personLabel } from "../identity/person-names.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -139,32 +137,13 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests;
   const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
-  const identityMembers = async (): Promise<DirectoryMember[]> => {
-    const [externals, participants] = await Promise.all([
-      deps.identity.listExternalMembers(),
-      deps.sessions?.distinctParticipants() ?? [],
-    ]);
-    const users = await deps.users?.resolve(participants).catch(() => undefined);
-    const candidates: DirectoryMember[] = [
-      ...(deps.emailAuthMembers ?? []),
-      ...externals
-        .filter((member) => externalMemberActive(member))
-        .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
-      ...participants
-        .filter((principalId) => deps.identity.classify(principalId).type === "internal")
-        .map((principalId) => ({
-          principalId,
-          displayName: personLabel(principalId, { user: users?.get(principalId) }),
-          type: "internal" as const,
-        })),
-    ];
-    const byKey = new Map<string, DirectoryMember>();
-    for (const member of candidates) {
-      const key = personKey(member.principalId);
-      if (key && !byKey.has(key)) byKey.set(key, member);
-    }
-    return [...byKey.values()];
-  };
+  const identityMembers = () =>
+    signInMembers({
+      identity: deps.identity,
+      sessions: deps.sessions,
+      ...(deps.users ? { users: deps.users } : {}),
+      ...(deps.emailAuthMembers ? { emailAuthMembers: deps.emailAuthMembers } : {}),
+    });
   const mergedDirectoryMembers = async () => {
     const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
     const seen = new Set(stored.map((member) => personKey(member.principalId)));
@@ -502,18 +481,8 @@ export function createMessagingMethods(
         ...(isPrivate !== undefined ? { isPrivate } : {}),
       });
     },
-    async resolveRecipient(query) {
-      const stored = await deps.directory.resolve(query);
-      if (stored.kind !== "none") return stored;
-      const match = pickMatch(
-        await identityMembers(),
-        query,
-        (member) => member.principalId,
-        (member) => member.displayName,
-      );
-      if (match.kind === "one") return { kind: "one", member: match.item };
-      if (match.kind === "ambiguous") return { kind: "ambiguous", candidates: match.items };
-      return { kind: "none" };
+    resolveRecipient(query) {
+      return deps.directory.resolve(query);
     },
     resolveChannel(query) {
       return deps.directory.resolveChannel(query);

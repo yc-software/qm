@@ -82,6 +82,12 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
+  it("a configured email-auth principal is a reachable recipient without Slack", async () => {
+    const resolved = await built.app.resolveReachTarget({ recipient: "allowed@example.com" }, "U-stay");
+    assert.equal(resolved.ok, true);
+    if (resolved.ok) assert.equal(resolved.destination.target, "allowed@example.com");
+  });
+
   it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
     await built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]);
     await built.app.upsertDirectory([member("U-stay")]);
