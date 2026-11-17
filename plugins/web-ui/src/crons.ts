@@ -461,8 +461,10 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
         ${listBackLink("Crons", drawCronsPage)}
         <div class="resource-heading">
           <h2 dir="auto">${cronTitle(c)}</h2>
-          ${mine ? shareButton({ type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId }) : nothing}
-          <button class="btn" @click=${showNewCron}>${icon(Plus, 15)}<span>New cron</span></button>
+          <div class="actions">
+            ${mine ? shareButton({ type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId }) : nothing}
+            <button class="btn" @click=${showNewCron}>${icon(Plus, 15)}<span>New cron</span></button>
+          </div>
         </div>
         ${notice ? html`<div class="hint">${notice}</div>` : ""}
         <div class="field">
