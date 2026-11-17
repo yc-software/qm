@@ -1239,11 +1239,7 @@ export function createSessionMethods(
         };
         await deps.deploy.assertShareAllowed(publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
       }
-      const author = await artifactAuthor(g.ownerScopeId, g.ref);
-      const held = await deps.acl.grantsFor(tenant, g.ownerScopeId, g.ref);
-      if (held.some((h) => h.granteeScopeId === g.granteeScopeId && h.permission !== g.permission))
-        await deps.acl.revoke(tenant, g.ownerScopeId, g.ref, g.granteeScopeId, g.grantedBy, author);
-      await deps.acl.grant(tenant, g, author);
+      await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,

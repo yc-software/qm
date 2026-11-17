@@ -1,3 +1,4 @@
+import type { DeployAccessErrorCode } from "../deploy/deploy-service.ts";
 import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
@@ -93,9 +94,8 @@ export interface ShareArtifactRequest {
   scope?: string;
   recipient?: string;
   email?: string;
-  permission?: Permission;
+  permission?: Permission | "none";
   move?: boolean;
-  remove?: boolean;
   notify?: boolean;
 }
 
@@ -136,15 +136,7 @@ export type ShareArtifactResult =
     }
   | {
       ok: false;
-      code:
-        | "bad_request"
-        | "not_found"
-        | "forbidden"
-        | "human_consent_required"
-        | "external_sharing_disabled"
-        | "recipient_not_found"
-        | "ambiguous_recipient"
-        | "share_failed";
+      code: "bad_request" | "recipient_not_found" | "ambiguous_recipient" | "share_failed" | DeployAccessErrorCode;
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };

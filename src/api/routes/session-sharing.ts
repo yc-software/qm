@@ -12,7 +12,7 @@ import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import { audit, isObj } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
-export async function createShare(ctx: ApiCtx): Promise<void> {
+async function createShare(ctx: ApiCtx): Promise<void> {
   const { deps, app, res, body, params } = ctx;
   res.setHeader("Cache-Control", "no-store");
   const viewer = ctx.actor?.p ?? (isObj(body) && body.principalId);

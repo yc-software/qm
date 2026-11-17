@@ -1214,8 +1214,8 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       message: 'toScope required ("org", a scope id, or a teammate\'s name)',
     });
   }
-  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write") {
-    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read" or "write"' });
+  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write" && b.permission !== "none") {
+    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read", "write" or "none"' });
   }
   if (b.notify !== undefined && typeof b.notify !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
@@ -1225,7 +1225,9 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       id: b.id,
       ...(typeof b.toScope === "string" ? splitToScope(b.toScope) : {}),
       ...(typeof b.email === "string" ? { email: b.email } : {}),
-      ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
+      ...(b.permission === "read" || b.permission === "write" || b.permission === "none"
+        ? { permission: b.permission }
+        : {}),
       ...(b.move === true ? { move: true } : {}),
       ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },

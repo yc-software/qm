@@ -1,4 +1,4 @@
-import { openShare } from "./share-dialog";
+import { openSessionShare } from "./session-share";
 import { preserveTranscriptScroll } from "./transcript-viewport";
 import { swallow, swallowAs } from "../../chassis/src/errors.ts";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -1122,7 +1122,7 @@ function sessionActionItems(sessionId: string, panelId: string): SessionAction[]
       glyph: Link,
       cls: "split-tab-share",
       run: () => {
-        void openShare({ type: "session", id: sessionId });
+        void openSessionShare(sessionId);
       },
     },
     {

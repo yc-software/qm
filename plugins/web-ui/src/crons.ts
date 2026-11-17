@@ -1,6 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Share2, Trash2 } from "lucide";
-import { openShare } from "./share-dialog";
+import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
+import { shareButton } from "./share-dialog";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
@@ -461,16 +461,7 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
         ${listBackLink("Crons", drawCronsPage)}
         <div class="resource-heading">
           <h2 dir="auto">${cronTitle(c)}</h2>
-          ${
-            mine
-              ? html`<button
-                  class="btn"
-                  @click=${() => void openShare({ type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId })}
-                >
-                  ${icon(Share2, 15)}<span>Share</span>
-                </button>`
-              : nothing
-          }
+          ${mine ? shareButton({ type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId }) : nothing}
           <button class="btn" @click=${showNewCron}>${icon(Plus, 15)}<span>New cron</span></button>
         </div>
         ${notice ? html`<div class="hint">${notice}</div>` : ""}

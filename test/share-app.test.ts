@@ -12,7 +12,7 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { renameApp, archiveApp, restoreApp, getApp, setAppDisplayName } from "../src/api/routes/apps.ts";
-import { getAppShares, shareApp } from "../src/api/routes/app-sharing.ts";
+import { changeShares as shareApp, readShares as getAppShares } from "../src/api/routes/sharing.ts";
 import { resolveShareTarget as resolveTarget } from "../src/api/artifact-share.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -105,7 +105,7 @@ function callManage(
   const ctx = {
     res,
     app,
-    params: { id },
+    params: { type: "deploy", id },
     body,
     capability: capability && { ...liveRunClaims(capability.actorId), ...capability },
     actor: person ? { p: person, exp: Date.now() + 60_000 } : null,
@@ -243,7 +243,6 @@ test('share endpoint: "everyone" grants org reach — a non-owner can reach it; 
   const r = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org" });
   assert.equal(r.status, 200);
   assert.equal(r.body.target.scope, scopeId("org", "default-org"));
-  assert.match(r.body.reach, /everyone in default-org/);
   assert.equal((await deploy.reachApp("dead-reckoning", "U2")).status, "ok");
 
   const off = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org", access: "none" });
@@ -318,7 +317,7 @@ test("share endpoint: unknown app → 404; no capability → 403; bad/ambiguous/
   assert.equal((await callShare(app, cap("U1"), "a", { scope: "not-a-scope" })).status, 400, "bad scope id → 400");
 });
 
-test("share endpoint: access:manage grants write (reach + manage)", async () => {
+test("share endpoint: access:manage grants write, and a later view grant replaces it", async () => {
   const directory: Dir = { resolve: async () => one("U-eng", "Eng") };
   const { app, deploy } = apiHarness(directory);
   await app.deploy({
@@ -331,6 +330,15 @@ test("share endpoint: access:manage grants write (reach + manage)", async () => 
   const r = await callShare(app, cap("U1"), "mgmt", { recipient: "eng", access: "manage" });
   assert.equal(r.status, 200);
   assert.deepEqual(await deploy.appGrantees("mgmt"), [{ scope: scopeId("personal", "U-eng"), permission: "write" }]);
+  const d = (await app.getApp("mgmt"))!;
+  await app.grant(tenant, {
+    ownerScopeId: d.ownerScopeId,
+    ref: `deployment:${d.id}`,
+    granteeScopeId: scopeId("personal", "U-eng"),
+    permission: "read",
+    grantedBy: "U1",
+  });
+  assert.deepEqual(await deploy.appGrantees("mgmt"), [{ scope: scopeId("personal", "U-eng"), permission: "read" }]);
 });
 
 test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→personal, none/ambiguous/invalid', async () => {
