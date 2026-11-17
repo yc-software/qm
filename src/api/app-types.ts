@@ -668,7 +668,11 @@ export interface App {
   setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
   setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
-  setAppPublic(idOrName: string, isPublic: boolean, actor: AppActor): Promise<PublishedApp>;
+  setAppPublic(
+    idOrName: string,
+    isPublic: boolean,
+    actor: AppActor & { personAtKeyboard: boolean },
+  ): Promise<PublishedApp>;
   setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
