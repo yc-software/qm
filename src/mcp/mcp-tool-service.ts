@@ -13,7 +13,6 @@ import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const RETRY_FAILED_LIST_MS = 15_000;
-const SHARED_LISTING_MAX = 200;
 const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
@@ -204,8 +203,10 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
-  const sharedListings = new LRUCache<string, { at: number; listing: Promise<McpListing> }>({
-    max: SHARED_LISTING_MAX,
+  const sharedListings = new LRUCache<string, Promise<McpListing>>({
+    ttl: refreshIntervalMs,
+    ttlAutopurge: true,
+    perf: { now },
   });
   const tenantState = perTenant<{
     clients: Map<string, { client: McpClient; server: McpServer }>;
@@ -342,14 +343,14 @@ export function createMcpToolService(opts: {
   function listServer(server: McpServer, fresh: boolean): Promise<McpListing> {
     if (server.auth !== "none" || server.attestActor)
       return clientFor(server).listTools({ headers: headersFor(server, undefined) });
-    const cached = sharedListings.get(server.url);
-    if (cached && !fresh && now() - cached.at < refreshIntervalMs) return cached.listing;
-    const entry = { at: now(), listing: clientFor(server).listTools({}) };
-    sharedListings.set(server.url, entry);
-    entry.listing.catch(() => {
-      if (sharedListings.peek(server.url) === entry) sharedListings.delete(server.url);
+    const cached = fresh ? undefined : sharedListings.get(server.url);
+    if (cached) return cached;
+    const listing = clientFor(server).listTools({});
+    sharedListings.set(server.url, listing);
+    listing.catch(() => {
+      if (sharedListings.peek(server.url) === listing) sharedListings.delete(server.url);
     });
-    return entry.listing;
+    return listing;
   }
 
   async function serverTools(

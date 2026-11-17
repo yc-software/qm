@@ -442,51 +442,40 @@ test("Slack mention names stay with their tenant; the env bot identity is proces
   setDefaultBotIdentity(undefined);
 });
 
-function listedServer(id: string, url: string): McpServer {
-  return { id, name: id, url, auth: "none", readOnly: true, enabled: true, updatedAt: 1, updatedBy: "admin" };
-}
-
-test("tenants share one unauthenticated MCP listing per refresh interval instead of listing once per tenant", async (t) => {
+test("tenants share one unauthenticated MCP listing, and a refused listing keeps its tools and is retried", async (t) => {
   const mcp = await startMcpTestServer(t);
-  const store = mcpStore({ [A]: [listedServer("yc", mcp.url)], [B]: [listedServer("yc", mcp.url)] });
+  const yc: McpServer = {
+    id: "yc",
+    name: "YC",
+    url: mcp.url,
+    auth: "none",
+    readOnly: true,
+    enabled: true,
+    updatedAt: 1,
+    updatedBy: "admin",
+  };
+  let refused = false;
   let clock = 1_000;
-  const service = createMcpToolService({
-    fetch: loopbackFetch,
-    servers: store,
-    refreshIntervalMs: 60_000,
-    now: () => clock,
-  });
+  const fetch: typeof loopbackFetch = (input, init) =>
+    refused ? Promise.resolve(new Response("Forbidden", { status: 403 })) : loopbackFetch(input, init);
+  const service = createMcpToolService({ fetch, servers: mcpStore({ [A]: [yc], [B]: [yc] }), now: () => clock });
   t.after(() => service.close());
+  t.mock.method(console, "error", () => {});
   const lists = () => mcp.requests.filter((r) => r.rpc === "tools/list").length;
-  const names = (tenant: string) => withTenant(tenant, async () => (await service.toolDefs()).map((tool) => tool.name));
+  const names = (tenant: string) => withTenant(tenant, async () => (await service.toolDefsFor()).map((d) => d.name));
   assert.deepEqual(await names(A), ["yc_query", "yc_update"]);
   assert.deepEqual(await names(B), ["yc_query", "yc_update"]);
   assert.equal(lists(), 1);
-  await withTenant(B, () => service.refresh());
-  assert.equal(lists(), 2, "an explicit refresh lists the server anew");
-  clock += 60_000;
-  await withTenant(A, () => service.refresh());
-  assert.equal(lists(), 3);
-});
-
-test("a refused MCP listing keeps the tools last listed and is retried on a later turn", async (t) => {
-  const mcp = await startMcpTestServer(t);
-  const store = mcpStore({ [A]: [listedServer("yc", mcp.url)] });
-  let refused = true;
-  const fetch: typeof loopbackFetch = (input, init) =>
-    refused ? Promise.resolve(new Response("<html>403 Forbidden</html>", { status: 403 })) : loopbackFetch(input, init);
-  let clock = 1_000;
-  const errors = t.mock.method(console, "error", () => {});
-  const service = createMcpToolService({ fetch, servers: store, refreshIntervalMs: 3_600_000, now: () => clock });
-  t.after(() => service.close());
-  const names = () => withTenant(A, async () => (await service.toolDefsFor()).map((tool) => tool.name));
-  assert.deepEqual(await names(), [], "nothing was ever listed");
-  refused = false;
-  assert.deepEqual(await names(), [], "a retry waits a few seconds");
-  clock += 15_000;
-  assert.deepEqual(await names(), ["yc_query", "yc_update"], "the turn after the wait lists again before answering");
   refused = true;
   await withTenant(A, () => service.refresh());
-  assert.deepEqual(await names(), ["yc_query", "yc_update"], "a refused re-list keeps the last tools");
-  errors.mock.restore();
+  assert.deepEqual(await names(A), ["yc_query", "yc_update"]);
+  const fresh = randomUUID();
+  const store = mcpStore({ [fresh]: [yc] });
+  const cold = createMcpToolService({ fetch, servers: store, now: () => clock });
+  t.after(() => cold.close());
+  const coldNames = () => withTenant(fresh, async () => (await cold.toolDefsFor()).map((d) => d.name));
+  assert.deepEqual(await coldNames(), []);
+  refused = false;
+  clock += 15_000;
+  assert.deepEqual(await coldNames(), ["yc_query", "yc_update"]);
 });
