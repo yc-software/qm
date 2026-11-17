@@ -9,7 +9,6 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
-import { EMOJI_CHAR_BY_NAME } from "./emoji-map.ts";
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -18,7 +17,6 @@ export interface SlackSessionStatusState {
   threadTs: string;
   anchorRunId: string;
   startedAt?: number;
-  emoji?: string;
   cardId?: string;
   cardTs?: string;
   cardContent?: string;
@@ -73,7 +71,7 @@ export function createSlackSessionStatus(
           const cardId = current.cardId ?? randomUUID();
           const elapsed = now() - startedAt;
           const followUrl = work?.sessionId ? conversationWebUrl(activity.publicWebUrl, work.sessionId) : undefined;
-          const { blocks, headline } = renderCard(work, { emoji: current.emoji, cardId, elapsed, followUrl });
+          const { blocks, headline } = renderCard(work, { cardId, elapsed, followUrl });
           const ongoing = !!work?.busy;
           const content = JSON.stringify(blocks);
           const post =
@@ -101,7 +99,7 @@ export function createSlackSessionStatus(
                 unfurl_media: false,
               })) as { ts?: string };
               const cardTs = state.cardTs ?? result.ts;
-              if (!cardTs) throw new Error("Slack task card response missing timestamp");
+              if (!cardTs) throw new Error("Slack status line response missing timestamp");
               if (leaseLost) {
                 await update(id, (row) => (row.cardId === state!.cardId && !row.cardTs ? { ...row, cardTs } : row));
                 state = { ...state, cardTs };
@@ -142,24 +140,15 @@ export function createSlackSessionStatus(
     });
   }
   return {
-    async start(
-      client: StatusClient,
-      account: string,
-      runId: string,
-      channel: string,
-      threadTs?: string,
-      emoji?: Promise<string | undefined>,
-    ) {
+    async start(client: StatusClient, account: string, runId: string, channel: string, threadTs?: string) {
       if (!threadTs) return;
       const startedAt = now();
-      const picked = await emoji?.catch(swallowAs("slack: session status emoji", undefined));
       await sync(client, key(account, channel, threadTs), {
         account,
         channel,
         threadTs,
         anchorRunId: runId,
         startedAt,
-        ...(picked ? { emoji: picked } : {}),
         cardId: randomUUID(),
       }).catch(swallowAs("slack: start session status", undefined));
     },
@@ -178,57 +167,47 @@ function stillWorking(step: string): string {
   return `Still working: ${step.charAt(0).toLowerCase()}${step.slice(1)}`;
 }
 
-function headlineOf(work: SessionWork | undefined): [string, string] {
-  if (work?.running) return [stillWorking(work.running.purpose ?? "Thinking it through"), "Working on it"];
-  if (work?.queued) return [work.queued.purpose ?? "Queued", "Picking back up shortly"];
+function headlineOf(work: SessionWork | undefined): string {
+  if (work?.running) return stillWorking(work.running.purpose ?? "Thinking it through");
+  if (work?.queued) return work.queued.purpose ?? "Queued";
   const branch = work?.branches.find((b) => b.step) ?? work?.branches[0];
   if (branch)
-    return [
-      stillWorking(branch.step ?? (branch.background ? BACKGROUND_STEP[branch.background] : "Thinking it through")),
-      "Working on it",
-    ];
-  if (work?.returning) return [stillWorking("Wrapping up"), "Working on it"];
-  if (work?.background?.kind === "watch") return [work.background.purpose ?? BACKGROUND_STEP.watch, "Keeping watch"];
-  if (work?.background) return [work.background.purpose ?? BACKGROUND_STEP.job, "Running in the background"];
-  return ["", ""];
+    return stillWorking(
+      branch.step ?? (branch.background ? BACKGROUND_STEP[branch.background] : "Thinking it through"),
+    );
+  if (work?.returning) return stillWorking("Wrapping up");
+  if (work?.background?.kind === "watch") return work.background.purpose ?? BACKGROUND_STEP.watch;
+  if (work?.background) return work.background.purpose ?? BACKGROUND_STEP.job;
+  return "";
 }
 
 function renderCard(
   work: SessionWork | undefined,
-  card: { emoji?: string | undefined; cardId: string; elapsed: number; followUrl?: string | undefined },
+  card: { cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
-  const [title, phrase] = headlineOf(work);
-  const icon = card.emoji ? EMOJI_CHAR_BY_NAME[card.emoji] : undefined;
-  const headline = icon ? `${icon} ${title}` : title;
-  const details = richText(
-    icon ? undefined : card.emoji,
-    card.elapsed >= 60_000 ? `${phrase} · ${minutes(card.elapsed)}` : phrase,
-    card.followUrl,
-  );
+  const title = headlineOf(work);
+  const text = card.elapsed >= 60_000 ? `${title} · ${minutes(card.elapsed)}` : title;
   const blocks: Record<string, unknown>[] = [
     {
-      type: "task_card",
-      task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
-      title: headline,
-      status: "in_progress",
-      ...(details ? { details } : {}),
+      type: "rich_text",
+      block_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [
+            { type: "text", text: "~ " },
+            card.followUrl ? { type: "link", url: card.followUrl, text } : { type: "text", text },
+          ],
+        },
+      ],
     },
   ];
-  return { blocks, headline };
+  return { blocks, headline: `~ ${text}` };
 }
 
 function minutes(ms: number): string {
   const total = Math.floor(ms / 60_000);
   return total >= 60 ? `${Math.floor(total / 60)}h ${total % 60}m` : `${total}m`;
-}
-
-function richText(emoji: string | undefined, text: string, url?: string) {
-  const body = emoji ? ` ${text}` : text;
-  const elements = [
-    ...(emoji ? [{ type: "emoji", name: emoji }] : []),
-    ...(text ? [url ? { type: "link", url, text: body } : { type: "text", text: body }] : []),
-  ];
-  return elements.length ? { type: "rich_text", elements: [{ type: "rich_text_section", elements }] } : undefined;
 }
 
 export type SlackSessionStatus = ReturnType<typeof createSlackSessionStatus>;

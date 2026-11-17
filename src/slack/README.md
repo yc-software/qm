@@ -42,21 +42,21 @@ Two caveats:
 ### Optional activity cards
 
 In Admin → Customize → Feature flags, enable **Slack loading indicator (experimental)**
-for selected people or conversation scopes. It is off by default. The Slack app must
-support [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block)
-blocks and have `chat:write`.
+for selected people or conversation scopes. It is off by default. The Slack app needs
+`chat:write`.
 
-After QM has been working for thirty seconds, one flat task card is posted in the existing
-reply thread and updated in place. Its title is the acknowledgement emoji and **Still working:**
-followed by the current step's tool `purpose`; while subagents do the work, a subagent's latest
-step is used instead. Background jobs and watches show their own purpose. The card's details
-line (for example "Working on it · 2m") links to the exact web conversation with normal
-authorization; without a configured web URL, it is plain text.
+After QM has been working for thirty seconds, one single-line status message is posted in the
+existing reply thread and updated in place: `~ Still working: <step>`, where the step is the
+current tool `purpose`; while subagents do the work, a subagent's latest step is used instead.
+Background jobs and watches show their own purpose. After a minute the elapsed time is appended
+(for example "· 2m"). The text after the tilde links to the exact web conversation with normal
+authorization; without a configured web URL, it is plain text. The message carries no emoji
+and no Slack task card, so Slack draws no spinner or details row.
 Quiet ambient turns, unthreaded DMs and turns that finish within thirty seconds do not create
-cards. Cards are visible to everyone in their thread; own status cards and edits are
-excluded from conversation history.
+status lines. They are visible to everyone in their thread; own status lines (marked by a
+`qm_status:` block id) and their edits are excluded from conversation history.
 
-Waiting cards survive turns and restarts. Only this conversation's registered background
+Waiting status lines survive turns and restarts. Only this conversation's registered background
 jobs and enabled, unexpired process monitors count, not recurring crons or agent prose.
 Unwatched exits become visible when checked, reconciled during sandbox setup, or expired.
 Commands and monitor instructions are never rendered.

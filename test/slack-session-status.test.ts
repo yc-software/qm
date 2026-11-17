@@ -169,19 +169,27 @@ function fixture() {
     background,
     watch,
     enable: () => flags.setEnabled("slack_loading_indicator", "channel:C1", true, "admin"),
-    start: async (id: string, account = "T1:B1", emoji?: string) => {
-      await status.start(client, account, id, "C1", "1.0", emoji ? Promise.resolve(emoji) : undefined);
+    start: async (id: string, account = "T1:B1") => {
+      await status.start(client, account, id, "C1", "1.0");
       at += 30_000;
       await status.reconcile(client, account);
     },
     reconcile: () => status.reconcile(client, "T1:B1"),
     card: () => cards.at(-1)!.args.blocks as Array<Record<string, unknown>>,
+    text: () => cards.at(-1)!.args.text,
     now: () => at,
     advance: (ms: number) => {
       at += ms;
     },
   };
 }
+
+const title = (block: Record<string, unknown> | undefined) =>
+  ((block?.elements as Array<{ elements: Array<{ text: string }> }> | undefined)?.[0]?.elements ?? [])
+    .map((el) => el.text)
+    .join("")
+    .replace(/^~ /, "")
+    .replace(/ · \d+m$/, "");
 
 test("cards require opt-in, a reply thread and non-private engagement", async () => {
   const f = fixture();
@@ -214,11 +222,11 @@ test("concurrent starts share one card, terminal runs cannot clear active work, 
   await f.reconcile();
   assert.deepEqual(f.deleted, ["card.1"]);
   assert.deepEqual(await f.store.all(), []);
-  const oldCard = f.card()[0]?.task_id;
+  const oldCard = f.card()[0]?.block_id;
   f.add("later");
   await f.start("later");
   assert.equal(f.cards.at(-1)?.method, "chat.postMessage");
-  assert.notEqual(f.card()[0]?.task_id, oldCard);
+  assert.notEqual(f.card()[0]?.block_id, oldCard);
 });
 
 test("restart preserves card identity and pending or expired-lease work is waiting, not working", async () => {
@@ -231,14 +239,14 @@ test("restart preserves card identity and pending or expired-lease work is waiti
   assert.equal(f.cards.length, 1);
   run.leaseExpiresAt = 0;
   await restarted.reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Queued");
+  assert.equal(title(f.card()[0]), "Queued");
   run.status = "pending";
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 2);
   run.status = "running";
   run.leaseExpiresAt = Number.MAX_SAFE_INTEGER;
   await restarted.reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Still working: thinking it through");
+  assert.equal(title(f.card()[0]), "Still working: thinking it through");
   assert.ok(f.cards.slice(1).every((call) => call.args.ts === "card.1"));
 });
 
@@ -248,18 +256,18 @@ test("background lifecycle survives restart, links to the web conversation from 
   const run = f.add("r1");
   await f.start(run.id);
   assert.equal(f.card().length, 1);
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0])?.[1], { type: "link", url: WEB, text: title(f.card()[0]) });
   const job = f.background();
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Background job");
+  assert.equal(title(f.card()[0]), "Background job");
   const monitor = f.watch();
   await f.manager().reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Watching for updates");
+  assert.equal(title(f.card()[0]), "Watching for updates");
   f.advance(290_000);
   const wake = f.add("wake");
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Still working: thinking it through");
+  assert.equal(title(f.card()[0]), "Still working: thinking it through");
   assert.equal((await f.store.all())[0]?.startedAt, 1_000);
   wake.status = "done";
   job.status = "exited";
@@ -273,23 +281,40 @@ test("background lifecycle survives restart, links to the web conversation from 
 
 const WEB = "https://qm.example.test/web-ui/s/canonical-uuid";
 const line = (block: Record<string, unknown> | undefined) =>
-  (block?.details as { elements: Array<{ elements: unknown[] }> } | undefined)?.elements[0]?.elements;
+  (block?.elements as Array<{ elements: unknown[] }> | undefined)?.[0]?.elements;
 
-test("the card shows the latest step with the ack emoji and vanishes once the reply has landed", async () => {
+test("the status is one tilde line with the latest step and vanishes once the reply has landed", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
-  await f.status.start(f.client, "T1:B1", run.id, "C1", "1.0", Promise.resolve("gear"));
+  await f.status.start(f.client, "T1:B1", run.id, "C1", "1.0");
   assert.deepEqual(f.cards, []);
   f.advance(30_000);
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "⚙️ Still working: thinking it through");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.equal(f.text(), "~ Still working: thinking it through");
+  assert.deepEqual(f.card(), [
+    {
+      type: "rich_text",
+      block_id: f.card()[0]?.block_id,
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [
+            { type: "text", text: "~ " },
+            { type: "link", url: WEB, text: "Still working: thinking it through" },
+          ],
+        },
+      ],
+    },
+  ]);
+  assert.match(String(f.card()[0]?.block_id), /^qm_status:/);
   f.purposes.set("r1", "Reading status implementation");
   f.advance(51_000);
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "⚙️ Still working: reading status implementation");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it · 1m" }]);
+  assert.deepEqual(line(f.card()[0]), [
+    { type: "text", text: "~ " },
+    { type: "link", url: WEB, text: "Still working: reading status implementation · 1m" },
+  ]);
   const posts = f.cards.length;
   await f.reconcile();
   assert.equal(f.cards.length, posts);
@@ -297,8 +322,10 @@ test("the card shows the latest step with the ack emoji and vanishes once the re
   job.purpose = "Waiting on CI";
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "⚙️ Waiting on CI");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Running in the background · 1m" }]);
+  assert.deepEqual(line(f.card()[0]), [
+    { type: "text", text: "~ " },
+    { type: "link", url: WEB, text: "Waiting on CI · 1m" },
+  ]);
   job.status = "exited";
   f.outbox.push({ provenance: { sourceThreadRef: "ch:C1:1.0" } }, { provenance: { sourceThreadRef: "ch:C1:9.0" } });
   const shown = f.cards.length;
@@ -311,16 +338,9 @@ test("the card shows the latest step with the ack emoji and vanishes once the re
   assert.deepEqual(await f.store.all(), []);
 });
 
-test("custom ack emoji ride in the details, and work that ends before the card is due posts nothing", async () => {
+test("work that ends before the status is due posts nothing", async () => {
   const f = fixture();
   await f.enable();
-  const run = f.add("r1");
-  await f.start(run.id, "T1:B1", "qm-wave");
-  assert.equal(f.card()[0]?.title, "Still working: thinking it through");
-  assert.deepEqual(line(f.card()[0]), [
-    { type: "emoji", name: "qm-wave" },
-    { type: "link", url: WEB, text: " Working on it" },
-  ]);
   const quick = f.add("quick");
   quick.sessionId = "ch:C1:2.0";
   await f.status.start(f.client, "T1:B1", quick.id, "C1", "2.0");
@@ -342,19 +362,19 @@ test("running subagents keep one flat card titled with their latest step", async
   run.status = "done";
   await f.reconcile();
   assert.equal(f.card().length, 1);
-  assert.equal(f.card()[0]?.type, "task_card");
-  assert.equal(f.card()[0]?.title, "Still working: reading Slack docs");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.equal(f.card()[0]?.type, "rich_text");
+  assert.equal(title(f.card()[0]), "Still working: reading Slack docs");
+  assert.deepEqual(line(f.card()[0])?.[1], { type: "link", url: WEB, text: title(f.card()[0]) });
   child.status = "done";
   const job = f.background("sub:c1");
   job.purpose = "Waiting on CI";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Still working: waiting on CI");
+  assert.equal(title(f.card()[0]), "Still working: waiting on CI");
   const watch = f.watch("sub:c1");
   watch.purpose = "Watching the deploy";
   job.status = "exited";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Still working: watching the deploy");
+  assert.equal(title(f.card()[0]), "Still working: watching the deploy");
   watch.enabled = false;
   await f.reconcile();
   assert.deepEqual(f.deleted, ["card.1"]);
@@ -370,7 +390,7 @@ test("a turn that hands work to a subagent and finishes before the card starts s
   const job = f.background("sub:c1");
   job.purpose = "Waiting on CI";
   await f.start(run.id);
-  assert.equal(f.card()[0]?.title, "Still working: waiting on CI");
+  assert.equal(title(f.card()[0]), "Still working: waiting on CI");
   job.status = "exited";
   await f.reconcile();
   assert.deepEqual(f.deleted, ["card.1"]);
@@ -390,8 +410,7 @@ test("a finished subagent whose result has not reached the parent yet keeps the 
   f.unreturned.add(child.id);
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Still working: wrapping up");
-  assert.equal(f.card()[0]?.status, "in_progress");
+  assert.equal(title(f.card()[0]), "Still working: wrapping up");
   f.unreturned.delete(child.id);
   await f.reconcile();
   assert.deepEqual(f.deleted, ["card.1"]);
@@ -409,7 +428,7 @@ test("a busy grandchild's step titles the card", async () => {
   run.status = "done";
   await f.reconcile();
   assert.equal(f.card().length, 1);
-  assert.equal(f.card()[0]?.title, "Still working: running the test suite");
+  assert.equal(title(f.card()[0]), "Still working: running the test suite");
 });
 
 test("an unchanged live card costs no store writes or Slack calls per sweep", async () => {
@@ -433,7 +452,7 @@ test("an unchanged live card costs no store writes or Slack calls per sweep", as
   assert.equal(f.cards.length, calls);
   f.purposes.set("r1", "Reading files");
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Still working: reading files");
+  assert.equal(title(f.card()[0]), "Still working: reading files");
 });
 
 test("unrelated, expired, disabled and private work never keeps a card active", async () => {
@@ -574,7 +593,7 @@ for (const method of ["chat.postMessage", "chat.update"]) {
     await pending;
     await f.reconcile();
     assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
-    if (method === "chat.update") assert.equal(f.card()[0]?.title, "Still working: thinking it through");
+    if (method === "chat.update") assert.equal(title(f.card()[0]), "Still working: thinking it through");
     else assert.deepEqual(f.deleted, ["card.1"]);
   });
 }

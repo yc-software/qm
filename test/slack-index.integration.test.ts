@@ -1698,11 +1698,9 @@ test("thread status is detached from reply delivery and steering cannot take own
   const network = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const emojis: unknown[] = [];
   f.core.sessionStatus = {
     start: async (...args) => {
       starts.push(args.slice(1, 5));
-      emojis.push(await args[5]);
       await network;
     },
     reconcile: async () => {},
@@ -1724,8 +1722,6 @@ test("thread status is detached from reply delivery and steering cannot take own
     await original;
     assert.ok(f.client.posts.some((post) => post.text === "finished" && post.thread_ts === "700.1"));
     assert.equal(starts.length, 1);
-    await waitFor(() => emojis.length === 1, 5_000);
-    assert.equal(typeof emojis[0], "string");
   } finally {
     release();
     await f.stop();
@@ -1762,7 +1758,7 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
     bot_id: "BBOT",
     text: "Working",
     ts: "200.1",
-    blocks: [{ type: "task_card", task_id: "qm_status:test", title: "Working", status: "in_progress" }],
+    blocks: [{ type: "rich_text", block_id: "qm_status:test", elements: [] }],
   };
   try {
     await f.app.emitMessage({ channel: "C1", channel_type: "channel", ...status });
