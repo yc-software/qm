@@ -5,7 +5,7 @@ import {
   orgDisplayName,
   PUBLIC_ACCESS_NOTE,
 } from "../../plugins/chassis/src/app-access.ts";
-import { parseScopeId, personalScope, type ScopeKind } from "../types.ts";
+import { parseScopeId, type ScopeKind } from "../types.ts";
 
 export type AppAccess = {
   level: GeneralAccess;
@@ -23,17 +23,14 @@ const NOUNS: Record<ScopeKind, [one: string, many: string]> = {
   persona: ["persona", "personas"],
 };
 
-const canEditAppPermissions = (ownerScopeId: string, principalId: string): boolean =>
-  ownerScopeId === personalScope(principalId);
-
 export function appAccess(opts: {
   ownerScopeId: string;
   public: boolean;
   grantees: ReadonlyArray<{ scope: string }>;
-  viewer: string;
+  canEdit: boolean;
   orgName?: string | undefined;
 }): AppAccess {
-  const canEdit = canEditAppPermissions(opts.ownerScopeId, opts.viewer);
+  const { canEdit } = opts;
   const general = generalAccessOf(opts);
   if (general === "public") return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
   if (general === "org") {

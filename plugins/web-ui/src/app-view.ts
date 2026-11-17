@@ -47,6 +47,10 @@ export function appCanManage(d: AppView): boolean {
   return d.permission === "write";
 }
 
+export function appCanShare(d: AppView, me: string | undefined): boolean {
+  return d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId === `personal:${me}` : appCanManage(d);
+}
+
 export function appContextScope(d: AppView): string | undefined {
   return d.createdInScope ?? d.ownerScopeId;
 }

@@ -952,16 +952,17 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && publishedApp) {
-        const [draft, grantees] = await Promise.all([
+        const [draft, grantees, canEdit] = await Promise.all([
           app.appLiveEdit(publishedApp.id).then((edit) => edit?.draft),
           app.appGrantees(publishedApp.id),
+          app.canManageArtifactHome(publishedApp.ownerScopeId, publishedApp.createdBy, sub!),
         ]);
         const orgName = (deps.config?.getBranding(orgScope(deps)) ?? deps.brandingDefault)?.orgName;
         const { ownerScopeId } = publishedApp;
         sendJson(res, 200, {
           version: publishedApp.appliedVersion ?? publishedApp.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
-          access: appAccess({ ownerScopeId, public: isPublic, grantees, viewer: sub!, orgName }),
+          access: appAccess({ ownerScopeId, public: isPublic, grantees, canEdit, orgName }),
         });
       } else if (
         annotationsEnabled &&
