@@ -1,3 +1,4 @@
+import { recordGroupRoster } from "../directory/directory-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type {
@@ -206,13 +207,13 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         resolveChannel: (q) => deps.directory.resolveChannel(q),
         channelMember: (c, p) => deps.directory.channelMember(c, p),
         resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, SLACK),
-        groupMember: (g, p) => deps.directory.groupMember(g, p),
         directoryMember: (p) => deps.directory.get(p),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
                 openGroupViaSurface((query) => deps.surfaceContext!.pull(SLACK, query), parts),
-              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts, SLACK),
+              registerGroup: (g: string, parts: readonly string[]) =>
+                recordGroupRoster(deps.directory, SLACK, g, parts),
             }
           : {}),
       },

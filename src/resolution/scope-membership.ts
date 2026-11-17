@@ -2,12 +2,7 @@ import type { Principal, ScopeId } from "../types.ts";
 import { atLeast, type PersonaRole } from "../personas/persona-schema.ts";
 import { actsAsScope, parseScopeId, scopeId } from "../types.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import type {
-  ChannelMembershipFacts,
-  DirectoryMember,
-  DirectoryStore,
-  ScopeMembershipFacts,
-} from "../directory/directory-store.ts";
+import type { ChannelMembershipFacts, DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 
@@ -24,13 +19,10 @@ export interface ScopeMembershipDeps {
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "membership" | "members">;
   directory?: {
     channelMember(channelId: string, principalId: string): Promise<boolean>;
-    groupMember(groupId: string, principalId: string): Promise<boolean>;
     channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
-    groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     rosterCoversAudience?(channelId: string): Promise<boolean | undefined>;
     conversationMembers?(
-      kind: "channel" | "group",
       id: string,
     ): Promise<Array<{ principalId: string; displayName?: string; type: string }> | undefined>;
     list?(): Promise<Array<{ principalId: string; displayName?: string }>>;
@@ -81,7 +73,7 @@ async function currentSharedScopeMember(
   const managed = kind === "group" && deps.managedGroups?.recognizes(ref);
   const membership = (id: string) => {
     if (managed) return deps.managedGroups!.membership(ref, id);
-    return kind === "channel" ? deps.directory?.channelMember(ref, id) : deps.directory?.groupMember(ref, id);
+    return deps.directory?.channelMember(ref, id);
   };
   for (const id of ids)
     if (
@@ -105,11 +97,7 @@ async function sharedScopeMembership(
         .membership(ref, principalId)
         .catch(swallowAs("scope membership: managed group", false))) === true
     );
-  const membership =
-    kind === "channel"
-      ? deps.directory?.channelMembership(ref, principalId)
-      : deps.directory?.groupMembership(ref, principalId);
-  return membership?.catch(swallowAs(`scope membership: ${kind}`, undefined));
+  return deps.directory?.channelMembership(ref, principalId).catch(swallowAs(`scope membership: ${kind}`, undefined));
 }
 
 async function memberOfSharedScope(
@@ -174,28 +162,26 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComp
     }
 
     if (requireComplete) {
-      const roster = await deps.directory?.conversationMembers?.(kind, ref);
+      const roster = await deps.directory?.conversationMembers?.(ref);
       if (!roster?.length || roster.some((member) => member.type !== "internal")) return undefined;
       const members = roster.map((member) => principal(member.principalId, member.displayName));
       return members.some((member) => member === null) ? undefined : (members as Principal[]);
     }
 
     if (!deps.directory?.list) return undefined;
-    if (kind === "channel" && (await deps.directory.channelPrivacy?.(ref)) !== true) return undefined;
-    if (kind === "channel" && (await deps.directory.rosterCoversAudience?.(ref)) === false) return [];
+    if ((await deps.directory.channelPrivacy?.(ref)) !== true) return undefined;
+    if ((await deps.directory.rosterCoversAudience?.(ref)) === false) return [];
 
-    const candidates = await deps.directory.list();
-    const membership = kind === "channel" ? deps.directory.channelMember : deps.directory.groupMember;
+    const directory = deps.directory;
+    const candidates = await directory.list!();
     const included = await Promise.all(
       candidates.map(async (member) =>
-        (await membership.call(deps.directory, ref, member.principalId))
+        (await directory.channelMember(ref, member.principalId))
           ? principal(member.principalId, member.displayName)
           : null,
       ),
     );
-    const present = included.filter((member): member is Principal => member !== null);
-    if (kind === "group" && present.length === 0) return undefined;
-    return present;
+    return included.filter((member): member is Principal => member !== null);
   };
 }
 
@@ -207,8 +193,7 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
     if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "read");
-    if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId, targetScope);
-    if (kind === "channel") {
+    if (kind === "channel" || kind === "group") {
       if (await memberOfSharedScope(deps, kind, ref, principalId, targetScope)) return true;
       return (await channelPrivacy(deps, ref)) === false && activePrincipal(deps, principalId);
     }
@@ -275,7 +260,7 @@ export function rosterAdmits(roster: readonly string[], principalId: string, sco
 }
 
 type ScopeMembershipSources = Omit<ScopeMembershipDeps, "directory" | "managedGroups" | "personas" | "teams"> & {
-  directory: Pick<DirectoryStore, "getMany" | "channelMemberships" | "groupMemberships">;
+  directory: Pick<DirectoryStore, "getMany" | "channelMemberships">;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members"> & {
     membersMany(groupIds: readonly string[]): Promise<Map<string, string[]>>;
   };
@@ -297,8 +282,8 @@ export async function scopeMembershipSnapshot(
       }),
     ),
   ];
-  const channels = refs("channel");
   const groups = refs("group");
+  const conversations = [...refs("channel"), ...groups];
   const teamIds = refs("team");
   const { directory, managedGroups, personas, teams } = sources;
   const members = await directory
@@ -306,26 +291,15 @@ export async function scopeMembershipSnapshot(
     .catch(swallowAs("scope membership: directory lookup", new Map<string, DirectoryMember>()));
   const member = members.get(principalId);
   const aliases = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
-  const [channelFacts, groupFacts, projectMembers, roles, memberTeams] = await Promise.all([
+  const [channelFacts, projectMembers, roles, memberTeams] = await Promise.all([
     Promise.all(
       aliases.map(
         async (id) =>
           [
             id,
             await directory
-              .channelMemberships(channels, id)
-              .catch(swallowAs("scope membership: channel", new Map<string, ChannelMembershipFacts>())),
-          ] as const,
-      ),
-    ),
-    Promise.all(
-      aliases.map(
-        async (id) =>
-          [
-            id,
-            await directory
-              .groupMemberships(groups, id)
-              .catch(swallowAs("scope membership: group", new Map<string, ScopeMembershipFacts>())),
+              .channelMemberships(conversations, id)
+              .catch(swallowAs("scope membership: conversation", new Map<string, ChannelMembershipFacts>())),
           ] as const,
       ),
     ),
@@ -340,7 +314,6 @@ export async function scopeMembershipSnapshot(
       .catch(swallowAs("scope membership: teams", new Set<string>() as ReadonlySet<string>)),
   ]);
   const channelsBy = new Map(channelFacts);
-  const groupsBy = new Map(groupFacts);
   return {
     ...(sources.identity ? { identity: sources.identity } : {}),
     ...(teams
@@ -355,8 +328,6 @@ export async function scopeMembershipSnapshot(
       channelMember: async (ref: string, id: string) => channelsBy.get(id)?.get(ref)?.member === true,
       channelMembership: async (ref: string, id: string) => channelsBy.get(id)?.get(ref)?.membership,
       channelPrivacy: async (ref: string) => channelsBy.get(principalId)?.get(ref)?.isPrivate,
-      groupMember: async (ref: string, id: string) => groupsBy.get(id)?.get(ref)?.member === true,
-      groupMembership: async (ref: string, id: string) => groupsBy.get(id)?.get(ref)?.membership,
     },
     ...(managedGroups
       ? {

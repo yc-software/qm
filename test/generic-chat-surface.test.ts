@@ -236,7 +236,7 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
     assert.deepEqual(
       await Promise.all(
         ["ada@example.com", "grace@example.com", "eve@example.com"].map((p) =>
-          built.directory.groupMember(CONTAINER, p),
+          built.directory.channelMember(CONTAINER, p),
         ),
       ),
       [true, true, false],

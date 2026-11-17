@@ -193,7 +193,7 @@ test(
     assert.equal(await store.channelMember("C-sec", "U-alice"), false);
     assert.equal(await store.channelMember("C-other", "U-carol"), false);
     assert.deepEqual(
-      (await store.conversationMembers("channel", "C-sec"))?.map((member) => member.principalId),
+      (await store.conversationMembers("C-sec"))?.map((member) => member.principalId),
       ["U-carol"],
     );
 
@@ -222,60 +222,6 @@ test("pg directory: private nonmembership is definitive only after a membership-
   await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }], []);
   assert.equal(await store.channelMembership("C-privdef", "U-alice"), false);
 });
-
-test(
-  "pg directory: group-DM resolve-by-set + membership gate; a change re-writes, identical skips",
-  { skip },
-  async () => {
-    const store = createPostgresDirectoryStore(URL!);
-    await store.replace([
-      { principalId: "U-alice", displayName: "Alice", type: "internal" },
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-      { principalId: "U-sam", displayName: "Sam", type: "internal" },
-    ]);
-    await store.replaceGroups([
-      { groupId: "G-1", principalId: "U-alice" },
-      { groupId: "G-1", principalId: "U-carol" },
-      { groupId: "G-1", principalId: "U-sam" },
-      { groupId: "G-2", principalId: "U-alice" },
-      { groupId: "G-2", principalId: "U-carol" },
-    ]);
-
-    const r = await store.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"], "slack");
-    assert.equal(r.kind, "one");
-    if (r.kind === "one") assert.equal(r.groupId, "G-1");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol"], "slack")).kind, "one");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-extra"], "slack")).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants([], "slack")).kind, "none");
-
-    assert.equal(await store.groupMember("G-1", "U-sam"), true);
-    assert.equal(await store.groupMember("G-2", "U-sam"), false);
-    assert.equal(await store.groupMembership("G-2", "U-sam"), false);
-    assert.deepEqual(
-      (await store.conversationMembers("group", "G-1"))?.map((member) => member.principalId),
-      ["U-alice", "U-carol", "U-sam"],
-    );
-    assert.deepEqual(await store.listGroupsFor("U-sam"), ["G-1"]);
-
-    const direct = (await freshPg(URL!)).query;
-    const t0 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", ["default-org"]);
-    await store.replaceGroups([
-      { groupId: "G-2", principalId: "U-carol" },
-      { groupId: "G-2", principalId: "U-alice" },
-      { groupId: "G-1", principalId: "U-sam" },
-      { groupId: "G-1", principalId: "U-alice" },
-      { groupId: "G-1", principalId: "U-carol" },
-    ]);
-    const t1 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", ["default-org"]);
-    assert.equal(t0.rows[0]?.groups_hash, t1.rows[0]?.groups_hash, "identical set must not rewrite the hash");
-    assert.equal(await store.groupMember("G-1", "U-sam"), true);
-
-    await store.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);
-    assert.equal(await store.groupMember("G-1", "U-sam"), false);
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"], "slack")).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice"], "slack")).kind, "one");
-  },
-);
 
 test(
   "pg directory: listChannelsFor returns public ∪ private-member, ordered by name (§10 reach roster)",
@@ -370,12 +316,6 @@ test("pg directory: workspace URL survives roster swaps and reads back per org",
 test("pg directory: a swap stamped older than the stored snapshot is refused", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
 
-  assert.equal(await store.replaceGroups([{ groupId: "G-fresh", principalId: "U-alice" }], 2000), true);
-  assert.equal(await store.replaceGroups([], 1000), false, "a stale instance's swap must not clobber a fresh sync");
-  assert.equal(await store.groupMember("G-fresh", "U-alice"), true);
-  assert.equal(await store.replaceGroups([], 3000), true);
-  assert.equal(await store.groupMember("G-fresh", "U-alice"), false);
-
   assert.equal(await store.replace([{ principalId: "U-fresh", displayName: "Fresh", type: "internal" }], 2000), true);
   assert.equal(await store.replace([], 1000), false);
   assert.notEqual(await store.get("U-fresh"), null);
@@ -452,7 +392,7 @@ test(
     assert.equal(await store.channelMember("C-connect", "U-member"), true);
     assert.equal(await store.channelMember("C-connect", "U-outsider"), false);
     assert.equal(await store.rosterCoversAudience("C-connect"), false);
-    assert.equal(await store.conversationMembers("channel", "C-connect"), undefined);
+    assert.equal(await store.conversationMembers("C-connect"), undefined);
     assert.deepEqual(
       (await store.listChannelsFor("U-member")).map((c) => c.channelId),
       ["C-connect"],
@@ -460,40 +400,22 @@ test(
   },
 );
 
-test("pg directory: a partial group swap preserves unknown rosters", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
-  await store.replaceGroups(
-    [
-      { groupId: "G-one", principalId: "U-old-one" },
-      { groupId: "G-two", principalId: "U-old-two" },
-    ],
-    undefined,
-    ["G-one", "G-two"],
-    ["G-one", "G-two"],
-  );
-  await store.replaceGroups(
-    [{ groupId: "G-two", principalId: "U-new-two" }],
-    undefined,
-    ["G-one", "G-two", "G-new"],
-    ["G-two"],
-  );
-  assert.equal(await store.groupMembership("G-one", "U-old-one"), true);
-  assert.equal(await store.groupMembership("G-two", "U-old-two"), false);
-  assert.equal(await store.groupMembership("G-two", "U-new-two"), true);
-  assert.equal(await store.groupMembership("G-new", "U-new"), undefined);
-});
-
 test(
   "pg directory: an identical push still advances the stamp, so ordering survives content-idempotent pushes",
   { skip },
   async () => {
     const store = createPostgresDirectoryStore(URL!);
-    const roster = [{ groupId: "G-idem", principalId: "U-alice" }];
+    const group = [{ channelId: "G-idem", name: "", kind: "group" as const }];
+    const roster = [{ channelId: "G-idem", principalId: "U-alice" }];
 
-    assert.equal(await store.replaceGroups(roster, 12000), true);
-    assert.equal(await store.replaceGroups(roster, 13000), true);
-    assert.equal(await store.replaceGroups([], 12500), false, "a swap older than the newest snapshot seen must lose");
-    assert.equal(await store.groupMember("G-idem", "U-alice"), true);
+    assert.equal(await store.replaceChannels(group, roster, 12000), true);
+    assert.equal(await store.replaceChannels(group, roster, 13000), true);
+    assert.equal(
+      await store.replaceChannels([], [], 12500),
+      false,
+      "a swap older than the newest snapshot seen must lose",
+    );
+    assert.equal(await store.channelMember("G-idem", "U-alice"), true);
   },
 );
 
@@ -512,12 +434,15 @@ test("pg directory: room membership follows a person's linked identities", { ski
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const store = createPostgresDirectoryStore(URL!);
   await store.replaceChannels(
-    [{ channelId: "C-linked", name: "linked", isPrivate: true }],
-    [{ channelId: "C-linked", principalId: "slack-person@example.com" }],
+    [
+      { channelId: "C-linked", name: "linked", isPrivate: true },
+      { channelId: "G-linked", name: "", kind: "group" },
+    ],
+    [
+      { channelId: "C-linked", principalId: "slack-person@example.com" },
+      { channelId: "G-linked", principalId: "slack-person@example.com" },
+    ],
   );
-  await store.replaceGroups([{ groupId: "G-linked", principalId: "slack-person@example.com" }], Date.now(), [
-    "G-linked",
-  ]);
   assert.equal(await store.channelMembership("C-linked", "web-person"), false);
   installPrincipalLinks({
     canonical: (key) => (key === "slack-person@example.com" ? "web-person" : undefined),
@@ -526,8 +451,7 @@ test("pg directory: room membership follows a person's linked identities", { ski
   try {
     assert.equal(await store.channelMembership("C-linked", "web-person"), true);
     assert.equal(await store.channelMember("C-linked", "web-person"), true);
-    assert.equal(await store.groupMembership("G-linked", "web-person"), true);
-    assert.equal(await store.groupMember("G-linked", "web-person"), true);
+    assert.equal(await store.channelMembership("G-linked", "web-person"), true);
     assert.deepEqual(await store.listGroupsFor("web-person"), ["G-linked"]);
     assert.ok((await store.listChannelsFor("web-person")).some((c) => c.channelId === "C-linked"));
     assert.ok(!(await store.listChannelsFor("someone-else")).some((c) => c.channelId === "C-linked"));

@@ -179,7 +179,9 @@ export function createSurfaceContextFulfiller(deps: {
       return { error: `I couldn't open that group DM: ${(err as Error).message}` };
     }
     try {
-      void directory.forceDirectorySync(client).catch(swallowAs("slack: sync after opening a group DM", undefined));
+      void directory
+        .forceDirectorySync(client, groupId)
+        .catch(swallowAs("slack: sync after opening a group DM", undefined));
     } catch (err) {
       swallow("slack: sync after opening a group DM", err);
     }

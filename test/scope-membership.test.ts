@@ -15,9 +15,7 @@ const channels: Record<string, { private?: boolean; members: string[]; known: bo
   pub: { private: false, members: ["alice@x.com"], known: true },
   priv: { private: true, members: ["alice@x.com"], known: true },
   unknown: { members: ["alice@x.com"], known: false },
-};
-const groups: Record<string, { members: string[]; known: boolean }> = {
-  g1: { members: ["U_ALICE"], known: true },
+  g1: { private: true, members: ["U_ALICE"], known: true },
   gunknown: { members: [], known: false },
 };
 
@@ -37,14 +35,6 @@ const directory = {
   async channelPrivacy(channelId: string) {
     const channel = channels[channelId];
     return channel?.known ? channel.private === true : undefined;
-  },
-  async groupMember(groupId: string, principalId: string) {
-    return groups[groupId]?.members.includes(principalId) ?? false;
-  },
-  async groupMembership(groupId: string, principalId: string) {
-    const group = groups[groupId];
-    if (!group?.known) return undefined;
-    return group.members.includes(principalId);
   },
 };
 

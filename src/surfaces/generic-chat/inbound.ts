@@ -49,7 +49,7 @@ export function createGenericChatInbound(deps: {
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
   turns: Pick<GenericChatTurns, "start">;
   onAction: (click: GenericChatActionClick) => Promise<void>;
-  registerGroup: (groupId: string, principalIds: readonly string[]) => Promise<void>;
+  registerGroup: (groupId: string, principalIds: readonly string[]) => Promise<unknown>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;

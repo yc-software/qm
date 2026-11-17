@@ -66,7 +66,17 @@ test("a fully migrated database skips the base schema and drops the retired obje
       ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x'),
       ('directory/store/0005', 'x')`);
     await admin.query("CREATE TABLE directory_sync(org_id TEXT PRIMARY KEY, channel_members_synced BOOLEAN)");
-    await admin.query("CREATE TABLE directory_groups(org_id TEXT, group_id TEXT)");
+    await admin.query(
+      "CREATE TABLE directory_groups(tenant_id TEXT, org_id TEXT, group_id TEXT, roster_known BOOLEAN)",
+    );
+    await admin.query(
+      "CREATE TABLE directory_group_members(tenant_id TEXT, org_id TEXT, group_id TEXT, principal_id TEXT)",
+    );
+    await admin.query(`CREATE TABLE directory_channels(tenant_id TEXT, org_id TEXT, channel_id TEXT, name TEXT, name_lc TEXT,
+      is_private BOOLEAN, is_external BOOLEAN, roster_known BOOLEAN, observed_at BIGINT,
+      PRIMARY KEY (tenant_id, org_id, channel_id))`);
+    await admin.query(`CREATE TABLE directory_channel_members(tenant_id TEXT, org_id TEXT, channel_id TEXT, principal_id TEXT,
+      PRIMARY KEY (tenant_id, org_id, channel_id, principal_id))`);
     await admin.query("CREATE TABLE directory_members(org_id TEXT, principal_id TEXT, slack_id TEXT)");
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY, thread_ref TEXT, spawn_meta TEXT)");
     await admin.query(

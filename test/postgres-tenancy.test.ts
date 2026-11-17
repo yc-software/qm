@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.ts";
+import { DIRECTORY_MIGRATIONS, UNIFIED_ROSTERS } from "../src/directory/postgres-directory-store.ts";
 import {
   applyPgMigrations,
   createPgPool,
@@ -154,7 +154,11 @@ test("an open transaction refuses work for a different tenant until it has ended
 });
 
 const preTenancy = (m: PgMigrationDefinition) =>
-  !TENANCY.includes(m) && m !== TENANT_BACKFILL && m !== DROP_SESSION_LEASES && !/-tenant|claim/.test(m.id);
+  !TENANCY.includes(m) &&
+  m !== TENANT_BACKFILL &&
+  m !== DROP_SESSION_LEASES &&
+  m !== UNIFIED_ROSTERS &&
+  !/-tenant|claim/.test(m.id);
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });

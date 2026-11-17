@@ -8,7 +8,6 @@ export type VisibilityTarget =
 
 export interface VisibilityDirectory {
   channelMember(channelId: string, principalId: string): Promise<boolean>;
-  groupMember(groupId: string, principalId: string): Promise<boolean>;
   listChannelsFor?(principalId: string): Promise<DirectoryChannel[]>;
 }
 
@@ -17,7 +16,7 @@ export async function isVisible(dir: VisibilityDirectory, actorId: string, targe
     case "dm":
       return samePerson(actorId, target.ownerId);
     case "group":
-      return dir.groupMember(target.groupId, actorId);
+      return dir.channelMember(target.groupId, actorId);
     case "channel":
       if (target.isPrivate === true) return dir.channelMember(target.channelId, actorId);
       if (target.isPrivate === false) return true;

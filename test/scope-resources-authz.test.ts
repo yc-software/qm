@@ -36,9 +36,8 @@ function makeDeps() {
       principalId === U1 ? [{ channelId: C1, name: "general", isPrivate: true }] : [],
     channelMember: async (channelId: string, principalId: string) => principalId === U1 && channelId === C1,
     channelPrivacy: async (channelId: string): Promise<boolean | undefined> => (channelId === C1 ? true : undefined),
-    groupRosters: async () => new Map(),
+    conversationRosters: async () => new Map(),
     getMany: async () => new Map(),
-    groupMemberships: async () => new Map(),
     channelMemberships: async (ids: readonly string[], principalId: string) =>
       new Map(
         await Promise.all(

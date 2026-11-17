@@ -17,6 +17,7 @@ import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const SECRET = "project-trigger-secret".repeat(3);
 
@@ -57,8 +58,8 @@ test("Project trigger access follows current membership while Slack-group owner 
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);
-  await built.app.upsertGroups([{ groupId: "G-slack", principalId: "member" }]);
   await built.app.upsertChannels([{ channelId: "C-public", name: "public", isPrivate: false }], []);
+  await recordGroupRoster(built.directory, "slack", "G-slack", ["member"]);
   const project = await built.app.createProject("owner", "Launch");
   assert.ok(project);
   const initialVersion = await built.projects.version(project.scopeId.slice("group:".length));

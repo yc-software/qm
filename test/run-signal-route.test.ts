@@ -18,6 +18,7 @@ import { configureCommandRules } from "./support/command-rules.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -615,16 +616,15 @@ test("run control follows current shared membership while public history require
     [
       { channelId: "C-RUN", name: "run-room", isPrivate: true },
       { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
+      { channelId: "G-RUN", name: "", kind: "group" },
     ],
     [
       { channelId: "C-RUN", principalId: "shared-owner" },
       { channelId: "C-RUN", principalId: "shared-member" },
+      { channelId: "G-RUN", principalId: "shared-owner" },
+      { channelId: "G-RUN", principalId: "shared-member" },
     ],
   );
-  await built.app.upsertGroups([
-    { groupId: "G-RUN", principalId: "shared-owner" },
-    { groupId: "G-RUN", principalId: "shared-member" },
-  ]);
 
   for (const shared of [
     { kind: "channel" as const, ref: "C-RUN", scope: "channel:C-RUN" as const },
@@ -650,11 +650,14 @@ test("run control follows current shared membership while public history require
         [
           { channelId: "C-RUN", name: "run-room", isPrivate: true },
           { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
+          { channelId: "G-RUN", name: "", kind: "group" },
         ],
         [{ channelId: "C-RUN", principalId: "shared-owner" }],
+        undefined,
+        ["C-RUN"],
       );
     } else {
-      await built.app.upsertGroups([{ groupId: "G-RUN", principalId: "shared-owner" }]);
+      await recordGroupRoster(built.directory, "slack", "G-RUN", ["shared-owner"]);
     }
     assert.ok(
       await built.app.getSessionForViewer(session.id, { actorId: "shared-member" }),

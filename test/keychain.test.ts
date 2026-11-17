@@ -33,6 +33,7 @@ import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -1081,10 +1082,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
         { channelId: "C8", principalId: "U3" },
       ],
     );
-    await built.directory.replaceGroups([
-      { groupId: "G_CONN", principalId: "alex@conn" },
-      { groupId: "G_CONN", principalId: "carol@conn" },
-    ]);
+    await recordGroupRoster(built.directory, "slack", "G_CONN", ["alex@conn", "carol@conn"]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

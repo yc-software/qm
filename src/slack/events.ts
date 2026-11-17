@@ -106,7 +106,7 @@ export function registerSlackEvents(
   };
   const { dispatch, handleReactionEvent, botHasStakeInThread } = handler;
   const { mirrorMessageEvent, pushSurfaceEvents } = mirror;
-  const { syncForUnseenGroup, forceDirectorySync } = directory;
+  const { forceDirectorySync } = directory;
   const eventIdentity = async (
     client: any,
     event: { user?: string; bot_id?: string },
@@ -200,8 +200,12 @@ export function registerSlackEvents(
       if (privacyChange) {
         await forceDirectorySync(client, privacyChange.channel);
       }
-      if (isGroupMembershipMessage(m)) {
-        await forceDirectorySync(client);
+      if (isGroupMembershipMessage(m) && m.channel) {
+        const principalId =
+          m.subtype === "group_leave" && m.user
+            ? (await directory.classifyUserCached(client, m.user)).actor.externalId
+            : undefined;
+        await forceDirectorySync(client, m.channel, principalId);
       }
       const ackGate = context.ackGate;
       if (m.channel && m.ts && !m.hidden && !m.subtype && !isBotAuthored(m)) {
@@ -312,7 +316,6 @@ export function registerSlackEvents(
       }
 
       if (m.channel_type === "channel" || m.channel_type === "group" || m.channel_type === "mpim") {
-        if (m.channel_type === "mpim" && m.channel) syncForUnseenGroup(client, m.channel);
         const threadReply = isThreadReply(m);
         const isMention = mentionsBot(m.text ?? "", ids.botUserId);
         const threadTs = m.thread_ts;

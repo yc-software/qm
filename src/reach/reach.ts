@@ -54,10 +54,9 @@ export interface ReachDirectory {
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   resolveGroup(participants: readonly string[]): Promise<GroupResolution>;
-  groupMember(groupId: string, principalId: string): Promise<boolean>;
   directoryMember(principalId: string): Promise<{ type: string } | null>;
   openGroup?(participants: readonly string[]): Promise<{ groupId: string } | { error: string } | null>;
-  registerGroup?(groupId: string, participants: readonly string[]): Promise<void>;
+  registerGroup?(groupId: string, participants: readonly string[]): Promise<unknown>;
 }
 
 const MAX_GROUP_DM_PARTICIPANTS = 8;

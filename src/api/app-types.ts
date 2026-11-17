@@ -68,7 +68,6 @@ import type {
   DirectoryMember,
   DirectoryMeta,
   DirectoryStore,
-  GroupMembership,
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type { Delivery, Destination } from "../types.ts";
@@ -578,13 +577,6 @@ export interface App {
     revocations?: ChannelMembership[],
     partial?: boolean,
   ): Promise<boolean>;
-  upsertGroups(
-    groupMembers: GroupMembership[],
-    syncedAt?: number,
-    groupIds?: string[],
-    groupRosterIds?: string[],
-  ): Promise<boolean>;
-  registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;

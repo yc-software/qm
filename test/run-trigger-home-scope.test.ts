@@ -15,9 +15,7 @@ const SCOPE = scopeId("channel", CHAN);
 function unknownChannelDirectory() {
   return {
     channelMember: async (_c: string, _pid: string) => false,
-    groupMember: async (_g: string, _pid: string) => false,
     channelMembership: async (): Promise<boolean | undefined> => undefined,
-    groupMembership: async (): Promise<boolean | undefined> => undefined,
     listChannelsFor: async (): Promise<{ channelId: string; name: string }[]> => [],
     channelPrivacy: async (): Promise<boolean | undefined> => undefined,
     list: async () => [{ principalId: OWNER, displayName: "Pete" }],
@@ -137,7 +135,8 @@ describe("runTrigger home-scope gate for group homes", () => {
     let ranTurn = false;
     const dir = {
       ...unknownChannelDirectory(),
-      groupMember: async (_g: string, pid: string) => pid === "kim@example.com",
+      channelMember: async (_g: string, pid: string) => pid === "kim@example.com",
+      channelPrivacy: async (): Promise<boolean | undefined> => true,
       list: async () => [
         { principalId: OWNER, displayName: "Pete" },
         { principalId: "kim@example.com", displayName: "Kim" },
@@ -156,7 +155,7 @@ describe("runTrigger home-scope gate for group homes", () => {
     let ranTurn = false;
     const dir = {
       ...unknownChannelDirectory(),
-      groupMembership: async (): Promise<boolean | undefined> => false,
+      channelMembership: async (): Promise<boolean | undefined> => false,
     };
     const sessions = {
       participantScopes: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],

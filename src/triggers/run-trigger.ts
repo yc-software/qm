@@ -28,7 +28,7 @@ export interface TriggerDeps {
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string; principalId?: string; slackId?: string } | null>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
-    groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
+    channelMembership?(channelId: string, principalId: string): Promise<boolean | undefined>;
     conversationMembers?: DirectoryStore["conversationMembers"];
   };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
@@ -124,7 +124,7 @@ async function actorMayReadScope(
       if (await participatesInScope(deps, actorId, scope)) return { ok: true };
       return { ok: false, note: UNKNOWN_HOME_SKIP_NOTE };
     }
-    const known = await deps.directory.groupMembership?.(ref, actorId).catch(() => undefined);
+    const known = await deps.directory.channelMembership?.(ref, actorId).catch(() => undefined);
     if (known === undefined && (await participatesInScope(deps, actorId, scope))) return { ok: true };
     return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
   }
@@ -197,7 +197,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let isPrivate: boolean | undefined;
   if (ownerKind === "channel" || ownerKind === "group") {
     roster = await deps.directory
-      ?.conversationMembers?.(ownerKind, ownerRef)
+      ?.conversationMembers?.(ownerRef)
       .catch(reportFailureAs("trigger home roster", undefined));
     isPrivate =
       ownerKind === "channel"

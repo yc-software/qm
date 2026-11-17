@@ -13,6 +13,7 @@ import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
 import { createMirror } from "../src/slack/mirror.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -1035,7 +1036,7 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
     await built.directory.replace([
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
-    await built.directory.replaceGroups([{ groupId: container, principalId: "alice@acme.com" }]);
+    await recordGroupRoster(built.directory, "slack", container, ["alice@acme.com"]);
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       {

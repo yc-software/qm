@@ -173,7 +173,7 @@ import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
 import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
-import type { DirectoryStore } from "./directory/directory-store.ts";
+import { recordGroupRoster, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
@@ -2622,7 +2622,7 @@ export function buildApp(
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           unansweredReply: genericChatNotices.unanswered,
           turns: genericChatTurns,
-          registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, GENERIC_CHAT),
+          registerGroup: (groupId, principalIds) => recordGroupRoster(directory, GENERIC_CHAT, groupId, principalIds),
           onAction: createGenericChatApprovals({
             client: genericChatClient,
             app,

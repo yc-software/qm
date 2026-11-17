@@ -6,6 +6,7 @@ import { createDirectory } from "../src/slack/directory.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const MEMBERS = [
@@ -41,16 +42,13 @@ function directory(
     async resolveChannel() {
       return { kind: "none" };
     },
-    async channelMember() {
-      return false;
+    async channelMember(groupId, principalId) {
+      return (groups[groupId] ?? []).includes(principalId);
     },
     async resolveGroup(participants) {
       const want = key(participants);
       const hit = Object.entries(groups).find(([, ids]) => key(ids) === want);
       return hit ? { kind: "one", groupId: hit[0] } : { kind: "none" };
-    },
-    async groupMember(groupId, principalId) {
-      return (groups[groupId] ?? []).includes(principalId);
     },
     async directoryMember(principalId) {
       if (opts.unknownAuthor) return null;
@@ -549,12 +547,11 @@ describe("directory resolution by Slack id", () => {
 describe("directory group upsert", () => {
   it("makes a just-opened group resolvable and its members visible at once", async () => {
     const store = createPostgresDirectoryStore(testDatabaseUrl());
-    await store.replaceGroups([]);
     assert.equal((await store.resolveGroupByParticipants(["a", "b"], "slack")).kind, "none");
 
-    await store.upsertGroup("C-new", ["a", "b"], "slack");
+    await recordGroupRoster(store, "slack", "C-new", ["a", "b"]);
     assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"], "slack"), { kind: "one", groupId: "C-new" });
-    assert.equal(await store.groupMember("C-new", "a"), true);
-    assert.equal(await store.groupMember("C-new", "c"), false);
+    assert.equal(await store.channelMember("C-new", "a"), true);
+    assert.equal(await store.channelMember("C-new", "c"), false);
   });
 });

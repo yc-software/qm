@@ -24,6 +24,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { recordGroupRoster } from "../src/directory/directory-store.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -377,7 +378,7 @@ test("a stale-loop ping is withheld from a group DM its owner has left", async (
     { principalId: "josh", displayName: "Josh", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "internal" },
   ]);
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  await recordGroupRoster(directory, "slack", "G1", ["U2"]);
   const s = service(HAPPY, { directory });
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },
