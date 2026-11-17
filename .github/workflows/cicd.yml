@@ -381,6 +381,22 @@ jobs:
       - name: Build connector SDK
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run build:connector-sdk
+      - name: Schema snapshot matches the migrations
+        if: needs.reuse.outputs.reusable != 'true'
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
+        run: |
+          npm run db:schema
+          git diff --exit-code -- db/schema.sql || {
+            echo "::error file=db/schema.sql::db/schema.sql is stale. Run npm run db:schema against Postgres 16 with pgvector, or commit the schema-sql artifact from this run."
+            exit 1
+          }
+      - name: Upload the regenerated schema snapshot
+        if: failure() && needs.reuse.outputs.reusable != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: schema-sql
+          path: db/schema.sql
       - name: Model registry cross-process tests
         if: needs.reuse.outputs.reusable != 'true'
         env:

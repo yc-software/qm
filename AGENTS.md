@@ -118,6 +118,9 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   transformed, or dropped; explain migration, backfill, rollout, and compatibility
   effects. Distinguish approved design, implemented code, and live schema. A migration
   diff alone is not enough. If configuration or schema is unchanged, say so explicitly.
+- **`db/schema.sql` is the generated schema.** After changing any migration, run
+  `npm run db:schema` (needs a Postgres 16 server with pgvector, as in CI) and commit
+  the result; CI fails when it is stale. Read its diff to see what a change does to tables.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several
