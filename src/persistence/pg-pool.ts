@@ -358,7 +358,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       if (replaced && replaced < migration.replaces!.length) {
         const missing = migration.replaces!.filter((id) => !present.has(id));
         throw new Error(
-          `pg-pool: ${migration.id} replaces ${migration.replaces!.length} earlier migrations, but this database is missing ${missing.length} of them (${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ", …" : ""}); run the last QM release from before ${migration.id} against it first`,
+          `pg-pool: ${migration.id} replaces ${migration.replaces!.length} earlier migrations, but this database is missing ${missing.length} of them (${missing.join(", ")}); upgrade it with the last QM release before ${migration.id} first`,
         );
       }
       if (replaced) {

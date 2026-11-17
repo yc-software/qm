@@ -10,8 +10,6 @@ SET LOCAL row_security = off;
 
 CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA public;
 
-COMMENT ON EXTENSION btree_gin IS 'support for indexing common datatypes in GIN';
-
 CREATE TYPE public.item_kind AS ENUM (
     'UserMessage',
     'SteeringMessage',

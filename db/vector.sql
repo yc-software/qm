@@ -12,8 +12,6 @@ SET LOCAL default_table_access_method = heap;
 
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
-COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
-
 CREATE FUNCTION public.claim_memory_tenants() RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
