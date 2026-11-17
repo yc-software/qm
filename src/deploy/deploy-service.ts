@@ -126,7 +126,11 @@ export interface DeployService {
   setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
   setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
-  setAppPublic(idOrName: string, isPublic: boolean, actor: AppActor): Promise<PublishedApp>;
+  setAppPublic(
+    idOrName: string,
+    isPublic: boolean,
+    actor: AppActor & { personAtKeyboard: boolean },
+  ): Promise<PublishedApp>;
   setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
 
   maintainApps(): Promise<number>;
@@ -163,7 +167,12 @@ export interface DeployService {
     opts?: { notify?: boolean },
   ): Promise<AppGrantee[]>;
   assertAppOwner(d: PublishedApp, actor: AppActor): Promise<void>;
-  assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null): Promise<void>;
+  assertShareAllowed(
+    d: PublishedApp,
+    grantee: ScopeId,
+    permission: Permission | null,
+    grantedBy: string,
+  ): Promise<void>;
   transferAppOwner(
     idOrName: string,
     toScope: ScopeId,
@@ -180,7 +189,12 @@ const PUBLIC_LINKS_UNAVAILABLE =
   "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
 
 export type DeployAccessErrorCode =
-  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable" | "unknown_connector";
+  | "not_found"
+  | "forbidden"
+  | "external_sharing_disabled"
+  | "public_links_unavailable"
+  | "unknown_connector"
+  | "human_consent_required";
 
 export class DeployAccessError extends Error {
   readonly code: DeployAccessErrorCode;
@@ -258,10 +272,21 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   const deployQueue = createKeyedQueue();
   const externalSharingAllowed = (ownerScopeId: ScopeId): Promise<boolean> =>
     deps.externalSharingAllowed?.(ownerScopeId) ?? Promise.resolve(false);
-  async function assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null) {
+  async function assertShareAllowed(
+    d: PublishedApp,
+    grantee: ScopeId,
+    permission: Permission | null,
+    grantedBy: string,
+  ) {
+    if (permission === null) return;
+    if (d.connectors && !samePerson(d.createdBy, grantedBy))
+      throw new DeployAccessError(
+        "forbidden",
+        `only the person who published "${d.name ?? d.id}" can share it while it borrows their connectors`,
+      );
     const { kind, ref } = parseScopeId(grantee);
-    if (permission === null || kind !== "personal" || !ref?.includes("@")) return;
-    if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
+    if (kind !== "personal" || !ref?.includes("@")) return;
+    if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(d.ownerScopeId))) return;
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
   const recordAudit = (e: AuditEvent): void => recordAuditInBinding(deps.auditLog, e);
@@ -742,6 +767,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       await this.assertAppOwner(d, actor);
+      if (!actor.personAtKeyboard)
+        throw new DeployAccessError(
+          "human_consent_required",
+          `Only the person can change who can open "${d.name ?? d.id}" by link. Ask them to do it themselves.`,
+        );
       if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
         throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
       if (isPublic && deps.publicLinksAvailable === false)
@@ -1025,7 +1055,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       await this.assertAppOwner(d, actor);
       grantee = await appShareScope(grantee, permission, deps.canManageEmail);
-      await assertShareAllowed(d.ownerScopeId, grantee, permission);
+      await assertShareAllowed(d, grantee, permission, actor.createdBy);
       const ref = appRef(d.id);
       const tenant = ambientTenant();
       await deps.acl.revoke(tenant, d.ownerScopeId, ref, grantee, actor.createdBy);
