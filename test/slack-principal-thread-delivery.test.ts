@@ -1,13 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { createSlackDeliverer } from "../src/slack/deliveries.ts";
 
 const TS = "1723497600.123456";
 
 test("a threaded principal delivery posts and records the DM thread", async () => {
   const posts: Array<Record<string, unknown>> = [];
   const acks: Array<{ id: string; body: unknown }> = [];
-  let claimed = false;
   const delivery = {
     id: "delivery-1",
     destination: { type: "principal", target: "U-alice", threadTs: TS },
@@ -25,14 +24,8 @@ test("a threaded principal delivery posts and records the DM thread", async () =
       },
     },
   };
-  const poller = createDeliveryPoller({
+  const deliverer = createSlackDeliverer({
     core: {
-      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-      claimDeliveries: async (type: string) => {
-        if (type !== "principal" || claimed) return [];
-        claimed = true;
-        return [delivery];
-      },
       ackDelivery: async (id: string, body: unknown) => void acks.push({ id, body }),
     } as any,
     flow: { inFlightRuns: { add() {}, delete() {}, has: () => false } } as never,
@@ -40,7 +33,7 @@ test("a threaded principal delivery posts and records the DM thread", async () =
     clientForIdentity: () => client,
   });
 
-  await poller.pollDeliveries(client);
+  await deliverer.deliver(client, delivery as never);
 
   assert.equal(posts.length, 1);
   assert.equal(posts[0]!.channel, "D-alice");

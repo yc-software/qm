@@ -6,7 +6,12 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, WITHDRAW_LOANS_MIGRATION, type PublishedApp } from "../src/deploy/deploy-store.ts";
+import { APP_TABLES } from "../src/deploy/page-views.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -121,7 +126,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
       ),
       { connectors },
     );
-  return { d, app, audits, upstream, broker, lend };
+  return { d, app, deploy, audits, upstream, broker, lend };
 }
 
 const get = (host: string, path = "/v1/me") => ({ connector: host, url: `https://${host}${path}` });
@@ -202,4 +207,31 @@ test("a new running version from anyone but the publisher withdraws the loan", a
   await h.lend(PUBLISHER, ["slack.com"]);
   await h.app.rollbackApp(h.d.id, 1, CO_MANAGER);
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "a rollback counts too");
+});
+
+test("moving the app out of its publisher's library withdraws the loan", async (t) => {
+  const h = await agent(t);
+  await h.lend(PUBLISHER, ["slack.com"]);
+  await h.deploy.transferAppOwner(h.d.id, personalScope(CO_MANAGER), { callerId: PUBLISHER });
+  assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");
+  assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.detail?.includes("moved out of")));
+});
+
+test("an upgrade withdraws loans on apps outside their publisher's library", async () => {
+  const url = testDatabaseUrl();
+  const apps = createPostgresMapFactory(url).map<PublishedApp>("deployments", undefined, APP_TABLES);
+  const lent = (id: string, owner: string) =>
+    ({ id, createdBy: PUBLISHER, ownerScopeId: personalScope(owner), connectors: ["slack.com"] }) as PublishedApp;
+  await apps.put("kept", lent("kept", PUBLISHER));
+  await apps.put("moved", lent("moved", CO_MANAGER));
+  const audit = createPostgresAuditLog(url);
+  await audit.events(testTenant);
+  const pg = createPgPool(url);
+  await pg.migrate(WITHDRAW_LOANS_MIGRATION).finally(() => pg.close());
+  assert.deepEqual((await apps.get("kept"))?.connectors, ["slack.com"]);
+  assert.equal((await apps.get("moved"))?.connectors, undefined);
+  assert.deepEqual(
+    (await audit.events(testTenant)).map((e) => e.resource),
+    ["deployment:moved"],
+  );
 });

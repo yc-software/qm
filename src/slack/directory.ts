@@ -405,7 +405,7 @@ export function createDirectory(deps: {
     if (!CORE_SINGLETON) return true;
     let pushed: boolean | null;
     try {
-      pushed = await core.holdDirectorySync(async (lost) => {
+      pushed = await core.holdDirectorySync(`${ids.ownTeamId}:${ids.botUserId}`, async (lost) => {
         let lostFlag = false;
         void lost.then(() => {
           lostFlag = true;

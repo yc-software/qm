@@ -274,8 +274,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
   const recordAudit = (e: AuditEvent): void => recordAuditInBinding(deps.auditLog, e);
-  async function withdrawLoanUnlessPublisher(d: PublishedApp, actor: string | undefined): Promise<void> {
-    if (!d.connectors || samePerson(actor, d.createdBy)) return;
+  async function withdrawLoan(d: PublishedApp, actor: string | undefined, detail: string): Promise<void> {
+    if (!d.connectors) return;
     await deps.deployStore.setConnectors(d.id, undefined);
     recordAudit({
       at: Date.now(),
@@ -283,8 +283,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       action: "deploy_connectors",
       resource: appRef(d.id),
       scopeLabel: d.ownerScopeId,
-      detail: "withdrawn: someone other than the publisher changed the running version",
+      detail,
     });
+  }
+  async function withdrawLoanUnlessPublisher(d: PublishedApp, actor: string | undefined): Promise<void> {
+    if (!samePerson(actor, d.createdBy))
+      await withdrawLoan(d, actor, "withdrawn: someone other than the publisher changed the running version");
   }
 
   const eachRunning = (work: (d: PublishedApp) => Promise<void>) =>
@@ -1074,6 +1078,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         throw new DeployAccessError("forbidden", `only the owner can transfer "${d.name ?? d.id}"`);
       }
       if (d.ownerScopeId === toScope) return d;
+      if (toScope !== scopeId("personal", d.createdBy))
+        await withdrawLoan(d, actor.callerId, "withdrawn: the app moved out of its publisher's library");
       const ref = appRef(d.id);
       const fromScope = d.ownerScopeId;
       const tenant = ambientTenant();
