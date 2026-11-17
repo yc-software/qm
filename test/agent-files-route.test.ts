@@ -111,10 +111,7 @@ describe("agent files self-API", async () => {
   });
 
   after(async () => {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-      server.closeAllConnections();
-    });
+    await new Promise<void>((resolve) => server.close(() => resolve()).closeAllConnections());
   });
 
   it("requires a capability token", async () => {

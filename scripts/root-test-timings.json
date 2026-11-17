@@ -18,7 +18,7 @@
   "test/admin-links.test.ts": 1,
   "test/admin-login-token.test.ts": 1,
   "test/admin-model-lookup.test.ts": 10,
-  "test/admin-observability.test.ts": 41,
+  "test/admin-observability.test.ts": 25,
   "test/admin-offboard.test.ts": 11,
   "test/admin-paging-params.test.ts": 8,
   "test/admin-resources.test.ts": 22,

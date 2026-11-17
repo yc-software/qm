@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 export const CI_JOBS = [
   "Core typecheck",
-  ...Array.from({ length: 7 }, (_, i) => `Core tests (${i + 1}/7)`),
+  ...Array.from({ length: 8 }, (_, i) => `Core tests (${i + 1}/8)`),
   "Core",
   "CLI",
   "Lint",

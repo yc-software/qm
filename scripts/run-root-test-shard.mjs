@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const TIMINGS = join(ROOT, "scripts/root-test-timings.json");
 const DEFAULT_SECONDS = 10;
+const JOBS_PER_SHARD = 4;
 const MODULE = /\.(ts|tsx|mts|mjs|js|cjs)$/;
 const ROOT_TEST = /^test\/[^/]+\.test\.ts$/;
 const WHOLE_REPO_TEST = /\bls-files\b|recursive: true, encoding/;
@@ -83,12 +84,14 @@ function affectedTests(base, all) {
 function pack(files, all, total, timings) {
   const weight = (file) => timings[file] ?? DEFAULT_SECONDS;
   const seconds = (list) => list.reduce((sum, file) => sum + weight(file), 0);
-  const used = Math.min(total, Math.ceil((seconds(files) * total) / seconds(all)));
+  const share = seconds(all) / total;
+  const load = (file) => (weight(file) * JOBS_PER_SHARD >= share ? weight(file) * JOBS_PER_SHARD : weight(file));
+  const used = Math.min(total, Math.ceil(files.reduce((sum, file) => sum + load(file), 0) / share));
   const shards = Array.from({ length: total }, () => ({ seconds: 0, files: [] }));
   for (const file of files.toSorted((a, b) => weight(b) - weight(a) || a.localeCompare(b))) {
     const lightest = shards.slice(0, used).reduce((min, shard) => (shard.seconds < min.seconds ? shard : min));
     lightest.files.push(file);
-    lightest.seconds += weight(file);
+    lightest.seconds += load(file);
   }
   return shards;
 }
@@ -133,7 +136,7 @@ if (values.record) {
       : `${files.length} of ${all.length} root test files are reachable from the diff against ${values.since}`,
   );
   const shard = pack(files, all, Number(match[2]), readTimings())[Number(match[1]) - 1];
-  console.error(`Shard ${values.shard}: ${shard.files.length} files, ~${shard.seconds}s recorded`);
+  console.error(`Shard ${values.shard}: ${shard.files.length} files`);
   if (shard.files.length > 0) console.log(shard.files.join("\n"));
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(process.env.GITHUB_OUTPUT, `run=${shard.files.length > 0}\nfull=${files.length === all.length}\n`);

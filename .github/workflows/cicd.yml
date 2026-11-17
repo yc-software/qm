@@ -70,7 +70,7 @@ jobs:
           npm test --prefix desktop
 
   core-tests:
-    name: Core tests (${{ matrix.shard }}/7)
+    name: Core tests (${{ matrix.shard }}/8)
     timeout-minutes: 25
     needs: reuse
     if: always() && !cancelled()
@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     services:
       postgres:
         image: pgvector/pgvector:0.8.1-pg16
@@ -106,7 +106,7 @@ jobs:
         id: plan
         if: needs.reuse.outputs.reusable != 'true'
         env:
-          CORE_TEST_SHARD: ${{ matrix.shard }}/7
+          CORE_TEST_SHARD: ${{ matrix.shard }}/8
           CORE_TEST_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
         run: node scripts/run-root-test-shard.mjs > "$RUNNER_TEMP/root-tests"
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
