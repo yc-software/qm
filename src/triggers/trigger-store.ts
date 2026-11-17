@@ -71,10 +71,7 @@ export const DROP_RECIPIENT_CONSENT_MIGRATION = {
   ]),
 };
 
-export const BACKFILL_BOT_MARKER_MIGRATION = {
-  id: "users/v2/0008-bot-marker-backfill",
-  statements: [
-    `DO $$
+export const markBotWork = (users?: string): string => `DO $$
     BEGIN
       IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL THEN
         RETURN;
@@ -89,14 +86,24 @@ ${[
     ([table, creator]) => `      IF to_regclass('${table}') IS NOT NULL THEN
         UPDATE ${table} t SET json = t.json || '{"botActor": true}'::jsonb
           FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
-         WHERE u.kind = 'app' AND l.tenant_id = t.tenant_id
+         WHERE u.kind = 'app' AND l.tenant_id = t.tenant_id${users ? ` AND u.id = ANY(${users})` : ""}
            AND l.alias_id = ${fold(`t.json ->> '${creator}'`)} AND NOT t.json ? 'botActor';
-        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = '${table}';
+        ${
+          users
+            ? `IF FOUND THEN
+          UPDATE durable_map_versions SET v = v + 1
+           WHERE tbl = '${table}' AND tenant_id IN (SELECT tenant_id FROM users WHERE id = ANY(${users}));
+        END IF;`
+            : `UPDATE durable_map_versions SET v = v + 1 WHERE tbl = '${table}';`
+        }
       END IF;`,
   )
   .join("\n")}
-    END $$`,
-  ],
+    END $$`;
+
+export const BACKFILL_BOT_MARKER_MIGRATION = {
+  id: "users/v2/0008-bot-marker-backfill",
+  statements: [markBotWork()],
 };
 
 export const MARK_BOT_EDITED_CRONS_MIGRATION = {

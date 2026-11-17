@@ -7,7 +7,7 @@ import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
-import { BACKFILL_BOT_MARKER_MIGRATION } from "../triggers/trigger-store.ts";
+import { markBotWork } from "../triggers/trigger-store.ts";
 import { holdBotLoopShips } from "../loops/loop-store.ts";
 
 export { fold };
@@ -364,7 +364,8 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
   return winner;
 }
 
-const BOT_WORK = [...BACKFILL_BOT_MARKER_MIGRATION.statements, holdBotLoopShips("system")];
+const MARKED = "string_to_array(current_setting('qm.marked_apps'), ',')::uuid[]";
+const BOT_WORK = [markBotWork(MARKED), holdBotLoopShips("system", MARKED)];
 
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
@@ -482,7 +483,9 @@ export function createPostgresUserStore(connectionString: string): UserStore {
             RETURNING id`,
           [ids.map((id) => foldPrincipalId(id))],
         );
-        if (rows.length) for (const statement of BOT_WORK) await client.query(statement);
+        if (!rows.length) return 0;
+        await client.query(`SELECT set_config('qm.marked_apps', $1, true)`, [rows.map((row) => row.id).join(",")]);
+        for (const statement of BOT_WORK) await client.query(statement);
         return rows.length;
       });
     },

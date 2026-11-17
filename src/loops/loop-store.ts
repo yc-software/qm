@@ -266,7 +266,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
   };
 }
 
-export const holdBotLoopShips = (by: string): string => `DO $$
+export const holdBotLoopShips = (by: string, users?: string): string => `DO $$
     BEGIN
       IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('loops') IS NULL
          OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
@@ -278,10 +278,18 @@ export const holdBotLoopShips = (by: string): string => `DO $$
           JOIN loops l ON l.tenant_id = g.tenant_id AND l.id = g.json ->> 'loopId'
          WHERE NOT g.json ? 'revokedAt'
            AND EXISTS (SELECT 1 FROM user_links k JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
-                        WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")})
+                        WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")}${
+                          users ? ` AND u.id = ANY(${users})` : ""
+                        })
       ), locked AS (
         SELECT l.tenant_id, l.id, l.json FROM loops l
-         WHERE l.json @> '{"botActor": true}' AND l.json -> 'shipActions' @> '[{"gate": "auto"}]'
+         WHERE l.json @> '{"botActor": true}' AND l.json -> 'shipActions' @> '[{"gate": "auto"}]'${
+           users
+             ? `
+           AND EXISTS (SELECT 1 FROM user_links k WHERE k.tenant_id = l.tenant_id AND k.user_id = ANY(${users})
+                          AND k.alias_id = ${fold("l.json ->> 'createdBy'")})`
+             : ""
+         }
            FOR UPDATE
       ), gated AS (
         SELECT l.tenant_id, l.id, any_value(l.json ->> 'ownerScopeId') AS scope,

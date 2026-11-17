@@ -42,11 +42,16 @@ test("a user is a person until QM records it as an app; then what its sign-ins m
     for (const who of [bot, pat]) await put(table, who, { [creator]: who, shipActions });
   for (const who of [bot, synced, pat]) await put("loop_ship_grants", who, { loopId: pat, actorId: who });
   await put("loops", "marked", { createdBy: bot, botActor: true, shipActions });
+  await put("loops", "pats-bot-loop", { createdBy: pat, botActor: true, shipActions });
   const rowsSql = `SELECT concat_ws(' ', t, id, json ->> 'botActor', json #>> '{shipActions,0,gate}', json ->> 'revokedBy') AS r
     FROM (${[...Object.keys(creators), "loop_ship_grants"].map((t) => `SELECT '${t}' t, * FROM ${t}`).join(" UNION ")}) x`;
   const rows = async () => (await pg.q(rowsSql)).map((r) => r.r as string).sort();
   const bots = (t: string) => `${t} ${bot} true ${t === "loops" ? "hold" : "auto"}`;
-  const made = [...Object.keys(creators).flatMap((t) => [bots(t), `${t} ${pat} auto`]), "loops marked true hold"];
+  const made = [
+    ...Object.keys(creators).flatMap((t) => [bots(t), `${t} ${pat} auto`]),
+    "loops marked true hold",
+    "loops pats-bot-loop true auto",
+  ];
   const grants = (...apps: string[]) =>
     [bot, synced, pat].map((who) => `loop_ship_grants ${who}${apps.includes(who) ? " system" : ""}`);
   assert.equal((await roster.get(bot))?.kind, "person");
