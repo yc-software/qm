@@ -190,8 +190,9 @@ Nothing is lent by default. The publisher opts in per app and per connected-app 
 withdraws. Only the publisher may call it, from a live turn or a signed-in session. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
-withdrawn before that version runs. The token comes from the publisher's personal
-connection, else their default, else their company one.
+withdrawn before that version runs. Moving the app out of the publisher's own library, to
+a teammate or a shared home, withdraws it as the app moves. The token comes from the
+publisher's personal connection, else their default, else their company one.
 
 The app's server sends the broker `connector` (the host) instead of `credential`, with
 the same `url`, `method`, `headers` and `body`. The broker pins the URL to that exact host
