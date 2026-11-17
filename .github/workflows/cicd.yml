@@ -59,10 +59,12 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - name: Install
-        run: npm ci --ignore-scripts
+      - name: Install the TypeScript parser alone
+        run: |
+          version=$(node -p 'require("./package-lock.json").packages["node_modules/typescript"].version')
+          npm install --prefix "$RUNNER_TEMP/parser" --no-audit --no-fund --ignore-scripts "typescript@$version"
+          mkdir -p node_modules
+          ln -s "$RUNNER_TEMP/parser/node_modules/typescript" node_modules/typescript
       - name: Select the tests this change can reach
         id: select
         env:
