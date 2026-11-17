@@ -349,10 +349,11 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
   const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
   const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
-  const requesterMessageTs =
-    originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"
-      ? originRun.request.origin.messageTs
-      : undefined;
+  const runRequest = originRun && originRun.sessionId === capability.threadRef ? originRun.request : undefined;
+  const humanOrigin = runRequest?.origin.kind === "human" ? runRequest.origin : undefined;
+  const requesterMessageTs = humanOrigin?.messageTs;
+  const ownerSurfaceUser =
+    humanOrigin && samePerson(actorId, cred.ownerId) ? runRequest?.surfaceOrigin?.author : undefined;
   const { ask, existing } = await kc.createAsk({
     ...(capability.triggered ? { triggered: true } : {}),
     credentialId: cred.id,
@@ -360,6 +361,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     requesterScopeId: capability.scopeId,
     ...(requesterSeq != null ? { requesterSeq } : {}),
     ...(requesterMessageTs ? { requesterMessageTs } : {}),
+    ...(ownerSurfaceUser ? { ownerSurfaceUser } : {}),
     ...(requesterDestination ? { requesterDestination } : {}),
     ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
     purpose: b.purpose,

@@ -3,6 +3,7 @@ import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { SurfaceUser } from "../surfaces/contract.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
@@ -133,6 +134,7 @@ export interface KeychainAsk {
   requesterThreadRef?: string;
   requesterSeq?: number;
   requesterMessageTs?: string;
+  ownerSurfaceUser?: Pick<SurfaceUser, "surface" | "account" | "id">;
   purpose: string;
   requestedMode?: GrantMode;
   botActor?: boolean;
@@ -325,6 +327,7 @@ interface CreateAskInput {
   requesterThreadRef?: string;
   requesterSeq?: number;
   requesterMessageTs?: string;
+  ownerSurfaceUser?: Pick<SurfaceUser, "surface" | "account" | "id">;
   purpose: string;
   requestedMode?: GrantMode;
   botActor?: boolean;
@@ -1295,6 +1298,7 @@ export function createKeychain(deps: {
         ...(input.requesterThreadRef ? { requesterThreadRef: input.requesterThreadRef } : {}),
         ...(input.requesterSeq !== undefined ? { requesterSeq: input.requesterSeq } : {}),
         ...(input.requesterMessageTs ? { requesterMessageTs: input.requesterMessageTs } : {}),
+        ...(input.ownerSurfaceUser ? { ownerSurfaceUser: input.ownerSurfaceUser } : {}),
         purpose,
         ...(input.requestedMode ? { requestedMode: input.requestedMode } : {}),
         ...(input.botActor ? { botActor: true } : {}),
