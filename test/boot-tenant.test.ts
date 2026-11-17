@@ -2,10 +2,9 @@ import { after, before, test } from "./support/unbound-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { applyPgMigrations, createPgPool, definePgMigration } from "../src/persistence/pg-pool.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { readBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
-import { TENANCY } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { ownerUrl } from "./support/test-tenant.ts";
 
@@ -24,7 +23,6 @@ before(async () => {
   if (skip) return;
   url = ownerUrl(testDatabaseUrl()).toString();
   owner = new pg.Pool({ connectionString: url, max: 1 });
-  await applyPgMigrations(owner, TENANCY.map(definePgMigration));
   await owner.query(`CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
   await owner.query(`GRANT SELECT ON tenants TO ${role}`);
   await owner.query("DELETE FROM tenants");

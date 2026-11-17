@@ -1,8 +1,6 @@
-import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { PGVECTOR_MAX_DIMENSIONS, unitVector } from "../model/embeddings.ts";
-import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
+import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -42,19 +40,6 @@ export interface MemoryVectorStore {
   close(): Promise<void>;
 }
 
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS memory_fact_vectors (
-    scope_id TEXT NOT NULL,
-    model TEXT NOT NULL,
-    fact_id BIGINT NOT NULL,
-    fact_hash TEXT NOT NULL,
-    dimensions INTEGER NOT NULL CHECK (dimensions BETWEEN 1 AND 16000),
-    embedding vector NOT NULL,
-    PRIMARY KEY (scope_id, model, fact_id),
-    CHECK (vector_dims(embedding) = dimensions)
-  )`,
-];
-
 const SKETCH_CANDIDATES_PER_RESULT = 4;
 
 const batchSize = (limit: number) => Math.max(1, Math.min(256, Math.floor(limit) || 1));
@@ -66,94 +51,8 @@ function vectorWidth(dimensions: number | undefined): number | null {
   return dimensions;
 }
 
-export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
-  ...MEMORY_FACTS_MIGRATIONS,
-  {
-    id: "memory/vectors/0001-vector-extension",
-    statements: [
-      `DO $ext$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
-          CREATE EXTENSION vector;
-        END IF;
-      END $ext$`,
-    ],
-  },
-  { id: "memory/vectors/0002", statements: SCHEMA },
-  {
-    id: "memory/vectors/0003-sketch",
-    statements: [
-      "SET LOCAL lock_timeout = '3s'",
-      "ALTER TABLE memory_fact_vectors ADD COLUMN IF NOT EXISTS embedding_bits BIT VARYING",
-      `CREATE OR REPLACE FUNCTION memory_fact_vectors_bits() RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          NEW.embedding_bits := binary_quantize(NEW.embedding);
-          RETURN NEW;
-        END $$`,
-      "DROP TRIGGER IF EXISTS memory_fact_vectors_bits ON memory_fact_vectors",
-      `CREATE TRIGGER memory_fact_vectors_bits BEFORE INSERT OR UPDATE OF embedding ON memory_fact_vectors
-          FOR EACH ROW EXECUTE FUNCTION memory_fact_vectors_bits()`,
-    ],
-  },
-  {
-    id: "memory/vectors/0004-sketch-backfill",
-    autocommit: true,
-    statements: [
-      `DO $memory_sketch_backfill$
-        DECLARE
-          batch tid[];
-        BEGIN
-          LOOP
-            SELECT array_agg(ctid) INTO batch
-              FROM (SELECT ctid FROM memory_fact_vectors WHERE embedding_bits IS NULL LIMIT 1000) pending;
-            EXIT WHEN batch IS NULL;
-            UPDATE memory_fact_vectors SET embedding_bits = binary_quantize(embedding)
-             WHERE ctid = ANY(batch) AND embedding_bits IS NULL;
-            COMMIT;
-          END LOOP;
-        END $memory_sketch_backfill$`,
-    ],
-  },
-  ...tenantTables("memory/vectors/0003-tenants", [
-    { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
-  ]),
-  {
-    id: "memory/vectors/0004-claims",
-    statements: [
-      claimFunction(
-        "claim_memory_index",
-        "model text, dims integer",
-        `SELECT f.tenant_id, 'memory'::text FROM memory_facts f
-             WHERE f.deleted_at IS NULL AND NOT EXISTS (
-               SELECT 1 FROM memory_fact_vectors v
-                WHERE v.tenant_id = f.tenant_id AND v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
-                  AND v.fact_hash = f.text_hash AND ($2::integer IS NULL OR v.dimensions = $2))
-             GROUP BY f.tenant_id
-           UNION
-           SELECT s.tenant_id, 'memory'::text FROM memory_fact_vectors s
-             WHERE s.model <> $1 OR ($2::integer IS NOT NULL AND s.dimensions <> $2) OR NOT EXISTS (
-               SELECT 1 FROM memory_facts f
-                WHERE f.tenant_id = s.tenant_id AND f.scope_id = s.scope_id AND f.id = s.fact_id
-                  AND f.deleted_at IS NULL AND f.text_hash = s.fact_hash)
-             GROUP BY s.tenant_id`,
-      ),
-    ],
-  },
-  {
-    id: "memory/vectors/0005-claim-tenants",
-    statements: [
-      "DROP FUNCTION IF EXISTS claim_memory_index(text, integer)",
-      claimFunction(
-        "claim_memory_tenants",
-        "",
-        `SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL
-           UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors`,
-      ),
-    ],
-  },
-];
-
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
-  const db = createPgPool(connectionString, VECTOR_MIGRATIONS);
+  const db = createPgPool(connectionString);
   return {
     async search(input) {
       if (!Number.isInteger(input.limit) || input.limit < 1)
@@ -273,14 +172,4 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     claimTenants: () => claimRows(db, "claim_memory_tenants"),
     close: () => db.close(),
   };
-}
-
-export async function registerVectorMigrations(connectionString: string): Promise<void> {
-  const pg = createPgPool(connectionString);
-  try {
-    const available = await pg.q("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'");
-    if (available.length) for (const migration of VECTOR_MIGRATIONS) pg.registerMigration(migration);
-  } finally {
-    await pg.close();
-  }
 }

@@ -2,7 +2,6 @@ import "./support/auto-fake-sprites.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { test, type TestContext } from "node:test";
 import pg from "pg";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
 import { factHash } from "../src/memory/facts.ts";
@@ -99,7 +98,6 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
     }),
   );
   databaseFixture.stop = () => built.runtime.stop();
-  await migrateRegisteredPgSchemas(databaseUrl);
   await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
   await built.memory.recall("personal:unconfigured", { query: "no model configured" });
   const inspector = new pg.Client({ connectionString: databaseUrl });

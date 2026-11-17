@@ -4,8 +4,7 @@ import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 import { spokenByPerson } from "../core/turn-origin.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows } from "../tenants/claim.ts";
+import { claimRows } from "../tenants/claim.ts";
 
 const CHANNEL = "run_signals";
 
@@ -23,53 +22,7 @@ function toSignals(rows: Rows): RunSignal[] {
 }
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
-  const pg = createPgPool(connectionString, [
-    {
-      id: "runs/signals/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS run_signals(
-        id BIGSERIAL PRIMARY KEY,
-        run_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        text TEXT,
-        payload JSONB,
-        created_at BIGINT NOT NULL,
-        consumed_at BIGINT
-      )`,
-        `ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS payload JSONB`,
-        `CREATE INDEX IF NOT EXISTS idx_run_signals_pending ON run_signals(run_id) WHERE consumed_at IS NULL`,
-      ],
-    },
-    {
-      id: "runs/signals/0002",
-      statements: [
-        `ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS dedupe_key TEXT`,
-        `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
-      ],
-    },
-    ...tenantTables("runs/signals/0003-tenants", [
-      {
-        table: "run_signals",
-        primaryKey: "id",
-        unique: [{ name: "run_signals_by_dedupe_key", columns: "dedupe_key", where: "dedupe_key IS NOT NULL" }],
-      },
-    ]),
-    {
-      id: "runs/signals/0004-claims",
-      statements: [
-        claimFunction(
-          "claim_signaled_runs",
-          "",
-          "SELECT DISTINCT tenant_id, run_id FROM run_signals WHERE consumed_at IS NULL ORDER BY tenant_id, run_id",
-        ),
-        claimFunction(
-          "claim_pruned_signals",
-          "before bigint",
-          "DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1 RETURNING tenant_id, id::text",
-        ),
-      ],
-    },
-  ]);
+  const pg = createPgPool(connectionString);
   const q = pg.query;
 
   const listeners = new Map<string, Set<() => void>>();

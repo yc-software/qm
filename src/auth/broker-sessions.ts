@@ -14,21 +14,9 @@ export interface BrokerSessionStore {
 }
 
 const hash = (token: string): string => createHash("sha256").update(token).digest("hex");
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS auth_broker_sessions (
-    token_hash TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    authenticated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    absolute_expires_at TIMESTAMPTZ NOT NULL,
-    idle_seconds INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS auth_broker_sessions_email ON auth_broker_sessions (email)`,
-  `CREATE INDEX IF NOT EXISTS auth_broker_sessions_expiry ON auth_broker_sessions (expires_at)`,
-];
 
 export function createPostgresBrokerSessions(connectionString: string): BrokerSessionStore {
-  const pg = createPgPool(connectionString, [{ id: "auth/broker-sessions/0001", statements: SCHEMA }]);
+  const pg = createPgPool(connectionString);
   const session = (row: Record<string, unknown>): BrokerSession => ({
     email: String(row.email),
     authTime: Math.floor(new Date(String(row.authenticated_at)).getTime() / 1000),

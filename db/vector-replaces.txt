@@ -1,0 +1,13 @@
+memory/vectors/0001-vector-extension
+memory/vectors/0002
+memory/vectors/0003-sketch
+memory/vectors/0003-tenants/0-column
+memory/vectors/0003-tenants/0-stamp-column
+memory/vectors/0003-tenants/1-column
+memory/vectors/0003-tenants/2-keys
+memory/vectors/0003-tenants/2-references
+memory/vectors/0003-tenants/2-tenant-policy
+memory/vectors/0003-tenants/3-policy
+memory/vectors/0004-claims
+memory/vectors/0004-sketch-backfill
+memory/vectors/0005-claim-tenants

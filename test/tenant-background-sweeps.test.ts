@@ -22,7 +22,6 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createDeployStore, type PublishedApp, type AppDraft } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
-import { APP_TABLES } from "../src/deploy/page-views.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -312,7 +311,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
   it("app keep-warm and idle reaping act on each tenant's apps under that tenant", async () => {
     const maps = createPostgresMapFactory(db.appDatabaseUrl);
     const deployStore = createDeployStore({
-      deployments: maps.map<PublishedApp>("deployments", undefined, APP_TABLES),
+      deployments: maps.map<PublishedApp>("deployments"),
       drafts: maps.map<AppDraft>("deployment_drafts"),
       pg: maps.pool,
     });

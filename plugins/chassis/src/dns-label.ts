@@ -10,7 +10,7 @@ export function isDnsName(name: string): boolean {
   return name.split(".").every(isDnsLabel);
 }
 
-export const APP_HANDLE_MIN = 2;
+const APP_HANDLE_MIN = 2;
 export const APP_HANDLE_MAX = DNS_LABEL_MAX - "-a".length;
 export const APP_HANDLE_CHARS = `${APP_HANDLE_MIN}–${APP_HANDLE_MAX} lowercase letters or digits, with no hyphens`;
 

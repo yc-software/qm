@@ -1,7 +1,6 @@
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, servingTenant, type ClaimedRow } from "../tenants/claim.ts";
+import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
 import type { Tenant } from "../tenants/context.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
@@ -95,80 +94,9 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
 }
 
 export function createPostgresProcessRegistry(connectionString: string): ProcessRegistry {
-  const pg = createPgPool(connectionString, [
-    {
-      id: "processes/registry/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS process_sessions(
-        process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
-        command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
-        status TEXT NOT NULL
-      )`,
-        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
-        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
-        `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
-      ],
-    },
-    ...tenantTables("processes/registry/0005-tenants", [{ table: "process_sessions", primaryKey: "process_id" }]),
-    {
-      id: "processes/registry/0006-claim-expired",
-      statements: [
-        claimFunction(
-          "claim_expired_process_sessions",
-          "bigint",
-          "SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at <= $1",
-        ),
-      ],
-    },
-    {
-      id: "processes/registry/0007-bot-actor",
-      statements: [
-        "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS bot_actor TEXT",
-        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND pg_input_is_valid(r.request, 'jsonb')${servingTenant("p.tenant_id")}; END IF; END $$`,
-        claimFunction(
-          "claim_live_bot_process_sessions",
-          "bigint",
-          `SELECT fill_process_session_bot_actors(); SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor <> ''${servingTenant("tenant_id")}`,
-        ),
-      ],
-    },
-    {
-      id: "processes/registry/0008-bot-limited-runs",
-      statements: [
-        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN to_jsonb(r) ->> 'bot_limited' = 'true' OR r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND pg_input_is_valid(r.request, 'jsonb')${servingTenant("p.tenant_id")}; END IF; END $$`,
-      ],
-    },
-  ]);
+  const pg = createPgPool(connectionString);
 
-  const migration = {
-    id: "processes/registry/0002",
-    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
-  };
-  pg.registerMigration(migration);
-  const purposeMigration = {
-    id: "processes/registry/0003",
-    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
-  };
-  pg.registerMigration(purposeMigration);
-  const credentialFilesMigration = {
-    id: "processes/registry/0004",
-    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
-  };
-  pg.registerMigration(credentialFilesMigration);
-  let ready: Promise<void> | undefined;
-  const migrated = () =>
-    (ready ??= pg
-      .migrate(migration)
-      .then(() => pg.migrate(purposeMigration))
-      .then(() => pg.migrate(credentialFilesMigration))
-      .catch((error) => {
-        ready = undefined;
-        throw error;
-      }));
-  const q: typeof pg.q = async (...args) => {
-    await migrated();
-    return pg.q(...args);
-  };
+  const { q } = pg;
   return {
     async register(rec) {
       const row = newRecord(rec, Date.now());
@@ -217,7 +145,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       return rows.map(pgRowToRecord);
     },
     async getMany(tenant, processIds) {
-      await migrated();
       const rows = await pg
         .forTenant(tenant)
         .q("SELECT * FROM process_sessions WHERE tenant_id = $1 AND process_id = ANY($2)", [tenant.id, processIds]);
