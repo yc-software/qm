@@ -5,7 +5,14 @@ import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClie
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
-import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
+import {
+  createMcpClient,
+  McpCallError,
+  mcpResultText,
+  type McpAuth,
+  type McpClient,
+  type McpListing,
+} from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestsInAudience, attestedPerson, OutsideAudience, type AttestingTurn } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
@@ -98,6 +105,12 @@ export interface McpToolService {
 class SignInRequired extends Error {}
 
 type RemoteTool = NonNullable<McpServer["tools"]>[number];
+type ListFailure = "refused" | "silent";
+const UNANSWERED_STATUSES = new Set([408, 504]);
+
+function answered(error: unknown): boolean {
+  return error instanceof McpCallError && error.status !== undefined && !UNANSWERED_STATUSES.has(error.status);
+}
 
 function catalogDescriptor(server: McpServer): McpToolDescriptor {
   return {
@@ -217,7 +230,7 @@ export function createMcpToolService(opts: {
     loadedAt?: number;
     version?: string;
     pending?: Promise<void>;
-    listFailed?: boolean;
+    listFailed?: ListFailure;
   }>(() => ({
     clients: new Map(),
     snapshot: [],
@@ -358,7 +371,7 @@ export function createMcpToolService(opts: {
     previous: McpToolDescriptor[],
     fresh: boolean,
     retryRefused: boolean,
-  ): Promise<{ tools: McpToolDescriptor[]; failed?: true }> {
+  ): Promise<{ tools: McpToolDescriptor[]; failed?: ListFailure }> {
     if (server.catalog) return { tools: [catalogDescriptor(server)] };
     const next: McpToolDescriptor[] = [];
     try {
@@ -404,7 +417,7 @@ export function createMcpToolService(opts: {
     } catch (e) {
       record("list", server.id, `error: ${errMessage(e)}`);
       const kept = previous.filter((t) => t.serverId === server.id);
-      return kept.length ? { tools: kept } : { tools: next, failed: true };
+      return kept.length ? { tools: kept } : { tools: next, failed: answered(e) ? "refused" : "silent" };
     }
     return { tools: next };
   }
@@ -418,7 +431,7 @@ export function createMcpToolService(opts: {
     const previous = state.snapshot;
     const listed = await Promise.all(servers.map((s) => serverTools(s, previous, fresh, retryRefused)));
     const next = listed.flatMap((l) => l.tools);
-    state.listFailed = listed.some((l) => l.failed);
+    state.listFailed = listed.some((l) => l.failed === "silent") ? "silent" : listed.find((l) => l.failed)?.failed;
     const seen = new Set<string>();
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
@@ -453,10 +466,10 @@ export function createMcpToolService(opts: {
     const state = await loaded();
     if (closed) return state;
     const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
-    if (version !== state.version || state.listFailed)
-      await (state.pending ?? refresh(version !== state.version, true)).catch(
-        reportFailureAs("mcp: refresh tools", undefined),
-      );
+    const changed = version !== state.version;
+    if (!changed && !state.listFailed) return state;
+    const run = (state.pending ?? refresh(changed, true)).catch(reportFailureAs("mcp: refresh tools", undefined));
+    if (changed || state.listFailed === "refused") await run;
     return state;
   }
 

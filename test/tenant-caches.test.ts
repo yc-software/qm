@@ -484,3 +484,64 @@ test("tenants share one unauthenticated MCP listing; a refused one keeps its too
   assert.deepEqual(await coldNames(C), ["shared_query", "shared_update"]);
   assert.equal(attempts, 3);
 });
+
+test("a turn does not wait on an unauthenticated MCP server that gives no answer, and the next turn picks up its tools", async (t) => {
+  const mcp = await startMcpTestServer(t);
+  const shared: McpServer = {
+    id: "shared",
+    name: "Shared",
+    url: mcp.url,
+    auth: "none",
+    readOnly: true,
+    enabled: true,
+    updatedAt: 1,
+    updatedBy: "admin",
+  };
+  const unanswered: { answer: () => void; drop: () => void }[] = [];
+  const asked: (() => void)[] = [];
+  let silent = true;
+  let attempts = 0;
+  const fetch: typeof loopbackFetch = (input, init) => {
+    if (String(init?.body).includes('"initialize"')) attempts++;
+    if (!silent) return loopbackFetch(input, init);
+    return new Promise((resolve, reject) => {
+      unanswered.push({
+        answer: () => resolve(loopbackFetch(input, init)),
+        drop: () => reject(new TypeError("fetch failed")),
+      });
+      asked.shift()?.();
+    });
+  };
+  const nextAsk = () => new Promise<void>((resolve) => asked.push(resolve));
+  const C = randomUUID();
+  const service = createMcpToolService({ fetch, servers: mcpStore({ [C]: [shared] }) });
+  t.after(() => {
+    for (const request of unanswered.splice(0)) request.drop();
+    service.close();
+  });
+  t.mock.method(console, "error", () => {});
+  const names = () => withTenant(C, async () => (await service.toolDefsFor()).map((d) => d.name));
+  const warmed = nextAsk();
+  const warmUp = withTenant(C, () => service.toolDefs());
+  await warmed;
+  unanswered.shift()!.drop();
+  assert.deepEqual(await warmUp, []);
+  assert.equal(attempts, 1);
+  const retried = nextAsk();
+  const turn = names();
+  const settled = await Promise.race([turn, new Promise((resolve) => setImmediate(resolve, "waiting"))]);
+  assert.deepEqual(settled, []);
+  await retried;
+  assert.equal(attempts, 2);
+  assert.deepEqual(await names(), []);
+  assert.equal(attempts, 2);
+  silent = false;
+  unanswered.shift()!.answer();
+  let tools = await names();
+  while (!tools.length) {
+    await new Promise((resolve) => setImmediate(resolve));
+    tools = await names();
+  }
+  assert.deepEqual(tools, ["shared_query", "shared_update"]);
+  assert.equal(attempts, 2);
+});
