@@ -42,7 +42,7 @@ if (!match || Number(match[1]) < 1 || Number(match[1]) > Number(match[2])) {
 }
 const selected = JSON.parse(process.env.CORE_TESTS ?? '"all"');
 const files = pack(
-  selected === "all" ? rootTests() : selected,
+  rootTests().filter((file) => selected === "all" || selected.includes(file)),
   Number(match[2]),
   JSON.parse(readFileSync(TIMINGS, "utf8")),
 )[Number(match[1]) - 1];
