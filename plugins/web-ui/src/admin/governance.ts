@@ -6,6 +6,7 @@ import { states, load, patternError, type GovernanceState } from "./governance-s
 import { putSetting } from "./setting-state.ts";
 import { pageHeader } from "./shared.ts";
 import type { AdminPage } from "./sections.ts";
+import { errChain } from "../../../chassis/src/errors.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
   "security-posture": (s) =>
@@ -573,7 +574,7 @@ async function simulate() {
   try {
     policy = state.collect();
   } catch (error) {
-    return say(error instanceof Error ? error.message : "Policy is invalid.", "danger");
+    return say(error instanceof Error ? errChain(error) : "Policy is invalid.", "danger");
   }
   tester.busy = true;
   say("Evaluating with the server’s command scanner…");
@@ -644,7 +645,7 @@ async function save(key: string) {
   try {
     body = state.collect();
   } catch (error) {
-    state.message = error instanceof Error ? error.message : "Could not save.";
+    state.message = error instanceof Error ? errChain(error) : "Could not save.";
     state.tone = "err";
     return draw();
   }

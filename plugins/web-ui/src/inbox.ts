@@ -601,7 +601,7 @@ async function loadDetail(itemId: string, loopId: string): Promise<void> {
     drawAll();
   } catch (error) {
     inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
-    notify(error instanceof Error ? error.message : "Could not load item");
+    notify(error instanceof Error ? errChain(error) : "Could not load item");
   }
 }
 
@@ -617,7 +617,7 @@ async function selectInboxFilter(filter: InboxFilter): Promise<void> {
     else if (!saved.ok)
       notify("A newer inbox filter was already saved. Your selection wasn't saved. Please try again.");
   } catch (error) {
-    notify(error instanceof Error ? error.message : "Could not save inbox filter");
+    notify(error instanceof Error ? errChain(error) : "Could not save inbox filter");
   } finally {
     inboxState.filterBusy = false;
     drawAll();
@@ -637,7 +637,7 @@ async function toggleSelection(id: string): Promise<void> {
     if (fullViewId === id) fullViewId = "all";
     await refreshInbox();
   } catch (error) {
-    notify(error instanceof Error ? error.message : "Could not update Inbox");
+    notify(error instanceof Error ? errChain(error) : "Could not update Inbox");
   } finally {
     inboxState.selectionBusy = false;
     drawAll();
@@ -664,7 +664,7 @@ async function decideReview(
     await refreshInbox({ silent: true });
     return true;
   } catch (error) {
-    notify(error instanceof Error ? error.message : "Could not confirm action");
+    notify(error instanceof Error ? errChain(error) : "Could not confirm action");
     return false;
   } finally {
     acting.delete(item.id);

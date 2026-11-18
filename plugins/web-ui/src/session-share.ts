@@ -3,6 +3,7 @@ import { X, Link, Copy, Check, Users, Globe, ChevronDown } from "lucide";
 import { toggleFormMenu, closeFormMenus } from "./ui";
 import { icon } from "./icons";
 import { api, withBase } from "./core-bridge";
+import { errChain } from "../../chassis/src/errors";
 
 interface ShareState {
   share: { token: string; audience: "internal" | "external"; createdAt: number } | null;
@@ -59,7 +60,7 @@ export async function openSessionShare(id: string): Promise<void> {
     try {
       state = await api<ShareState>(endpoint, { method: "POST", body: JSON.stringify({ audience }) });
     } catch (e) {
-      error = e instanceof Error ? e.message : "Could not create share.";
+      error = e instanceof Error ? errChain(e) : "Could not create share.";
     } finally {
       busy = false;
       draw();

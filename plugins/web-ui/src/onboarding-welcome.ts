@@ -14,6 +14,7 @@ import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
+import { errChain } from "../../chassis/src/errors.ts";
 
 interface ConnectedAccount {
   id: string;
@@ -296,7 +297,7 @@ export class OnboardingWelcome extends LitElement {
       this.connections = this.connections.filter((candidate) => candidate.id !== account.id);
       return true;
     } catch (error) {
-      this.connectionError = error instanceof Error ? error.message : `Could not disconnect ${name}.`;
+      this.connectionError = error instanceof Error ? errChain(error) : `Could not disconnect ${name}.`;
       return false;
     } finally {
       this.disconnecting = "";
@@ -363,7 +364,7 @@ export class OnboardingWelcome extends LitElement {
       if (controller.signal.aborted || !this.isConnected) return;
       this.connections = [];
       this.connectionOutcome = "";
-      this.connectionError = error instanceof Error ? error.message : "Could not check connected apps.";
+      this.connectionError = error instanceof Error ? errChain(error) : "Could not check connected apps.";
       await this.updateComplete;
       this.drawPicker();
     }
@@ -396,7 +397,7 @@ export class OnboardingWelcome extends LitElement {
       this.services = services;
     } catch (error) {
       if (controller.signal.aborted) return;
-      this.error = error instanceof Error ? error.message : "Could not load apps. Please try again.";
+      this.error = error instanceof Error ? errChain(error) : "Could not load apps. Please try again.";
     }
     if (!this.isConnected || controller.signal.aborted) return;
     this.loading = false;
@@ -454,7 +455,7 @@ export class OnboardingWelcome extends LitElement {
       window.location.assign(result.url);
     } catch (error) {
       this.authorizationError =
-        error instanceof Error ? error.message : "Could not open authorization. Please try again.";
+        error instanceof Error ? errChain(error) : "Could not open authorization. Please try again.";
     } finally {
       this.authorizing = "";
     }

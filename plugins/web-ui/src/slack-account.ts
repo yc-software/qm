@@ -5,6 +5,7 @@ import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import "./slack-account.css";
 import { withBase } from "./core-bridge";
+import { errChain } from "../../chassis/src/errors";
 
 interface SlackAttempt {
   user: string;
@@ -160,7 +161,7 @@ export class SlackAccount extends LitElement {
       sessionStorage.setItem("qm-slack-account", JSON.stringify(this.attempt));
       location.assign(url.href);
     } catch (error) {
-      this.error = error instanceof Error ? error.message : "Could not connect Slack.";
+      this.error = error instanceof Error ? errChain(error) : "Could not connect Slack.";
     } finally {
       this.busy = false;
     }
@@ -184,7 +185,7 @@ export class SlackAccount extends LitElement {
       this.clearAttempt();
       this.dispatchEvent(new CustomEvent("slack-linked", { bubbles: true }));
     } catch (error) {
-      this.error = error instanceof Error ? error.message : "Could not verify your Slack account.";
+      this.error = error instanceof Error ? errChain(error) : "Could not verify your Slack account.";
     } finally {
       this.busy = false;
     }

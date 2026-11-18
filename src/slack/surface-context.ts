@@ -1,7 +1,7 @@
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackHistoryReader } from "./history.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errText, swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
 import {
   type RecentMessage,
@@ -71,7 +71,7 @@ export function createSurfaceContextFulfiller(deps: {
         await post({ messages: [], liveSearch: "unconnected" });
         return;
       }
-      await post({ error: `Slack search failed: ${errMessage(err)}` });
+      await post({ error: `Slack search failed: ${errText(err)}` });
     }
   }
 
@@ -181,7 +181,7 @@ export function createSurfaceContextFulfiller(deps: {
       const code = slackErrorCode(err);
       if (code === "method_not_supported_for_channel_type" || code === "missing_scope")
         return { error: "I'm not allowed to open group DMs in this workspace (the app needs the mpim:write scope)" };
-      return { error: `I couldn't open that group DM: ${errMessage(err)}` };
+      return { error: `I couldn't open that group DM: ${errText(err)}` };
     }
     try {
       void directory.forceDirectorySync(client).catch(swallowAs("slack: sync after opening a group DM", undefined));
@@ -291,8 +291,7 @@ export function createSurfaceContextFulfiller(deps: {
       });
     } catch (err) {
       const code = slackErrorCode(err);
-      let msg =
-        slackHistoryRateLimitMessage(err, deps.historyRateLimitOptions) ?? `Slack read failed: ${errMessage(err)}`;
+      let msg = slackHistoryRateLimitMessage(err, deps.historyRateLimitOptions) ?? `Slack read failed: ${errText(err)}`;
       if (code === "not_in_channel") msg = "I'm not a member of that channel — ask someone to /invite me there";
       else if (code === "channel_not_found") msg = "I can't see that channel";
       await post({ error: msg });

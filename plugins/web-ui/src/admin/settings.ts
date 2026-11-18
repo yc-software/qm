@@ -18,6 +18,7 @@ import { decisionsCard, loadDecisions } from "./settings-decisions.ts";
 import { brandingCard } from "./settings-branding.ts";
 import { appHandleCard, appHandleError } from "./settings-app-handle.ts";
 import { runtimesCard } from "./settings-runtimes.ts";
+import { errChain } from "../../../chassis/src/errors.ts";
 
 type Model = { id: string; name?: string };
 type Data = Record<string, any>;
@@ -169,7 +170,10 @@ async function saveSetting(s: SettingsState) {
   try {
     body = s.collect();
   } catch (err) {
-    return Object.assign(s, { message: err instanceof Error ? err.message : "Could not save.", tone: "err" }).render();
+    return Object.assign(s, {
+      message: err instanceof Error ? errChain(err) : "Could not save.",
+      tone: "err",
+    }).render();
   }
   const view = page;
   const branding = s.key === "branding" ? { ...savedBranding, ...body } : body;

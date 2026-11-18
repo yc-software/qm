@@ -1,6 +1,6 @@
 import type { ExecResult } from "./sandbox.ts";
 import { shq } from "../util/shell.ts";
-import { errMessage } from "../util/errors.ts";
+import { errText } from "../util/errors.ts";
 
 export interface E2bCommandResult {
   stdout: string;
@@ -189,7 +189,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       (m) => m as unknown as E2bSdk,
       (e) => {
         sdk = null;
-        throw new Error(`the e2b SDK is not installed: ${String((e as Error)?.message ?? e)}`);
+        throw new Error(`the e2b SDK is not installed: ${errText(e)}`);
       },
     ));
     return loaded;
@@ -200,7 +200,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   const wrap = (lib: E2bSdk, sbx: SdkSandbox, ttlMs: number): E2bSession => {
     let expiresAtMs = Date.now() + ttlMs;
     const gone = (err: unknown): unknown =>
-      isSandboxGone(lib, err) ? new E2bSandboxGoneError(sbx.sandboxId, errMessage(err)) : err;
+      isSandboxGone(lib, err) ? new E2bSandboxGoneError(sbx.sandboxId, errText(err)) : err;
     const extend = async (ms: number): Promise<void> => {
       const bounded = Math.min(maxLifetimeMs, Math.max(ms, expiresAtMs - Date.now()));
       const at = Date.now() + bounded;
@@ -227,7 +227,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         try {
           handle = await sbx.commands.run(command, { background: true, timeoutMs });
         } catch (err) {
-          if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, errMessage(err));
+          if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, errText(err));
           throw err;
         }
         try {
@@ -235,7 +235,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         } catch (err) {
           const asResult = commandResultFrom(err);
           if (asResult) return asResult;
-          if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, errMessage(err));
+          if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, errText(err));
           throw err;
         }
       },
@@ -308,7 +308,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           memoryMb: info.memoryMB,
         };
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, errMessage(err));
+        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, errText(err));
         throw err;
       }
     },
@@ -334,7 +334,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         if (network) await sbx.updateNetwork(network);
         return wrap(lib, sbx, sandboxTtlMs);
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, errMessage(err));
+        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, errText(err));
         throw err;
       }
     },

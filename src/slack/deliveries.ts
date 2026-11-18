@@ -5,7 +5,7 @@ import { approvalDeliveryKey } from "../surfaces/approval-cards.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalDeliveryRecipient, approvalMessage, type ApprovalRequester } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, errText, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
@@ -251,7 +251,7 @@ export function createSlackDeliverer(deps: {
               })
               .catch((err: unknown) => {
                 if (slackErrorCode(err) !== "message_not_found") throw err;
-                throw Object.assign(new Error(`edit target not found: ${errMessage(err)}`, { cause: err }), {
+                throw Object.assign(new Error(`edit target not found: ${errText(err)}`, { cause: err }), {
                   data: { error: "edit_target_not_found" },
                 });
               });

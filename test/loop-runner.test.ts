@@ -266,7 +266,9 @@ test("a failing item is retried until its attempt cap, then parked", async () =>
   assert.equal((await s.items.get(second.parked[0]!))?.parkedReason, "sandbox died");
 });
 
-test("a failing item's failure and park reason keep the error's cause", async () => {
+test("a failing item's cause goes to the log, and its failure line and park reason stay short", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
   const s = stores();
   const loop = await loopIn(s, { caps: { maxItemAttempts: 1 } });
   const oom = effects(s, {
@@ -275,8 +277,11 @@ test("a failing item's failure and park reason keep the error's cause", async ()
     },
   });
   const summary = await runLoopFire(loop, s, oom);
-  assert.deepEqual(summary.failures, ["SENTRY-1: sandbox died <- Error: out of memory"]);
-  assert.equal((await s.items.get(summary.parked[0]!))?.parkedReason, "sandbox died <- Error: out of memory");
+  assert.deepEqual(summary.failures, ["SENTRY-1: sandbox died"]);
+  assert.equal((await s.items.get(summary.parked[0]!))?.parkedReason, "sandbox died");
+  assert.ok(
+    logged.some((line) => line.includes(`[loops] ${loop.id} SENTRY-1 failed: sandbox died <- Error: out of memory`)),
+  );
 });
 
 test("a failing item without an explicit cap parks at the default attempt limit", async () => {
