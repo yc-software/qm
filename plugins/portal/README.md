@@ -74,9 +74,8 @@ grants but does not remove existing ones. Company login and Slack integration re
 existing configuration. Deployment CLI secret wiring, account linking, and live
 qualification are pending; this is not a released deployment feature.
 
-Self-serve workspaces are off by default. On a multitenant deployment, set core's
-`TRUSTED_OIDC_SELF_SERVE_ISSUER` to the exact trusted issuer; this also requires a
-distinct `PORTAL_IDENTITY_SECRET` and durable replay storage. Core then reports
+Self-serve workspaces are available on a multitenant deployment whenever trusted
+sign-in is configured with a distinct `PORTAL_IDENTITY_SECRET`. Core then reports
 self-serve as available in its sign-in lookups, and the trusted provider may return an
 `orgs` claim in userinfo (or the ID token): an array of
 `{ "id": string, "name": string, "handle"?: string }` naming the organizations the person
@@ -89,9 +88,16 @@ workspace, or joins the existing one, then records the person (and links their v
 email) and grants them organization admin. Every person who joins this way is an admin.
 The name becomes the workspace brand; the handle is used only when it is valid and free,
 and is never part of the key. A person an admin removed from the workspace is refused. A
-new workspace has no tenant settings of its own, so it uses the deployment's model
-gateway key and sandbox credentials until an operator sets per-workspace values. A
 deployment with a boot tenant never self-serves.
+
+A deployment that sets core's `WORKSPACE_PROVISIONER_URL` sets up each new workspace
+before it serves. Core POSTs `{ tenant, brandName, handle, issuer, externalOrg }` to that
+URL, signed with `CORE_SIGNING_SECRET` like any source-authenticated request, and merges
+the `settings` object of a 200 reply (for example its own `modelGatewayKey`) into the
+workspace's tenant settings. Until a call succeeds the workspace stays switched off and
+sign-in fails; the next sign-in retries, so the provisioner must answer repeated calls for
+a tenant with the same settings. Without a provisioner, a new workspace uses the
+deployment's model gateway key and sandbox credentials.
 
 When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a
