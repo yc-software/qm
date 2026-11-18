@@ -1051,7 +1051,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let type: SessionType = "channel";
       if (conversation.kind === "dm") type = "dm";
       else if (conversation.kind === "group") type = "group";
-      const session = await deps.sessions.getOrCreateByThread(
+      const threadSession = await deps.sessions.getOrCreateByThread(
         conversation.threadRef,
         type,
         scopeId,
@@ -1065,8 +1065,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         },
       );
+      const session =
+        persona && deps.personas
+          ? await (persona.routedBy ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
+              threadSession,
+              persona.persona.id,
+            )
+          : threadSession;
       screenSession.id = session.id;
-      if (persona?.routedBy) await deps.sessions.setPersona(session.id, persona.persona.id);
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
       const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {

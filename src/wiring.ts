@@ -1911,6 +1911,7 @@ export function buildApp(
     teams,
     sessions,
     isActive: isActiveMember,
+    config: configStore,
     ...(keychain ? { keychain } : {}),
   });
   const personaHandover = createPersonaHandover({

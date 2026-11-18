@@ -75,7 +75,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.personasEnabled,
     guidance:
-      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Writers set its default model (new conversations wearing it start on it) with PUT /v1/runtime-config and scopeId persona:<id>. Use the persona-fork skill to copy one.",
     routes: [
       { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
       {
@@ -92,7 +92,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PATCH",
         path: "/v1/personas/:id",
         summary:
-          "{name?,description?,instructions?,icon?} edits it (write or owner); each change that alters a field records a new version",
+          '{name?,description?,instructions?,icon?} edits it (write or owner); icon is {kind:"emoji",value}, {kind:"custom",name} (Slack custom emoji), {kind:"image",url} (any https image URL) or null; each change that alters a field records a new version',
       },
       {
         method: "GET",
@@ -236,7 +236,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PATCH",
         path: "/v1/projects/:id",
         summary:
-          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji or {kind:"custom",name} with a workspace custom emoji, or null to clear (any member)',
+          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji, {kind:"custom",name} with a workspace custom emoji, {kind:"image",url} with an https image URL, or null to clear (any member)',
       },
       {
         method: "POST",

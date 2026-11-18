@@ -1,3 +1,4 @@
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { personIds } from "../directory/person.ts";
 import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
@@ -61,9 +62,11 @@ export interface PersonaService {
   detachCredential(principalId: string, id: string, grantId: string): Promise<PersonaResult<true>>;
   assign(
     principalId: string,
-    session: Pick<Session, "id" | "scopeId">,
+    session: Pick<Session, "id" | "scopeId" | "runtime">,
     personaId: string | null,
-  ): Promise<PersonaResult<PersonaView | null>>;
+  ): Promise<PersonaResult<(PersonaView & { sessionModelId?: string }) | null>>;
+  startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
+  adopt<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
   forTurn(
     personaId: string | undefined,
     actorId: string,
@@ -89,7 +92,7 @@ function fieldsFrom(input: unknown, requireName: boolean): PersonaFields | strin
   if (requireName && !fields.name) return "name required";
   if (body.icon !== undefined) {
     if (!validProjectIcon(body.icon))
-      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<custom emoji name>}, or null';
+      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<custom emoji name>}, {kind:"image",url:<https image URL>}, or null';
     fields.icon = body.icon;
   }
   return fields;
@@ -100,9 +103,10 @@ export function createPersonaService(deps: {
   flags: Pick<FeatureFlagStore, "enabled">;
   orgScope: ScopeId;
   teams?: Pick<TeamStore, "forTurn">;
-  sessions: Pick<SessionStore, "setPersona">;
+  sessions: Pick<SessionStore, "setPersona" | "setRuntime">;
   isActive: (principalId: string) => boolean;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
+  config?: Pick<ScopedConfigStore, "getRuntimeSelectionDurable">;
 }): PersonaService {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
@@ -142,6 +146,22 @@ export function createPersonaService(deps: {
       service: credential.service,
       ownerId: credential.ownerId,
     }));
+  }
+
+  async function startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(
+    session: S,
+    personaId: string,
+  ): Promise<S> {
+    if (session.runtime) return session;
+    const modelId = (await deps.config?.getRuntimeSelectionDurable(personaScope(personaId)))?.modelId;
+    if (!modelId) return session;
+    await deps.sessions.setRuntime(session.id, { modelId });
+    return { ...session, runtime: { modelId } };
+  }
+
+  async function adopt<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S> {
+    await deps.sessions.setPersona(session.id, personaId);
+    return startOnDefaultModel(session, personaId);
   }
 
   return {
@@ -281,9 +301,14 @@ export function createPersonaService(deps: {
       const persona = await store.get(personaId);
       const held = persona ? await role(principalId, personaId, session.scopeId) : null;
       if (!persona || !held) return { status: "not_found" };
-      await deps.sessions.setPersona(session.id, personaId);
-      return { status: "ok", value: { ...persona, role: held } };
+      const { runtime } = await adopt(session, personaId);
+      return {
+        status: "ok",
+        value: { ...persona, role: held, ...(runtime ? { sessionModelId: runtime.modelId } : {}) },
+      };
     },
+    startOnDefaultModel,
+    adopt,
     async forTurn(personaId, actorId, contextScope, route) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
