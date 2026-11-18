@@ -37,6 +37,7 @@
     "smoke:git-cli": "node scripts/git-cli-smoke.ts",
     "smoke:google-oauth": "node scripts/google-oauth-smoke.ts",
     "smoke:service-cred": "node scripts/service-credential-livetest.ts",
+    "db:schema": "node scripts/db-schema.ts",
     "smoke:aws-sandbox": "node scripts/aws-sandbox-smoke.ts",
     "smoke:local-sandbox": "node scripts/local-sandbox-smoke.ts",
     "smoke:managed-agents-sandbox": "node --env-file-if-exists=.env scripts/managed-agents-sandbox-smoke.ts",

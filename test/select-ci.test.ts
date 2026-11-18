@@ -52,7 +52,7 @@ test("dependencies, CI, runners and runtime files under src run everything", () 
     "tsconfig.json",
     ".github/workflows/cicd.yml",
     "scripts/run-pg-tests.mjs",
-    "db/baseline.sql",
+    "db/schema.sql",
     "src/prompt.md",
     "src/tenants/context.ts",
   ])

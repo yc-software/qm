@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import type { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
@@ -358,7 +358,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       if (replaced && replaced < migration.replaces!.length) {
         const missing = migration.replaces!.filter((id) => !present.has(id));
         throw new Error(
-          `pg-pool: ${migration.id} replaces ${migration.replaces!.length} earlier migrations, but this database is missing ${missing.length} of them (${missing.join(", ")}); upgrade it with the last QM release before ${migration.id} first`,
+          `pg-pool: ${migration.id} replaces ${migration.replaces!.length} earlier migrations, but this database is missing ${missing.length} of them (${missing.join(", ")}); upgrade it with the last QM release that still shipped them first`,
         );
       }
       if (replaced) {
@@ -471,14 +471,23 @@ function sqlMigration(id: string, file: string, replaces?: string): PgMigration 
   });
 }
 
-export function dbMigrations(vector: boolean): PgMigration[] {
+export function dbMigrations({ vector = false, schema = true } = {}): PgMigration[] {
   const files = readdirSync(new URL("migrations/", DB_DIR))
     .filter((name) => name.endsWith(".sql"))
-    .sort();
+    .sort()
+    .map((name) => name.slice(0, -4));
   return [
-    sqlMigration("baseline", "baseline.sql", "baseline-replaces.txt"),
-    ...(vector ? [sqlMigration("baseline-vector", "vector.sql", "vector-replaces.txt")] : []),
-    ...files.map((name) => sqlMigration(`migrations/${name.slice(0, -4)}`, `migrations/${name}`)),
+    ...(schema
+      ? [{ ...sqlMigration("schema", "schema.sql", "migrations/0000-baseline-replaces.txt"), checksum: "current" }]
+      : []),
+    ...files.map((name) =>
+      sqlMigration(
+        `migrations/${name}`,
+        `migrations/${name}.sql`,
+        existsSync(new URL(`migrations/${name}-replaces.txt`, DB_DIR)) ? `migrations/${name}-replaces.txt` : undefined,
+      ),
+    ),
+    ...(vector ? [sqlMigration("vector", "vector.sql", "vector-replaces.txt")] : []),
   ];
 }
 
@@ -486,7 +495,7 @@ export function migrateDatabase(connectionString: string, { vector = false } = {
   return migrationQueue(connectionString, async () => {
     const pool = await retainPool(connectionString, "migration");
     try {
-      await applyPgMigrations(pool, dbMigrations(vector));
+      await applyPgMigrations(pool, dbMigrations({ vector }));
     } finally {
       await releasePool(connectionString, pool, "migration");
     }

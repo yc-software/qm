@@ -37,7 +37,7 @@ for (const access of ["app", "bootstrap"]) {
         await owner.q("GRANT CREATE ON SCHEMA public TO qm_app");
       }
       const migrated = migrateDatabase(databaseUrl);
-      if (access === "app") await assert.rejects(migrated, /misconfiguration: migration baseline has not been applied/);
+      if (access === "app") await assert.rejects(migrated, /misconfiguration: migration schema has not been applied/);
       else await migrated;
       assert.deepEqual(await owner.q("SELECT to_regclass('tenants') AS t"), [
         { t: access === "app" ? null : "tenants" },
