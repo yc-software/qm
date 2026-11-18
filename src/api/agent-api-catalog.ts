@@ -30,7 +30,12 @@ const FAMILIES: AgentApiFamily[] = [
       "Use the composio skill for backend app access. Never load a Composio project key or call its SDK directly. Execution binds accounts to your identity and sharing permissions.",
     routes: [
       { method: "GET", path: "/v1/composio/toolkits", summary: "discover available apps; cursor pagination" },
-      { method: "GET", path: "/v1/composio/connections", summary: "list your active connections; cursor pagination" },
+      {
+        method: "GET",
+        path: "/v1/composio/connections",
+        summary:
+          "list your connections; expired or failed ones carry a status and need reconnecting; cursor pagination",
+      },
       {
         method: "GET",
         path: "/v1/composio/tools?toolkit=&query=",
@@ -541,7 +546,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/credentials",
         summary:
-          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); replacing a login the user already saved needs their own running turn or a loginTicket / list participants' registered logins (metadata)",
+          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); replacing a login the user already saved needs their own running turn or a loginTicket / list the user's registered logins with their last check and connected accounts (metadata)",
       },
       {
         method: "POST",
@@ -554,6 +559,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/keychain/credentials/:id/writer",
         summary:
           "claim {holder, until} / release ?holder= the single-writer lease on one of the user's own credentials, such as a browser profile; 409 writer_held while another holder's lease runs",
+      },
+      {
+        method: "POST",
+        path: "/v1/keychain/credentials/:id/check",
+        summary:
+          "{ok, detail?} record whether one of your logins or connected accounts worked when last used, so the Keychain page and every run show the same state; ids from GET /v1/keychain/credentials",
       },
       {
         method: "GET",

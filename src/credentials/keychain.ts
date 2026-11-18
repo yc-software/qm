@@ -96,8 +96,15 @@ export interface KeychainCredential {
   origin?: string;
   expiresAt?: number;
   writer?: { holder: string; until: number };
+  check?: CredentialCheck;
   createdAt: number;
   updatedAt: number;
+}
+
+interface CredentialCheck {
+  ok: boolean;
+  at: number;
+  detail?: string;
 }
 
 export type KeychainCredentialMeta = Omit<KeychainCredential, "secretEnc"> & { credentialHandle?: string };
@@ -366,7 +373,6 @@ interface MaterializedFileCred {
   origin?: string;
   grantId?: string;
   purpose?: string;
-  writeback?: boolean;
   live?: boolean;
   baseline?: Record<string, string>;
 }
@@ -392,6 +398,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
   withLoginTicket<T>(ticketId: string, fn: () => Promise<T>): Promise<T>;
   claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
+  recordCheck(ownerId: string, id: string, check: Omit<CredentialCheck, "at">): Promise<boolean>;
   releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean | null>;
   updateFiles(
     materialized: Extract<MaterializedCred, { kind: "file" }>,
@@ -463,7 +470,6 @@ export interface FileCredentialSource {
   ownerId: string;
   service: string;
   grantId?: string;
-  writeback?: boolean;
   live?: boolean;
 }
 
@@ -825,13 +831,8 @@ export function createKeychain(deps: {
     };
   }
 
-  function storedRefreshError(e: unknown): string {
-    const msg = errMessage(e).replace(/\s+/g, " ").trim();
-    return msg.length > 500 ? `${msg.slice(0, 497)}...` : msg;
-  }
-
   const refreshDue = (rec: KeychainCredential) =>
-    rec.expiresAt !== undefined && now() >= rec.expiresAt - oauthRefreshMargin;
+    rec.check?.ok === false || (rec.expiresAt !== undefined && now() >= rec.expiresAt - oauthRefreshMargin);
   const accessTokenOf = (rec: KeychainCredential) => tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
   const unexpiredAccessToken = (rec: KeychainCredential) =>
     oauthExpired(rec, now(), oauthSkew) ? null : accessTokenOf(rec);
@@ -864,7 +865,7 @@ export function createKeychain(deps: {
         );
         return written ? accessTokenOf(written) : null;
       } catch (e) {
-        const message = storedRefreshError(e);
+        const message = storedCredentialError(e);
         console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
         const t = now();
         try {
@@ -1131,6 +1132,16 @@ export function createKeychain(deps: {
 
     withLoginTicket: (ticketId, fn) => lock.withLock(`keychain-login-ticket:${ticketId}`, fn),
 
+    async recordCheck(ownerId, id, check) {
+      let recorded = false;
+      await deps.creds.update(id, (current) => {
+        if (!samePerson(current.ownerId, ownerId)) return current;
+        recorded = true;
+        return { ...current, check: { ...check, at: now() } };
+      });
+      return recorded;
+    },
+
     async claimWriter(ownerId, id, writer) {
       let claimed: boolean | null = null;
       await deps.creds.update(id, (current) => {
@@ -1155,7 +1166,6 @@ export function createKeychain(deps: {
 
     async updateFiles(materialized, files) {
       const unchanged = { overruled: [], withheld: [] };
-      if (!materialized.writeback) return unchanged;
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
@@ -1226,7 +1236,6 @@ export function createKeychain(deps: {
         files,
         baseline: fileHashes,
         ...(source.grantId ? { grantId: source.grantId } : {}),
-        ...(source.writeback ? { writeback: true } : {}),
         ...(source.live ? { live: true } : {}),
       };
     },
@@ -1535,7 +1544,9 @@ export function createKeychain(deps: {
         connected: true,
         ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
         ...(hasRefresh ? { hasRefreshToken: true } : {}),
-        ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
+        ...((tokenExpired && (!hasRefresh || refreshFailed)) || rec.check?.ok === false
+          ? { needsReconnect: true }
+          : {}),
         ...(refreshFailed ? { refreshFailedAt } : {}),
         ...(refreshFailed && rec.refresh?.refreshError ? { refreshError: rec.refresh.refreshError } : {}),
         ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
@@ -1729,9 +1740,17 @@ interface CredentialLine {
   use: string;
   expired: boolean;
   refreshError?: string;
+  failedCheck?: CredentialCheck;
+}
+
+export function storedCredentialError(e: unknown): string {
+  const msg = errMessage(e).replace(/\s+/g, " ").trim();
+  return msg.length > 500 ? `${msg.slice(0, 497)}...` : msg;
 }
 
 export const credentialLineText = (line: CredentialLine): string => {
+  if (line.failedCheck)
+    return `${line.label}; ${line.use}; last check failed${line.failedCheck.detail ? ` (${line.failedCheck.detail})` : ""}`;
   if (!line.expired) return `${line.label}; ${line.use}`;
   return `${line.label}; expired${line.refreshError ? ` (refresh failed: ${line.refreshError})` : ""}`;
 };
@@ -1773,6 +1792,7 @@ function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine 
     label: `${c.service}${c.accountLabel ? ` (${c.accountLabel})` : ""}`,
     use,
     expired: c.kind !== "file" && typeof c.expiresAt === "number" && c.expiresAt < now,
+    ...(c.check && !c.check.ok ? { failedCheck: c.check } : {}),
   };
 }
 
@@ -1790,8 +1810,12 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
     ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
     ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
     connected: true,
-    ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
-    ...(tokenExpired && refreshFailed && rec.refresh?.refreshError ? { refreshError: rec.refresh.refreshError } : {}),
+    ...((tokenExpired && (!hasRefresh || refreshFailed)) || rec.check?.ok === false ? { needsReconnect: true } : {}),
+    ...(tokenExpired && refreshFailed && rec.refresh?.refreshError
+      ? { refreshError: rec.refresh.refreshError }
+      : rec.check?.ok === false && rec.check.detail
+        ? { refreshError: rec.check.detail }
+        : {}),
   };
 }
 
@@ -1861,7 +1885,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       add(entry.ownerId, `- \`${entry.handle}\` — ${entry.description}`);
   const lines = [
     "## Credentials",
-    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill.",
+    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill. When one of your own fails as signed out or revoked, record it (POST /v1/keychain/credentials/:id/check).",
   ];
   const owners = [...groups.keys()].sort(
     (a, b) => Number(b === ORGANIZATION_OWNER_KEY) - Number(a === ORGANIZATION_OWNER_KEY) || a.localeCompare(b),

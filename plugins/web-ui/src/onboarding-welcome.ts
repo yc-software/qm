@@ -15,10 +15,22 @@ import { mountConnectionPicker, type ConnectionService } from "./connection-pick
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
 
+export interface AppConnection {
+  id: string;
+  toolkit: string;
+  name: string;
+  label?: string;
+  connector?: string;
+  logoUrl?: string;
+  state: "working" | "reconnect" | "permissions";
+}
 interface ConnectedAccount {
   id: string;
   toolkit: string;
+  label?: string;
+  connector?: string;
   missingScopes?: string[];
+  status?: string;
 }
 import type { Me } from "./shell-state";
 import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
@@ -57,6 +69,8 @@ export class OnboardingWelcome extends LitElement {
     widget: {},
     toolkit: {},
     returnKey: {},
+    embedded: { type: Boolean },
+    picking: { type: Boolean },
     base: {},
     loading: { state: true },
     error: { state: true },
@@ -80,6 +94,8 @@ export class OnboardingWelcome extends LitElement {
   declare widget: "all" | "apps" | "slack" | "slack-account";
   declare toolkit: string;
   declare returnKey: string;
+  declare embedded: boolean;
+  declare picking: boolean;
   declare base: string;
   declare loading: boolean;
   declare error: string;
@@ -120,6 +136,8 @@ export class OnboardingWelcome extends LitElement {
     this.widget = "all";
     this.toolkit = "";
     this.returnKey = "welcome";
+    this.embedded = false;
+    this.picking = false;
     this.base = "/";
     this.loading = true;
     this.error = "";
@@ -273,7 +291,9 @@ export class OnboardingWelcome extends LitElement {
     const toolkits = new Set(this.connections.map((account) => account.toolkit));
     return new Set(
       [...toolkits].filter((toolkit) =>
-        this.connections.every((account) => account.toolkit !== toolkit || account.missingScopes?.length),
+        this.connections.every(
+          (account) => account.toolkit !== toolkit || account.missingScopes?.length || account.status,
+        ),
       ),
     );
   }
@@ -304,6 +324,34 @@ export class OnboardingWelcome extends LitElement {
       await this.updateComplete;
       this.drawPicker();
     }
+  }
+  private appState(account: ConnectedAccount): AppConnection["state"] {
+    if (account.status) return "reconnect";
+    return account.missingScopes?.length ? "permissions" : "working";
+  }
+  private sentApps = "";
+  protected updated(): void {
+    if (!this.embedded) return;
+    const apps: AppConnection[] = this.connections.map((account) => {
+      const service = this.services.find((candidate) => candidate.id === account.toolkit);
+      return {
+        id: account.id,
+        toolkit: account.toolkit,
+        name: service?.name ?? account.toolkit,
+        ...(account.label ? { label: account.label } : {}),
+        ...(account.connector ? { connector: account.connector } : {}),
+        ...(service?.logoUrl ? { logoUrl: service.logoUrl } : {}),
+        state: this.appState(account),
+      };
+    });
+    const detail = { apps, loading: this.loading, busy: Boolean(this.authorizing || this.disconnecting) };
+    const sent = JSON.stringify(detail);
+    if (sent === this.sentApps) return;
+    this.sentApps = sent;
+    this.dispatchEvent(new CustomEvent("app-connections", { detail }));
+  }
+  reconnectApp(app: AppConnection): void {
+    void this.authorize({ id: app.toolkit, name: app.name, description: "", popularity: 0 }, app.id);
   }
   private confirmDisconnect(account: ConnectedAccount, name: string): void {
     if (window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`))
@@ -337,7 +385,7 @@ export class OnboardingWelcome extends LitElement {
       if (this.realReturn) {
         const attempt = this.realReturn;
         const verified = accounts.some(
-          (account) => account.id === attempt.accountId && account.toolkit === attempt.service.id,
+          (account) => account.id === attempt.accountId && account.toolkit === attempt.service.id && !account.status,
         );
         if (verified && (!this.returnAccount || this.returnAccount === attempt.accountId))
           this.connectionOutcome = "success";
@@ -627,11 +675,11 @@ export class OnboardingWelcome extends LitElement {
         ["slack", "slack-account"].includes(this.widget)
           ? nothing
           : html`<div class="welcome-beat" style=${`--welcome-delay:${paced ? 3450 : 1300}ms`}>
-              ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
+              ${this.loading && (!this.embedded || this.picking) ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error
                   ? html`<div class="welcome-load">
-                      ${this.seeded ? nothing : html`<strong>Connect your apps</strong>`}
+                      ${this.seeded || this.embedded ? nothing : html`<strong>Connect your apps</strong>`}
                       <p role="status">${this.error}</p>
                       <button
                         type="button"
@@ -663,15 +711,22 @@ export class OnboardingWelcome extends LitElement {
               }
               ${this.connectionError && !this.error && !this.loading ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
               ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
-              <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
+              <div
+                class="welcome-picker"
+                ?hidden=${this.embedded && !this.picking}
+                ?inert=${Boolean(this.authorizing)}
+              ></div>
               ${
-                connectedAccounts.length
+                connectedAccounts.length && !this.embedded
                   ? html`<div class="connection-connected" role="status" aria-live="polite">
                       ${connectedAccounts.map((account) => {
                         const service = serviceFor(account.toolkit);
-                        const stale = Boolean(account.missingScopes?.length);
+                        const stale = Boolean(account.missingScopes?.length || account.status);
+                        let state = "connected";
+                        if (account.status) state = "reconnect needed";
+                        else if (stale) state = "needs new permissions";
                         return html`<span class=${stale ? "stale" : ""}
-                          >${icon(stale ? TriangleAlert : Check, 10)}${`${service.name} ${stale ? "needs new permissions" : "connected"}`}
+                          >${icon(stale ? TriangleAlert : Check, 10)}${`${service.name} ${state}`}
                           ${
                             account.id
                               ? html`<button

@@ -5040,6 +5040,23 @@ a.connector-widget:focus-visible {
   gap: 12px;
   padding: 0 12px 7px;
 }
+.kc-section-head > .btn {
+  margin: 0 0 0 auto;
+  align-self: center;
+}
+.kc-app-picker:has(.welcome-content:empty) {
+  display: none;
+}
+.kc-app-picker .welcome-picker[hidden] {
+  display: none;
+}
+.kc-app-picker .welcome-content,
+.kc-app-picker .connection-picker {
+  max-width: none;
+}
+.kc-app-picker .welcome-picker:not([hidden]) {
+  padding: 0 12px 12px;
+}
 .kc-section-title {
   display: flex;
   align-items: center;
@@ -5130,6 +5147,10 @@ a.connector-widget:focus-visible {
   color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 600;
+}
+.kc-state.ok {
+  background: color-mix(in srgb, var(--success) 14%, var(--background));
+  color: var(--success);
 }
 .kc-state.warning {
   background: color-mix(in srgb, var(--warning) 14%, var(--background));

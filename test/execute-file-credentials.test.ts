@@ -98,13 +98,11 @@ async function fixture(t: TestContext) {
               env: [],
               files: {
                 files: materialized.files,
-                save: (updated: CredentialFile[]) =>
-                  keychain.updateFiles({ ...materialized, writeback: true, live: true }, updated),
+                save: (updated: CredentialFile[]) => keychain.updateFiles({ ...materialized, live: true }, updated),
                 source: {
                   credentialId: materialized.credentialId,
                   ownerId: owner,
                   service: "aws",
-                  writeback: true,
                   live: true,
                 },
               },
@@ -232,7 +230,7 @@ const savedFiles = async (f: Awaited<ReturnType<typeof fixture>>) => {
 const startCommand = async (f: Awaited<ReturnType<typeof fixture>>) => {
   const m = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   if (m.kind !== "file") throw new Error("Expected files");
-  return { ...m, writeback: true, live: true };
+  return { ...m, live: true };
 };
 
 test("a conflict with no readable expiry keeps the first save and leaves grants alone", async (t) => {
@@ -352,8 +350,15 @@ test("a command that deletes every credential file leaves the saved login unchan
   assert.equal(Buffer.from(next.files[0]!.contentBase64, "base64").toString(), "original");
 });
 
-test("refreshes made through a use grant never change the owner's saved login", async (t) => {
+test("a run through a use grant saves a token refresh but nothing else to the owner's saved login", async (t) => {
   const f = await fixture(t);
+  const cache = (accessToken: string) => [
+    {
+      path: ".aws/sso/cache/session.json",
+      contentBase64: Buffer.from(JSON.stringify({ startUrl: "https://sso.example", accessToken })).toString("base64"),
+    },
+  ];
+  await f.keychain.save({ ownerId: owner, service: "aws", files: cache("t0") });
   const grant = await f.keychain.createGrant({
     credentialId: f.credential.id,
     ownerId: owner,
@@ -371,6 +376,10 @@ test("refreshes made through a use grant never change the owner's saved login", 
   const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   if (saved.kind !== "file") throw new Error("Expected files");
   assert.deepEqual(saved.files, before);
+  await f.keychain.updateFiles(prepared.materialized, cache("t1"));
+  const refreshed = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (refreshed.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(refreshed.files, cache("t1"));
 });
 
 test("an execution sweeps only stale credential directories", async (t) => {
@@ -604,7 +613,7 @@ test("an unattended command saves only token cache refreshes and says why it kep
   const f = await fixture(t);
   const m = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   if (m.kind !== "file") throw new Error("Expected files");
-  const save = (updated: CredentialFile[]) => f.keychain.updateFiles({ ...m, writeback: true }, updated);
+  const save = (updated: CredentialFile[]) => f.keychain.updateFiles(m, updated);
   const result = await f
     .context({
       commandCredentials: [{ handle: "aws", resolve: async () => ({ env: [], files: { files: m.files, save } }) }],

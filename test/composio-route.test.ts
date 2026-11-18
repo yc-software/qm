@@ -255,7 +255,7 @@ test("authorization supplies the callback and account binding without accepting 
   assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
 });
 
-test("connections return only this actor's active accounts and strip credentials", async () => {
+test("connections return only this actor's accounts, flag expired ones, skip abandoned sign-ins, and strip credentials", async () => {
   const f = fixture();
   await f.own();
   const owned = {
@@ -264,12 +264,15 @@ test("connections return only this actor's active accounts and strip credentials
     status: "ACTIVE",
     toolkit: { slug: "gmail" },
     data: { token: "secret-token" },
+    state: { val: { status: "ACTIVE", access_token: "secret-token", displayName: "alice@example.com" } },
   };
   f.replies.push({
     items: [
       owned,
       { ...owned, id: "ca_other", user_id: composioUserId(orgId(), "bob") },
       { ...owned, status: "INITIATED" },
+      { ...owned, id: "ca_expired", status: "EXPIRED" },
+      { ...owned, id: "ca_abandoned", status: "EXPIRED", state: { val: { status: "EXPIRED" } } },
       { ...owned, is_disabled: true },
     ],
     next_cursor: "next-page",
@@ -277,12 +280,28 @@ test("connections return only this actor's active accounts and strip credentials
   const r = await f.invoke("/v1/composio/connections?user_ids=bob&cursor=page-1");
   assert.equal(r.status, 200);
   assert.deepEqual(r.data, {
-    items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(orgId(), "alice"), missingScopes: [] }],
+    items: [
+      {
+        id: "ca_gmail",
+        toolkit: "gmail",
+        userId: composioUserId(orgId(), "alice"),
+        label: "alice@example.com",
+        missingScopes: [],
+      },
+      {
+        id: "ca_expired",
+        toolkit: "gmail",
+        userId: composioUserId(orgId(), "alice"),
+        label: "alice@example.com",
+        missingScopes: [],
+        status: "EXPIRED",
+      },
+    ],
     nextCursor: "next-page",
   });
   const q = new URL(f.calls[0]!.url).searchParams;
   assert.equal(q.get("user_ids"), composioUserId(orgId(), "alice"));
-  assert.equal(q.get("statuses"), "ACTIVE");
+  assert.equal(q.get("statuses"), "ACTIVE,EXPIRED,FAILED");
   assert.equal(q.get("cursor"), "page-1");
   assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
 });

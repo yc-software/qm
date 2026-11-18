@@ -4,6 +4,7 @@ import {
   KeychainError,
   keychainService,
   renderAskNotice,
+  storedCredentialError,
   type CredentialFieldInput,
   type CredentialFile,
   type GrantMode,
@@ -253,6 +254,15 @@ const claimWriter = keychainRoute(async ({ res, body, params }, kc, { actorId })
   return claimed ? sendJson(res, 200, { ok: true }) : sendJson(res, 409, { error: "writer_held" });
 });
 
+const recordCheck = keychainRoute(async ({ res, body, params }, kc, { actorId }) => {
+  const b = body as { ok?: unknown; detail?: unknown };
+  if (typeof b.ok !== "boolean" || (b.detail !== undefined && typeof b.detail !== "string"))
+    return sendJson(res, 400, { error: "bad_request", message: "expected { ok: boolean, detail?: string }" });
+  const detail = typeof b.detail === "string" ? storedCredentialError(b.detail) : "";
+  const recorded = await kc.recordCheck(actorId, params.id!, { ok: b.ok, ...(detail ? { detail } : {}) });
+  return recorded ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
+});
+
 const releaseWriter = keychainRoute(async ({ res, url, params }, kc, { actorId }) => {
   const holder = url.searchParams.get("holder")?.trim();
   if (!holder) return sendJson(res, 400, { error: "bad_request", message: "holder required" });
@@ -262,7 +272,8 @@ const releaseWriter = keychainRoute(async ({ res, url, params }, kc, { actorId }
 });
 
 const listCredentials = keychainRoute(async ({ res }, kc, { actorId }) => {
-  return sendJson(res, 200, { credentials: await kc.listByOwner(actorId) });
+  const connectors = (await kc.listConnectorsByOwners([actorId])).get(actorId) ?? [];
+  return sendJson(res, 200, { credentials: await kc.listByOwner(actorId), connectors });
 });
 
 const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId }) => {
@@ -518,6 +529,13 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
     actor: "system",
     auth: "either",
     handle: releaseWriter,
+  },
+  {
+    method: "POST",
+    path: "/v1/keychain/credentials/:id/check",
+    actor: "system",
+    auth: "either",
+    handle: recordCheck,
   },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: listCredentials },
   {

@@ -18,6 +18,10 @@ test("callbacks stay on the configured public origin and preserve the conversati
     composioCallbackUrl("https://qm.example/web-ui", "/web-ui/settings", state),
     `https://qm.example/web-ui/settings?composioReturn=${state}`,
   );
+  assert.equal(
+    composioCallbackUrl("https://qm.example", "/keychain", state),
+    `https://qm.example/keychain?composioReturn=${state}`,
+  );
   for (const path of [
     "https://evil.example/",
     "//evil.example/",

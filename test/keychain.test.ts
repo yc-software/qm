@@ -69,6 +69,27 @@ test("save → list returns metadata only (no secret material), and re-save upse
   assert.deepEqual(await k.listByOwner("U9"), []);
 });
 
+test("a recorded check shows in every credential list until a fresh sign-in clears it", async () => {
+  const k = kc();
+  const cred = await k.save(GH);
+  assert.equal(await k.recordCheck("U9", cred.id, { ok: false }), false);
+  assert.equal(await k.recordCheck("U1", cred.id, { ok: false, detail: "Bad credentials" }), true);
+  const [failing] = await k.listByOwner("U1");
+  assert.equal(failing!.check?.ok, false);
+  const manifest = renderKeychainManifest({
+    scopeId: "personal:U1",
+    conversationKind: "dm",
+    actorId: "U1",
+    members: [{ id: "U1" }],
+    entriesByOwner: new Map([["U1", [failing!]]]),
+    scopeGrants: [],
+    execution: [{ credentialId: cred.id, ownerId: "U1", handle: credentialHandle(cred), description: "github" }],
+  });
+  assert.match(manifest, /last check failed \(Bad credentials\)/);
+  await k.save({ ...GH, secret: "ghp_fresh" });
+  assert.equal((await k.listByOwner("U1"))[0]!.check, undefined);
+});
+
 test("listAllMetadata returns person-facing metadata only", async () => {
   const k = kc();
   const meta = await k.save(GH);

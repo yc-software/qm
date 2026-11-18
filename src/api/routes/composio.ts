@@ -148,13 +148,14 @@ export interface ComposioAccountRecord {
 export function usableAccount<T extends ComposioAccountRecord>(
   item: T | null | undefined,
   userIds: readonly string[],
+  statuses: readonly string[] = ["ACTIVE"],
 ): item is T & { id: string; toolkit: { slug: string } } {
   return (
     !!item &&
     typeof item.id === "string" &&
     ACCOUNT_ID.test(item.id) &&
     userIds.includes(String(item.user_id)) &&
-    item.status === "ACTIVE" &&
+    statuses.includes(String(item.status)) &&
     item.is_disabled !== true &&
     typeof item.toolkit?.slug === "string" &&
     /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug)
@@ -288,6 +289,11 @@ function scopeName(scope: string): string {
   return scope.slice(scope.lastIndexOf("/") + 1) || scope;
 }
 
+function accountState(item: { state?: { val?: unknown } }): Record<string, unknown> {
+  const val = item.state?.val;
+  return val && typeof val === "object" ? (val as Record<string, unknown>) : {};
+}
+
 function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
   const granted = account.state?.val?.scope;
   if (typeof granted !== "string" || !granted.trim()) return [];
@@ -303,7 +309,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
   const userIds = composioUserIds(access.principal);
-  const query = new URLSearchParams({ user_ids: userIds.join(","), statuses: "ACTIVE", limit: "100" });
+  const query = new URLSearchParams({ user_ids: userIds.join(","), statuses: "ACTIVE,EXPIRED,FAILED", limit: "100" });
   if (cursor) query.set("cursor", cursor);
   try {
     const [data, external] = await Promise.all([
@@ -311,7 +317,11 @@ async function connections(ctx: ApiCtx): Promise<void> {
       cursor ? [] : (ctx.deps.mcpToolService?.appConnections(access.principal, servers) ?? []),
     ]);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-    const accounts = data.items.filter((item) => usableAccount(item, userIds));
+    const accounts = data.items.filter(
+      (item) =>
+        usableAccount(item, userIds, ["ACTIVE", "EXPIRED", "FAILED"]) &&
+        (item.status === "ACTIVE" || Object.keys(accountState(item)).some((key) => key !== "status")),
+    );
     const configIds = [
       ...new Set(
         accounts
@@ -327,7 +337,9 @@ async function connections(ctx: ApiCtx): Promise<void> {
         id: item.id,
         toolkit: item.toolkit.slug,
         userId: item.user_id,
+        ...(typeof accountState(item).displayName === "string" ? { label: accountState(item).displayName } : {}),
         missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
+        ...(item.status !== "ACTIVE" ? { status: String(item.status) } : {}),
       })),
       ...external
         .filter((app) => app.connected)

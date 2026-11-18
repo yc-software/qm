@@ -114,20 +114,19 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
       resource: "scratch execution",
     });
   };
-  const resolvedCredential = (materialized: MaterializedCred, writeback: boolean) => {
+  const resolvedCredential = (materialized: MaterializedCred, owner: boolean) => {
     if (materialized.kind === "env") return { env: materialized.env };
-    const live = liveAuthorTurn ? { live: true } : {};
+    const live = liveAuthorTurn && owner ? { live: true } : {};
     return {
       env: [],
       files: {
         files: materialized.files,
-        save: (files: CredentialFile[]) => deps.keychain!.updateFiles({ ...materialized, writeback, ...live }, files),
+        save: (files: CredentialFile[]) => deps.keychain!.updateFiles({ ...materialized, ...live }, files),
         source: {
           credentialId: materialized.credentialId,
           ownerId: materialized.ownerId,
           service: materialized.service,
           ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
-          writeback,
           ...live,
         },
       },
