@@ -5942,6 +5942,11 @@ a.connector-widget:focus-visible {
   background: var(--secondary);
   font-size: var(--font-13-5);
 }
+.cron-banner-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
 .cron-section {
   margin-bottom: 26px;
 }

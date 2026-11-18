@@ -18,6 +18,7 @@ function destinationLabel(c: CronView, mine: boolean): TemplateResult | string {
     return mine ? html`Your chat: ${link}` : link;
   }
   if (d.type === "principal") return `${friendlyPrincipal(d.target)}'s DM`;
+  if (d.audienceScopeId) return scopeChip(d.audienceScopeId);
   if (d.type === "slack") return d.target.startsWith("D") ? "A Slack DM" : "A Slack channel";
   return d.type === "group" ? "A group DM" : "Somewhere else";
 }
@@ -35,6 +36,19 @@ function deliveryRow(
   </div>`;
 }
 
+export const COPY_STATUS = {
+  on: { label: "On", tone: "on" },
+  paused: { label: "Paused", tone: "" },
+  edited: { label: "Edited their copy", tone: "" },
+};
+
+function copyDestinationLabel(type: string | undefined): string {
+  if (type === "web") return "Their own chat";
+  if (type === "principal") return "Their DM";
+  if (type === "slack" || type === "group") return "A Slack conversation of theirs";
+  return "Nowhere yet";
+}
+
 function granteeName(scope: string): TemplateResult | string {
   return scope.startsWith("personal:") ? friendlyPrincipal(scope.slice("personal:".length)) : scopeChip(scope);
 }
@@ -50,6 +64,9 @@ export function cronDeliveryList(
   else if (c.enabled) ownStatus = { label: "On", tone: "on" };
   return html`<div class="cron-card cron-delivery-list">
     ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
+    ${(c.copies ?? []).map((copy) =>
+      deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), COPY_STATUS[copy.status]),
+    )}
     ${shares.map((g) => deliveryRow(granteeName(g.scope), g.permission === "write" ? "Can view and edit" : "Can view"))}
     ${
       mine

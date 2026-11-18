@@ -3,6 +3,7 @@ import { Archive, Ellipsis, Pause, Pencil, Play, Plus, RotateCcw, Sparkles, Tras
 import { live } from "lit/directives/live.js";
 import { openShare, shareButton } from "./share-dialog";
 import { cronDeliveryList } from "./cron-delivery";
+import { friendlyPrincipal } from "./app-view";
 import { draftFromSchedule, schedulePicker, type ScheduleDraft } from "./cron-schedule-picker";
 import { closeFormMenus, relTime, toggleFormMenu } from "./ui";
 import { api, userSendMessage } from "./core-bridge";
@@ -33,7 +34,7 @@ export interface CronView {
   action?: string;
   message?: string;
   schedule: { everyMs?: number; firstFireAt?: number; cron?: string; timezone?: string };
-  destination?: { type: string; target: string } | null;
+  destination?: { type: string; target: string; audienceScopeId?: string } | null;
   enabled: boolean;
   archived?: boolean;
   createdAt: number;
@@ -42,6 +43,10 @@ export interface CronView {
   lastFireNote?: { text: string; at: number; by?: string } | null;
   scopeName?: string;
   permission?: "read" | "manage";
+  sharedFrom?: string;
+  sharedBy?: string;
+  forkedAt?: number;
+  copies?: Array<{ id: string; owner: string; status: "on" | "paused" | "edited"; deliversTo?: string }>;
 }
 
 interface CronRunView {
@@ -497,10 +502,10 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
             ? nothing
             : html`<div class="cron-banner">Shared from ${cronScopeLabel(c)}. You can view it, but not change it.</div>`
         }
-        ${cronInstructions(c, manageable)} ${cronScheduleSection(c, manageable)}
+        ${cronCopyBanner(c)} ${cronInstructions(c, manageable)} ${cronScheduleSection(c, manageable)}
         ${cronSection(
           "Delivers to",
-          cronDeliveryList(c, mine, mine ? (cronShares.get(c.id) ?? []) : [], () =>
+          cronDeliveryList(c, mine, mine && !c.copies ? (cronShares.get(c.id) ?? []) : [], () =>
             openShare(
               { type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId },
               { onChange: () => void loadCronShares(c.id) },
@@ -575,6 +580,22 @@ function cronTitleTpl(c: CronView, manageable: boolean): TemplateResult {
       <span>${cronTitle(c)}</span>${icon(Pencil, 14)}
     </button>
   </h2>`;
+}
+
+function cronCopyBanner(c: CronView): TemplateResult | typeof nothing {
+  if (!c.sharedFrom) return nothing;
+  const from = c.sharedBy ? friendlyPrincipal(c.sharedBy) : "a teammate";
+  if (c.forkedAt || c.enabled)
+    return html`<div class="cron-banner">
+      <span>Shared by <strong>${from}</strong>${c.forkedAt ? " · your edited copy" : " · linked to their cron"}</span>
+    </div>`;
+  return html`<div class="cron-banner">
+    <span><strong>${from}</strong> shared this with you. It runs as you once you turn it on.</span>
+    <span class="cron-banner-actions">
+      <button class="btn" type="button" @click=${() => showCronDialog("delete", c)}>Decline</button>
+      <button class="btn primary" type="button" @click=${() => void setCronEnabled(c.id, true)}>Turn on</button>
+    </span>
+  </div>`;
 }
 
 function cronSwitch(c: CronView): TemplateResult {

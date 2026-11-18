@@ -116,6 +116,7 @@ export interface ShareArtifactRequest {
 export interface ShareAccess {
   scope: ScopeId;
   permission: Permission;
+  status?: "pending" | "on" | "edited";
 }
 
 export interface ShareOffers {
@@ -147,6 +148,7 @@ export type ShareArtifactResult =
       target: { scope: ScopeId; label: string };
       permission: Permission;
       invitation?: AppInvitation;
+      copy?: { id: string; enabled: boolean; existed: boolean };
     }
   | {
       ok: false;
