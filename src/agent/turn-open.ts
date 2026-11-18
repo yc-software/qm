@@ -4,6 +4,8 @@ import type { AgentTurnInput } from "./agent.ts";
 import { goalPausedNote, goalSteeringNote, type GrindMeter } from "./goal.ts";
 import { dayMarkerPrefix, userPromptText } from "./replay.ts";
 import { imageRefs, runApprovedToolCall, type BridgedTool } from "./turn-support.ts";
+import { deliverSessionMail } from "./agent-tools/record.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import type { TurnSession } from "./turn-session.ts";
 
 export function turnToolRef(dispatched: AgentTurnInput): TurnSession["ref"] {
@@ -69,6 +71,8 @@ export async function openTurnPrompt({
     if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
     return "";
   })();
+  const mail = continueTurn ? undefined : await deliverSessionMail(entry.ref);
+  const environment = [turn.environment, ...(mail?.texts ?? [])].filter(Boolean).join("\n\n");
   const userEntry = continueTurn
     ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
     : await turn.emit({
@@ -77,7 +81,7 @@ export async function openTurnPrompt({
         author: turn.runtimeActorId ?? null,
         externalId: turn.triggerTs ?? turn.entryTs ?? null,
         body: {
-          ...(turn.environment ? { environment: turn.environment } : {}),
+          ...(environment ? { environment } : {}),
           ...(goalNote.trim() ? { goalNote } : {}),
           ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
           ...imageRefs(turn.images),
@@ -89,6 +93,10 @@ export async function openTurnPrompt({
           turn.history.findLast((e) => isUserItem(e) && e.seq < userEntry.seq),
           userEntry,
         )
-      : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
+      : "") + userPromptText({ goalNote, text: turn.input, environment });
+  if (mail?.delivered.length)
+    await entry.ref.current?.sessionSyscalls
+      ?.acknowledge?.(mail.delivered)
+      .catch(reportFailureAs("turn: acknowledge session mail", undefined));
   return { userEntry, modelPrompt };
 }

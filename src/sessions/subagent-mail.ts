@@ -30,12 +30,12 @@ import { snippet } from "../util/text.ts";
 
 const MAIL_ERROR_CAP = 1_000;
 const COMPLETION_WAKE =
-  "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
+  "A delegated task finished; its message is below. Report any new result or blocker relevant to the user's request. If it was already handled or no message is shown, end without posting.";
 const MESSAGE_WAKE =
-  "A subagent sent you a message. Check internal messages with subagents wait (timeoutMs: 0) and decide whether it affects the user's request; report only what is relevant. If it does not, end without posting.";
+  "A subagent sent you a message; it is below. Decide whether it affects the user's request and report only what is relevant. If it does not, end without posting.";
 const MESSAGE_DISPLAY = "Subagent sent a message";
 const PEER_WAKE =
-  "Another conversation handed you a task. Read it with subagents wait (timeoutMs: 0), then do it, or decline it and tell the sender with sessions send_message and wake:false.";
+  "Another conversation handed you a task; it is below. Do it, or decline it and tell the sender with sessions send_message and wake:false.";
 const PEER_DISPLAY = "Another conversation handed over a task";
 const RESULT_MAIL = "subagent-mail-";
 const returnWakeKey = (runId: string) => `subagent-return:${runId}`;
