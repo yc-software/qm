@@ -133,7 +133,7 @@ export function createSideChatController(ctx: ConvCtx) {
     for (const [card, step] of glides) {
       step.start ??= now;
       const progress = Math.min(1, (now - step.start) / step.duration);
-      card.style.height = progress < 1 ? `${step.from + (step.to - step.from) * (1 - (1 - progress) ** 3)}px` : "";
+      card.style.height = progress < 1 ? `${step.from + (step.to - step.from) * (1 - (1 - progress) ** 2)}px` : "";
       if (progress < 1 && card.isConnected) continue;
       glides.delete(card);
       step.done?.();
@@ -151,6 +151,10 @@ export function createSideChatController(ctx: ConvCtx) {
     ghost.className = "side-chat-ghost";
     ghost.inert = true;
     ghost.append(...[...card.children].map((part) => part.cloneNode(true)));
+    const copies = [...ghost.querySelectorAll("*")];
+    const scrolled = [...card.querySelectorAll("*")].flatMap((element, index) =>
+      element.scrollTop ? [[copies[index], element.scrollTop] as const] : [],
+    );
     for (const named of ghost.querySelectorAll("[id]")) named.removeAttribute("id");
     for (const custom of [...ghost.querySelectorAll("*")].filter((element) => element.localName.includes("-"))) {
       const plain = document.createElement("div");
@@ -160,16 +164,25 @@ export function createSideChatController(ctx: ConvCtx) {
     }
     card.style.height = `${height}px`;
     held.add(card);
-    queueMicrotask(() => card.prepend(ghost));
+    queueMicrotask(() => {
+      card.append(ghost);
+      for (const [copy, top] of scrolled) if (copy) copy.scrollTop = top;
+    });
     return (keep: boolean) => {
       if (!held.has(card)) return;
       held.delete(card);
       settledHeights.set(card.dataset.sideChatId ?? "", card.getBoundingClientRect().height);
       moving();
       glide(card);
-      const shrinking = glides.get(card);
-      if (keep && shrinking) shrinking.done = () => ghost.remove();
-      else ghost.remove();
+      const shrinking = keep && glides.get(card);
+      const delay = shrinking ? shrinking.duration * 0.6 : 0;
+      ghost.classList.add("fading");
+      const faded = ghost
+        .animate?.({ opacity: [1, 0] }, { delay, duration: 80, endDelay: 160, fill: "both" })
+        .finished.catch(() => {});
+      card.style.setProperty("--side-chat-reveal", `${delay + 40}ms`);
+      const settled = shrinking ? new Promise<void>((resolve) => (shrinking.done = resolve)) : null;
+      void Promise.all([faded, settled]).then(() => ghost.remove());
     };
   }
   function openCard() {
@@ -867,7 +880,7 @@ export function createSideChatController(ctx: ConvCtx) {
                   window.getSelection()?.toString()
                 )
                   return;
-                returnFocus = (event.currentTarget as HTMLElement).querySelector("button");
+                returnFocus = (event.currentTarget as HTMLElement).querySelector(":scope > .side-chat-marker");
                 void show(chat, false, true);
               }}
               data-side-chat-id=${chat.id}
