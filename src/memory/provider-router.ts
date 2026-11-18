@@ -1,4 +1,4 @@
-import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
+import { disclosedMemory, MemoryRecallWithheld, MemoryDisclosureDenied } from "./disclosure.ts";
 import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
@@ -9,7 +9,7 @@ import {
   type MemoryService,
   resolveIds,
 } from "./memory-service.ts";
-import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
+import { MemoryForgetRefused, captureProvenance, type MemoryCandidate } from "./facts.ts";
 import {
   changeFailure,
   failedOutcome,
@@ -143,8 +143,11 @@ export function createRoutedMemoryService(opts: {
 
     async capture(scopeId, facts, at, by, context) {
       const mode = context?.mode ?? "explicit";
+      const personalOnly = captureProvenance(scopeId, context).personalOnly === true;
       const routes = routesFor(scopeId).filter((route) => captureAllowed(route.capture, mode));
+      if (personalOnly && !routes.some((route) => providerFor(route).facts)) throw new MemoryDisclosureDenied();
       const notebookOnly =
+        personalOnly ||
         changesNotebookOnly(by) ||
         (context?.conversationScopeId !== undefined && context.conversationScopeId !== scopeId);
       const counts = strict(

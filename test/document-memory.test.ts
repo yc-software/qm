@@ -1,0 +1,372 @@
+import "./support/auto-fake-sprites.ts";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createDocumentMemory } from "../src/documents/memory.ts";
+import { disclosedMemory } from "../src/memory/disclosure.ts";
+import { createResolutionService } from "../src/resolution/resolution-service.ts";
+import { resolveTurnContext } from "../src/resolution/turn-context.ts";
+import { DEFAULT_MEMORY_POLICY } from "../src/memory/policy.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import type { Conversation } from "../src/types.ts";
+
+const surface = "https://sheets.example.test";
+
+test("authorized document notebooks follow the team roster and automatic recall stays with the active document", async () => {
+  const config = testConfig();
+  const databaseUrl = config.databaseUrl;
+  assert.ok(databaseUrl);
+  const built = buildApp(config);
+  try {
+    const project = await built.projects.create({ name: "Operations", ownerId: "owner" });
+    await built.projects.addMember(project.id, "owner", "member");
+    await built.documentConversations.configure(surface, project.id);
+    const resolve = async (documentId: string, principalId: string, mode: "shared" | "private" = "shared") => {
+      const result = await built.documentConversations.resolve({ surface, documentId, principalId, mode });
+      if (result.status !== "ok") throw new Error("missing conversation");
+      const knowledge = await built.documentConversations.knowledgeForSession(
+        result.conversation.sessionId,
+        principalId,
+      );
+      assert.ok(knowledge);
+      return { ...result.conversation, knowledge };
+    };
+    const a = await resolve("a", "owner");
+    const b = await resolve("b", "member");
+    const personal = await resolve("a", "member", "private");
+    const raw = createPostgresMemoryService(databaseUrl);
+    const memory = createDocumentMemory(raw, built.documentConversations, built.auditLog);
+    const at = 100;
+    const capture = {
+      mode: "explicit" as const,
+      conversationScopeId: a.scopeId,
+      sessionId: a.sessionId,
+      sensitivity: "ordinary" as const,
+      inheritedFacts: [],
+    };
+    await memory.capture(
+      a.knowledge.teamScopeId,
+      ["Team procedure"],
+      at,
+      { actorId: "owner", context: "conversation" },
+      capture,
+    );
+    await memory.capture(
+      a.knowledge.documentScopeId,
+      ["Document A assumption"],
+      at,
+      { actorId: "owner", context: "conversation" },
+      capture,
+    );
+    const context = async (binding: typeof a, id: string) => {
+      const actor = built.identity.classify(id);
+      const conversation: Conversation = {
+        kind: binding.mode === "private" ? "dm" : "group",
+        threadRef: binding.threadRef,
+        ...(binding.mode === "shared" ? { channelRef: binding.scopeId.slice(6) } : {}),
+        audience: binding.mode === "private" ? [actor] : ((await built.app.currentScopeMembers(binding.scopeId)) ?? []),
+      };
+      const resolution = await createResolutionService(config.orgId, built.config, built.acl).resolve(
+        testTenant,
+        conversation,
+        actor,
+        false,
+        false,
+      );
+      return resolveTurnContext({
+        tenant: testTenant,
+        actor,
+        targetScope: binding.scopeId,
+        document: (await built.documentConversations.knowledgeForSession(binding.sessionId, id))!,
+        resolution,
+        audience: conversation.audience,
+        origin: { kind: "human" },
+        trustedLiveHuman: true,
+        config: built.config,
+        sessions: built.sessions,
+        isCurrentSharedScopeMember: built.app.isCurrentSharedScopeMember,
+        currentScopeMembers: built.app.currentScopeMembers,
+        acl: built.acl,
+        memoryPolicy: DEFAULT_MEMORY_POLICY,
+        useMemory: true,
+        botActor: false,
+        ownScopeBotWork: false,
+        memory,
+        files: built.files,
+      });
+    };
+    assert.deepEqual(
+      new Set((await (await context(a, "owner")).memorySnapshot()).facts.map((fact) => fact.text)),
+      new Set(["Team procedure", "Document A assumption"]),
+    );
+    assert.deepEqual(
+      (await (await context(b, "member")).memorySnapshot()).facts.map((fact) => fact.text),
+      ["Team procedure"],
+    );
+    assert.deepEqual(
+      new Set((await (await context(personal, "member")).memorySnapshot()).facts.map((fact) => fact.text)),
+      new Set(["Team procedure", "Document A assumption"]),
+    );
+    const rosters = await built.managedGroups.membersMany([
+      a.knowledge.documentScopeId.slice(6),
+      b.knowledge.documentScopeId.slice(6),
+      "document-missing",
+    ]);
+    assert.deepEqual(rosters.get("document-missing"), []);
+    assert.deepEqual(new Set(rosters.get(a.knowledge.documentScopeId.slice(6))), new Set(["owner", "member"]));
+    await assert.rejects(
+      memory.capture(
+        a.knowledge.documentScopeId,
+        ["Wrong document"],
+        at,
+        { actorId: "member", context: "conversation" },
+        { ...capture, sessionId: b.sessionId },
+      ),
+    );
+    await built.principalLinks.link({
+      principalId: "member",
+      canonicalId: "web-member",
+      evidence: "test: verified linked account",
+      linkedBy: "web-member",
+    });
+    assert.equal(await built.managedGroups.membership(a.knowledge.documentScopeId.slice(6), "web-member"), true);
+    await built.projects.removeMember(project.id, "owner", "member");
+    assert.equal(
+      await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: a.knowledge.documentScopeId }),
+      false,
+    );
+    await assert.rejects(
+      memory.capture(
+        b.knowledge.documentScopeId,
+        ["Revoked write"],
+        at,
+        { actorId: "member", context: "conversation" },
+        { ...capture, sessionId: b.sessionId },
+      ),
+    );
+    assert.deepEqual((await (await context(personal, "member")).memorySnapshot()).facts, []);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("private capture restrictions survive storage, duplicate merges, edits, and derived facts even in open shared contexts", async () => {
+  const config = testConfig();
+  const databaseUrl = config.databaseUrl;
+  assert.ok(databaseUrl);
+  const built = buildApp(config);
+  try {
+    const project = await built.projects.create({ name: "Operations", ownerId: "owner" });
+    await built.documentConversations.configure(surface, project.id);
+    const binding = await built.documentConversations.resolve({
+      surface,
+      documentId: "a",
+      principalId: "owner",
+      mode: "private",
+    });
+    if (binding.status !== "ok") throw new Error("missing private binding");
+    const raw = createPostgresMemoryService(databaseUrl);
+    const memory = createDocumentMemory(raw, built.documentConversations, built.auditLog);
+    const metadata = {
+      mode: "automatic" as const,
+      sessionId: binding.conversation.sessionId,
+      conversationScopeId: "personal:owner",
+      sensitivity: "ordinary" as const,
+      inheritedFacts: [],
+    };
+    await memory.capture(
+      "personal:owner",
+      ["Private convention"],
+      100,
+      { actorId: "owner", context: "conversation" },
+      metadata,
+    );
+    await raw.capture(
+      "personal:owner",
+      ["Private convention"],
+      101,
+      { actorId: "owner", context: "self" },
+      { ...metadata, sessionId: undefined },
+    );
+    const child = await built.sessions.getOrCreateByThread("web:owner:private-child", "dm", "personal:owner");
+    await built.sessions.setParentSession(child.id, binding.conversation.sessionId);
+    await memory.capture(
+      "personal:owner",
+      ["Private child convention"],
+      101,
+      { actorId: "owner", context: "conversation" },
+      { ...metadata, sessionId: child.id },
+    );
+    assert.equal(
+      (await raw.facts!("personal:owner")).find((fact) => fact.text === "Private child convention")?.personalOnly,
+      true,
+    );
+    await assert.rejects(built.documentConversations.knowledgeForSession(child.id, "someone-else"));
+    const fact = (await raw.facts!("personal:owner"))[0]!;
+    assert.equal(fact.personalOnly, true);
+    await raw.edit!(
+      "personal:owner",
+      [{ id: fact.id, text: "Updated private convention" }],
+      { actorId: "owner", context: "self" },
+      { inheritedFacts: [], sensitivity: "ordinary", conversationScopeId: "personal:owner" },
+    );
+    const stored = createPostgresMemoryService(databaseUrl);
+    const updated = (await stored.facts!("personal:owner"))[0]!;
+    assert.equal(updated.personalOnly, true);
+    await raw.capture("org:test", ["Derived private convention"], 102, undefined, {
+      mode: "explicit",
+      inheritedFacts: [updated],
+      sensitivity: "ordinary",
+      conversationScopeId: "org:test",
+    });
+    assert.equal((await stored.facts!("org:test"))[0]?.personalOnly, true);
+    const actor = built.identity.classify("owner");
+    const access = {
+      actor,
+      targetScope: "group:room",
+      nativeScopes: ["org:test", "personal:owner", "group:room"],
+      audience: [actor],
+      open: true,
+      config: built.config,
+      isCurrentSharedScopeMember: async () => true,
+      currentScopeMembers: async () => [actor],
+    };
+    await built.config.setSharingPosture(`org:${config.orgId}`, "open");
+    const shared = disclosedMemory(stored, access);
+    assert.deepEqual(await shared.facts!("personal:owner"), []);
+    assert.deepEqual(await shared.facts!("org:test"), []);
+    assert.equal(
+      (await disclosedMemory(stored, { ...access, targetScope: "personal:owner" }).facts!("personal:owner"))[0]?.text,
+      "Updated private convention",
+    );
+    await assert.rejects(
+      memory.capture(
+        "org:test",
+        ["Forbidden publication"],
+        103,
+        { actorId: "owner", context: "conversation" },
+        metadata,
+      ),
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("recorded document extraction routes a team procedure and workbook assumptions through the capture buffer", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { createPerTurnStrategy } = await import("../src/memory/strategies/per-turn.ts");
+  const fixture = JSON.parse(
+    await readFile(new URL("./fixtures/document-memory-extraction.json", import.meta.url), "utf8"),
+  ) as { response: string; turns: Array<{ input: string; reply: string }> };
+  const config = testConfig();
+  assert.ok(config.databaseUrl);
+  const built = buildApp(config);
+  try {
+    const project = await built.projects.create({ name: "Operations", ownerId: "owner" });
+    await built.documentConversations.configure(surface, project.id);
+    const binding = await built.documentConversations.resolve({
+      surface,
+      documentId: "recorded",
+      principalId: "owner",
+    });
+    if (binding.status !== "ok") throw new Error("missing binding");
+    const document = await built.documentConversations.knowledgeForSession(binding.conversation.sessionId, "owner");
+    assert.ok(document);
+    const raw = createPostgresMemoryService(config.databaseUrl);
+    const memory = createDocumentMemory(raw, built.documentConversations, built.auditLog);
+    const strategy = createPerTurnStrategy({
+      memory,
+      agent: { oneShot: async () => fixture.response },
+      captureQuietMs: 180_000,
+      captureMaxTurns: 1,
+    });
+    await strategy.onTurnEnd!({
+      ...fixture.turns[0]!,
+      scopeId: binding.conversation.scopeId,
+      conversationScopeId: binding.conversation.scopeId,
+      sessionId: binding.conversation.sessionId,
+      actorId: "owner",
+      inheritedFacts: [],
+      document,
+    });
+    const teamFacts = await raw.facts!(document.teamScopeId);
+    const documentFacts = await raw.facts!(document.documentScopeId);
+    assert.match(teamFacts.map((fact) => fact.text).join("\n"), /reconcile every total/);
+    assert.doesNotMatch(teamFacts.map((fact) => fact.text).join("\n"), /Assumptions/);
+    assert.match(documentFacts.map((fact) => fact.text).join("\n"), /Assumptions/);
+    assert.doesNotMatch(documentFacts.map((fact) => fact.text).join("\n"), /reconcile every total/);
+    assert.doesNotMatch([...teamFacts, ...documentFacts].map((fact) => fact.text).join("\n"), /42|equal zero/);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("HTTP edits in a private document mark previously ordinary personal facts as personal-only", async () => {
+  const { createServer } = await import("../src/api/server.ts");
+  const { serverDeps } = await import("../src/wiring.ts");
+  const { mintCapabilityToken } = await import("../src/auth/capability-token.ts");
+  const secret = "document-private-edit-test-secret-long-enough";
+  const config = testConfig({ signingSecret: secret });
+  const built = buildApp(config);
+  const server = createServer(built.app, serverDeps(config, built));
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const project = await built.projects.create({ name: "Operations", ownerId: "owner" });
+    await built.documentConversations.configure(surface, project.id);
+    const binding = await built.documentConversations.resolve({
+      surface,
+      documentId: "private-edit",
+      principalId: "owner",
+      mode: "private",
+    });
+    if (binding.status !== "ok") throw new Error("missing private conversation");
+    assert.ok(config.databaseUrl);
+    const raw = createPostgresMemoryService(config.databaseUrl);
+    await raw.capture("personal:owner", ["An ordinary convention"], 100, undefined, {
+      mode: "explicit",
+      inheritedFacts: [],
+      sensitivity: "ordinary",
+    });
+    const original = (await raw.facts!("personal:owner"))[0]!;
+    assert.equal(original.personalOnly, undefined);
+    const token = await mintCapabilityToken(
+      {
+        actorId: "owner",
+        scopeId: "personal:owner",
+        sessionId: binding.conversation.sessionId,
+        memory: { write: "personal:owner", read: ["personal:owner"] },
+        exp: Date.now() + 60_000,
+      },
+      config.capabilitySecret!,
+    );
+    const port = (server.address() as import("node:net").AddressInfo).port;
+    const response = await fetch(`http://127.0.0.1:${port}/v1/memory/facts`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "x-agent-capability": token },
+      body: JSON.stringify({ facts: [{ id: original.id, text: "A private replacement convention" }] }),
+    });
+    assert.equal(response.status, 200);
+    const edited = (await raw.facts!("personal:owner"))[0]!;
+    assert.equal(edited.text, "A private replacement convention");
+    assert.equal(edited.personalOnly, true);
+    const actor = built.identity.classify("owner");
+    const shared = disclosedMemory(raw, {
+      actor,
+      targetScope: "group:shared",
+      nativeScopes: ["group:shared", "personal:owner"],
+      audience: [actor],
+      open: true,
+      config: built.config,
+      isCurrentSharedScopeMember: async () => true,
+      currentScopeMembers: async () => [actor],
+    });
+    assert.deepEqual(await shared.facts!("personal:owner"), []);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
+  }
+});

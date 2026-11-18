@@ -29,16 +29,28 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
     }
     return decision;
   };
+  const target = parseScopeId(input.targetScope);
+  const personalTarget = target.kind === "personal" && samePerson(target.ref, input.actor.id);
   let currentAudience: Promise<readonly Principal[]> | undefined;
   const audience = () =>
-    (currentAudience ??=
-      input.targetScope === personalScope(input.actor.id)
-        ? Promise.resolve(input.audience)
-        : (input
-            .currentScopeMembers?.(input.targetScope)
-            .then((members) => members ?? [])
-            .catch(swallowAs("memory disclosure: audience", [])) ?? Promise.resolve([])));
+    (currentAudience ??= personalTarget
+      ? Promise.resolve(input.audience)
+      : (input
+          .currentScopeMembers?.(input.targetScope)
+          .then((members) => members ?? [])
+          .catch(swallowAs("memory disclosure: audience", [])) ?? Promise.resolve([])));
   const native = (scope: ScopeId) => input.nativeScopes.includes(scope);
+  const sourceRosters = new Map<ScopeId, Promise<readonly Principal[] | undefined>>();
+  const roster = (scope: ScopeId) => {
+    let pending = sourceRosters.get(scope);
+    if (!pending) {
+      pending =
+        input.currentScopeMembers?.(scope).catch(swallowAs("memory disclosure: source audience", [])) ??
+        Promise.resolve(undefined);
+      sourceRosters.set(scope, pending);
+    }
+    return pending;
+  };
   function entitled(person: Principal, scope: ScopeId): Promise<boolean> {
     return once(`member:${person.id}:${scope}`, async () => {
       const { kind, ref } = parseScopeId(scope);
@@ -47,6 +59,10 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
       if (kind === "org") return native(scope);
       if (kind === "team") return native(scope) && person.teamIds?.includes(ref) === true;
       if (scope === input.targetScope && native(scope)) return true;
+      if (kind === "group" && native(scope)) {
+        const members = await roster(scope);
+        if (members !== undefined) return members.some((member) => samePerson(member.id, person.id));
+      }
       return (await input.isCurrentSharedScopeMember?.(person.id, scope)) === true;
     });
   }
@@ -59,8 +75,7 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
   function sourceAllowed(source: ScopeId, sensitivity: MemoryProvenance["sensitivity"]): Promise<boolean> {
     return once(`source:${source}:${sensitivity}`, async () => {
       if (!(await entitled(input.actor, source))) return false;
-      if (source === input.targetScope || (native(source) && ["org", "team"].includes(parseScopeId(source).kind ?? "")))
-        return allEntitled(source);
+      if (source === input.targetScope || native(source)) return allEntitled(source);
       if (!input.open || !input.config) return false;
       const personal = personalScope(input.actor.id);
       if ((await input.config.resolveSharingPostureDurable(personal, input.targetScope)) !== "open") return false;
@@ -85,8 +100,9 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
       }
     },
     allows(home: ScopeId, record: MemoryProvenance): Promise<boolean> {
-      const { sensitivity, sourceUnknown, sources } = record;
-      return once(`allows:${home}:${JSON.stringify([sensitivity, sourceUnknown, sources])}`, async () => {
+      const { sensitivity, sourceUnknown, sources, personalOnly } = record;
+      if (personalOnly && !personalTarget) return Promise.resolve(false);
+      return once(`allows:${home}:${JSON.stringify([sensitivity, sourceUnknown, sources, personalOnly])}`, async () => {
         const homeAllowed = async () => (await narrow(home)) || (await sourceAllowed(home, "unknown"));
         if ((sourceUnknown || sensitivity === "unknown") && !(await homeAllowed())) return false;
         if (!sources.length) return sourceUnknown && (await homeAllowed());

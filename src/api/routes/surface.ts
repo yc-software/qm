@@ -800,10 +800,11 @@ const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
 const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write: string]) => Promise<void>) =>
   agentMemory(async (ctx, memory, capability) => {
     const requestedScope = (ctx.body as { scope?: unknown } | undefined)?.scope;
-    if (requestedScope !== undefined && requestedScope !== "org") {
-      return sendJson(ctx.res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
+    if (requestedScope !== undefined && requestedScope !== "org" && requestedScope !== "team") {
+      return sendJson(ctx.res, 400, { error: "bad_request", message: 'scope must be "org" or "team" when present' });
     }
-    const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+    const writes = { org: capability.memory?.orgWrite, team: capability.memory?.teamWrite };
+    const write = requestedScope === undefined ? capability.memory?.write : writes[requestedScope as "org" | "team"];
     if (!write) {
       return sendJson(ctx.res, 403, {
         error: "forbidden",
@@ -850,6 +851,7 @@ const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capabi
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
   await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
     conversationScopeId: capability.scopeId,
+    ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
   });
   audit(
     { deps, tenant },

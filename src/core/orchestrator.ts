@@ -854,7 +854,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
       };
 
+      const document = storedSession
+        ? await deps.documentConversations?.knowledgeForSession(storedSession.id, actor.id)
+        : null;
       const context = await resolveTurnContext({
+        ...(document ? { document } : {}),
         tenant,
         external,
         actor,
@@ -1775,7 +1779,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
-          memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
+          memoryCaptureMetadata: () => ({
+            sessionId: session.id,
+            inheritedFacts: captureDependencies(),
+            ...(document ? { document, ...(document.mode === "private" ? { personalOnly: true as const } : {}) } : {}),
+          }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
@@ -2629,6 +2637,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           personConversationTurn,
           useMemory,
           captureDependencies,
+          ...(document ? { document } : {}),
           turnInput,
           reply,
           spine,

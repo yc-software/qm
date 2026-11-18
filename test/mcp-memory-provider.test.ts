@@ -429,3 +429,79 @@ test("a split write sends no batch once its deadline has passed", async () => {
   );
   assert.equal(calls, 2);
 });
+
+test("personal-only captures stay in a provenance-aware notebook and never reach an opaque MCP provider", async () => {
+  const { createPostgresMemoryService } = await import("../src/memory/postgres-memory-service.ts");
+  const { testDatabaseUrl } = await import("./support/test-database.ts");
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const sdk = client(calls);
+  const opaque = createMcpMemoryProvider({
+    read: { client: sdk, tool: "recall", timeoutMs: 100 },
+    write: { client: sdk, tool: "store", timeoutMs: 100 },
+  });
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  const memory = createRoutedMemoryService({
+    providers: { notebook, opaque },
+    routes: [
+      { provider: "notebook", scopes: ["personal"], capture: "automatic" },
+      { provider: "opaque", scopes: ["personal"], capture: "automatic", manage: false },
+    ],
+  });
+  await memory.capture(
+    "personal:u1",
+    ["Ordinary public preference"],
+    100,
+    { actorId: "u1", context: "conversation" },
+    { mode: "explicit", conversationScopeId: "personal:u1", inheritedFacts: [] },
+  );
+  assert.deepEqual(
+    calls.map((call) => call.args.content),
+    ["Ordinary public preference"],
+  );
+  await memory.capture(
+    "personal:u1",
+    ["Private document preference"],
+    101,
+    { actorId: "u1", context: "conversation" },
+    { mode: "explicit", conversationScopeId: "personal:u1", inheritedFacts: [], personalOnly: true },
+  );
+  assert.deepEqual(
+    calls.map((call) => call.args.content),
+    ["Ordinary public preference"],
+  );
+  assert.equal(
+    (await notebook.facts!("personal:u1")).find((fact) => fact.text === "Private document preference")?.personalOnly,
+    true,
+  );
+  const privateFact = (await notebook.facts!("personal:u1")).find(
+    (fact) => fact.text === "Private document preference",
+  )!;
+  await memory.capture(
+    "personal:u1",
+    ["Derived private preference"],
+    102,
+    { actorId: "u1", context: "conversation" },
+    { mode: "explicit", conversationScopeId: "personal:u1", inheritedFacts: [privateFact] },
+  );
+  assert.deepEqual(
+    calls.map((call) => call.args.content),
+    ["Ordinary public preference"],
+  );
+  const opaqueOnly = createRoutedMemoryService({
+    providers: { opaque },
+    routes: [{ provider: "opaque", scopes: ["personal"], capture: "automatic" }],
+  });
+  await assert.rejects(
+    opaqueOnly.capture(
+      "personal:u1",
+      ["Must not leave the notebook"],
+      102,
+      { actorId: "u1", context: "conversation" },
+      { mode: "automatic", personalOnly: true },
+    ),
+  );
+  assert.deepEqual(
+    calls.map((call) => call.args.content),
+    ["Ordinary public preference"],
+  );
+});

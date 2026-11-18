@@ -1,3 +1,4 @@
+import { writableNotebook, type MemoryAccess } from "../memory/policy.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
@@ -252,9 +253,9 @@ export interface ToolContext extends SurfaceToolDeps {
     scope?: ScopeId,
   ): Promise<{ hits: string[]; problems: MemoryProviderProblem[] } | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
-  memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
-  memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
-  memoryDelete(ids: string[], callId: string): Promise<MemoryForget | null>;
+  memoryAdd(facts: string[], scope?: ScopeId): Promise<MemoryWrite | null>;
+  memoryEdit(edits: MemoryEdit[], scope?: ScopeId): Promise<true | null>;
+  memoryDelete(ids: string[], callId: string, scope?: ScopeId): Promise<MemoryForget | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
@@ -518,7 +519,7 @@ export interface ToolContextDeps {
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
-  memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
+  memoryAccess?: MemoryAccess;
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
@@ -1176,8 +1177,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return scope !== undefined ? `### ${target}\n${quotedData(body)}` : quotedData(body);
     },
 
-    async memoryAdd(facts: string[]) {
-      const write = deps.memoryAccess?.write;
+    async memoryAdd(facts: string[], scope?: ScopeId) {
+      const write = writableNotebook(deps.memoryAccess, scope);
       if (!memory || !write) return null;
       return writeFacts(
         memory,
@@ -1194,8 +1195,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
-      const write = deps.memoryAccess?.write;
+    async memoryEdit(edits: MemoryEdit[], scope?: ScopeId): Promise<true | null> {
+      const write = writableNotebook(deps.memoryAccess, scope);
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
         ...deps.memoryCaptureMetadata?.(),
@@ -1204,8 +1205,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return true;
     },
 
-    async memoryDelete(ids: string[], callId: string) {
-      const write = deps.memoryAccess?.write;
+    async memoryDelete(ids: string[], callId: string, scope?: ScopeId) {
+      const write = writableNotebook(deps.memoryAccess, scope);
       if (!memory?.delete || !write) return null;
       return forgetFacts(
         memory,

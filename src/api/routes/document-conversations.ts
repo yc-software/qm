@@ -46,8 +46,10 @@ async function resolve(ctx: ApiCtx): Promise<void> {
     ...(previous ? { previous } : {}),
     ...(body.mode ? { mode: body.mode as "private" | "shared" } : {}),
   });
-  if (result.status !== "ok")
-    return sendJson(ctx.res, result.status === "forbidden" ? 403 : 503, { error: result.status });
+  if (result.status !== "ok") {
+    const status = { forbidden: 403, conflict: 409, unconfigured: 503 }[result.status];
+    return sendJson(ctx.res, status, { error: result.status });
+  }
   return sendJson(ctx.res, 200, result);
 }
 

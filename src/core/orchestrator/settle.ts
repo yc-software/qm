@@ -1,6 +1,6 @@
 import type { Tenant } from "../../tenants/context.ts";
 import type { AgentTurnResult } from "../../agent/agent.ts";
-import type { MemoryProvenance } from "../../memory/facts.ts";
+import type { MemoryCaptureMetadata, MemoryProvenance } from "../../memory/facts.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import { isAgentReply, type Item } from "../../sessions/items.ts";
@@ -32,6 +32,7 @@ export function startMemoryCapture(turn: {
   personConversationTurn: boolean;
   useMemory: boolean;
   captureDependencies: () => MemoryProvenance[];
+  document?: MemoryCaptureMetadata["document"];
   turnInput: string;
   reply: string;
   spine: SpineState;
@@ -71,6 +72,9 @@ export function startMemoryCapture(turn: {
       try {
         await onTurnEnd({
           scopeId: memoryScopeId,
+          ...(turn.document
+            ? { document: turn.document, ...(turn.document.mode === "private" ? { personalOnly: true as const } : {}) }
+            : {}),
           conversationScopeId: scopeId,
           ...(audienceScopeId ? { audienceScopeId } : {}),
           inheritedFacts: captureDependencies(),

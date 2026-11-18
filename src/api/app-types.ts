@@ -1,3 +1,4 @@
+import type { ManagedGroupDirectory } from "../resolution/scope-membership.ts";
 import type { PersonaHandover } from "../personas/persona-handover.ts";
 import type { Tenant } from "../tenants/context.ts";
 import type { PersonaService } from "../personas/persona-service.ts";
@@ -775,6 +776,7 @@ export interface AppDeps {
   teams?: Pick<TeamStore, "isMember" | "memberTeams">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
+  managedGroups?: ManagedGroupDirectory & Pick<ProjectStore, "membersMany">;
   deploy: DeployService;
   deployAppsDomain?: string;
   appGitPrincipals?: AppGitPrincipals;

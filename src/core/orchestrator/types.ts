@@ -1,3 +1,4 @@
+import type { DocumentConversations } from "../../documents/conversations.ts";
 import type { PersonaService } from "../../personas/persona-service.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -146,6 +147,7 @@ export interface OrchestratorDeps {
   memory: MemoryService;
   mcp?: McpToolService;
   memoryPolicy?: MemoryPolicy;
+  documentConversations?: Pick<DocumentConversations, "knowledgeForSession">;
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;

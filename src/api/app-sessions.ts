@@ -1004,7 +1004,7 @@ export function createSessionMethods(
 
     currentScopeMembers: createCurrentScopeMembers(
       {
-        managedGroups: deps.projects,
+        managedGroups: deps.managedGroups ?? deps.projects,
         directory: deps.directory,
         identity: deps.identity,
       },

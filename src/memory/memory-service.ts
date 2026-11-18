@@ -145,6 +145,7 @@ function editedText(text: string): string {
 function sameProvenance(a: MemoryProvenance, b: MemoryProvenance): boolean {
   return (
     a.sensitivity === b.sensitivity &&
+    a.personalOnly === b.personalOnly &&
     a.sourceUnknown === b.sourceUnknown &&
     a.sources.length === b.sources.length &&
     a.sources.every((source) => b.sources.includes(source))

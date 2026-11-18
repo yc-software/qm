@@ -24,6 +24,7 @@ function ctxFor(opts: {
   memory: ReturnType<typeof createPostgresMemoryService>;
   memoryScopeId?: ScopeId;
   deps?: Partial<ToolContextDeps>;
+  teamWrite?: ScopeId;
 }) {
   return createToolContext({
     tenant: testTenant,
@@ -41,7 +42,11 @@ function ctxFor(opts: {
     createdBy: opts.scope.split(":")[1] ?? opts.scope,
     memory: opts.memory,
     memoryScopeId: opts.memoryScopeId ?? opts.scope,
-    memoryAccess: { write: opts.memoryScopeId ?? opts.scope, read: [opts.memoryScopeId ?? opts.scope] },
+    memoryAccess: {
+      write: opts.memoryScopeId ?? opts.scope,
+      ...(opts.teamWrite ? { teamWrite: opts.teamWrite } : {}),
+      read: [opts.memoryScopeId ?? opts.scope, ...(opts.teamWrite ? [opts.teamWrite] : [])],
+    },
     ...opts.deps,
   });
 }
@@ -272,11 +277,8 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   );
   assert.match(textOf(await call(tool, { action: "read", scope: org })), /December/);
   assert.match(textOf(await call(tool, { action: "read", scope: "personal:someone-else" })), /isn't available/);
-  assert.match(
-    textOf(await call(tool, { action: "add", scope: org, facts: [{ text: "stolen" }] })),
-    /scope is only allowed/,
-  );
-  assert.match(textOf(await call(tool, { action: "delete", scope: org, ids: ["2"] })), /scope is only allowed/);
+  assert.match(textOf(await call(tool, { action: "add", scope: org, facts: [{ text: "stolen" }] })), /isn't available/);
+  assert.match(textOf(await call(tool, { action: "delete", scope: org, ids: ["2"] })), /isn't available/);
   assert.doesNotMatch(await memory.read(org), /stolen/);
   assert.match(await memory.read(org), /December/);
   const hits = (await ctx.memorySearch("deploys"))?.hits;
@@ -498,4 +500,19 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     /^Forgot acme:8\.\n\[memory_provider_failed\] QM's notebook failed to forget this delete's notebook ids, so they're still there\./,
   );
   assert.deepEqual(forgets(), [13, 14, 7, 8]);
+});
+
+test("team writes require an explicit authorized destination and never use a readable foreign notebook", async () => {
+  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const document = "group:document-a";
+  const team = "group:team-a";
+  const shared = ctxFor({ scope: document, memory, teamWrite: team });
+  assert.equal((await shared.memoryAdd(["Reusable procedure"], "team"))?.added, 1);
+  assert.match(await memory.read(team), /Reusable procedure/);
+  assert.equal(await memory.read(document), "");
+  const privateContext = ctxFor({ scope: "personal:U1", memory });
+  assert.equal(await privateContext.memoryAdd(["Private procedure"], "team"), null);
+  assert.equal(await shared.memoryAdd(["Other team's procedure"], "group:team-b"), null);
+  assert.equal(await memory.read("group:team-b"), "");
+  assert.doesNotMatch(await memory.read(team), /Private procedure/);
 });

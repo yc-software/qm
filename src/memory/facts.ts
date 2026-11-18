@@ -8,6 +8,7 @@ export interface MemoryProvenance {
   sensitivity: MemorySensitivity;
   sources: ScopeId[];
   sourceUnknown: boolean;
+  personalOnly?: true;
 }
 
 export interface MemoryFact extends MemoryProvenance {
@@ -23,6 +24,8 @@ export interface MemoryCaptureMetadata {
   conversationScopeId?: ScopeId;
   sessionId?: string;
   sensitivity?: MemorySensitivity;
+  personalOnly?: true;
+  document?: { teamScopeId: ScopeId; documentScopeId: ScopeId; mode: "shared" | "private" };
   inheritedFacts?: readonly MemoryProvenance[];
 }
 
@@ -56,7 +59,12 @@ export function mergeProvenance(
       sensitivity = item.sensitivity;
     for (const source of item.sources) sources.add(source);
   }
-  return { sensitivity, sources: [...sources], sourceUnknown: items.some((item) => item.sourceUnknown) };
+  return {
+    sensitivity,
+    sources: [...sources],
+    sourceUnknown: items.some((item) => item.sourceUnknown),
+    ...(items.some((item) => item.personalOnly) ? { personalOnly: true } : {}),
+  };
 }
 
 export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
@@ -66,6 +74,7 @@ export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata
     sensitivity: merged.sensitivity,
     sources: merged.sources.includes(source) ? merged.sources : [...merged.sources, source],
     sourceUnknown: merged.sourceUnknown || context?.inheritedFacts === undefined,
+    ...(merged.personalOnly || context?.personalOnly ? { personalOnly: true } : {}),
   };
 }
 

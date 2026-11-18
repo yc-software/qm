@@ -73,6 +73,7 @@ function fact(row: Row): MemoryFact {
     sensitivity: isMemorySensitivity(sensitivity) ? sensitivity : "unknown",
     sources: (row.sources as string[] | null) ?? [],
     sourceUnknown: row.source_unknown === true,
+    ...(row.personal_only === true ? { personalOnly: true as const } : {}),
     ...(row.author ? { author: String(row.author) } : {}),
     ...(row.session_id ? { sessionId: String(row.session_id) } : {}),
     createdAt: Number(row.created_at),
@@ -80,7 +81,7 @@ function fact(row: Row): MemoryFact {
   };
 }
 
-const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at
+const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, personal_only, author, session_id, created_at, updated_at
   FROM memory_facts WHERE scope_id = $1 AND deleted_at IS NULL ORDER BY id`;
 
 export const MEMORY_FACTS_MIGRATIONS = [
@@ -110,6 +111,10 @@ export const MEMORY_FACTS_MIGRATIONS = [
     id: "memory/facts/0004-session-id",
     statements: ["ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS session_id TEXT"],
   },
+  {
+    id: "memory/facts/0005-personal-only",
+    statements: ["ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS personal_only BOOLEAN NOT NULL DEFAULT false"],
+  },
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
@@ -120,8 +125,8 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
       list: async () => (await client.query(LIVE, [scopeId])).rows.map(fact),
       async insert(f) {
         await client.query(
-          `INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          `INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at, personal_only)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [
             scopeId,
             f.text,
@@ -132,13 +137,15 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
             f.sessionId ?? null,
             f.createdAt,
             f.updatedAt,
+            f.personalOnly === true,
           ],
         );
       },
       async update(id, patch, at) {
         await client.query(
           `UPDATE memory_facts SET text = COALESCE($3, text), sensitivity = COALESCE($4, sensitivity),
-             sources = COALESCE($5, sources), source_unknown = COALESCE($6, source_unknown), updated_at = $7
+             sources = COALESCE($5, sources), source_unknown = COALESCE($6, source_unknown), updated_at = $7,
+             personal_only = personal_only OR COALESCE($8, false)
            WHERE scope_id = $1 AND id = $2`,
           [
             scopeId,
@@ -148,6 +155,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
             patch.sources ?? null,
             patch.sourceUnknown ?? null,
             at,
+            patch.personalOnly === true,
           ],
         );
       },

@@ -1,3 +1,4 @@
+import { DOCUMENT_GROUP_PREFIX } from "./groups.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
@@ -13,8 +14,25 @@ export interface DocumentConversation {
   sessionId: string;
   mode: DocumentMode;
 }
+export interface DocumentKnowledge {
+  documentKey: string;
+  projectId: string;
+  teamScopeId: string;
+  documentScopeId: string;
+  mode: DocumentMode;
+  sharedAccess: boolean;
+}
 export type DocumentRecord =
   | { kind: "surface"; projectId: string }
+  | { kind: "knowledge"; groupRef: string; projectId: string }
+  | {
+      kind: "session";
+      documentKey: string;
+      projectId: string;
+      scopeId: string;
+      mode: DocumentMode;
+      principalId?: string;
+    }
   | { kind: "document"; projectId: string; threadRef?: string }
   | { kind: "conversation"; scopeId: string; threadRef: string }
   | { kind: "preference"; mode: DocumentMode };
@@ -29,6 +47,44 @@ export function createDocumentConversations(deps: {
   sessions: SessionStore;
 }) {
   return {
+    async knowledgeGroups(refs: readonly string[]) {
+      return (await deps.backing.getMany(refs.map((ref) => key("knowledge", ref)))).filter(
+        (record): record is Extract<DocumentRecord, { kind: "knowledge" }> => record.kind === "knowledge",
+      );
+    },
+    async knowledgeForSession(sessionId: string, principalId: string): Promise<DocumentKnowledge | null> {
+      let cursor: string | undefined = sessionId;
+      const seen = new Set<string>();
+      let record: DocumentRecord | null = null;
+      while (cursor) {
+        if (seen.has(cursor)) throw new Error("Cyclic document session ancestry");
+        seen.add(cursor);
+        record = await deps.backing.get(key("session", cursor));
+        if (record?.kind === "session") break;
+        cursor = (await deps.sessions.get(cursor))?.parentSessionId;
+      }
+      if (record?.kind !== "session") return null;
+      if (record.mode === "private" && !samePerson(record.principalId ?? "", principalId))
+        throw new Error("Private document owner does not match session actor");
+      if (cursor !== sessionId) {
+        const inherited = await deps.backing.putIfAbsent(key("session", sessionId), record);
+        if (
+          inherited.kind !== "session" ||
+          inherited.documentKey !== record.documentKey ||
+          inherited.mode !== record.mode
+        )
+          throw new Error("Derived document session has a different association");
+      }
+      const members = await deps.projects.members(projectGroupRef(record.projectId));
+      return {
+        documentKey: record.documentKey,
+        projectId: record.projectId,
+        teamScopeId: projectScopeId(record.projectId),
+        documentScopeId: `group:${DOCUMENT_GROUP_PREFIX}${record.documentKey}`,
+        mode: record.mode,
+        sharedAccess: members?.some((member) => samePerson(member, principalId)) === true,
+      };
+    },
     async configure(surface: string, projectId: string): Promise<boolean> {
       if (!(await deps.projects.get(projectId))) return false;
       await deps.backing.put(key("surface", surface), { kind: "surface", projectId });
@@ -40,7 +96,9 @@ export function createDocumentConversations(deps: {
       principalId: string;
       mode?: DocumentMode;
       previous?: { scopeId: string; threadRef: string };
-    }): Promise<{ status: "ok"; conversation: DocumentConversation } | { status: "unconfigured" | "forbidden" }> {
+    }): Promise<
+      { status: "ok"; conversation: DocumentConversation } | { status: "unconfigured" | "forbidden" | "conflict" }
+    > {
       const configured = await deps.backing.get(key("surface", input.surface));
       if (configured?.kind !== "surface") return { status: "unconfigured" };
       const documentKey = key("document", input.surface, input.documentId);
@@ -83,10 +141,15 @@ export function createDocumentConversations(deps: {
           mode,
           mode === "private" ? input.principalId : "",
         );
+        const priorSession = mode === "shared" && sharedThread ? await deps.sessions.getByThread(sharedThread) : null;
+        const priorAssociation = priorSession ? await deps.backing.get(key("session", priorSession.id)) : null;
+        const canAdopt =
+          sharedThread &&
+          (!priorAssociation || (priorAssociation.kind === "session" && priorAssociation.documentKey === documentKey));
         const binding = await deps.backing.putIfAbsent(bindingKey, {
           kind: "conversation",
           scopeId,
-          threadRef: mode === "shared" && sharedThread ? sharedThread : `web:${input.principalId}:${randomUUID()}`,
+          threadRef: mode === "shared" && canAdopt ? sharedThread : `web:${input.principalId}:${randomUUID()}`,
         });
         if (binding.kind !== "conversation" || binding.scopeId !== scopeId)
           throw new Error("Document conversation binding has an invalid owner");
@@ -98,6 +161,30 @@ export function createDocumentConversations(deps: {
           "web",
         );
         if (session.scopeId !== scopeId) throw new Error("Document session has a different owner");
+        const groupRef = `${DOCUMENT_GROUP_PREFIX}${documentKey}`;
+        const knowledge = await deps.backing.putIfAbsent(key("knowledge", groupRef), {
+          kind: "knowledge",
+          groupRef,
+          projectId: project.id,
+        });
+        if (knowledge.kind !== "knowledge" || knowledge.projectId !== project.id)
+          throw new Error("Document knowledge has a different audience");
+        const association = await deps.backing.putIfAbsent(key("session", session.id), {
+          kind: "session",
+          documentKey,
+          projectId: project.id,
+          scopeId,
+          mode,
+          ...(mode === "private" ? { principalId: input.principalId } : {}),
+        });
+        if (
+          association.kind !== "session" ||
+          association.documentKey !== documentKey ||
+          association.projectId !== project.id ||
+          association.scopeId !== scopeId ||
+          association.mode !== mode
+        )
+          return { status: "conflict" as const };
         await deps.sessions.addParticipant(session.id, input.principalId);
         if (input.mode !== undefined) await deps.backing.put(preferenceKey, { kind: "preference", mode });
         return {

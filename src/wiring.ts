@@ -1,3 +1,5 @@
+import { createDocumentMemory } from "./documents/memory.ts";
+import { createDocumentGroups } from "./documents/groups.ts";
 import {
   createDocumentConversations,
   type DocumentConversations,
@@ -578,6 +580,7 @@ export interface BuiltApp {
   directory: DirectoryStore;
   projects: ProjectStore;
   documentConversations: DocumentConversations;
+  managedGroups: ReturnType<typeof createDocumentGroups>;
   environments: EnvironmentStore;
   processes?: ProcessRegistry;
   appPageViews?: AppPageViewLog;
@@ -1887,14 +1890,6 @@ export function buildApp(
         provisionWorkspace.bind(null, config.workspaceProvisionerUrl, provisionerSigningKey(config.signingSecret!)),
       )
     : undefined;
-  const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
-    agent,
-    memory: baseMemory,
-    captureQuietMs: config.memoryCaptureQuietMs,
-    ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
-    onCaptureError: (e, scope) =>
-      recordAmbientError({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
-  });
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
     return (
@@ -1914,6 +1909,15 @@ export function buildApp(
     projects,
     sessions,
   });
+  const managedGroups = createDocumentGroups(documentConversations, projects);
+  const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
+    agent,
+    memory: createDocumentMemory(baseMemory, documentConversations, auditLog),
+    captureQuietMs: config.memoryCaptureQuietMs,
+    ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
+    onCaptureError: (e, scope) =>
+      recordAmbientError({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
+  });
   const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
     store: personaStore,
@@ -1930,15 +1934,15 @@ export function buildApp(
     orgAdmins: async () => (await admin.listGrants(ambientTenant())).filter((grant) => grant.role === "org_admin"),
     auditLog,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
+  const canReadScope = createCanReadScope({ managedGroups, directory, identity, teams, sessions, personas });
+  const canWriteScope = createCanWriteScope({ managedGroups, directory, identity, teams, personas });
+  const canManageScope = createCanManageScope({ managedGroups, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams, personas },
+    { managedGroups, directory, identity, teams, personas },
     canManageScope,
   );
-  const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
-  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
+  const currentScopeMembers = createCurrentScopeMembers({ managedGroups, directory, identity });
+  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups, directory, identity });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -2330,9 +2334,10 @@ export function buildApp(
     resolveSessionRuntime,
     directory,
     isCurrentSharedScopeMember,
-    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
-    managedGroups: projects,
+    currentScopeMembers: createCurrentScopeMembers({ managedGroups, directory, identity }, true),
+    managedGroups,
     projects,
+    documentConversations,
     personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions
@@ -2495,6 +2500,7 @@ export function buildApp(
         }
       : {}),
     projects,
+    managedGroups,
     personas,
     personaHandover,
     environments,
@@ -3332,6 +3338,7 @@ export function buildApp(
     ...(brokerSessions ? { brokerSessions } : {}),
     directory,
     projects,
+    managedGroups,
     documentConversations,
     environments,
     ...(processes ? { processes } : {}),

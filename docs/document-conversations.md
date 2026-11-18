@@ -28,3 +28,35 @@ Bindings use atomic put-if-absent. Project roster locking coordinates resolution
 A client adopting existing settings may include `previous: { scopeId, threadRef }`. Resolution accepts only an existing managed project whose active roster includes that person. If the thread exists, its actual session scope must match. The association retains that project and existing thread; nothing copies history or broadens its audience. An unused reference receives a fresh thread in the original project. Subsequent resolutions use the durable association rather than further client hints.
 
 No old fields are moved or dropped. Adoption adds `["document", surface, documentId]` with `{ "kind": "document", "projectId": "p1", "threadRef": "web:alice:<uuid>" }`; `threadRef` is present only when adopting an existing session. New documents omit it. Existing embedded clients are unaffected until they call the new API. The table and mapping must be available before enabling clients that require resolution. Automatic knowledge routing and additional authorized read destinations are separate work; this API alone does not establish their privacy guarantees.
+
+## Automatic knowledge routing
+
+Each document association also defines a group knowledge scope, `group:document-<document record hash>`. The managed-group directory resolves its membership and version from the original parent project on each request. It stores no copied roster. Batch membership resolves parent projects together; disclosure loads each source roster once per read and preserves linked-person identity checks. Unknown associations deny membership.
+
+A session is indexed to exactly one document association. The index is immutable: resolving another document with the same saved legacy thread creates a fresh conversation instead of changing the first session's document. Actual malformed/conflicting stored associations produce 409. Team remapping continues to affect new associations only.
+
+Shared document turns can recall relevant team and current-document knowledge, subject to the full conversation audience's current entitlement. Other documents' scopes are not added to recall. These native reads do not require open sharing. Document turns do not automatically carry unrelated personal/open-scope files, skills, or memory into the conversation.
+
+The ordinary memory tool defaults writes to the current document. `scope=team` selects the authoritative team notebook only when the server issued `teamWrite`; private conversations receive no such grant. Edit/delete use the same writable-notebook check. The agent self-API accepts the same bounded `scope: "team"` destination, alongside its existing org-admin destination. Private document turns do not receive automatic org-write capability.
+
+Automatic post-turn extraction uses the existing utility-model request with a structured applicability result: team, document, or discard. Scope IDs and provenance come from server metadata, never model output. Unrecognized applicability remains document-specific. The extractor excludes transient values/results and treats only the user's own directives as applicability instructions. Private captures remain in the owner's personal notebook. Captures are audited by destination, count, session, and private status without including their text in the audit event.
+
+## Additional persistence changes
+
+The durable map now also contains these complete JSON shapes (examples invented):
+
+| Key components                                     | JSON value                                                                                                                                                  |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `["knowledge", "document-<document record hash>"]` | `{ "kind": "knowledge", "groupRef": "document-<document record hash>", "projectId": "p1" }`                                                                 |
+| `["session", "session1"]`                          | `{ "kind": "session", "documentKey": "<document record hash>", "projectId": "p1", "scopeId": "group:web-project-p1", "mode": "shared" }`                    |
+| `["session", "session2"]`                          | `{ "kind": "session", "documentKey": "<document record hash>", "projectId": "p1", "scopeId": "personal:alice", "mode": "private", "principalId": "alice" }` |
+
+These are direct-key records in the same tenant-bound map. No new index, environment setting, or scope kind is added. Resolution populates metadata for adopted sessions before use; existing session content remains in its original store and audience.
+
+Migration `memory/facts/0005-personal-only` adds `memory_facts.personal_only BOOLEAN NOT NULL DEFAULT false`. All existing columns, keys and indexes remain unchanged. Existing rows get false; this does not reinterpret historical ordinary chats as private. New private document captures and edits set true. For example, an old personal fact row retains its text, source scopes, sensitivity, timestamps and session id with `personal_only=false`; replacing it from a private document changes its text/timestamp and sets `personal_only=true`.
+
+The TypeScript provenance shape adds optional `personalOnly: true`; false SQL values remain absent in that shape. Duplicate merges, edits and derived facts retain the strongest restriction, and SQL updates cannot clear true. Disclosure applies it before native/open-sharing exceptions, including a shared audience containing only the owner. Linked owner identities remain eligible only in their personal context.
+
+Opaque memory providers cannot retain this provenance. Routing therefore withholds direct and inherited personal-only captures from those providers. A configured provenance-aware notebook receives the private capture; if no eligible notebook route exists, capture is denied rather than sent to the opaque provider. Existing provider capture-off policies remain effective.
+
+Deploy the migration and updated API/workers before enabling the Excel changes; do not enable private capture while older workers can still process new turns. Older code does not enforce the new provenance field, so rolling back requires disabling the new client behavior first. There is no automatic publication or audience expansion for previously captured private facts.

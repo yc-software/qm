@@ -1,3 +1,4 @@
+import type { MemoryAccess } from "../memory/policy.ts";
 import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
@@ -86,7 +87,7 @@ export interface CapabilityClaims {
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
-  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
+  memory?: MemoryAccess;
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;

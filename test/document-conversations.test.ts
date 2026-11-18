@@ -146,6 +146,16 @@ test("adopting an existing document preserves its audience and thread while new 
     if (adopted.status !== "ok") throw new Error("missing adopted binding");
     assert.equal(adopted.conversation.sessionId, old.id);
     assert.equal(adopted.conversation.scopeId, old.scopeId);
+    const originalKnowledge = await built.documentConversations.knowledgeForSession(old.id, "owner");
+    const separate = await built.documentConversations.resolve({ ...input, documentId: "independent-copy" });
+    assert.equal(separate.status, "ok");
+    if (separate.status !== "ok") throw new Error("missing separate conversation");
+    assert.notEqual(separate.conversation.sessionId, old.id);
+    assert.deepEqual(await built.documentConversations.knowledgeForSession(old.id, "owner"), originalKnowledge);
+    assert.notEqual(
+      (await built.documentConversations.knowledgeForSession(separate.conversation.sessionId, "owner"))?.documentKey,
+      originalKnowledge?.documentKey,
+    );
     assert.deepEqual(
       await built.documentConversations.resolve({ surface, documentId: "existing", principalId: "member" }),
       { status: "forbidden" },

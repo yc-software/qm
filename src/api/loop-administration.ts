@@ -32,7 +32,7 @@ export async function loopAdministration(
     {
       directory: deps.directory,
       identity: deps.identity,
-      ...(deps.projects ? { managedGroups: deps.projects } : {}),
+      ...(deps.managedGroups || deps.projects ? { managedGroups: deps.managedGroups ?? deps.projects } : {}),
       ...(deps.personas ? { personas: deps.personas } : {}),
     },
     actorId,

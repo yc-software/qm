@@ -151,7 +151,11 @@ async function mintControlPlaneTokens(
   const securityPolicy = resolution.securityPolicy;
   let actorIsOrgAdmin = false;
   let orgMemoryWrite: ScopeId | undefined;
-  const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
+  const orgMemoryWritable =
+    useMemory &&
+    memoryPolicy.capture !== "off" &&
+    !memoryAccess?.personalOnly &&
+    resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
   const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(triggeredTurn ? { triggered: true } : {}) };
   const runBinding = {

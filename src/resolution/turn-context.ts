@@ -1,3 +1,4 @@
+import type { DocumentKnowledge } from "../documents/conversations.ts";
 import { memoryRecallLabels } from "../memory/recall-labels.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
@@ -25,6 +26,7 @@ import type { Tenant } from "../tenants/context.ts";
 
 type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
   tenant: Tenant;
+  document?: DocumentKnowledge;
   resolution: Resolution;
   audienceScopeId?: ScopeId;
   external?: boolean;
@@ -46,12 +48,21 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
 
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
-  const sharingSources = input.external
-    ? []
-    : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+  const sharingSources =
+    input.external || input.document
+      ? []
+      : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
   const memoryScopeId = resolution.writableScopeId;
+  const documentScopes = input.document?.sharedAccess
+    ? [input.document.teamScopeId, input.document.documentScopeId]
+    : [];
   const baseRecallScopes = useMemory
-    ? recallMemoryScopes(memoryPolicy, memoryScopeId, resolution.readOnlyScopeIds)
+    ? [
+        ...new Set([
+          ...recallMemoryScopes(memoryPolicy, memoryScopeId, resolution.readOnlyScopeIds),
+          ...(memoryPolicy.recall === "visible" ? documentScopes : []),
+        ]),
+      ]
     : [];
   const read = [
     ...new Set([...baseRecallScopes, ...(useMemory && memoryPolicy.recall === "visible" ? sharingSources : [])]),
@@ -59,8 +70,14 @@ export async function resolveTurnContext(input: ContextInput) {
   const memoryAccess =
     (useMemory && memoryPolicy.capture !== "off") || read.length
       ? {
-          ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
+          ...(useMemory && memoryPolicy.capture !== "off"
+            ? { write: input.document?.mode === "shared" ? input.document.documentScopeId : memoryScopeId }
+            : {}),
           read,
+          ...(input.document?.mode === "shared" && input.document.sharedAccess && memoryPolicy.capture !== "off"
+            ? { teamWrite: input.document.teamScopeId }
+            : {}),
+          ...(input.document?.mode === "private" ? { personalOnly: true as const } : {}),
           ...(input.notebookOnly ? { notebookOnly: true as const } : {}),
         }
       : undefined;
@@ -163,9 +180,10 @@ export async function resolveTurnContext(input: ContextInput) {
     },
     listFiles: () => handles,
     listSkills: async (sources?: readonly string[]) => {
-      const sharingSources = input.external
-        ? []
-        : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+      const sharingSources =
+        input.external || input.document
+          ? []
+          : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
       const skillScopes = [
         ...new Set([
           memoryScopeId,

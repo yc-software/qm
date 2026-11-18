@@ -472,7 +472,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   const scopeMembershipDeps = {
-    ...(deps.projects ? { managedGroups: deps.projects } : {}),
+    ...(deps.managedGroups || deps.projects ? { managedGroups: deps.managedGroups ?? deps.projects } : {}),
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.identity ? { identity: deps.identity } : {}),
     ...(deps.teams ? { teams: deps.teams } : {}),
@@ -731,7 +731,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         {
           directory: deps.directory,
           ...(deps.identity ? { identity: deps.identity } : {}),
-          ...(deps.projects ? { managedGroups: deps.projects } : {}),
+          ...(deps.managedGroups || deps.projects ? { managedGroups: deps.managedGroups ?? deps.projects } : {}),
           ...(deps.personas ? { personas: deps.personas } : {}),
           ...(deps.teams
             ? {
