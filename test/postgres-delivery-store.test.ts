@@ -1,7 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
-import { currentTenant } from "../src/tenants/context.ts";
+import { currentTenant, withTenant } from "../src/tenants/context.ts";
+import type { Delivery } from "../src/types.ts";
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
@@ -101,11 +102,14 @@ test("pg delivery store: one target's same-millisecond rows are claimed in creat
   for (let i = 0; i < 20; i++) for (const text of ["first", "second"]) await enqueue(i, text);
   t.mock.restoreAll();
   const sent = new Map<string, string[]>();
-  for (let rows; (rows = await store.claimDue("webhook", 60_000)).length;)
-    for (const d of rows) {
-      sent.set(d.destination.target, [...(sent.get(d.destination.target) ?? []), d.text]);
-      await store.ack(d.id, now);
-    }
+  const send = async (d: Delivery) => {
+    sent.set(d.destination.target, [...(sent.get(d.destination.target) ?? []), d.text]);
+    await store.ack(d.id, now);
+  };
+  const head = (i: number) =>
+    withTenant(currentTenant(), (tenant) => store.claimHead(tenant, "webhook", `tie-${i}`, 60_000));
+  for (let i = 0; i < 20; i++) if (i % 4 < 2) for (let h; (h = await head(i));) await send(h.delivery);
+  for (let rows; (rows = await store.claimDue("webhook", 60_000)).length;) for (const d of rows) await send(d);
   assert.deepEqual(new Set([...sent.values()].map(String)), new Set(["first,second"]));
 });
 
