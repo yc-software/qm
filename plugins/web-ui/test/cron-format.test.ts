@@ -5,7 +5,11 @@ import {
   cronRunSummary,
   cronScheduleDetail,
   cronScheduleSummary,
+  describeSchedule,
   formatCronDateTime,
+  presetCron,
+  presetNextRuns,
+  schedulePreset,
 } from "../src/cron-format.ts";
 
 const baseCron = {
@@ -236,4 +240,28 @@ test("formatCronDateTime matches the legacy hand-rolled formatter across timezon
       }
     }
   }
+});
+
+test("calendar presets round-trip and read as plain words; anything else stays custom", () => {
+  for (const [cron, words] of [
+    ["15 * * * *", "Every hour at :15"],
+    ["0 9 * * *", "Every day at 9:00 AM"],
+    ["30 7 * * 1-5", "Weekdays at 7:30 AM"],
+    ["0 17 * * 5", "Every Friday at 5:00 PM"],
+  ] as const) {
+    assert.equal(presetCron(schedulePreset(cron)!), cron);
+    assert.equal(describeSchedule({ cron }), words);
+  }
+  assert.equal(schedulePreset("0 9 1 * *"), null);
+  assert.equal(describeSchedule({ cron: "0 9 1 * *" }), "Custom: 0 9 1 * *");
+  assert.equal(describeSchedule({ everyMs: 900_000 }), "Every 15 minutes");
+});
+
+test("weekday preset previews skip the weekend and keep wall-clock time across DST", () => {
+  const friday = Date.UTC(2026, 9, 30, 20);
+  const runs = presetNextRuns({ kind: "weekdays", hour: 9, minute: 0 }, "America/Los_Angeles", 3, friday);
+  assert.deepEqual(
+    runs.map((ms) => new Date(ms).toISOString()),
+    ["2026-11-02T17:00:00.000Z", "2026-11-03T17:00:00.000Z", "2026-11-04T17:00:00.000Z"],
+  );
 });
