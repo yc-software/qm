@@ -1,5 +1,6 @@
 import { openDesktopBrowser } from "../../../chassis/src/desktop-browser.ts";
 import { SettingState } from "./setting-state.ts";
+import type { AdminPage } from "./sections.ts";
 export type Api = (
   method: string,
   path: string,
@@ -161,6 +162,64 @@ class ConnectorsState extends Status {
   }
 }
 export const connectors = new ConnectorsState();
+
+type CoreMcpServer = { id: string; url: string; enabled: boolean; auth: string };
+
+class CoreConnectorState extends SettingState {
+  server?: CoreMcpServer;
+  loadError = "";
+  collect() {
+    return { url: String(this.draft.url ?? "").trim(), enabled: this.draft.enabled ?? true };
+  }
+  async load(page: AdminPage) {
+    this.available = false;
+    this.server = undefined;
+    this.draft = {};
+    this.loadError = "";
+    this.loaded();
+    const result = await page.api<{ servers: CoreMcpServer[] }>("GET", "/api/mcp-servers");
+    if (!page.current()) return;
+    if (!result.ok || !result.data) {
+      this.loadError = denied(result, "Failed to load Core MCP.");
+      this.render();
+      return;
+    }
+    this.server = result.data.servers.find((server) => server.id === "core");
+    if (this.server && this.server.auth !== "oauth-user") {
+      this.loadError = "The core ID is already used by another MCP server.";
+      this.render();
+      return;
+    }
+    this.draft = { url: this.server?.url ?? "", enabled: this.server?.enabled ?? true };
+    this.available = true;
+    this.loaded();
+  }
+  async persist(page: AdminPage) {
+    const draft = this.collect();
+    if (!this.available || this.saving || !draft.url || !this.dirty) return;
+    Object.assign(this, { saving: true, message: "Saving...", tone: "saving" }).render();
+    const payload = this.server
+      ? { enabled: draft.enabled }
+      : { ...draft, name: "Core", auth: "oauth-user", oauthScopes: ["ontology:read"] };
+    const result = await page.api<{ server: CoreMcpServer }>(
+      "PUT",
+      "/api/mcp-servers/core",
+      payload,
+      this.server ? undefined : { "if-none-match": "*" },
+    );
+    if (!page.current()) return;
+    if (!result.ok || !result.data) {
+      Object.assign(this, { saving: false, message: denied(result, "Failed to save Core MCP."), tone: "err" }).render();
+      return;
+    }
+    this.server = result.data.server;
+    this.draft.url = this.server.url;
+    this.commit({ url: this.server.url, enabled: this.server.enabled });
+  }
+}
+
+export const coreConnector = new CoreConnectorState("core-mcp");
+
 class SlackInstallationState extends Status {
   data: Record<string, any> = {};
   editor = false;

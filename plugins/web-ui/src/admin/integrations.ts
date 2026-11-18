@@ -10,6 +10,7 @@ import { repeat } from "lit/directives/repeat.js";
 import {
   states,
   connectors,
+  coreConnector,
   installation,
   emoji,
   context,
@@ -21,15 +22,19 @@ import {
 let page: AdminPage;
 let failure = "";
 const draw = () => page?.host.isConnected && render(template(), page.host);
-for (const owner of [...states.values(), connectors, installation]) owner.render = draw;
+for (const owner of [...states.values(), connectors, coreConnector, installation]) owner.render = draw;
 for (const s of states.values()) s.save = () => save(s);
+coreConnector.save = () => coreConnector.persist(page);
 
 export async function mount(next: AdminPage) {
   page = next;
   Object.assign(context, { api: next.api, orgScope: () => next.orgScope });
   failure = "";
   draw();
-  if (next.view === "connectors") return connectors.load();
+  if (next.view === "connectors") {
+    await Promise.all([connectors.load(), coreConnector.load(next)]);
+    return;
+  }
   void installation.load();
   const r = await next.api("GET", "/api/scopes/" + encodeURIComponent(next.orgScope) + "?view=slack-settings");
   if (!next.current()) return;
@@ -211,9 +216,8 @@ function connectorsCard() {
     <div class="head">
       <h2>OAuth apps</h2>
       <p>
-        Each connector needs its own OAuth app's client ID and secret before anyone can link it. A connector stays
-        hidden in everyone's web UI until you set its client here. The secret is write-only and never displayed. Applies
-        org-wide.
+        Configure these OAuth apps with a client ID and secret before users can link them. The settings apply to the
+        whole organization.
       </p>
     </div>
     <div class="body">
@@ -450,25 +454,47 @@ function connectorGuide() {
 function builtIns() {
   return html`<section class="card" id="card-built-in-connectors">
     <div class="head"><h2>Built-in connectors</h2></div>
-    <div class=${connectors.catalog.length ? "" : "hint"} id="built-in-connectors">
-      ${
-        connectors.catalog.length
-          ? repeat(
-              connectors.catalog,
-              (c) => c.provider,
-              (c) =>
-                html`<div class="credential-row">
-                  <div class="credential-main">
-                    <strong>${connectorName(c.provider)}</strong>
-                    <div class="hint">${c.configured ? "Available to users" : "Requires an OAuth app"}</div>
-                  </div>
-                  ${badge(c.configured ? "Configured" : "Not configured", c.configured ? "ok" : "muted")}
-                </div>`,
-            )
-          : "No built-in connectors are available."
-      }
+    <div id="built-in-connectors">
+      ${repeat(
+        connectors.catalog,
+        (c) => c.provider,
+        (c) =>
+          html`<div class="credential-row">
+            <div class="credential-main">
+              <strong>${connectorName(c.provider)}</strong>
+              <div class="hint">${c.configured ? "Available to users" : "Requires an OAuth app"}</div>
+            </div>
+            ${badge(c.configured ? "Configured" : "Not configured", c.configured ? "ok" : "muted")}
+          </div>`,
+      )}
+      ${coreConnectorRow()}
     </div>
   </section>`;
+}
+function coreConnectorRow() {
+  const s = coreConnector;
+  let status = "Not configured";
+  if (s.server) status = s.server.enabled ? "Configured" : "Disabled";
+  return html`<div class="credential-row">
+      <div class="credential-main"><strong>Core</strong></div>
+      ${s.available ? badge(status, s.server?.enabled ? "ok" : "muted") : nothing}
+    </div>
+    ${
+      s.available
+        ? html`<div class="body">
+            ${textField("Core MCP URL", 8, "core-mcp-url", s.draft.url, (url) => s.change("url", url), {
+              type: "url",
+              placeholder: "https://core.example.com/mcp",
+              disabled: Boolean(s.server) || s.saving,
+            })}
+            <p class="field-hint">
+              Users sign in with their own Core account. The default scope is <code>ontology:read</code>.
+            </p>
+            ${toggleField("Enabled", 8, s.draft.enabled, (enabled) => s.change("enabled", enabled), { id: "core-mcp-enabled" })}
+            ${saveFooter(s, "Save Core connector", !s.collect().url)}
+          </div>`
+        : html`<div class="body hint" role="status">${s.loadError || "Loading Core connector…"}</div>`
+    }`;
 }
 function emojiChanged(s: SlackSetting, names: string[]) {
   s.change({ names });

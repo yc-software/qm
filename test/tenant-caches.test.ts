@@ -230,6 +230,9 @@ function mcpStore(servers: Record<string, McpServer[]>): McpServerStore & { list
     async get(id) {
       return (servers[currentTenant()] ?? []).find((server) => server.id === id) ?? null;
     },
+    async insertIfAbsent() {
+      throw new Error("Unexpected MCP server registration");
+    },
     async put() {
       for (const listener of listeners) listener();
     },

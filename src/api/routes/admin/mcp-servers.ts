@@ -70,7 +70,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     });
   }
   const body = ctx.body as Partial<McpServer> & { validate?: boolean };
+  const createOnly = ctx.req.headers["if-none-match"] === "*";
+  const alreadyRegistered = () =>
+    sendJson(ctx.res, 412, {
+      error: "precondition_failed",
+      message: "This MCP server already exists. Reload its settings.",
+    });
   const existing = await ctx.deps.mcpServers.get(id);
+  if (createOnly && existing) return alreadyRegistered();
   const b: typeof body = {
     ...existing,
     ...Object.fromEntries(Object.entries(body).filter(([, v]) => v != null && v !== "")),
@@ -256,7 +263,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       });
     }
   }
-  await ctx.deps.mcpServers.put(server);
+  if (createOnly) {
+    if (!(await ctx.deps.mcpServers.insertIfAbsent(server))) return alreadyRegistered();
+  } else {
+    await ctx.deps.mcpServers.put(server);
+  }
   audit(ctx, {
     principalId: authorized.id,
     action: "mcp-servers.update",

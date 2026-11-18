@@ -46,6 +46,7 @@ export function isValidMcpServerId(id: string): boolean {
 export interface McpServerStore {
   list(): Promise<McpServer[]>;
   get(id: string): Promise<McpServer | null>;
+  insertIfAbsent(server: McpServer): Promise<boolean>;
   put(server: McpServer): Promise<void>;
   delete(id: string): Promise<void>;
   onChange(listener: () => void): () => void;
@@ -59,6 +60,11 @@ export function createMcpServerStore(backing: DurableMap<McpServer>): McpServerS
       return entries.map(([, v]) => v).sort((a, b) => a.id.localeCompare(b.id));
     },
     get: (id) => backing.get(id),
+    async insertIfAbsent(server) {
+      if (!(await backing.insertIfAbsent(server.id, server))) return false;
+      listeners.emit();
+      return true;
+    },
     put: async (server) => {
       await backing.put(server.id, server);
       listeners.emit();

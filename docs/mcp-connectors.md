@@ -1,9 +1,17 @@
 # MCP connector credentials
 
+To set up Core, open **Settings → Connectors → Built-in connectors**, enter your
+deployment's Core MCP URL, and save. This setup uses OAuth discovery and dynamic
+client registration. QM requests `ontology:read` by default. Each user connects
+their Core account with the `core_sign_in` tool. After setup, the panel displays the
+registered URL and lets administrators enable or disable the connector.
+
 Administrators register HTTP MCP servers through `PUT /v1/admin/mcp-servers/:id`
 from an administrator session (`/api/admin/mcp-servers/:id` in the web UI behind the portal); agent tokens
 are refused, so an agent cannot change which tools it may call or which calls need
 approval. Registration controls the outbound destination and the tools available to agents.
+Send `If-None-Match: *` to create a registration only if its ID is free. If the ID
+is already registered, QM returns HTTP 412.
 
 `approval` decides which calls pause for a person's approval, bound to the exact
 arguments and good for one call: `annotations` (the default; tools annotated

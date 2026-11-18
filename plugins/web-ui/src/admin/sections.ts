@@ -84,7 +84,12 @@ export interface AdminPage {
   session: string | null;
   params: URLSearchParams;
   apiBase: string;
-  api: <T = any>(method: string, path: string, body?: unknown) => Promise<AdminResponse<T>>;
+  api: <T = any>(
+    method: string,
+    path: string,
+    body?: unknown,
+    headers?: Record<string, string>,
+  ) => Promise<AdminResponse<T>>;
   href: (view: string, params?: Record<string, string | number | null | undefined>, path?: string) => string;
   go: (url: string, replace?: boolean) => void;
   current: () => boolean;
@@ -121,13 +126,19 @@ const pages = {
 const loadAdminPage = (view: string) =>
   Promise.all([import("./entry.ts"), pages[view]!()]).then(([, module]) => module);
 
-async function adminApi(base: string, method: string, path: string, body?: unknown): Promise<AdminResponse> {
+async function adminApi(
+  base: string,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<AdminResponse> {
   let res: Response;
   let text: string;
   try {
     res = await webFetch(base + (path.startsWith("/api/") ? path.slice("/api".length) : path), {
       method,
-      headers: body === undefined ? {} : { "content-type": "application/json" },
+      headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     text = await res.text();
@@ -180,7 +191,7 @@ export function adminMounter(options: {
       session: route.session,
       params: route.params,
       apiBase: options.apiBase,
-      api: (method, path, body) => adminApi(options.apiBase, method, path, body),
+      api: (method, path, body, headers) => adminApi(options.apiBase, method, path, body, headers),
       href: (view, params, path) => settingsHref(options.base, view, params, path),
       go: options.go,
       current: () => token === mounts && host.isConnected,

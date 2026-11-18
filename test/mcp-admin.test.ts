@@ -69,8 +69,12 @@ test("MCP admin validates and preserves credential scope, without returning secr
     ).status,
     403,
   );
-  assert.equal((await put({})).status, 200);
+  const createOnly = { ...ADMIN, "if-none-match": "*" };
+  assert.equal((await put({}, createOnly)).status, 200);
   assert.equal((await store.get("crm"))?.readOnly, false);
+  const duplicate = await put({ url: "https://other.example.com/mcp" }, createOnly);
+  assert.equal(duplicate.status, 412);
+  assert.equal((await store.get("crm"))?.url, "https://tools.example.com/mcp");
   assert.equal((await put({ readOnly: true })).status, 200);
   assert.equal((await put({})).status, 200);
   assert.equal((await store.get("crm"))?.readOnly, true, "an update that omits readOnly keeps it");

@@ -125,3 +125,48 @@ test("connectors save the OAuth client and delete it", async () => {
   ]);
   admin.close();
 });
+
+test("Core setup saves the deployment URL and updates enablement without changing OAuth settings", async () => {
+  const url = "https://core.example.com/mcp";
+  let server: object | undefined;
+  const saves: unknown[] = [];
+  const admin = await mountPage("/settings/connectors", {
+    "/connector-catalog": { catalog: [] },
+    "/scopes/org:acme": { connectors: [] },
+    "/mcp-servers": () => ({ servers: server ? [server] : [] }),
+    "PUT /mcp-servers/core": ({ body, headers }) => {
+      assert.equal(headers.get("if-none-match"), server ? null : "*");
+      saves.push(body);
+      server = { id: "core", ...server, ...body };
+      return { server };
+    },
+  });
+  const builtIns = admin.document.getElementById("built-in-connectors")!;
+  assert.match(builtIns.textContent!, /Core\s+Not configured/);
+  type(admin, "#core-mcp-url", " " + url + " ");
+  click(admin, '[data-save="core-mcp"]');
+  await admin.settle();
+  assert.deepEqual(plain(server), {
+    id: "core",
+    name: "Core",
+    url,
+    auth: "oauth-user",
+    oauthScopes: ["ontology:read"],
+    enabled: true,
+  });
+  await admin.mount();
+  assert.match(builtIns.textContent!, /Core\s+Configured/);
+  const input = admin.document.querySelector<HTMLInputElement>("#core-mcp-url")!;
+  assert.equal(input.value, url);
+  assert.ok(input.disabled);
+  admin.document.querySelector<HTMLInputElement>("#core-mcp-enabled")!.click();
+  click(admin, '[data-save="core-mcp"]');
+  await admin.settle();
+  assert.deepEqual(plain(saves[1]), { enabled: false });
+  assert.match(builtIns.textContent!, /Core\s+Disabled/);
+  server = { id: "core", auth: "bearer", url, enabled: true };
+  await admin.mount();
+  assert.match(builtIns.textContent!, /already used by another MCP server/);
+  assert.equal(admin.document.querySelector('[data-save="core-mcp"]'), null);
+  admin.close();
+});

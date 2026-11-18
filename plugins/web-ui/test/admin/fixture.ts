@@ -35,13 +35,14 @@ async function bundle(entry: string, globalName: string): Promise<string> {
 let sectionsBundle: Promise<string> | null = null;
 
 export type Reply = object | string | number | boolean | null;
-export type Route = (request: { method: string; path: string; url: URL; body: any }) => Reply | Promise<Reply>;
+export type Route = (request: AdminRequest) => Reply | Promise<Reply>;
 
 export interface AdminRequest {
   method: string;
   path: string;
   url: URL;
   body: any;
+  headers: Headers;
 }
 
 export async function mountPage(
@@ -92,7 +93,7 @@ export async function mountPage(
     const method = (init.method ?? "GET").toUpperCase();
     const body = typeof init.body === "string" ? JSON.parse(init.body) : (init.body ?? null);
     const path = target.pathname.replace(/^\/api\/admin/, "");
-    const request = { method, path, url: target, body };
+    const request = { method, path, url: target, body, headers: new Headers(init.headers) };
     requests.push(request);
     const decoded = decodeURIComponent(path);
     const handler = routes[`${method} ${path}`] ?? routes[path] ?? routes[`${method} ${decoded}`] ?? routes[decoded];
