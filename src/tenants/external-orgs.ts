@@ -50,3 +50,33 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
     `REVOKE ALL ON FUNCTION qm_self_serve_tenant(text, text, text), qm_self_serve_provisioned(uuid, text) FROM PUBLIC`,
   ],
 };
+
+const partnerChatDefiner = `CREATE FUNCTION qm_self_serve_provisioned(tenant uuid, key text, partner text)
+  RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  BEGIN
+    UPDATE tenant_external_orgs o SET provisioned_at = now() WHERE o.tenant = $1 AND o.provisioned_at IS NULL;
+    IF NOT FOUND THEN
+      RETURN true;
+    END IF;
+    UPDATE tenants t SET settings = t.settings || jsonb_build_object('modelGatewayKey', $2, 'serving', true)
+      WHERE t.id = $1;
+    IF $3 IS NULL THEN
+      RETURN true;
+    END IF;
+    BEGIN
+      UPDATE tenants t SET settings = t.settings || jsonb_build_object('partnerChatAccount', $3) WHERE t.id = $1;
+    EXCEPTION WHEN unique_violation THEN
+      RETURN false;
+    END;
+    RETURN true;
+  END $f$`;
+
+export const TENANT_EXTERNAL_ORG_PARTNER_CHAT: PgMigrationDefinition = {
+  id: "0000-tenancy/external-orgs-partner-chat",
+  statements: [
+    `DROP FUNCTION IF EXISTS qm_self_serve_provisioned(uuid, text)`,
+    `DO $self_serve$ BEGIN EXECUTE format($sql$${partnerChatDefiner}$sql$, current_schema()); END $self_serve$`,
+    `REVOKE ALL ON FUNCTION qm_self_serve_provisioned(uuid, text, text) FROM PUBLIC`,
+  ],
+};

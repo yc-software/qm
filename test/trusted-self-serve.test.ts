@@ -337,3 +337,29 @@ test("self-serve never creates a deployment's first workspace", async (t) => {
   );
   assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenants"))[0], { n: 0 });
 });
+
+test("a provisioner can hand a new workspace its partner chat account, but never one another workspace holds", async (t) => {
+  const { s, provision, db } = await shared(t);
+  const signIn = (id: string) =>
+    withoutTenant(() => selfServeWorkspace(s.config, { subject: `p${id}`, email: null }, { id, name: `Chat ${id}` }));
+  const partnerOf = async (tenant: string) =>
+    (await db.owner.q("SELECT settings->>'partnerChatAccount' AS account FROM tenants WHERE id = $1", [tenant]))[0]
+      ?.account;
+  provision.state.reply = { settings: { modelGatewayKey: "own-key", partnerChatAccount: "acct-1", brandName: "x" } };
+  const first = await signIn("81");
+  provision.state.reply = { settings: { modelGatewayKey: "own-key", partnerChatAccount: "acct-1" } };
+  const second = await signIn("82");
+  provision.state.reply = { settings: { modelGatewayKey: "own-key" } };
+  const third = await signIn("83");
+  assert.deepEqual([await partnerOf(first), await partnerOf(second), await partnerOf(third)], ["acct-1", null, null]);
+  assert.deepEqual((await db.owner.q("SELECT qm_tenant_for_partner_chat('acct-1')::text AS tenant"))[0], {
+    tenant: first,
+  });
+  const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [second]);
+  assert.deepEqual(row?.settings, {
+    brandName: "Chat 82",
+    modelGatewayKey: "own-key",
+    serving: true,
+    deploymentModelKey: false,
+  });
+});

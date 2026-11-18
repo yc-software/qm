@@ -46,13 +46,32 @@ async function selfServeTenant(
   };
 }
 
-async function markSelfServeProvisioned(pg: Pick<PgPool, "q">, tenant: string, modelGatewayKey: string): Promise<void> {
-  await pg.q("SELECT qm_self_serve_provisioned($1, $2)", [tenant, modelGatewayKey]);
-}
-
 const provisionedSettings = z.object({
-  settings: tenantSettingsSchema.pick({ modelGatewayKey: true }).required(),
+  settings: tenantSettingsSchema
+    .pick({ modelGatewayKey: true, partnerChatAccount: true })
+    .required({ modelGatewayKey: true })
+    .strip(),
 });
+
+type ProvisionedSettings = z.infer<typeof provisionedSettings>["settings"];
+
+async function markSelfServeProvisioned(
+  pg: Pick<PgPool, "q">,
+  tenant: string,
+  settings: ProvisionedSettings,
+): Promise<void> {
+  const rows = await pg.q("SELECT qm_self_serve_provisioned($1, $2, $3) AS attached", [
+    tenant,
+    settings.modelGatewayKey,
+    settings.partnerChatAccount ?? null,
+  ]);
+  if (rows[0]?.attached === false)
+    reportFailure(
+      "self-serve workspace provisioning",
+      new Error("the provisioner's partner chat account already belongs to another workspace"),
+      tenant,
+    );
+}
 
 export interface WorkspaceProvisionRequest {
   tenant: string;
@@ -69,7 +88,7 @@ export async function provisionWorkspace(
   url: string,
   signingKey: string,
   request: WorkspaceProvisionRequest,
-): Promise<string> {
+): Promise<ProvisionedSettings> {
   const target = new URL(url);
   const body = JSON.stringify({ ...request, nonce: randomUUID() });
   const res = await fetch(target, {
@@ -92,7 +111,7 @@ export async function provisionWorkspace(
     throw new Error(
       `workspace provisioner returned invalid settings: ${parsed.error.issues[0]?.message ?? "rejected"}`,
     );
-  return parsed.data.settings.modelGatewayKey;
+  return parsed.data.settings;
 }
 
 export interface SelfServe {
@@ -101,7 +120,7 @@ export interface SelfServe {
 
 export function createSelfServe(
   pg: Pick<PgPool, "q">,
-  provision: (request: WorkspaceProvisionRequest) => Promise<string>,
+  provision: (request: WorkspaceProvisionRequest) => Promise<ProvisionedSettings>,
 ): SelfServe {
   return {
     async workspace(issuer, subject, org) {
@@ -117,11 +136,11 @@ export function createSelfServe(
           issuer,
           externalOrg: org,
         };
-        const key = await provision(request).catch((error: unknown) => {
+        const settings = await provision(request).catch((error: unknown) => {
           reportFailure("self-serve workspace provisioning", error, workspace.tenant);
           throw new AdminError(502, "the new workspace could not be set up; try signing in again", { cause: error });
         });
-        await markSelfServeProvisioned(pg, workspace.tenant, key);
+        await markSelfServeProvisioned(pg, workspace.tenant, settings);
       }
       return { tenant: workspace.tenant, created: workspace.created };
     },
