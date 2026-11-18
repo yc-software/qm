@@ -751,8 +751,10 @@ export function createDocumentScreen(turn: {
     let documentsUnscreened = false;
     if (securityPolicy.screening !== "off") {
       for (const document of documentInputs.documents.slice()) {
-        if (released.size && released.has(contentKey(Buffer.from(document.dataBase64, "base64")))) continue;
-        documentsUnscreened ||= !isTextDocument(document);
+        const textDocument = isTextDocument(document);
+        documentsUnscreened ||= !textDocument;
+        if (textDocument && released.size && released.has(contentKey(Buffer.from(document.dataBase64, "base64"))))
+          continue;
         if (!(deps.securityScreener || deps.agent.screenSecurity)) {
           documentsUnscreened = true;
           continue;
