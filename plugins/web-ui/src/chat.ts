@@ -2559,15 +2559,17 @@ export function createChatSurface(
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
     if (!files?.length) return nothing;
     const media: MediaItem[] = [];
-    const rest: TemplateResult[] = [];
+    const audio: MediaItem[] = [];
+    const rest: DeliveredFile[] = [];
     for (const file of files) {
       const item = deliveredMedia(file);
-      if (!item) rest.push(deliveredFileBadge(file));
-      else if (item.kind === "audio") rest.push(audioPlayer(item));
+      if (!item) rest.push(file);
+      else if (item.kind === "audio") audio.push(item);
       else media.push(item);
     }
     return html`${media.length ? html`<div class="message-media">${mediaFeed(media)}</div>` : nothing}
-    ${rest.length ? html`<div class="message-files">${rest}</div>` : nothing}`;
+    ${audio.length ? html`<div class="message-files message-audio">${audio.map(audioPlayer)}</div>` : nothing}
+    ${rest.length ? html`<div class="message-files">${rest.map(deliveredFileBadge)}</div>` : nothing}`;
   }
 
   function syncWorkTicker(): void {
@@ -3889,7 +3891,9 @@ export function createChatSurface(
     event.preventDefault();
     unpeekAttachment();
     const visual = all.filter(userVisual);
-    const thumbs = (event.currentTarget as HTMLElement).parentElement!.querySelectorAll(".file-image > :is(img, video)");
+    const thumbs = (event.currentTarget as HTMLElement).parentElement!.querySelectorAll(
+      ".file-image > :is(img, video)",
+    );
     openMediaViewer(
       visual.map((a) => userMedia(a)!),
       visual.indexOf(current),

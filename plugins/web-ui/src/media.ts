@@ -4,6 +4,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Maximize2, Pause, Play, Volume2, VolumeX, X } from "lucide";
 import "./media.css";
 import { icon } from "./icons";
+import { tip } from "./tooltip";
 import { formatBytes } from "./ui";
 import { formatDuration, justifyRows, layoutRatio, MEDIA_GAP, type MediaItem } from "./media-layout";
 
@@ -12,9 +13,9 @@ export { mediaKind, type MediaItem } from "./media-layout";
 const MAX_TILES = 6;
 const MAX_HEIGHT = 460;
 const FEED_WIDTH = 700;
-const EAGER_BYTES = 32 * 1024 * 1024;
 const SPEEDS = [1, 1.5, 2, 0.5];
-const EASE = "cubic-bezier(0.2, 0, 0, 1)";
+const ZOOM_WORTHWHILE = 1.25;
+const EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 
 const ratios = new Map<string, number>();
 const naturalWidths = new Map<string, number>();
@@ -102,11 +103,11 @@ class MediaPlayer extends Base {
   };
 
   private videoTemplate(): TemplateResult {
-    const { name, src, size, download } = this.item;
-    const eager = this.autoplay || (typeof size === "number" && size <= EAGER_BYTES);
+    const { name, src, download } = this.item;
+    const viewer = this.mode === "viewer";
     return html`<video
         src=${frameSrc(src)}
-        preload=${eager ? "auto" : "metadata"}
+        preload=${this.autoplay ? "auto" : "metadata"}
         playsinline
         @loadedmetadata=${this.onMetadata}
         @play=${this.onPlay}
@@ -137,18 +138,13 @@ class MediaPlayer extends Base {
           <span class="mp-i-sound">${icon(Volume2, 16)}</span><span class="mp-i-muted">${icon(VolumeX, 16)}</span>
         </button>
         ${
-          download
+          download && !viewer
             ? html`<a class="mp-btn" href=${download} download=${name} aria-label="Download ${name}"
                 >${icon(Download, 16)}</a
               >`
             : nothing
         }
-        <button
-          type="button"
-          class="mp-btn"
-          aria-label=${this.mode === "viewer" ? "Full screen" : "Expand"}
-          @click=${this.expand}
-        >
+        <button type="button" class="mp-btn" aria-label=${viewer ? "Full screen" : "Expand"} @click=${this.expand}>
           ${icon(Maximize2, 16)}
         </button>
       </div>
@@ -169,8 +165,10 @@ class MediaPlayer extends Base {
       <button type="button" class="mp-toggle mp-round" aria-label="Play ${name}" @click=${this.toggle}>
         <span class="mp-i-play">${icon(Play, 15)}</span><span class="mp-i-pause">${icon(Pause, 15)}</span>
       </button>
-      <div class="mp-body"><span class="mp-name" dir="auto">${name}</span>${this.trackTemplate()}</div>
-      <span class="mp-time"></span>
+      <div class="mp-body">
+        <span class="mp-name" dir="auto">${name}</span>
+        <div class="mp-line">${this.trackTemplate()}<span class="mp-time"></span></div>
+      </div>
       ${
         download
           ? html`<a class="mp-btn" href=${download} download=${name} aria-label="Download ${name}"
@@ -410,6 +408,7 @@ class MediaFeed extends Base {
       class="media-tile"
       style=${style}
       aria-label=${more ? `Show all ${this.list.length} files` : `Open ${item.name}`}
+      ${tip(more ? `${more} more` : item.name)}
       @click=${() => this.open(index)}
     >
       <img
@@ -466,6 +465,7 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
   if (!items.length) return;
   let index = Math.max(0, items.indexOf(all[start]!));
   let zoomed = false;
+  let panned = false;
   let closing = false;
   let playback = { startAt: options.startAt ?? 0, autoplay: options.autoplay ?? items[index]!.kind === "video" };
   const opener = document.activeElement as HTMLElement | null;
@@ -492,7 +492,7 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
     };
     const full = { transform: "none", clipPath: "inset(0px 0px round 10px)" };
     return frame.animate(opening ? [small, full] : [full, small], {
-      duration: opening ? 300 : 220,
+      duration: opening ? 340 : 240,
       easing: EASE,
       fill: opening ? "none" : "forwards",
     });
@@ -514,8 +514,9 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
       if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
     const leaving = morph(false);
-    if (leaving) void leaving.finished.then(done, done);
-    else setTimeout(done, reducedMotion() ? 0 : 160);
+    if (leaving) return void leaving.finished.then(done, done);
+    dialog.classList.add("fading");
+    setTimeout(done, reducedMotion() ? 0 : 180);
   };
 
   const show = (next: number): void => {
@@ -527,10 +528,28 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
     dialog.querySelector(".mv-thumb[aria-current='true']")?.scrollIntoView({ block: "nearest", inline: "center" });
   };
 
+  const pan = (event: PointerEvent): void => {
+    panned = false;
+    if (!zoomed || event.button) return;
+    const image = event.currentTarget as HTMLElement;
+    const stage = image.parentElement!;
+    const start = { x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop };
+    const move = (at: PointerEvent): void => {
+      if (Math.hypot(at.clientX - start.x, at.clientY - start.y) > 4) panned = true;
+      stage.scrollTo(start.left + start.x - at.clientX, start.top + start.y - at.clientY);
+    };
+    const stop = (): void => image.removeEventListener("pointermove", move);
+    image.setPointerCapture(event.pointerId);
+    image.addEventListener("pointermove", move);
+    image.addEventListener("pointerup", stop, { once: true });
+    image.addEventListener("pointercancel", stop, { once: true });
+  };
+
   const toggleZoom = (event: MouseEvent): void => {
+    if (panned) return;
     const image = event.currentTarget as HTMLImageElement;
     const stage = image.parentElement!;
-    if (!zoomed && image.naturalWidth <= image.clientWidth * 1.05) return;
+    if (!zoomed && image.naturalWidth < image.clientWidth * ZOOM_WORTHWHILE) return;
     const x = event.offsetX / image.clientWidth;
     const y = event.offsetY / image.clientHeight;
     zoomed = !zoomed;
@@ -558,11 +577,12 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
       src=${item.src}
       alt=${item.name}
       draggable="false"
+      @pointerdown=${pan}
       @click=${toggleZoom}
       @load=${(event: Event) => {
         const image = event.currentTarget as HTMLImageElement;
         if (learn(item.src, image.naturalWidth, image.naturalHeight)) draw();
-        image.classList.toggle("zoomable", zoomed || image.naturalWidth > image.clientWidth * 1.05);
+        image.classList.toggle("zoomable", zoomed || image.naturalWidth >= image.clientWidth * ZOOM_WORTHWHILE);
       }}
     />`;
   };
@@ -635,7 +655,7 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
         </div>
         ${
           items.length > 1
-            ? html`<div class="mv-strip">
+            ? html`<div class="mv-strip" ?hidden=${zoomed}>
                 ${items.map(
                   (entry, at) =>
                     html`<button
