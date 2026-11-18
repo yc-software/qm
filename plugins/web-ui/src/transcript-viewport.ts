@@ -168,22 +168,23 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     const target = event.target as HTMLElement | null;
     if (target?.nodeType !== 1) return;
     const disclosure = target.closest<HTMLElement>(".thinking-row > summary");
-    if (disclosure && stack?.contains(disclosure) && scroller) {
-      cancelFollow();
-      anchor = {
-        element: disclosure,
-        text: "",
-        row: rowKey(disclosure),
-        offset: disclosure.getBoundingClientRect().top - viewportTop(),
-      };
-      return;
-    }
+    if (disclosure) return hold(disclosure);
     const toggle = target.closest<HTMLButtonElement>(".pin-toggle");
     if (!toggle || !prompt?.contains(toggle)) return;
     cancelFollow();
     expanded = !expanded;
     if (!expanded && content) content.scrollTop = 0;
     syncSticky();
+  }
+
+  function hold(element?: HTMLElement): void {
+    if (!scroller || !stack) return;
+    if (element && !stack.contains(element)) return;
+    cancelFollow();
+    lastTop = scroller.scrollTop;
+    if (element)
+      anchor = { element, text: "", row: rowKey(element), offset: element.getBoundingClientRect().top - viewportTop() };
+    else captureAnchor();
   }
 
   function distanceToBottom(): number {
@@ -564,5 +565,5 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     if (scroller) sync(scroller);
   }
 
-  return { sync, refresh, follow, cancelFollow, beforeRender, afterRender, dispose };
+  return { sync, refresh, follow, cancelFollow, hold, beforeRender, afterRender, dispose };
 }

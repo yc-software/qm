@@ -3885,6 +3885,7 @@ export function createChatSurface(
     mountLoadingPane,
     mountLoadError,
     scrollToBottom,
+    holdTranscript: (element) => transcriptViewport.hold(element),
     revealEntry: (seq: number) => {
       if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {
         chatState.inheritedExpanded = true;
