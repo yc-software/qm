@@ -45,7 +45,7 @@ export function createGenericChatInbound(deps: {
   storageFetch?: AddressFetch;
   app: InboundApp;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
-  isInternalEmail: (email: string) => Promise<boolean>;
+  isInternalEmail: (email: string, vouchedByHost: boolean) => Promise<boolean>;
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
   turns: Pick<GenericChatTurns, "start">;
   onAction: (click: GenericChatActionClick) => Promise<void>;
@@ -134,7 +134,7 @@ export function createGenericChatInbound(deps: {
     }
     const humans = await Promise.all(
       members.map(async (m) =>
-        genericChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? "")),
+        genericChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? "", m.member === true)),
       ),
     );
     const listed = chat.members.find((m) => m.id === actorId);

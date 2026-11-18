@@ -523,6 +523,30 @@ test("a chat with any member the deployment does not vouch for is neither mirror
   }
 });
 
+test("a person the host flags as a member of the account's workspace is answered without a member-list row, unless deactivated", async () => {
+  const { built, genericChat, deliver } = await genericChatApp();
+  const founder = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
+  const fromFounder = (body: string, eventId: string, messageId: string) => {
+    const base = event({ body, mentions: true, eventId, messageId });
+    return {
+      ...base,
+      chat: { ...base.chat, members: [...base.chat.members, founder] },
+      message: { ...base.message, user: founder },
+    };
+  };
+  try {
+    assert.equal((await deliver(fromFounder("!post hi", "ev-member", "1050"))).body.ignored, undefined);
+    await settle(async () => genericChat.shown().some((m) => m.body === "hi"));
+    assert.ok(genericChat.shown().some((m) => m.body === "hi"));
+
+    await withTenant(TEST_TENANT, () => built.identity.deactivate(founder.email));
+    const deactivated = fromFounder("!post again", "ev-member-off", "1051");
+    assert.equal((await deliver(deactivated)).body.ignored, "unvouched_participants");
+  } finally {
+    await genericChat.close();
+  }
+});
+
 test("generic-chat config requires the url and secret together", () => {
   assert.throws(() => loadConfig({ GENERIC_CHAT_URL: "https://chat.example" }), /must be set together/);
   assert.deepEqual(
