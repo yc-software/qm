@@ -17,7 +17,6 @@ import {
   type ListOwnedOptions,
 } from "./file-artifact-store.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { personScope, personScopes } from "../directory/person.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS file_artifacts(
@@ -105,7 +104,7 @@ export function createPostgresFileArtifactStore(
     if (scopes.length === 0 && !sharedRefs?.length) return { files: [] };
     const limit = clampLimit(opts?.limit);
     const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
-    const params: unknown[] = [[...new Set(scopes.flatMap(personScopes))]];
+    const params: unknown[] = [scopes as string[]];
     let access = "owner_scope_id = ANY($1::text[])";
     if (sharedRefs !== undefined) {
       params.push(
@@ -117,8 +116,8 @@ export function createPostgresFileArtifactStore(
     const filters = [access];
     if (!opts?.includeDisabled) filters.push("enabled = TRUE");
     if (opts?.createdInScope != null) {
-      params.push(personScopes(opts.createdInScope));
-      filters.push(`created_in_scope = ANY($${params.length}::text[])`);
+      params.push(opts.createdInScope);
+      filters.push(`created_in_scope = $${params.length}::text`);
     }
     if (opts?.nameQuery != null) {
       params.push(likeContains(opts.nameQuery));
@@ -169,13 +168,14 @@ export function createPostgresFileArtifactStore(
     async publish(input) {
       const { blobKey, sizeBytes, sha256 } = input;
       const at = input.createdAt ?? Date.now();
-      const ownerScopeId = personScope(input.ownerScopeId);
       return withPgTransaction(await pool(), async (client) => {
         if (input.reuseExistingPath) {
-          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-path:${ownerScopeId}:${input.path}`]);
+          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+            `file-path:${input.ownerScopeId}:${input.path}`,
+          ]);
           const existing = await client.query(
-            "SELECT * FROM file_artifacts WHERE owner_scope_id=ANY($1::text[]) AND path=$2 AND enabled=TRUE ORDER BY created_at DESC,id DESC LIMIT 1",
-            [personScopes(ownerScopeId), input.path],
+            "SELECT * FROM file_artifacts WHERE owner_scope_id=$1 AND path=$2 AND enabled=TRUE ORDER BY created_at DESC,id DESC LIMIT 1",
+            [input.ownerScopeId, input.path],
           );
           if (existing.rows[0]) return { artifact: rowToArtifact(existing.rows[0]), created: false };
         }
@@ -190,7 +190,7 @@ export function createPostgresFileArtifactStore(
          ON CONFLICT (tenant_id, id) DO NOTHING`,
           [
             input.id,
-            ownerScopeId,
+            input.ownerScopeId,
             input.path,
             input.name,
             storedMimetype(input.mimetype),

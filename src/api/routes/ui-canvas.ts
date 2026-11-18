@@ -16,7 +16,7 @@ import { scopeId } from "../../types.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
-import { ownsPersonalScope, samePerson } from "../../directory/person.ts";
+import { samePerson } from "../../directory/person.ts";
 import { audit, isObj } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -70,7 +70,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     sessionId: session.id,
     threadRef,
     runId: run.id,
-    personal: ownsPersonalScope(cap.scopeId, cap.actorId),
+    personal: cap.scopeId === scopeId("personal", cap.actorId),
   };
 }
 

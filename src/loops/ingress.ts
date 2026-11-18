@@ -4,7 +4,6 @@ import type { TenantLookup } from "../tenants/lookup.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Loop, LoopItem } from "./types.ts";
-import { ownsPersonalScope } from "../directory/person.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { IngestEntryInput, LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
@@ -293,7 +292,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           input.channels.some((channel) => !/^[CDG][A-Z0-9]+$/.test(channel)))
       )
         throw new Error("Slack requires a signing secret, workspace ID, and selected channel IDs");
-      if (input.kind === "gmail" && !ownsPersonalScope(loop.ownerScopeId, loop.owner))
+      if (input.kind === "gmail" && loop.ownerScopeId !== `personal:${loop.owner}`)
         throw new Error("Gmail ingestion requires a personal Loop");
       return deps.lock.withLock(`loop-ingress-setup:${loop.id}`, async () => {
         const existing = (await deps.sources.all()).find(

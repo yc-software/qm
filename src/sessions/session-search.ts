@@ -4,8 +4,7 @@ import type { ScopeId, Session } from "../types.ts";
 import type { EntrySearchHit, SessionStore } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
 import { msOf, SEARCHABLE_ITEM, searchTypeExpr, TENANT, USER_KINDS } from "./items.ts";
-import { PERSON_ROW, participantSessionsSql } from "./session-participants.ts";
-import { rosterIds } from "../directory/person.ts";
+import { participantSessionsSql } from "./session-participants.ts";
 import { BOT_VISIBLE, OWN_CHAT, rowToParticipantSession } from "./session-rows.ts";
 
 const SEARCH_TIMEOUT_MS = 10_000;
@@ -19,7 +18,7 @@ export function createSessionSearch(q: PgPool["q"]): Pick<SessionStore, "searchS
         participantSessionsSql(
           ` AND ${OWN_CHAT("s")} AND COALESCE(p.title, s.title) ILIKE $2${BOT_VISIBLE(botActor)}`,
         ) + " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
-        [rosterIds(principalId), likeContains(needle), Math.max(1, Math.min(Math.floor(limit), 100))],
+        [principalId, likeContains(needle), Math.max(1, Math.min(Math.floor(limit), 100))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.map(rowToParticipantSession);
@@ -35,13 +34,13 @@ export function createSessionSearch(q: PgPool["q"]): Pick<SessionStore, "searchS
                 i.text, ${msOf("i.created_at")} AS created_at,
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
            FROM items i
-           JOIN participants p ON p.session_id = i.session_id AND ${PERSON_ROW("p")}
+           JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
            JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}${BOT_VISIBLE(botActor)}
           WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
             AND ${SEARCHABLE_ITEM("i")}
           ORDER BY i.created_at DESC, i.session_id, i.seq DESC
           LIMIT $3`,
-        [rosterIds(principalId), ts, Math.max(1, Math.min(limit, 200))],
+        [principalId, ts, Math.max(1, Math.min(limit, 200))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.flatMap((r) => {

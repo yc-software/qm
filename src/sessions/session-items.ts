@@ -1,6 +1,4 @@
 import { type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
-import { rosterIds } from "../directory/person.ts";
-import { PERSON_ROW } from "./session-participants.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import type { GetItemsOptions, SessionStore, SessionWriter } from "./session-store.ts";
@@ -92,8 +90,8 @@ export function createSessionItems(deps: {
     const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
     let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}`;
     if (principalId !== undefined) {
-      params.push(rosterIds(principalId));
-      sql += ` JOIN participants p ON p.session_id = i.session_id AND ${PERSON_ROW("p", params.length)}`;
+      params.push(principalId);
+      sql += ` JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $${params.length}`;
     }
     sql += ` WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
     if (opts?.seqs) {
@@ -217,9 +215,9 @@ export function createSessionItems(deps: {
             )
           : await q(
               `SELECT count(*)::int AS n FROM items i
-                 JOIN participants p ON p.session_id = i.session_id AND ${PERSON_ROW("p", 3)}
+                 JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $3
                 WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq < $2 AND ${transcriptItemPredicate("i")}`,
-              [sessionId, beforeSeq, rosterIds(principalId)],
+              [sessionId, beforeSeq, principalId],
             );
       return Number(rows[0]?.n ?? 0);
     },
@@ -366,7 +364,7 @@ export function createSessionItems(deps: {
     async latestVisiblePromptAt(sessionId, principalId) {
       const rows = await q(
         `SELECT ${msOf("i.created_at")} AS at FROM items i
-         JOIN participants p ON p.session_id = i.session_id AND ${PERSON_ROW("p", 2)}
+         JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
          WHERE i.tenant_id = ${TENANT} AND i.session_id = $1
            AND i.kind IN ('UserMessage', 'SteeringMessage') AND i.hidden IS DISTINCT FROM true
            AND NOT (i.body @> '{"overheard":true}')
@@ -374,7 +372,7 @@ export function createSessionItems(deps: {
              OR (i.kind = 'SteeringMessage' AND i.author IS NOT NULL))
            AND ${transcriptItemPredicate("i")}
          ORDER BY i.seq DESC LIMIT 1`,
-        [sessionId, rosterIds(principalId)],
+        [sessionId, principalId],
       );
       return rows[0] ? Number(rows[0].at) : undefined;
     },

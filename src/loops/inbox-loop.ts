@@ -1,6 +1,5 @@
 import type { Loop } from "./types.ts";
 import { scopeId } from "../types.ts";
-import { ownsPersonalScope } from "../directory/person.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { text } from "node:stream/consumers";
@@ -47,7 +46,7 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
   const loops: Loop[] = [];
   for (const [source, { loopName: name }] of Object.entries(INBOX_SOURCE_NAMES)) {
     const existing = (await store.list()).find(
-      (loop) => ownsPersonalScope(loop.ownerScopeId, owner) && loop.surface === `inbox:${source}`,
+      (loop) => loop.ownerScopeId === scopeId("personal", owner) && loop.surface === `inbox:${source}`,
     );
     if (existing) {
       loops.push(existing);

@@ -1,4 +1,4 @@
-import { personIds } from "../directory/person.ts";
+import { canonicalPerson } from "../directory/person.ts";
 import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { TeamStore } from "../teams/teams.ts";
@@ -110,7 +110,7 @@ export function createPersonaService(deps: {
   async function granteeScopes(principalId: string, contextScope?: ScopeId): Promise<ScopeId[]> {
     const teams = (await deps.teams?.forTurn(ambientTenant(), "", [principalId])) ?? [];
     return [
-      ...personIds(principalId).map((id) => scopeId("personal", id)),
+      scopeId("personal", canonicalPerson(principalId)),
       deps.orgScope,
       ...teams.map((team) => scopeId("team", team.id)),
       ...(isSharedScope(contextScope) ? [contextScope!] : []),

@@ -124,6 +124,15 @@ declare module "fastify" {
 
 const rawBodies = new WeakMap<IncomingMessage, string>();
 
+function canonicalClaims(claims: CapabilityClaims): CapabilityClaims {
+  const { kind, ref } = parseScopeId(claims.scopeId);
+  return {
+    ...claims,
+    actorId: canonicalPerson(claims.actorId),
+    ...(kind === "personal" ? { scopeId: scopeId("personal", canonicalPerson(ref)) } : {}),
+  };
+}
+
 async function verifyCapability(
   req: IncomingMessage,
   res: ServerResponse,
@@ -139,11 +148,13 @@ async function verifyCapability(
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
   }
-  const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
-  if (!capability) {
+  const claims = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
+  if (!claims) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
     return null;
   }
+  await deps.identity?.refresh();
+  const capability = canonicalClaims(claims);
   if (
     capability.externalSlack &&
     !(
@@ -156,7 +167,6 @@ async function verifyCapability(
     return null;
   }
   if (deps.identity) {
-    await deps.identity.refresh();
     if (deps.identity.classify(capability.actorId).type !== "internal") {
       sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
       return null;
@@ -168,7 +178,7 @@ async function verifyCapability(
       !publishedApp ||
       publishedApp.id !== capability.deployment ||
       publishedApp.status !== "running" ||
-      !samePerson(publishedApp.createdBy, capability.actorId)
+      publishedApp.createdBy !== capability.actorId
     ) {
       sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
       return null;

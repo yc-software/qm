@@ -1,16 +1,13 @@
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { errMessage } from "../../util/errors.ts";
-import { rosterIds, samePerson } from "../../directory/person.ts";
+import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { composioUserIds, credential, request as composioRequest } from "./composio.ts";
 import type { ApiCtx } from "./route.ts";
 
 async function personSlackAccounts(ctx: ApiCtx, principalId: string) {
-  const ids = rosterIds(principalId);
-  const records = (await ctx.deps.slackAccounts?.getMany(ids)) ?? [];
-  return records
-    .filter((record) => samePerson(record.memberId, principalId))
-    .sort((a, b) => ids.indexOf(a.principalId) - ids.indexOf(b.principalId));
+  const record = await ctx.deps.slackAccounts?.get(canonicalPerson(principalId));
+  return record && samePerson(record.memberId, principalId) ? [record] : [];
 }
 
 export async function hasSlackAccount(ctx: ApiCtx): Promise<boolean> {

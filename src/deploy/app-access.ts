@@ -5,8 +5,7 @@ import {
   orgDisplayName,
   PUBLIC_ACCESS_NOTE,
 } from "../../plugins/chassis/src/app-access.ts";
-import { parseScopeId, type ScopeKind } from "../types.ts";
-import { ownsPersonalScope } from "../directory/person.ts";
+import { parseScopeId, personalScope, type ScopeKind } from "../types.ts";
 
 export type AppAccess = {
   level: GeneralAccess;
@@ -25,7 +24,7 @@ const NOUNS: Record<ScopeKind, [one: string, many: string]> = {
 };
 
 export const canEditAppPermissions = (ownerScopeId: string, principalId: string): boolean =>
-  ownsPersonalScope(ownerScopeId, principalId);
+  ownerScopeId === personalScope(principalId);
 
 export function appAccess(opts: {
   ownerScopeId: string;

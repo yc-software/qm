@@ -1,4 +1,4 @@
-import { foldPrincipalId, personIds, personKey, sameScope } from "../directory/person.ts";
+import { foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -204,7 +204,7 @@ export function teamsForTurn(
   teams: readonly TurnTeam[],
   turn: { scope: ScopeId; actorId: string; audience: readonly Principal[]; posture: SharingPosture },
 ): { teamIds: string[]; note?: string } {
-  const ownScope = sameScope(turn.scope, scopeId("personal", turn.actorId));
+  const ownScope = turn.scope === scopeId("personal", turn.actorId);
   const everyoneOn = (t: TurnTeam) => turn.audience.length > 0 && turn.audience.every((p) => onTeam(t, p.id));
   const applies = teams.filter(
     (t) =>

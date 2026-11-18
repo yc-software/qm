@@ -10,6 +10,7 @@ import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { REKEY_LINKED_SIGN_INS } from "./sign-in-rekey.ts";
 
 export { fold };
 
@@ -252,6 +253,7 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
   ...USER_MIGRATIONS,
   ...TENANTED.after,
   ...PERSONA_TENANCY,
+  { id: "users/v2/0010-rekey-linked-sign-ins", statements: [REKEY_LINKED_SIGN_INS] },
   {
     id: "users/v2/0006-display-name",
     statements: [
@@ -424,6 +426,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     `INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at) VALUES ($1, $2, $3, $4, ${ts("$5")})`,
     [link.principalId, target, link.evidence, linkedBy, link.createdAt],
   );
+  await q(REKEY_LINKED_SIGN_INS);
   return toLink((await q(`${LINK_SELECT} WHERE l.alias_id = $1`, [link.principalId]))[0]!);
 }
 

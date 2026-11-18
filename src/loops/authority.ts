@@ -1,5 +1,4 @@
 import type { Cron } from "../triggers/types.ts";
-import { samePerson } from "../directory/person.ts";
 import type { Loop } from "./types.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 
@@ -16,7 +15,7 @@ export async function boundLoopCron(
   if (
     !cron ||
     (firingCronId !== undefined && firingCronId !== cron.id) ||
-    !samePerson(cron.owner, loop.owner) ||
+    cron.owner !== loop.owner ||
     cron.ownerScopeId !== loop.ownerScopeId
   ) {
     throw new Error("loop cron authority binding mismatch");

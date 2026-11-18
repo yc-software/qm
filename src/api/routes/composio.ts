@@ -4,14 +4,7 @@ import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts"
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
-import {
-  canonicalPerson,
-  ownsPersonalScope,
-  personIds,
-  pickForPerson,
-  rosterIds,
-  samePerson,
-} from "../../directory/person.ts";
+import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
@@ -40,12 +33,14 @@ export function composioUserIds(principal: string): string[] {
 
 export function personAccounts<T extends ComposioAccountRecord>(principal: string, accounts: T[]): T[] {
   const org = externalOrgId();
-  const latest = (items: T[]) => Math.max(...items.map((i) => Date.parse(String(i.updated_at ?? i.created_at)) || 0));
-  const mine = (p: string) => {
-    const found = accounts.filter((a) => String(a.user_id) === composioUserId(org, p));
-    return found.length ? found : undefined;
-  };
-  return pickForPerson(principal, mine, latest) ?? [];
+  const at = (account: T) => Date.parse(String(account.updated_at ?? account.created_at)) || 0;
+  const owners = personIds(principal).map((id) =>
+    accounts.filter((a) => String(a.user_id) === composioUserId(org, id)),
+  );
+  const [own, ...linked] = owners;
+  if (own?.length) return own;
+  const latest = (items: T[]) => Math.max(...items.map(at));
+  return linked.filter((items) => items.length).sort((a, b) => latest(b) - latest(a))[0] ?? [];
 }
 
 export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
@@ -62,7 +57,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   const personal = scopeId("personal", principal);
   if (ctx.capability) {
     const cap = ctx.capability;
-    const shared = !ownsPersonalScope(cap.scopeId, principal);
+    const shared = cap.scopeId !== personal;
     if (
       cap.ownerConnections !== true ||
       cap.deployment ||
@@ -98,10 +93,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   }
   const org = scopeId("org", orgId());
   const identity = ctx.deps.identity?.classify(principal) ?? { id: principal, type: "internal" as const };
-  const audience =
-    ctx.capability && !ownsPersonalScope(ctx.capability.scopeId, principal)
-      ? ctx.capability.keychainMembers
-      : [identity];
+  const audience = ctx.capability && ctx.capability.scopeId !== personal ? ctx.capability.keychainMembers : [identity];
   if (!audience?.length || audience.some((member) => member.type !== "internal")) {
     sendJson(ctx.res, 403, { error: "unknown_audience" });
     return null;
@@ -541,9 +533,8 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
 
   ctx.res.setHeader("Cache-Control", "no-store");
   let failed = false;
-  for (const id of rosterIds(access.principal)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
-    if (!record || !samePerson(record.memberId, access.principal)) continue;
+  const record = await ctx.deps.slackAccounts?.get(canonicalPerson(access.principal));
+  if (record && samePerson(record.memberId, access.principal)) {
     try {
       const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
       const toolkit = account.toolkit as { slug?: string } | undefined;

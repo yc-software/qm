@@ -20,7 +20,6 @@ import { createSessionSearch } from "./session-search.ts";
 import { createSessionItems, lockSession } from "./session-items.ts";
 import { createSessionAdminReads } from "./session-admin-reads.ts";
 import { createSessionParticipants, participantSessionsSql } from "./session-participants.ts";
-import { rosterIds } from "../directory/person.ts";
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { authoredUserTurn, TENANT } from "./items.ts";
@@ -158,7 +157,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         principalId === undefined
           ? `SELECT s.* FROM sessions s WHERE ${condition}`
           : participantSessionsSql(` AND ${condition}`),
-        principalId === undefined ? [sessionId] : [rosterIds(principalId), sessionId],
+        principalId === undefined ? [sessionId] : [principalId, sessionId],
       );
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
     },
@@ -289,7 +288,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (!ids.length) return [];
       const rows = await q(
         participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS) + " ORDER BY s.created_at, s.id",
-        [rosterIds(principalId), ids],
+        [principalId, ids],
       );
       return rows.map(rowToParticipantSession);
     },

@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import { isSystemActor, parseScopeId, scopeId, type ScopeId } from "../types.ts";
+import { isSystemActor, parseScopeId } from "../types.ts";
 
 export interface PrincipalLinkResolver {
   canonical(key: string): string | undefined;
@@ -86,11 +86,6 @@ export function personIds(id: string): string[] {
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
-export function ownsPersonalScope(scope: string | undefined, id: string | undefined): boolean {
-  const { kind, ref } = parseScopeId(scope ?? "");
-  return kind === "personal" && samePerson(ref, id);
-}
-
 export function ownsWebThread(threadRef: string, id: string): boolean {
   return personIds(id).some((owner) => threadRef.startsWith(`web:${owner}:`));
 }
@@ -98,70 +93,6 @@ export function ownsWebThread(threadRef: string, id: string): boolean {
 export function rosterIds(id: string): string[] {
   const ids = [id.trim(), ...personIds(id)].filter(Boolean);
   return [...new Set(ids.flatMap((x) => [x, foldPrincipalId(x)]))];
-}
-
-export function pickForPerson<T>(
-  id: string,
-  recordOf: (principalId: string) => T | null | undefined,
-  recency: (rec: T) => number,
-): T | undefined {
-  const ids = rosterIds(id);
-  const canonical = canonicalPerson(id);
-  for (const preferred of [id.trim(), foldPrincipalId(id), canonical, foldPrincipalId(canonical)]) {
-    const rec = recordOf(preferred);
-    if (rec !== undefined && rec !== null) return rec;
-  }
-  let best: T | undefined;
-  for (const other of ids) {
-    const rec = recordOf(other);
-    if (rec !== undefined && rec !== null && (best === undefined || recency(rec) > recency(best))) best = rec;
-  }
-  return best;
-}
-
-export function personScopes(scope: ScopeId): ScopeId[] {
-  const { kind, ref } = parseScopeId(scope);
-  if (kind !== "personal" || !ref.trim()) return [scope];
-  return [...new Set([scope, ...rosterIds(ref).map((id) => scopeId("personal", id))])];
-}
-
-export function personScope(scope: ScopeId): ScopeId {
-  const { kind, ref } = parseScopeId(scope);
-  return kind === "personal" && ref.trim() ? scopeId("personal", canonicalPerson(ref)) : scope;
-}
-
-export function sameScope(a: ScopeId, b: ScopeId): boolean {
-  if (a === b) return true;
-  const [x, y] = [parseScopeId(a), parseScopeId(b)];
-  return x.kind === "personal" && y.kind === "personal" && samePerson(x.ref, y.ref);
-}
-
-export function pickForScope<T>(
-  scope: ScopeId,
-  recordOf: (scope: ScopeId) => T | null | undefined,
-  recency: (rec: T) => number = () => 0,
-): T | undefined {
-  const { kind, ref } = parseScopeId(scope);
-  if (kind !== "personal" || !ref.trim()) return recordOf(scope) ?? undefined;
-  return pickForPerson(ref, (id) => recordOf(scopeId("personal", id)), recency);
-}
-
-export async function loadForScope<T>(
-  scope: ScopeId,
-  load: (scope: ScopeId) => Promise<T | null | undefined>,
-  recency?: (rec: T) => number,
-): Promise<T | undefined> {
-  const found = new Map(await Promise.all(personScopes(scope).map(async (s) => [s, await load(s)] as const)));
-  return pickForScope(scope, (s) => found.get(s), recency);
-}
-
-export async function recordForPerson<T>(
-  id: string,
-  recordOf: (principalId: string) => Promise<T | null | undefined>,
-  recency: (rec: T) => number = () => 0,
-): Promise<T | undefined> {
-  const found = new Map(await Promise.all(rosterIds(id).map(async (p) => [p, await recordOf(p)] as const)));
-  return pickForPerson(id, (p) => found.get(p), recency);
 }
 
 export function personKey(id: string | null | undefined): string {

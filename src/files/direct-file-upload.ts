@@ -22,7 +22,6 @@ import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-u
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { claimThenBind } from "../tenants/claim.ts";
-import { sameScope } from "../directory/person.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
@@ -233,7 +232,7 @@ export function createDirectFileUploads(options: {
         if (!artifact) throw new FileUploadError("published file was deleted", 410);
         if (
           artifact.blobKey !== `files/uploads/${id}` ||
-          !sameScope(artifact.ownerScopeId, row.scopeId) ||
+          artifact.ownerScopeId !== row.scopeId ||
           artifact.createdBy !== row.actorId
         )
           throw new FileUploadError("file identity conflict", 409);
@@ -305,7 +304,7 @@ export function createDirectFileUploads(options: {
       }
       if (
         artifact.blobKey !== `files/uploads/${id}` ||
-        !sameScope(artifact.ownerScopeId, row.scopeId) ||
+        artifact.ownerScopeId !== row.scopeId ||
         artifact.createdBy !== row.actorId
       )
         throw new FileUploadError("file identity conflict", 409);

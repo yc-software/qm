@@ -4,7 +4,6 @@ import { parseScopeId, personalScope, type Principal } from "../../types.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import type { ApiCtx } from "./route.ts";
 import { orgScope } from "./shared.ts";
-import { sameScope } from "../../directory/person.ts";
 
 export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryService | undefined {
   if (!ctx.deps.memory) return undefined;
@@ -24,7 +23,7 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
     actor,
     targetScope,
     nativeScopes,
-    audience: sameScope(targetScope, personalScope(id)) ? [actor] : (ctx.capability?.members ?? []),
+    audience: targetScope === personalScope(id) ? [actor] : (ctx.capability?.members ?? []),
     open: !ctx.capability || livePersonCapability(ctx.capability),
     ...(ctx.capability?.memory?.notebookOnly ? { notebookOnly: true } : {}),
     config: ctx.deps.config,

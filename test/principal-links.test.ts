@@ -200,7 +200,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(identity.externalMember("guest@partner.test"), undefined, "removal survives a reload");
   });
 
-  it("the keychain stores new credentials under the canonical owner and lists legacy ones from either id", async () => {
+  it("the keychain stores credentials under the canonical owner and lists them from either id", async () => {
     await installed();
     const creds = testMap<KeychainCredential>();
     const keychain = createKeychain({
@@ -215,14 +215,11 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     const rotated = await keychain.save({ ownerId: EMAIL, service: "github", secret: "ghp_y", envKey: "GITHUB_TOKEN" });
     assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
     assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
-    const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
-    await creds.merge(legacy.id, { ownerId: OIDC });
-    const mine = await keychain.listByOwner(EMAIL);
-    assert.deepEqual(mine.map((c) => c.service).sort(), ["github", "linear"]);
-    const viaSignIn = await keychain.listByOwner(OIDC);
-    assert.deepEqual(viaSignIn.map((c) => c.service).sort(), ["github", "linear"]);
-    assert.equal(await keychain.readOwnSecret(OIDC, legacy.id), "lin_x");
-    assert.equal(await keychain.readOwnSecret("casey@acme.test", legacy.id), null);
+    assert.deepEqual(
+      (await keychain.listByOwner(OIDC)).map((c) => c.id),
+      [saved.id],
+    );
+    assert.equal(await keychain.readOwnSecret("casey@acme.test", saved.id), null);
   });
 
   it("an admin grant held by either id makes the person an admin, and the users list shows one row", async () => {

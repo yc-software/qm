@@ -1,4 +1,3 @@
-import { samePerson } from "../../directory/person.ts";
 import { z } from "zod";
 import type { Cron } from "../../triggers/types.ts";
 import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
@@ -494,7 +493,7 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
   if (!acting) return;
   const loop =
     (await deps.store.list()).find(
-      (candidate) => samePerson(candidate.owner, acting.actorId) && candidate.surface === "inbox:gmail",
+      (candidate) => candidate.owner === acting.actorId && candidate.surface === "inbox:gmail",
     ) ?? null;
   const cron = loop?.cronId ? await ctx.app.getCron(loop.cronId) : null;
   sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });

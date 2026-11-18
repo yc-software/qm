@@ -6,7 +6,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SurfaceUser } from "../surfaces/contract.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { canonicalPerson, personIds, personKey, pickForPerson, rosterIds, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { mergeCredentialFiles, type CredentialFileMerge } from "./file-merge.ts";
@@ -555,7 +555,7 @@ function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: strin
 }
 
 function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {
-  return { field: "ownerId", anyOfFold: ownerIds.flatMap((id) => personIds(id)) };
+  return { field: "ownerId", anyOfFold: ownerIds.map(canonicalPerson) };
 }
 
 function bucketByOwner<C extends { ownerId: string }, T>(
@@ -794,19 +794,11 @@ export function createKeychain(deps: {
     accountType?: string,
   ): Promise<KeychainCredential> {
     const prior = await connectorRecord(host, principalId, accountType);
-    const owner = prior?.ownerId ?? canonicalPerson(principalId);
-    const id = prior?.id ?? oauthId(host, owner, accountType);
-    const rec = connectorRec(id, host, owner, token, accountType, prior);
+    const ownerId = canonicalPerson(principalId);
+    const id = oauthId(host, ownerId, accountType);
+    const rec = connectorRec(id, host, ownerId, token, accountType, prior);
     await deps.creds.put(id, rec);
     return rec;
-  }
-
-  async function personConnectorRecords(
-    host: string,
-    principalId: string,
-    accountType?: string,
-  ): Promise<KeychainCredential[]> {
-    return deps.creds.getMany([...new Set(rosterIds(principalId).map((p) => oauthId(host, p, accountType)))]);
   }
 
   async function connectorRecord(
@@ -814,14 +806,7 @@ export function createKeychain(deps: {
     principalId: string,
     accountType?: string,
   ): Promise<KeychainCredential | null> {
-    const byId = new Map((await personConnectorRecords(host, principalId, accountType)).map((r) => [r.id, r]));
-    return (
-      pickForPerson(
-        principalId,
-        (p) => byId.get(oauthId(host, p, accountType)),
-        (r) => r.updatedAt,
-      ) ?? null
-    );
+    return deps.creds.get(oauthId(host, canonicalPerson(principalId), accountType));
   }
 
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
@@ -1533,7 +1518,8 @@ export function createKeychain(deps: {
     },
 
     async deleteConnectorToken(host, principalId, accountType) {
-      for (const rec of await personConnectorRecords(host, principalId, accountType)) await deleteCredential(rec.id);
+      const rec = await connectorRecord(host, principalId, accountType);
+      if (rec) await deleteCredential(rec.id);
     },
 
     async connectorTokenStatus(host, principalId, accountType) {

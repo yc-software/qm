@@ -1166,9 +1166,8 @@ export function createSessionMethods(
     },
 
     async spawnSession(principalId, opts) {
-      const parsed = parseScopeId(opts.scopeId);
-      const own = parsed.kind === "personal" && samePerson(parsed.ref, principalId);
-      const scope = own ? scopeId("personal", principalId) : opts.scopeId;
+      const scope = opts.scopeId;
+      const parsed = parseScopeId(scope);
       const create = async (projectMembers?: readonly string[], channelName?: string) => {
         const threadRef = `web:${principalId}:${randomUUID()}`;
         let kind: "group" | "channel" | "dm" = "dm";
@@ -1189,7 +1188,9 @@ export function createSessionMethods(
         const stored = (await deps.sessions.get(session.id)) ?? session;
         return { session: { ...stored, canContinue: await canContinueOnWeb(principalId, stored) } };
       };
-      if (parsed.kind === "personal") return own ? create() : null;
+      if (parsed.kind === "personal") {
+        return parsed.ref === principalId ? create() : null;
+      }
       const projectId = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
       if (projectId) {
         const projects = deps.projects;

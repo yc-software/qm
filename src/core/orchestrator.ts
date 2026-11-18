@@ -147,7 +147,7 @@ import {
   turnFailureMessage,
   turnFailureItem,
 } from "./turn-error.ts";
-import { ownPrivateConversation, personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { canonicalPerson, ownPrivateConversation, personKey, samePerson } from "../directory/person.ts";
 import { personAtKeyboard } from "../api/artifact-share.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -265,9 +265,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants;
   const approvalGrantsFor = async (actorId: string) =>
-    (await approvalGrants.select({ where: { field: "actorId", anyOfFold: rosterIds(actorId) } })).filter((grant) =>
-      samePerson(grant.actorId, actorId),
-    );
+    approvalGrants.select({ where: { field: "actorId", anyOfFold: [canonicalPerson(actorId)] } });
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy = deps.memoryStrategy ?? createPerTurnStrategy({ agent: deps.agent, memory: deps.memory });
   const blobTransfer = deps.blobTransfer;

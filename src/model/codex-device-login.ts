@@ -1,4 +1,3 @@
-import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
 import type { AuthEvent, AuthPrompt, OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
@@ -110,7 +109,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
       const tenant = currentTenant();
       sweep();
       const login = pending.get(loginId);
-      if (!login || !samePerson(login.owner, owner) || login.tenant !== tenant) return "unknown";
+      if (!login || login.owner !== owner || login.tenant !== tenant) return "unknown";
       if (!login.settled) return "pending";
       try {
         return await login.outcome;

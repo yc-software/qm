@@ -1,4 +1,5 @@
-import { scopeId, type ApprovalGrantModes, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
+import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
+import { scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -7,7 +8,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { perTenant, tenantListeners } from "../tenants/cache.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
-import { loadForScope, pickForScope, recordForPerson } from "../directory/person.ts";
+import type { ApprovalGrantModes } from "../types.ts";
 import type { SpendLimit } from "../ratelimit/spend-limits.ts";
 import type { ActivitySeeds } from "../../plugins/chassis/src/suggested-activities.ts";
 import {
@@ -306,9 +307,9 @@ export function createConfigStore(
       store,
       refresh,
       reload: (id: ScopeId) => writeQueue(`${name}:${id}`, () => refresh(id)),
-      get: (id: ScopeId) => pickForScope(id, (s) => cache().get(s)),
+      get: (id: ScopeId) => cache().get(id),
       durable: async (id: ScopeId) => {
-        const row = await loadForScope(id, (s) => store.get(s));
+        const row = await store.get(id);
         return row ? read(row) : undefined;
       },
       set(id: ScopeId, value: T | null) {
@@ -510,7 +511,7 @@ export function createConfigStore(
       }
       return state.hydrated;
     },
-    getSoul: (id) => pickForScope(id, (s) => tenantState().souls.get(s))?.content ?? null,
+    getSoul: (id) => tenantState().souls.get(id)?.content ?? null,
     setSoul(id, content, updatedBy, sessionId) {
       return writeQueue(`soul:${id}`, async () => {
         const legacy = tenantState().legacySoulHistory.get(id) ?? [];
@@ -671,7 +672,7 @@ export function createConfigStore(
     },
     setPurposeRuntime,
     clearPurposeRuntime: (purpose) => setPurposeRuntime(purpose),
-    getBaseModel: (id) => pickForScope(id, (s) => tenantState().baseModels.get(s))?.modelId ?? null,
+    getBaseModel: (id) => tenantState().baseModels.get(id)?.modelId ?? null,
     async setBaseModel(id, modelId) {
       await writeQueue(`model:${id}`, async () => {
         const saved = await updateBaseModelRow(id, (current) => {
@@ -682,7 +683,7 @@ export function createConfigStore(
       });
       noteRuntimeSelectionChanged(id);
     },
-    getRuntimeSelection: (id) => runtimeSelection(pickForScope(id, (s) => tenantState().baseModels.get(s))),
+    getRuntimeSelection: (id) => runtimeSelection(tenantState().baseModels.get(id)),
     async setRuntimeSelection(id, selection) {
       await writeQueue(`model:${id}`, async () => {
         if (selection === null) {
@@ -710,7 +711,7 @@ export function createConfigStore(
     onRuntimeSelectionChanged(listener) {
       runtimeSelectionListeners.add(listener);
     },
-    getRuntimeSelectionDurable: async (id) => runtimeSelection(await loadForScope(id, (s) => baseModelStore.get(s))),
+    getRuntimeSelectionDurable: async (id) => runtimeSelection(await baseModelStore.get(id)),
     getOrgAmbient: () => settings.orgAmbient.get(org) ?? true,
     setOrgAmbient: (on) => settings.orgAmbient.set(org, on),
     getOrgAmbientDurable: async () => (await settings.orgAmbient.durable(org)) ?? true,
@@ -721,12 +722,12 @@ export function createConfigStore(
     setIndividualModelAuth: (on) => settings.individualModelAuth.set(org, on),
     async getIndividualModelAuthDurable(principalId) {
       if (await settings.individualModelAuth.durable(org)) return true;
-      const own = (p: string) => settings.individualModelAuth.durable(scopeId("personal", p));
-      return !!principalId && !!(await recordForPerson(principalId, own));
+      return principalId
+        ? ((await settings.individualModelAuth.durable(scopeId("personal", principalId))) ?? false)
+        : false;
     },
     async getModelAccountDurable(principalId) {
-      const own = (p: string) => settings.individualModelAuth.store.get(scopeId("personal", p));
-      const row = await recordForPerson(principalId, own);
+      const row = await settings.individualModelAuth.store.get(scopeId("personal", principalId));
       if (row?.on) return row.provider ?? "personal";
       return (await settings.individualModelAuth.durable(org)) ? "personal" : "company";
     },
@@ -734,9 +735,9 @@ export function createConfigStore(
       const id = scopeId("personal", principalId);
       await settings.individualModelAuth.store.put(id, { scopeId: id, on, ...(on && provider ? { provider } : {}) });
     },
-    getBaseModelOwnDurable: async (id) => (await loadForScope(id, (s) => baseModelStore.get(s)))?.modelId ?? null,
+    getBaseModelOwnDurable: async (id) => (await baseModelStore.get(id))?.modelId ?? null,
     getBaseModelDurable: async (id) =>
-      (await loadForScope(id, (s) => baseModelStore.get(s)))?.modelId ??
+      (await baseModelStore.get(id))?.modelId ??
       (id === org ? null : ((await baseModelStore.get(org))?.modelId ?? null)),
     getWebuiModels: (id) => settings.webuiModels.get(id) ?? null,
     setWebuiModels: (id, ids) => settings.webuiModels.set(id, ids?.length ? ids : null),
