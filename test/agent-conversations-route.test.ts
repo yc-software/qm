@@ -354,4 +354,10 @@ test("bot work in a person's name sees only conversations bot work ran in; the p
   const limited = { query: "deploy", limit: 1 };
   const found = [(await bot.selfApi!("POST", "/v1/search", limited)).body, await tool.search!(limited)];
   assert.deepEqual(found.map(ids), [[own], [own]]);
+  await web("web:U1:bot", "take it from here");
+  const persona = await bot.selfApi!("PUT", `/v1/sessions/${own}/persona`, { personaId: null });
+  assert.deepEqual(
+    [persona.status, persona.body],
+    [403, { error: "forbidden", message: "this conversation is no longer accessible" }],
+  );
 });
