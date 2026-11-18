@@ -26,8 +26,8 @@ const SCENARIOS = ["tick", "lease", "crash", "sigterm", "deploy"] as const;
 type Scenario = (typeof SCENARIOS)[number];
 const LEASE_TTL_MS = 8_000;
 const RUN_TIMEOUT_MS = 300_000;
-const SLEEP_PROMPT =
-  "Run this exact shell command in your sandbox and wait for it to finish: sleep 40; echo runtime-qa-slept. Then reply with exactly: SLEPT";
+const sleepPrompt = (marker: string) =>
+  `Run this exact shell command in your sandbox and wait for it to finish: sleep 40; echo ${marker}. Then reply with exactly: SLEPT`;
 
 const root = repoRoot();
 const evidence = mkdtempSync(join(tmpdir(), "runtime-qa-"));
@@ -175,8 +175,8 @@ async function enqueue(core: string, text: string): Promise<string> {
 }
 
 async function runRow(runId: string) {
-  const [row] = await query<{ status: string; attempts: number; last_stop: string | null; session_id: string }>(
-    "SELECT status, attempts, last_stop, session_id FROM runs WHERE id = $1",
+  const [row] = await query<{ status: string; attempts: number; last_stop: string | null }>(
+    "SELECT status, attempts, last_stop FROM runs WHERE id = $1",
     [runId],
   );
   return row;
@@ -190,11 +190,10 @@ function marks(): Map<string, number> {
   return new Map([...procs.values()].map((p) => [p.name, p.lines.length]));
 }
 
-async function sandboxCommandStarted(sessionId: string): Promise<boolean | undefined> {
-  const rows = await query(
-    "SELECT 1 FROM items WHERE session_id = $1 AND kind = 'ToolCall' AND body::text LIKE '%runtime-qa-slept%' LIMIT 1",
-    [sessionId],
-  );
+async function sandboxCommandStarted(marker: string): Promise<boolean | undefined> {
+  const rows = await query("SELECT 1 FROM items WHERE kind = 'ToolCall' AND strpos(body::text, $1) > 0 LIMIT 1", [
+    marker,
+  ]);
   return rows.length > 0 || undefined;
 }
 
@@ -213,6 +212,7 @@ async function lockHolder(key: string): Promise<string | undefined> {
   const [row] = await query<{ application_name: string }>(
     `SELECT a.application_name FROM pg_locks l JOIN pg_stat_activity a USING (pid)
       WHERE l.locktype = 'advisory' AND l.granted
+        AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
         AND l.classid = ((hashtextextended($1, 0) >> 32) & 4294967295)::oid
         AND l.objid = (hashtextextended($1, 0) & 4294967295)::oid`,
     [`leader-lease:${key}`],
@@ -283,13 +283,13 @@ async function scenarioLease(): Promise<string> {
   return `${key} moved ${first} -> ${next} ${handoverMs} ms after SIGKILL; ${first} restarted`;
 }
 
-async function sleepingRun(core: string): Promise<{ runId: string; worker: Proc; sessionId: string }> {
+async function sleepingRun(core: string): Promise<{ runId: string; worker: Proc }> {
   const from = marks();
-  const runId = await enqueue(core, SLEEP_PROMPT);
+  const marker = `runtime-qa-${randomUUID()}`;
+  const runId = await enqueue(core, sleepPrompt(marker));
   const worker = await until(`a worker to claim ${runId}`, () => claimant(runId, from), 60_000);
-  const sessionId = (await runRow(runId))!.session_id;
-  await until(`the sandbox command in ${runId}`, () => sandboxCommandStarted(sessionId), 180_000);
-  return { runId, worker, sessionId };
+  await until(`the sandbox command in ${runId}`, () => sandboxCommandStarted(marker), 180_000);
+  return { runId, worker };
 }
 
 async function scenarioCrash(core: string): Promise<string> {

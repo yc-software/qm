@@ -140,7 +140,9 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   development workspace before opening a PR. Do this Slack QA in **Firefox**, never the
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
-  covered by tests.
+  covered by tests. For worker restarts, SIGTERM drain, lease handover, deploy drain
+  and interval sweeps, run `npm run qa:runtime` instead of waiting for them
+  ([docs/qa/runtime](./docs/qa/runtime/README.md)).
   Leave review instances running until the PR merges, unless the user asks to stop
   earlier. After merge, tear down that worktree's instance and verify its processes
   and lease are gone before removing the worktree. Preserve shared Postgres and
