@@ -40,6 +40,7 @@ const KEPT_TRACE_DATA = new Set([
   "messaging.message.receive.latency",
   "qm.surface",
   "qm.origin",
+  "qm.started_by",
   "qm.cancelled",
   "qm.facts",
   "qm.recalled",
@@ -348,6 +349,17 @@ export function traceQueued<T>(
   return carrier
     ? sdk.continueTrace({ sentryTrace: carrier.sentryTrace, baggage: undefined }, begin)
     : sdk.startNewTrace(begin);
+}
+
+export function setRunAttribute(key: string, value: string | undefined): void {
+  if (!client || !tracing || value === undefined) return;
+  try {
+    const active = client.getActiveSpan();
+    if (!active) return;
+    client.getRootSpan(active).setAttribute(key, value);
+  } catch (error) {
+    swallow("tracing", error);
+  }
 }
 
 export type Phase = Sentry.Span;

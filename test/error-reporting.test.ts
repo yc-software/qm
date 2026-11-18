@@ -423,12 +423,13 @@ test("human turns are always traced while other runs follow the configured rate"
     `
     const { createServer } = await import('node:http');
     let declined;
+    const { setRunAttribute } = await import('./plugins/chassis/src/error-reporting.ts');
     const server = createServer((req, res) => { declined = traceCarrier(); res.end('ok'); });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     await fetch('http://127.0.0.1:' + server.address().port + '/v1/things', { headers: { 'sentry-trace': 'fedcba9876543210fedcba9876543210-fedcba9876543210-0' } });
     server.close();
     for (let i = 0; i < 20; i++) {
-      await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => {});
+      await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => setRunAttribute('qm.started_by', 'person'));
       await traceQueued(undefined, 'cron-run', { 'qm.surface': 'cron', 'qm.origin': 'automation' }, async () => {});
       await traceQueued(undefined, 'subagent-run', { 'qm.origin': 'direct' }, async () => {});
     }
@@ -455,6 +456,7 @@ test("human turns are always traced while other runs follow the configured rate"
   const human = sampled.segments.find((sent) => sent.name === "human-run")!;
   assert.equal(human.attributes["sentry.sample_rate"], 1);
   assert.equal(human.attributes["qm.origin"], "human");
+  assert.equal(human.attributes["qm.started_by"], "person");
   assert.equal(human.attributes["qm.surface"], "slack");
   assert.match(human.attributes["messaging.message.id"], /^run-\d+$/);
 });
