@@ -107,7 +107,7 @@ async function updatePersona(ctx: ApiCtx): Promise<void> {
 async function deletePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   respond(ctx, await personas.remove(principalId, ctx.params.id!), "deleted");
 }
 
@@ -152,7 +152,7 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const access = isObj(ctx.body) ? ctx.body.access : undefined;
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
@@ -169,7 +169,7 @@ async function keychainResult<T>(ctx: ApiCtx, fn: () => Promise<PersonaResult<T>
 async function attachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const credentialId = isObj(ctx.body) ? ctx.body.credentialId : undefined;
   await keychainResult(ctx, () => personas.attachCredential(principalId, ctx.params.id!, credentialId), "credential");
 }
@@ -177,7 +177,7 @@ async function attachCredential(ctx: ApiCtx): Promise<void> {
 async function detachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   await keychainResult(
     ctx,
     () => personas.detachCredential(principalId, ctx.params.id!, ctx.params.grantId!),

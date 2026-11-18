@@ -511,6 +511,7 @@ test("an admin's agent can register and bind a brain but never carries its secre
     memoryRegistry: built.memoryRegistry,
     capabilitySecret: secret,
     signingSecret: secret,
+    runs: liveRunStore(),
   });
   server.listen(0);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -519,7 +520,7 @@ test("an admin's agent can register and bind a brain but never carries its secre
       actorId: "admin-alice",
       scopeId: "personal:admin-alice",
       aud: CONTROL_PLANE_AUD,
-      liveActor: true,
+      ...liveRunClaims("admin-alice"),
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     secret,
