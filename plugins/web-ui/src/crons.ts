@@ -2,8 +2,9 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { Archive, Ellipsis, Pause, Pencil, Play, Plus, RotateCcw, Sparkles, Trash2 } from "lucide";
 import { live } from "lit/directives/live.js";
 import { openShare, shareButton } from "./share-dialog";
-import { friendlyPrincipal } from "./app-view";
-import { avatarTpl, closeFormMenus, relTime, toggleFormMenu } from "./ui";
+import { cronDeliveryList } from "./cron-delivery";
+import { draftFromSchedule, schedulePicker, type ScheduleDraft } from "./cron-schedule-picker";
+import { closeFormMenus, relTime, toggleFormMenu } from "./ui";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
@@ -11,22 +12,16 @@ import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
-import { sessionsState, sessionTitle, startNewChat } from "./sessions";
+import { startNewChat } from "./sessions";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import {
-  browserTimezone,
   cronNextFire,
   cronRunSummary,
   cronRunSummaryTitle,
   cronScheduleSummary,
   describeSchedule,
   formatCronDateTime,
-  presetCron,
-  presetNextRuns,
-  schedulePreset,
   timezoneLabel,
-  WEEKDAYS,
-  type SchedulePreset,
 } from "./cron-format";
 import { tip } from "./tooltip";
 
@@ -502,7 +497,16 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
             ? nothing
             : html`<div class="cron-banner">Shared from ${cronScopeLabel(c)}. You can view it, but not change it.</div>`
         }
-        ${cronInstructions(c, manageable)} ${cronScheduleSection(c, manageable)} ${cronDelivery(c, mine)}
+        ${cronInstructions(c, manageable)} ${cronScheduleSection(c, manageable)}
+        ${cronSection(
+          "Delivers to",
+          cronDeliveryList(c, mine, mine ? (cronShares.get(c.id) ?? []) : [], () =>
+            openShare(
+              { type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId },
+              { onChange: () => void loadCronShares(c.id) },
+            ),
+          ),
+        )}
         ${manageable ? cronRunHistory(c) : nothing}
         <div class="cron-details">
           ${scopeChip(c.ownerScopeId, c.scopeName ?? null)} ${mine ? nothing : html`<span>Owner ${c.owner}</span>`}
@@ -691,164 +695,19 @@ function cronInstructions(c: CronView, manageable: boolean): TemplateResult {
   );
 }
 
-type ScheduleKind = SchedulePreset["kind"] | "custom";
-
-interface ScheduleDraft {
-  kind: ScheduleKind;
-  hour: number;
-  minute: number;
-  day: number;
-  expression: string;
-  timezone: string;
-}
-
-const SCHEDULE_KINDS: Array<{ value: ScheduleKind; label: string }> = [
-  { value: "hourly", label: "Hourly" },
-  { value: "daily", label: "Daily" },
-  { value: "weekdays", label: "Weekdays" },
-  { value: "weekly", label: "Weekly" },
-  { value: "custom", label: "Custom" },
-];
-
-function draftFromSchedule(schedule: CronView["schedule"]): ScheduleDraft {
-  const preset = schedule.cron ? schedulePreset(schedule.cron) : null;
-  const draft: ScheduleDraft = {
-    kind: schedule.cron ? (preset?.kind ?? "custom") : "daily",
-    hour: 9,
-    minute: 0,
-    day: 1,
-    expression: schedule.cron?.trim() ?? "0 9 * * *",
-    timezone: schedule.timezone?.trim() || browserTimezone() || "UTC",
-  };
-  if (preset) {
-    draft.minute = preset.minute;
-    if (preset.kind !== "hourly") draft.hour = preset.hour;
-    if (preset.kind === "weekly") draft.day = preset.day;
-  }
-  return draft;
-}
-
-function draftPreset(draft: ScheduleDraft): SchedulePreset | null {
-  if (draft.kind === "custom") return null;
-  if (draft.kind === "hourly") return { kind: "hourly", minute: draft.minute };
-  if (draft.kind === "weekly") return { kind: "weekly", day: draft.day, hour: draft.hour, minute: draft.minute };
-  return draft.kind === "daily"
-    ? { kind: "daily", hour: draft.hour, minute: draft.minute }
-    : { kind: "weekdays", hour: draft.hour, minute: draft.minute };
-}
-
-function updateDraft(c: CronView, patch: Partial<ScheduleDraft>): void {
-  if (!scheduleDraft) return;
-  scheduleDraft = { ...scheduleDraft, ...patch };
-  openCron(c);
-}
-
-function timezoneOptions(): string[] {
-  const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
-  return intl.supportedValuesOf?.("timeZone") ?? [];
-}
-
-function schedulePicker(c: CronView, draft: ScheduleDraft): TemplateResult {
-  const preset = draftPreset(draft);
-  const runs = preset ? presetNextRuns(preset, draft.timezone) : [];
-  const time = `${String(draft.hour).padStart(2, "0")}:${String(draft.minute).padStart(2, "0")}`;
-  const onTime = (e: Event) => {
-    const [hour, minute] = (e.currentTarget as HTMLInputElement).value.split(":").map(Number);
-    if (Number.isInteger(hour) && Number.isInteger(minute)) updateDraft(c, { hour: hour!, minute: minute! });
-  };
-  return html`<form
-    class="cron-card cron-schedule-form"
-    @submit=${(e: SubmitEvent) => void saveSchedule(e, c)}
-    @keydown=${(e: KeyboardEvent) => e.key === "Escape" && cancelEdit(c)}
-  >
-    <div class="cron-segments" role="radiogroup" aria-label="How often">
-      ${SCHEDULE_KINDS.map(
-        (k) =>
-          html`<button
-            type="button"
-            role="radio"
-            aria-checked=${draft.kind === k.value ? "true" : "false"}
-            class=${draft.kind === k.value ? "active" : ""}
-            data-autofocus=${draft.kind === k.value ? "schedule" : nothing}
-            @click=${() => updateDraft(c, { kind: k.value })}
-          >
-            ${k.label}
-          </button>`,
-      )}
-    </div>
-    <div class="cron-schedule-fields">
-      ${
-        draft.kind === "hourly"
-          ? html`<label
-              >Minute past the hour<input
-                type="number"
-                min="0"
-                max="59"
-                .value=${live(String(draft.minute))}
-                @change=${(e: Event) => {
-                  const minute = Number((e.currentTarget as HTMLInputElement).value);
-                  if (Number.isInteger(minute) && minute >= 0 && minute <= 59) updateDraft(c, { minute });
-                }}
-            /></label>`
-          : nothing
-      }
-      ${
-        draft.kind === "weekly"
-          ? html`<label
-              >Day<select
-                @change=${(e: Event) => updateDraft(c, { day: Number((e.currentTarget as HTMLSelectElement).value) })}
-              >
-                ${WEEKDAYS.map((name, i) => html`<option value=${i} ?selected=${draft.day === i}>${name}</option>`)}
-              </select></label
-            >`
-          : nothing
-      }
-      ${
-        draft.kind === "daily" || draft.kind === "weekdays" || draft.kind === "weekly"
-          ? html`<label>Time<input type="time" .value=${live(time)} @change=${onTime} /></label>`
-          : nothing
-      }
-      ${
-        draft.kind === "custom"
-          ? html`<label class="cron-expression"
-              >Cron expression<input
-                class="mono"
-                .value=${live(draft.expression)}
-                placeholder="0 9 * * 1-5"
-                @input=${(e: Event) => {
-                  scheduleDraft = { ...draft, expression: (e.currentTarget as HTMLInputElement).value };
-                }}
-              /><span class="hint">minute · hour · day of month · month · day of week</span></label
-            >`
-          : nothing
-      }
-      <label
-        >Timezone<input
-          list="cron-timezones"
-          .value=${live(draft.timezone)}
-          @change=${(e: Event) => updateDraft(c, { timezone: (e.currentTarget as HTMLInputElement).value.trim() })}
-        /><datalist id="cron-timezones">
-          ${timezoneOptions().map((tz) => html`<option value=${tz}></option>`)}
-        </datalist></label
-      >
-    </div>
-    ${
-      runs.length
-        ? html`<div class="cron-next-runs">
-            <span>Next runs</span>
-            ${runs.map((at) => html`<span>${formatCronDateTime(at, Date.now(), draft.timezone)}</span>`)}
-          </div>`
-        : nothing
-    }
-    <div class="cron-card-actions">
-      <button class="btn" type="button" @click=${() => cancelEdit(c)}>Cancel</button>
-      <button class="btn primary" type="submit">Save</button>
-    </div>
-  </form>`;
-}
-
 function cronScheduleSection(c: CronView, manageable: boolean): TemplateResult {
-  if (editing(c, "schedule") && scheduleDraft) return cronSection("Schedule", schedulePicker(c, scheduleDraft));
+  if (editing(c, "schedule") && scheduleDraft)
+    return cronSection(
+      "Schedule",
+      schedulePicker(scheduleDraft, {
+        change: (patch) => {
+          scheduleDraft = scheduleDraft && { ...scheduleDraft, ...patch };
+          openCron(c);
+        },
+        save: (schedule) => void saveSchedule(c, schedule),
+        cancel: () => cancelEdit(c),
+      }),
+    );
   const next = cronNextFire(c);
   const sub = [
     c.schedule.cron ? timezoneLabel(c.schedule.timezone) : "",
@@ -872,79 +731,12 @@ function cronScheduleSection(c: CronView, manageable: boolean): TemplateResult {
   );
 }
 
-function destinationLabel(c: CronView, mine: boolean): TemplateResult | string {
-  const d = c.destination;
-  if (!d) return mine ? "This chat" : "Its owner's chat";
-  if (d.type === "web") {
-    const session = sessionsState.list.find((s) => s.threadRef === d.target);
-    if (!session) return mine ? "Your chat" : "A chat";
-    const link = html`<a href=${deepLinkPath(UI_BASE, "chats", session.id)}>${sessionTitle(session)}</a>`;
-    return mine ? html`Your chat: ${link}` : link;
-  }
-  if (d.type === "principal") return `${friendlyPrincipal(d.target)}'s DM`;
-  if (d.type === "slack") return d.target.startsWith("D") ? "A Slack DM" : "A Slack channel";
-  return d.type === "group" ? "A group DM" : "Somewhere else";
-}
-
-function deliveryRow(
-  who: string,
-  where: TemplateResult | string,
-  status?: { label: string; tone: string },
-): TemplateResult {
-  return html`<div class="cron-delivery-row">
-    ${avatarTpl({ key: who, name: who })}
-    <span class="cron-delivery-who">${who}</span>
-    <span class="cron-delivery-where">${where}</span>
-    ${status ? html`<span class="cron-pill ${status.tone}">${status.label}</span>` : nothing}
-  </div>`;
-}
-
-function granteeName(scope: string): string {
-  return scope.startsWith("personal:") ? friendlyPrincipal(scope.slice("personal:".length)) : scope;
-}
-
-function cronDelivery(c: CronView, mine: boolean): TemplateResult {
-  const shares = mine ? (cronShares.get(c.id) ?? []) : [];
-  const ownStatus = c.archived
-    ? { label: "Archived", tone: "" }
-    : c.enabled
-      ? { label: "On", tone: "on" }
-      : { label: "Paused", tone: "" };
-  return cronSection(
-    "Delivers to",
-    html`<div class="cron-card cron-delivery-list">
-      ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
-      ${shares.map((g) =>
-        deliveryRow(granteeName(g.scope), g.permission === "write" ? "Can view and edit" : "Can view"),
-      )}
-      ${
-        mine
-          ? html`<button
-              class="cron-delivery-add"
-              type="button"
-              @click=${() =>
-                void openShare(
-                  { type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId },
-                  { onChange: () => void loadCronShares(c.id) },
-                )}
-            >
-              ${icon(Plus, 15)}<span>Add people</span>
-            </button>`
-          : nothing
-      }
-    </div>`,
-  );
-}
-
 async function loadCronShares(id: string): Promise<void> {
   try {
     const r = await api<{ grantees: Array<{ scope: string; permission: "read" | "write" }> }>(
       `/api/shares/cron/${encodeURIComponent(id)}`,
     );
-    cronShares.set(
-      id,
-      (r.grantees ?? []).filter((g) => g.scope.startsWith("personal:")),
-    );
+    cronShares.set(id, r.grantees ?? []);
   } catch {
     cronShares.set(id, []);
   }
@@ -1105,13 +897,8 @@ async function saveCronField(event: SubmitEvent, c: CronView, field: "title" | "
   await reopenCron(c.id);
 }
 
-async function saveSchedule(event: SubmitEvent, c: CronView): Promise<void> {
-  event.preventDefault();
-  const draft = scheduleDraft;
-  if (!draft) return;
-  const preset = draftPreset(draft);
-  const cron = preset ? presetCron(preset) : draft.expression.trim().replace(/\s+/g, " ");
-  const ok = await patchCron(c.id, { schedule: { cron, timezone: draft.timezone } }, "schedule update failed");
+async function saveSchedule(c: CronView, schedule: { cron: string; timezone: string }): Promise<void> {
+  const ok = await patchCron(c.id, { schedule }, "schedule update failed");
   if (!ok) return;
   cronEdit = null;
   scheduleDraft = null;
