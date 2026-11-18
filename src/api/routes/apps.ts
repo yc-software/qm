@@ -1334,10 +1334,16 @@ async function listApps(ctx: ApiCtx): Promise<void> {
   const names = await createPersonNames({ users: ctx.deps.users, directory: ctx.deps.directory }).labels(
     visible.flatMap((d) => [ownerOf(d), d.createdBy].filter((id): id is string => !!id)),
   );
+  const managed = new Map<string, Promise<boolean>>();
+  const canShareFor = (ownerScopeId: string, createdBy: string) => {
+    const key = `${ownerScopeId}\n${createdBy}`;
+    if (!managed.has(key)) managed.set(key, app.canManageArtifactHome(ownerScopeId, createdBy, principalId));
+    return managed.get(key)!;
+  };
   const publishedApps = await Promise.all(
     visible.map(async (d) => {
       const owner = ownerOf(d);
-      const canShare = !!d.ownerScopeId && (await app.canManageArtifactHome(d.ownerScopeId, d.createdBy, principalId));
+      const canShare = !!d.ownerScopeId && (await canShareFor(d.ownerScopeId, d.createdBy));
       const named = {
         ...d,
         canShare,
