@@ -56,10 +56,7 @@ export function membershipEvent(
     .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
     .map((m) => (listed.has(m.principalId) ? memberLabel(m) : memberIds(m)));
   const listedBefore = new Set(
-    previous.roster
-      .toSorted((a, b) => a.id.localeCompare(b.id))
-      .slice(0, ROSTER_CAP)
-      .map((m) => m.id),
+    rosterShown(previous.roster.map((m) => ({ principalId: m.id }))).map((m) => m.principalId),
   );
   const left = previous.roster
     .filter((m) => absentFrom(roster, m.id))
