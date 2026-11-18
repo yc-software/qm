@@ -14,6 +14,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunBinding, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -29,6 +30,7 @@ describe("surface-context pulls", async () => {
         scopeId: scopeId("channel", "C9"),
         destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...liveRunBinding("U1"),
         ...overrides,
       },
       SECRET,
@@ -78,6 +80,7 @@ describe("surface-context pulls", async () => {
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
+      runs: liveRunStore(),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

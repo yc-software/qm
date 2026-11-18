@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isTerminal } from "../../runs/run-store.ts";
 import { waitForClientResult } from "../../runs/run-signal-store.ts";
 import type { UiSignal } from "../../runs/session-state-bus.ts";
 import {
@@ -37,7 +36,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return null;
   const cap = ctx.capability!;
-  if (!deps.uiState || !deps.runs || !deps.sessions) {
+  if (!deps.uiState || !deps.sessions) {
     sendJson(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
     return null;
   }
@@ -55,11 +54,6 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     });
     return null;
   }
-  const run = cap.runId ? await deps.runs.get(cap.runId) : null;
-  if (!run || isTerminal(run.status)) {
-    sendJson(res, 409, { error: "turn_ended", message: "The turn that issued this token has ended." });
-    return null;
-  }
   const session = await deps.sessions.getByThread(threadRef);
   if (!session) {
     sendJson(res, 404, { error: "not_found", message: "no such conversation" });
@@ -69,7 +63,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     actorId: cap.actorId,
     sessionId: session.id,
     threadRef,
-    runId: run.id,
+    runId: cap.runId!,
     personal: cap.scopeId === scopeId("personal", cap.actorId),
   };
 }
