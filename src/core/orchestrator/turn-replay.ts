@@ -1,5 +1,5 @@
 import type { OpenStoredFile } from "../attachments.ts";
-import { restoreAttachmentState } from "./attach-tool.ts";
+import { restoreAttachmentState, attachmentSnapshot } from "./attach-tool.ts";
 import { recordReplyFiles } from "./settle.ts";
 import type { SessionWriter } from "../../sessions/session-store.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
@@ -74,7 +74,7 @@ export async function replayRecordedAnswer(
   const attachments = restored.entries.map((entry) => entry.attachment);
   if (attachments.length)
     await turn.withManagedRosterVersion(() =>
-      recordReplyFiles(deps.sessions, turn.writer, attachments, recorded.items),
+      recordReplyFiles(deps.sessions, turn.writer, attachments, recorded.items, attachmentSnapshot(restored)),
     );
   return text.trim() || attachments.length
     ? {

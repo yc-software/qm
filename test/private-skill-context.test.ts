@@ -1,3 +1,4 @@
+import { attachmentSnapshot, restoreAttachmentState } from "../src/core/orchestrator/attach-tool.ts";
 import { disclosedMemory } from "../src/memory/disclosure.ts";
 import { recordReplyFiles } from "../src/core/orchestrator/settle.ts";
 import { randomUUID } from "node:crypto";
@@ -438,11 +439,22 @@ test("private document capability and skill privacy survive memory opt-out and a
   assert.ok(delivery);
   assert.ok(JSON.stringify(delivery.body.files).includes(privateFileId));
   assert.ok(!JSON.stringify(delivery.body).includes("blobId"));
+  const restored = await restoreAttachmentState(
+    attachedHistory!.items,
+    delivery.turnId!,
+    built.blobTransfer,
+    async (id) => {
+      const opened = await built.files.open(id);
+      return opened ? { ...opened.artifact, stream: opened.stream } : null;
+    },
+    actorId,
+  );
   await recordReplyFiles(
     built.sessions,
     { sessionId: attached.sessionId, turnId: delivery.turnId! },
     attached.attachments ?? [],
     attachedHistory!.items,
+    attachmentSnapshot(restored),
   );
   assert.equal(
     (await built.sessions.getItems(attached.sessionId)).filter((item) => item.variant === "files_delivered").length,

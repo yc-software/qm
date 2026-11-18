@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import pg from "pg";
-import { ATTACHMENT_STAGING_MIGRATION } from "../src/sessions/attachment-migrations.ts";
+import { ATTACHMENT_STAGING_MIGRATION, ATTACHMENT_RECEIPTS_MIGRATION } from "../src/sessions/attachment-migrations.ts";
 import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 test("only reconstructable in-flight attachment selections are migrated", async () => {
@@ -94,6 +94,93 @@ test("only reconstructable in-flight attachment selections are migrated", async 
       ).rows,
       rows,
     );
+  } finally {
+    await client.end();
+  }
+});
+
+test("in-flight delivery receipts become canonical cumulative snapshots without changing completed history", async () => {
+  const client = new pg.Client({ connectionString: testBareDatabaseUrl() });
+  await client.connect();
+  try {
+    await client.query("CREATE TABLE sessions(tenant_id uuid,id text,thread_ref text)");
+    await client.query("CREATE TABLE runs(tenant_id uuid,id text,session_id text,status text)");
+    await client.query(
+      "CREATE TABLE items(tenant_id uuid,session_id text,turn_id uuid,seq bigint,kind text,tool text,call_id text,variant text,is_error boolean,body jsonb)",
+    );
+    const tenants = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
+    const runIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333",
+    ];
+    for (const tenant of tenants)
+      for (const [index, status] of ["pending", "running", "done"].entries()) {
+        const id = runIds[index]!;
+        await client.query("INSERT INTO sessions VALUES($1,$2,'web:'||$2)", [tenant, id]);
+        await client.query("INSERT INTO runs VALUES($1,$2,'web:'||$2,$3)", [tenant, id, status]);
+        if (index === 0)
+          await client.query(
+            "INSERT INTO items VALUES($1,$2::text,$2::uuid,0,'ToolResult','attach','staged',NULL,false,$3)",
+            [tenant, id, { ok: true, stagedFiles: [], stagedRevision: 7 }],
+          );
+        for (const [position, name] of ["first", "second"].entries())
+          await client.query(
+            "INSERT INTO items VALUES($1,$2::text,$2::uuid,$3,'AgentMessage',NULL,NULL,'files_delivered',false,$4)",
+            [
+              tenant,
+              id,
+              position + 2,
+              {
+                files: [
+                  {
+                    artifactId: name + tenant,
+                    name: name + ".txt",
+                    mimetype: "text/plain",
+                    sizeBytes: 3,
+                    artifactViewerId: "owner",
+                  },
+                ],
+              },
+            ],
+          );
+      }
+    const before = (await client.query("SELECT * FROM items WHERE turn_id=$1 ORDER BY tenant_id,seq", [runIds[2]]))
+      .rows;
+    for (const sql of ATTACHMENT_RECEIPTS_MIGRATION.statements) await client.query(sql);
+    for (const tenant of tenants)
+      for (const [index, expected] of [
+        [0, [8, 9]],
+        [1, [1, 2]],
+      ] as const) {
+        const rows = (
+          await client.query(
+            "SELECT body FROM items WHERE tenant_id=$1 AND turn_id=$2 AND kind='AgentMessage' ORDER BY seq",
+            [tenant, runIds[index]],
+          )
+        ).rows;
+        assert.deepEqual(
+          rows.map((row) => row.body.stagedRevision),
+          expected,
+        );
+        assert.deepEqual(
+          rows[1]!.body.stagedFiles.map((file: { artifactId: string }) => file.artifactId),
+          ["first" + tenant, "second" + tenant],
+        );
+        assert.ok(
+          rows[1]!.body.stagedFiles.every(
+            (file: { created: boolean; artifactViewerId: string }) =>
+              !file.created && file.artifactViewerId === "owner",
+          ),
+        );
+      }
+    assert.deepEqual(
+      (await client.query("SELECT * FROM items WHERE turn_id=$1 ORDER BY tenant_id,seq", [runIds[2]])).rows,
+      before,
+    );
+    const after = (await client.query("SELECT * FROM items ORDER BY tenant_id,turn_id,seq")).rows;
+    for (const sql of ATTACHMENT_RECEIPTS_MIGRATION.statements) await client.query(sql);
+    assert.deepEqual((await client.query("SELECT * FROM items ORDER BY tenant_id,turn_id,seq")).rows, after);
   } finally {
     await client.end();
   }

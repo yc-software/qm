@@ -84,3 +84,34 @@ export const ATTACHMENT_STAGING_MIGRATION: PgMigrationDefinition = {
           AND d.turn_id=i.turn_id AND d.kind='AgentMessage' AND d.variant='files_delivered')`,
   ],
 };
+
+export const ATTACHMENT_RECEIPTS_MIGRATION: PgMigrationDefinition = {
+  id: "sessions/store/0068-attachment-receipts",
+  statements: [
+    `WITH receipts AS (
+       SELECT i.tenant_id,i.session_id,i.turn_id,i.seq,
+              row_number() OVER (PARTITION BY i.tenant_id,i.session_id,i.turn_id ORDER BY i.seq) +
+              COALESCE((SELECT max((d.body->>'stagedRevision')::bigint) FROM items d
+                WHERE d.tenant_id=i.tenant_id AND d.session_id=i.session_id AND d.turn_id=i.turn_id
+                  AND jsonb_typeof(d.body->'stagedRevision')='number'),0) AS revision
+         FROM items i JOIN runs r ON r.tenant_id=i.tenant_id AND r.id=i.turn_id::text
+         JOIN sessions s ON s.tenant_id=i.tenant_id AND s.id=i.session_id
+        WHERE r.status IN ('pending','running') AND r.session_id IN (s.id,s.thread_ref)
+          AND i.kind='AgentMessage' AND i.variant='files_delivered'
+          AND jsonb_typeof(i.body->'files')='array'
+          AND jsonb_typeof(i.body->'stagedFiles') IS DISTINCT FROM 'array'
+     ) UPDATE items i SET body=i.body || jsonb_build_object('stagedRevision',r.revision,'stagedFiles',COALESCE((
+         SELECT jsonb_agg(f.file || jsonb_build_object('key',jsonb_build_array('file',f.file->>'artifactId'),'created',false)
+                         ORDER BY f.seq,f.ordinality)
+           FROM (
+             SELECT DISTINCT ON (a.value->>'artifactId') a.value AS file,d.seq,a.ordinality
+               FROM items d CROSS JOIN LATERAL jsonb_array_elements(d.body->'files') WITH ORDINALITY a
+              WHERE d.tenant_id=r.tenant_id AND d.session_id=r.session_id AND d.turn_id=r.turn_id AND d.seq<=r.seq
+                AND d.kind='AgentMessage' AND d.variant='files_delivered'
+              ORDER BY a.value->>'artifactId',d.seq,a.ordinality
+           ) f
+       ),'[]'::jsonb)) FROM receipts r
+      WHERE i.tenant_id=r.tenant_id AND i.session_id=r.session_id AND i.seq=r.seq
+        AND jsonb_typeof(i.body->'stagedFiles') IS DISTINCT FROM 'array'`,
+  ],
+};

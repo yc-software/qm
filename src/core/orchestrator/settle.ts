@@ -26,7 +26,7 @@ export async function recordReplyFiles(
     "artifactId" | "name" | "mimetype" | "sizeBytes" | "artifactViewerId"
   >[],
   previous: readonly Item[],
-  snapshot?: ReturnType<StagedAttachments["snapshot"]>,
+  snapshot: ReturnType<StagedAttachments["snapshot"]>,
 ): Promise<boolean> {
   if (!filesToRecord.length) return false;
   const recorded = new Set(

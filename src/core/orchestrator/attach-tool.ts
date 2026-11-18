@@ -77,15 +77,7 @@ export async function restoreAttachmentState(
         saved = item.body.stagedFiles;
       }
     }
-  } else if (delivered.length) {
-    saved = delivered.flatMap((item) =>
-      Array.isArray(item.body.files)
-        ? item.body.files.map((file) =>
-            isObj(file) ? { ...file, key: ["file", file.artifactId], created: false } : file,
-          )
-        : [],
-    );
-  } else if (results.length) {
+  } else if (results.length || delivered.length) {
     throw new Error("The reply's attachment selection was not saved. Attach the files again in a new turn.");
   }
   const metadata = saved.map((file): StagedFileMeta & { artifactId: string } => {
@@ -155,13 +147,9 @@ export async function restoreAttachmentState(
   };
 }
 
-export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments {
-  const staged = new Map((ctx.initial?.entries ?? []).map((entry) => [JSON.stringify(entry.key), entry]));
-  let calls = ctx.initial?.calls ?? 0;
-  let revision = ctx.initial?.revision ?? 0;
-  const retired = new Set<string>();
-  const snapshot = () => ({
-    stagedFiles: [...staged.values()].map(({ key, attachment, created }) => ({
+export function attachmentSnapshot(state: Pick<AttachmentState, "entries" | "revision">) {
+  return {
+    stagedFiles: state.entries.map(({ key, attachment, created }) => ({
       key,
       name: attachment.name,
       mimetype: attachment.mimetype,
@@ -170,8 +158,16 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
       ...(attachment.artifactViewerId ? { artifactViewerId: attachment.artifactViewerId } : {}),
       created: created.has(attachment.artifactId ?? ""),
     })),
-    stagedRevision: revision,
-  });
+    stagedRevision: state.revision,
+  };
+}
+
+export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments {
+  const staged = new Map((ctx.initial?.entries ?? []).map((entry) => [JSON.stringify(entry.key), entry]));
+  let calls = ctx.initial?.calls ?? 0;
+  let revision = ctx.initial?.revision ?? 0;
+  const retired = new Set<string>();
+  const snapshot = () => attachmentSnapshot({ entries: [...staged.values()], revision });
   const attach = async (files: readonly OutboundFile[], sandboxId?: string): Promise<AttachResult> => {
     if (ctx.textOnly)
       return { ok: false, message: "This conversation takes text messages only; nothing was attached." };
