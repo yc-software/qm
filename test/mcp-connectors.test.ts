@@ -488,10 +488,13 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     ["alice", "bob"],
   );
   assert.deepEqual(authFor("tools/call").sort(), ["Bearer alice-token", "Bearer bob-token"]);
-  await users.setConnectorToken(host, "internal:alice", { accessToken: "rotated-alice" });
+  installPrincipalLinks({ canonical: (k) => (k === "alice@x.test" ? "internal:alice" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  await users.setConnectorToken(host, "alice@x.test", { accessToken: "rotated-alice" });
   await service.call("crm_query", { q: "rotated" }, "internal:alice");
   assert.equal(authFor("tools/call").at(-1), "Bearer rotated-alice");
-  await users.deleteConnectorToken(host, "internal:alice");
+  assert.equal(await service.call("crm_query", { q: "linked" }, "alice@x.test"), "linked");
+  await users.deleteConnectorToken(host, "alice@x.test");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
   await assert.rejects(service.call("crm_query", {}), /requires a connected user/);
   await assert.rejects(
@@ -500,7 +503,10 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
   );
   await users.setConnectorToken(host, "internal:bob", { accessToken: "expired", expiresAt: 1 });
   await assert.rejects(service.call("crm_query", {}, "internal:bob"), /Connect your account/);
-  assert.equal(authFor("tools/call").length, 3);
+  assert.equal(authFor("tools/call").length, 4);
+  await users.setConnectorToken(host, "alice@x.test", { accessToken: "relinked" });
+  installPrincipalLinks(null);
+  assert.equal(await users.connectorAccessToken(host, "internal:alice"), "relinked");
 });
 
 test("per-user mode fails closed without a keychain and shared mode preserves existing behavior", async (t) => {
