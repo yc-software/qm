@@ -91,14 +91,19 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       ms.filter((m) => botModeOf(m) !== "ignore").map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
     const delta = asPolicy(rawDelta.filter((m) => !m.handled));
     const rawLatestTs = rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? "");
-    const advanceCursor = async (): Promise<void> => {
-      if (deps.ambientCursors && rawDelta.length && rawLatestTs)
-        await deps.ambientCursors
-          .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
-          .catch(() => undefined);
+    const claimBatch = async (): Promise<boolean> => {
+      if (!deps.ambientCursors || !rawDelta.length) return true;
+      const claimed = { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() };
+      if (!cursor) return deps.ambientCursors.insertIfAbsent(cursorKey, claimed);
+      let won = false;
+      await deps.ambientCursors.update(cursorKey, (current) => {
+        won = current.lastJudgedTs === after;
+        return won ? claimed : current;
+      });
+      return won;
     };
     if (!delta.length && !scheduled) {
-      await advanceCursor();
+      await claimBatch();
       return { act: false };
     }
     if (!scheduled && delta.length && delta.every((m) => botModeOf(m) === "rollup")) {
@@ -111,6 +116,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         });
       if (held) return { act: false };
     }
+    if (!(await claimBatch())) return judgeAmbientContainer(surface, container, opts);
     const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
     const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const watchReason =
@@ -134,7 +140,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         ...(tsTo ? { tsTo } : {}),
         createdAt: Date.now(),
       });
-      await advanceCursor();
       return { act: false };
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
@@ -236,7 +241,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         createdAt: Date.now(),
       });
     }
-    await advanceCursor();
     return decision;
   }
 
