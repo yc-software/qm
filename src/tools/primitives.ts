@@ -254,6 +254,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<{ hits: string[]; problems: MemoryProviderProblem[] } | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
   memoryAdd(facts: string[], scope?: ScopeId): Promise<MemoryWrite | null>;
+  memoryPublish?(facts: MemoryEdit[], applicability: "team" | "workbook"): Promise<MemoryWrite | null>;
   memoryEdit(edits: MemoryEdit[], scope?: ScopeId): Promise<true | null>;
   memoryDelete(ids: string[], callId: string, scope?: ScopeId): Promise<MemoryForget | null>;
   history(q: string, limit?: number): Promise<string[]>;
@@ -519,6 +520,7 @@ export interface ToolContextDeps {
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
+  publishMemory?: (facts: MemoryEdit[], applicability: "team" | "workbook") => Promise<MemoryWrite | null>;
   memoryAccess?: MemoryAccess;
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
@@ -1194,6 +1196,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         deps.runId,
       );
     },
+
+    ...(deps.publishMemory ? { memoryPublish: deps.publishMemory } : {}),
 
     async memoryEdit(edits: MemoryEdit[], scope?: ScopeId): Promise<true | null> {
       const write = writableNotebook(deps.memoryAccess, scope);

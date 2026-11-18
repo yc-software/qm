@@ -147,7 +147,7 @@ export interface OrchestratorDeps {
   memory: MemoryService;
   mcp?: McpToolService;
   memoryPolicy?: MemoryPolicy;
-  documentConversations?: Pick<DocumentConversations, "knowledgeForSession">;
+  documentConversations?: Pick<DocumentConversations, "knowledgeForSession" | "publishLearning">;
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;

@@ -19,7 +19,7 @@ export interface MemoryDisclosure {
   currentScopeMembers?: CurrentScopeMembers;
 }
 
-function memoryDisclosurePolicy(input: MemoryDisclosure) {
+export function memoryDisclosurePolicy(input: MemoryDisclosure) {
   const decisions = new Map<string, Promise<boolean>>();
   const once = (key: string, read: () => Promise<boolean>) => {
     let decision = decisions.get(key);
@@ -119,8 +119,10 @@ export class MemoryRecallWithheld extends Error {
 }
 
 export class MemoryDisclosureDenied extends Error {
-  constructor() {
-    super("This notebook isn't editable from this conversation. Edit it from an authorized conversation.");
+  constructor(
+    message = "This notebook isn't editable from this conversation. Edit it from an authorized conversation.",
+  ) {
+    super(message);
   }
 }
 

@@ -5130,3 +5130,34 @@ test("a connector note over its budget shows every server, fills shorter tool li
   assert.ok(note.length <= 2_000 * 4 + 400);
   assert.equal(connectorToolsNote([...small, ...big]), note);
 });
+
+test("publishing private learning requires once-only approval of the exact selected text and destination", async () => {
+  const published: Array<{ facts: Array<{ id: string; text: string }>; applicability: string }> = [];
+  const approved = new Set<string>();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      memoryPublish: async (facts, applicability) => {
+        published.push({ facts, applicability });
+        return { added: facts.length, outcomes: [], problems: [] };
+      },
+    },
+    pendingApprovals: [],
+    scopeLabel: "personal:U1",
+    toolApprovalGate: (_tool, key) => !key || approved.delete(key),
+  };
+  const memory = createAgentTools(ref).find((tool) => tool.name === "memory")!;
+  const request = { action: "publish", scope: "team", facts: [{ id: "fact-id", text: "Selected procedure" }] };
+  assert.match(textOut(await call(memory, request)), /blocked: needs human approval/);
+  assert.deepEqual(published, []);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  approved.add(approval.approvalKey!);
+  await call(memory, { ...request, facts: [{ text: "Different private fact" }] });
+  await call(memory, { ...request, scope: "workbook" });
+  assert.deepEqual(published, []);
+  await call(memory, request);
+  assert.deepEqual(published, [{ facts: [{ id: "fact-id", text: "Selected procedure" }], applicability: "team" }]);
+  await call(memory, request);
+  assert.equal(published.length, 1);
+});

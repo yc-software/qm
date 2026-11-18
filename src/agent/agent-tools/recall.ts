@@ -4,6 +4,7 @@ import { MemoryFactsMissing, MemoryForgetRefused } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
 import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
+import { isObj } from "../../util/objects.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export function recallTools(kit: ToolKit) {
@@ -13,7 +14,7 @@ export function recallTools(kit: ToolKit) {
     label: "memory",
     description:
       "Your durable memory of the person or team you work for; it persists across conversations and surfaces. It is not a file: writing MEMORY.md does nothing. " +
-      "Reads may span authorized notebooks. Writes use this conversation's notebook by default; in a shared document conversation, scope=team selects its authorized team notebook. Private conversations cannot use that destination. " +
+      "Reads may span authorized notebooks. Writes use this conversation's notebook by default; in a shared document conversation, scope=team selects its authorized team notebook. Private conversations cannot add to that destination. publish: copy only selected existing private facts, identified by their current id and exact text from memory read, into the document team or workbook notebook after the person approves this exact call; pass scope=team or scope=workbook. The source stays private. " +
       "search: facts matching every word of `query` across readable notebooks — only a bounded selection is loaded into context, so search before asking. " +
       "read: this notebook with fact #ids (pass `scope` from a search result for another notebook). " +
       "add: short, self-contained facts (preferences, identifiers, ongoing projects, how they work); never secrets, one-off trivia, or anything already recorded elsewhere. " +
@@ -24,6 +25,7 @@ export function recallTools(kit: ToolKit) {
         Type.Literal("search"),
         Type.Literal("read"),
         Type.Literal("add"),
+        Type.Literal("publish"),
         Type.Literal("edit"),
         Type.Literal("delete"),
       ]),
@@ -103,6 +105,7 @@ export function recallTools(kit: ToolKit) {
               text(body.trim() ? body : "(you have nothing remembered here yet)"),
             );
           }
+          case "publish":
           case "add": {
             const texts = facts.map((fact) => fact.text).filter(Boolean);
             if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
@@ -110,7 +113,17 @@ export function recallTools(kit: ToolKit) {
               return fail(
                 `memory add takes at most ${MAX_FACTS_PER_WRITE} facts per call; add the rest in another call.`,
               );
-            const written = await tc.memoryAdd(texts, params.scope);
+            if (action === "publish" && !tc.memoryPublish) return unavailable();
+            if (action === "publish" && !ref.approvedToolCalls?.has(callId))
+              return fail("Publishing private learning requires approval of this exact call.");
+            if (action === "publish" && params.scope !== "team" && params.scope !== "workbook")
+              return fail("Publishing requires scope=team or scope=workbook.");
+            if (action === "publish" && facts.some((fact) => !fact.id || !fact.text))
+              return fail("Publishing requires each selected fact's current id and exact text from memory read.");
+            const written =
+              action === "publish"
+                ? ((await tc.memoryPublish?.(facts, params.scope as "team" | "workbook")) ?? null)
+                : await tc.memoryAdd(texts, params.scope);
             if (written === null) return unavailable();
             const { added, outcomes, problems } = written;
             const lines = problems.map(problemLine);
@@ -239,5 +252,13 @@ export function recallTools(kit: ToolKit) {
     },
   });
 
-  return { memory, history };
+  return {
+    memory: {
+      ...memory,
+      needsApproval: (params: unknown) => !!ref.current?.memoryPublish && isObj(params) && params.action === "publish",
+      approvalReason:
+        "Publish only these selected facts to the document team or workbook notebook; the private conversation and other learning remain private",
+    },
+    history,
+  };
 }

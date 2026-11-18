@@ -47,44 +47,59 @@ export function createDocumentConversations(deps: {
   projects: ProjectStore;
   sessions: SessionStore;
 }) {
+  async function knowledgeForSession(sessionId: string, principalId: string): Promise<DocumentKnowledge | null> {
+    let cursor: string | undefined = sessionId;
+    const seen = new Set<string>();
+    let record: DocumentRecord | null = null;
+    while (cursor) {
+      if (seen.has(cursor)) throw new Error("Cyclic document session ancestry");
+      seen.add(cursor);
+      record = await deps.backing.get(key("session", cursor));
+      if (record?.kind === "session") break;
+      cursor = (await deps.sessions.get(cursor))?.parentSessionId;
+    }
+    if (record?.kind !== "session") return null;
+    if (record.mode === "private" && !samePerson(record.principalId ?? "", principalId))
+      throw new Error("Private document owner does not match session actor");
+    if (cursor !== sessionId) {
+      const inherited = await deps.backing.putIfAbsent(key("session", sessionId), record);
+      if (
+        inherited.kind !== "session" ||
+        inherited.documentKey !== record.documentKey ||
+        inherited.mode !== record.mode
+      )
+        throw new Error("Derived document session has a different association");
+    }
+    const members = await deps.projects.members(projectGroupRef(record.projectId));
+    return {
+      documentKey: record.documentKey,
+      projectId: record.projectId,
+      teamScopeId: projectScopeId(record.projectId),
+      documentScopeId: `group:${DOCUMENT_GROUP_PREFIX}${record.documentKey}`,
+      mode: record.mode,
+      sharedAccess: members?.some((member) => samePerson(member, principalId)) === true,
+    };
+  }
   return {
     async knowledgeGroups(refs: readonly string[]) {
       return (await deps.backing.getMany(refs.map((ref) => key("knowledge", ref)))).filter(
         (record): record is Extract<DocumentRecord, { kind: "knowledge" }> => record.kind === "knowledge",
       );
     },
-    async knowledgeForSession(sessionId: string, principalId: string): Promise<DocumentKnowledge | null> {
-      let cursor: string | undefined = sessionId;
-      const seen = new Set<string>();
-      let record: DocumentRecord | null = null;
-      while (cursor) {
-        if (seen.has(cursor)) throw new Error("Cyclic document session ancestry");
-        seen.add(cursor);
-        record = await deps.backing.get(key("session", cursor));
-        if (record?.kind === "session") break;
-        cursor = (await deps.sessions.get(cursor))?.parentSessionId;
-      }
-      if (record?.kind !== "session") return null;
-      if (record.mode === "private" && !samePerson(record.principalId ?? "", principalId))
-        throw new Error("Private document owner does not match session actor");
-      if (cursor !== sessionId) {
-        const inherited = await deps.backing.putIfAbsent(key("session", sessionId), record);
-        if (
-          inherited.kind !== "session" ||
-          inherited.documentKey !== record.documentKey ||
-          inherited.mode !== record.mode
-        )
-          throw new Error("Derived document session has a different association");
-      }
-      const members = await deps.projects.members(projectGroupRef(record.projectId));
-      return {
-        documentKey: record.documentKey,
-        projectId: record.projectId,
-        teamScopeId: projectScopeId(record.projectId),
-        documentScopeId: `group:${DOCUMENT_GROUP_PREFIX}${record.documentKey}`,
-        mode: record.mode,
-        sharedAccess: members?.some((member) => samePerson(member, principalId)) === true,
-      };
+    knowledgeForSession,
+    async publishLearning<T>(
+      sessionId: string,
+      principalId: string,
+      applicability: "team" | "workbook",
+      write: (scope: string, document: DocumentKnowledge) => Promise<T>,
+    ): Promise<T | null> {
+      const binding = await knowledgeForSession(sessionId, principalId);
+      if (!binding || binding.mode !== "private" || !binding.sharedAccess) return null;
+      return deps.projects.withRosterLock(binding.projectId, async (project) => {
+        const members = await deps.projects.members(projectGroupRef(project.id));
+        if (!members?.some((member) => samePerson(member, principalId))) return null;
+        return write(applicability === "team" ? binding.teamScopeId : binding.documentScopeId, binding);
+      });
     },
     async restart(
       sessionId: string,

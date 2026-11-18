@@ -1,10 +1,11 @@
+import { createMockAgent } from "./support/mock-agent.ts";
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createDocumentMemory } from "../src/documents/memory.ts";
+import { createDocumentMemory, publishDocumentLearning } from "../src/documents/memory.ts";
 import { disclosedMemory } from "../src/memory/disclosure.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { resolveTurnContext } from "../src/resolution/turn-context.ts";
@@ -367,6 +368,236 @@ test("HTTP edits in a private document mark previously ordinary personal facts a
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
+  }
+});
+
+test("selected private learning publishes only to its authorized document team and retains the private source", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 10, 17) });
+  const config = testConfig();
+  assert.ok(config.databaseUrl);
+  const built = buildApp(config);
+  try {
+    const project = await built.projects.create({ name: "Operations", ownerId: "owner" });
+    await built.projects.addMember(project.id, "owner", "member");
+    await built.documentConversations.configure(surface, project.id);
+    const binding = await built.documentConversations.resolve({
+      surface,
+      documentId: "publication",
+      principalId: "member",
+      mode: "private",
+    });
+    assert.equal(binding.status, "ok");
+    if (binding.status !== "ok") throw new Error("missing private conversation");
+    const sessionId = binding.conversation.sessionId;
+    const knowledge = await built.documentConversations.knowledgeForSession(sessionId, "member");
+    assert.ok(knowledge);
+    const raw = createPostgresMemoryService(config.databaseUrl);
+    const memory = createDocumentMemory(raw, built.documentConversations, built.auditLog);
+    await memory.capture(
+      "personal:member",
+      ["Selected procedure", "Unrelated private preference"],
+      Date.now(),
+      { actorId: "member", context: "conversation" },
+      {
+        mode: "explicit",
+        sessionId,
+        inheritedFacts: [],
+        conversationScopeId: "personal:member",
+      },
+    );
+    const publish = async (actorId: string, applicability: "team" | "workbook", texts = ["Selected procedure"]) => {
+      const facts = await raw.facts!("personal:member");
+      return publishDocumentLearning(built.documentConversations, memory, built.auditLog, {
+        sessionId,
+        actorId,
+        applicability,
+        facts: texts.map((text) => ({ id: facts.find((fact) => fact.text === text)?.id ?? "missing", text })),
+        disclosure: {
+          actor: built.identity.classify(actorId),
+          nativeScopes: [`org:${config.orgId}`],
+          config: built.config,
+          currentScopeMembers: (scope) => built.app.currentScopeMembers(scope),
+          isCurrentSharedScopeMember: (principal, scope) => built.app.isCurrentSharedScopeMember(principal, scope),
+        },
+      });
+    };
+    await assert.rejects(publish("owner", "team"), /owner does not match/);
+    assert.equal((await publish("member", "team"))?.added, 1);
+    assert.deepEqual(
+      (await raw.facts!(knowledge.teamScopeId)).map((fact) => fact.text),
+      ["Selected procedure"],
+    );
+    assert.ok(
+      (await raw.facts!(knowledge.teamScopeId)).every(
+        (fact) => !fact.personalOnly && fact.sources.every((source) => source === knowledge.teamScopeId),
+      ),
+    );
+    assert.ok((await raw.facts!("personal:member")).every((fact) => fact.personalOnly));
+    await memory.capture(
+      "personal:member",
+      ["Workbook-only procedure"],
+      Date.now(),
+      { actorId: "member", context: "conversation" },
+      {
+        mode: "explicit",
+        sessionId,
+        inheritedFacts: [],
+        conversationScopeId: "personal:member",
+      },
+    );
+    assert.equal((await publish("member", "workbook", ["Workbook-only procedure"]))?.added, 1);
+    assert.deepEqual(
+      (await raw.facts!(knowledge.documentScopeId)).map((fact) => fact.text),
+      ["Workbook-only procedure"],
+    );
+    await memory.capture(
+      "personal:member",
+      ["Organization procedure"],
+      Date.now(),
+      { actorId: "member", context: "conversation" },
+      {
+        mode: "explicit",
+        sessionId,
+        conversationScopeId: "personal:member",
+        inheritedFacts: [{ sources: [`org:${config.orgId}`], sensitivity: "ordinary", sourceUnknown: false }],
+      },
+    );
+    assert.equal((await publish("member", "team", ["Organization procedure"]))?.added, 1);
+    assert.ok(
+      (await raw.facts!(knowledge.teamScopeId))
+        .find((fact) => fact.text === "Organization procedure")
+        ?.sources.includes(`org:${config.orgId}`),
+    );
+    const restrictedProject = await built.projects.create({ name: "Restricted", ownerId: "member" });
+    await memory.capture(
+      "personal:member",
+      ["Restricted project detail"],
+      Date.now(),
+      { actorId: "member", context: "conversation" },
+      {
+        mode: "explicit",
+        sessionId,
+        conversationScopeId: "personal:member",
+        inheritedFacts: [
+          { sources: [`group:web-project-${restrictedProject.id}`], sensitivity: "restricted", sourceUnknown: false },
+        ],
+      },
+    );
+    await built.config.setSharingPosture(`org:${config.orgId}`, "open");
+    await assert.rejects(publish("member", "team", ["Restricted project detail"]), /source restrictions/);
+    await built.projects.addMember(restrictedProject.id, "member", "owner");
+    assert.equal((await publish("member", "team", ["Restricted project detail"]))?.added, 1);
+    const restricted = (await raw.facts!(knowledge.teamScopeId)).find(
+      (fact) => fact.text === "Restricted project detail",
+    )!;
+    assert.ok(restricted.sources.includes(`group:web-project-${restrictedProject.id}`));
+    assert.equal(restricted.sensitivity, "restricted");
+    const shared = disclosedMemory(raw, {
+      actor: built.identity.classify("owner"),
+      targetScope: knowledge.teamScopeId,
+      nativeScopes: [knowledge.teamScopeId],
+      audience: (await built.app.currentScopeMembers(knowledge.teamScopeId))!,
+      open: true,
+      config: built.config,
+      currentScopeMembers: (scope) => built.app.currentScopeMembers(scope),
+      isCurrentSharedScopeMember: (principal, scope) => built.app.isCurrentSharedScopeMember(principal, scope),
+    });
+    assert.ok((await shared.facts!(knowledge.teamScopeId)).some((fact) => fact.id === restricted.id));
+    await built.projects.removeMember(restrictedProject.id, "member", "owner");
+    assert.ok(!(await shared.facts!(knowledge.teamScopeId)).some((fact) => fact.id === restricted.id));
+    await memory.capture(
+      "personal:member",
+      ["Unverified origin"],
+      Date.now(),
+      { actorId: "member", context: "conversation" },
+      { mode: "explicit", sessionId },
+    );
+    assert.equal((await publish("member", "team", ["Unverified origin"]))?.added, 1);
+    assert.equal(
+      (await raw.facts!(knowledge.teamScopeId)).find((fact) => fact.text === "Unverified origin")?.sourceUnknown,
+      true,
+    );
+    const original = (await raw.facts!("personal:member")).find((fact) => fact.text === "Selected procedure")!;
+    await raw.edit!("personal:member", [{ id: original.id, text: "Changed after proposal" }], {
+      actorId: "member",
+      context: "self",
+    });
+    await assert.rejects(
+      publishDocumentLearning(built.documentConversations, memory, built.auditLog, {
+        sessionId,
+        actorId: "member",
+        applicability: "team",
+        facts: [{ id: original.id, text: original.text }],
+        disclosure: {
+          actor: built.identity.classify("member"),
+          nativeScopes: [`org:${config.orgId}`],
+          currentScopeMembers: (scope) => built.app.currentScopeMembers(scope),
+        },
+      }),
+      /changed after approval/,
+    );
+    await assert.rejects(publish("member", "team", ["Not in this notebook"]), /No fact/);
+    await built.projects.removeMember(project.id, "owner", "member");
+    assert.equal(await publish("member", "team", ["Revoked write"]), null);
+    assert.deepEqual(
+      new Set((await raw.facts!(knowledge.teamScopeId)).map((fact) => fact.text)),
+      new Set(["Selected procedure", "Organization procedure", "Restricted project detail", "Unverified origin"]),
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("skipMemory prevents an approved private-learning publication from writing shared memory", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 10, 17) });
+  const config = testConfig();
+  assert.ok(config.databaseUrl);
+  const raw = createPostgresMemoryService(config.databaseUrl);
+  const base = createMockAgent();
+  let selected: { id: string; text: string }[] = [];
+  const built = buildApp(config, {
+    agent: {
+      ...base,
+      runTurn: async (input) => {
+        await input.tools.memoryPublish?.(selected, "team");
+        return base.runTurn(input);
+      },
+    },
+  });
+  try {
+    const project = await built.projects.create({ name: "Operations", ownerId: "U1" });
+    await built.documentConversations.configure(surface, project.id);
+    const privateBinding = await built.documentConversations.resolve({
+      surface,
+      documentId: "memory-opt-out",
+      principalId: "U1",
+      mode: "private",
+    });
+    if (privateBinding.status !== "ok") throw new Error("missing private binding");
+    await raw.capture(
+      "personal:U1",
+      ["Selected private fact"],
+      Date.now(),
+      { actorId: "U1", context: "self" },
+      {
+        mode: "explicit",
+        conversationScopeId: "personal:U1",
+        inheritedFacts: [],
+        personalOnly: true,
+      },
+    );
+    selected = (await raw.facts!("personal:U1")).map(({ id, text }) => ({ id, text }));
+    const result = await built.app.turn({
+      surface: "web",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: privateBinding.conversation.threadRef },
+      text: "publication opt-out test",
+      skipMemory: true,
+    });
+    assert.equal(result.status, "ok");
+    assert.deepEqual(await raw.facts!(`group:web-project-${project.id}`), []);
+  } finally {
     await built.runtime.stop();
   }
 });

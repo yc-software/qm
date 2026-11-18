@@ -1,3 +1,5 @@
+import type { MemoryEdit } from "../memory/memory-service.ts";
+import { publishDocumentLearning } from "../documents/memory.ts";
 import { personaPrompt, personaRoutedNote } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
@@ -1779,6 +1781,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
+          ...(useMemory &&
+          document?.mode === "private" &&
+          memoryPolicy.capture !== "off" &&
+          deps.documentConversations &&
+          deps.auditLog
+            ? {
+                publishMemory: (facts: MemoryEdit[], applicability: "team" | "workbook") =>
+                  publishDocumentLearning(deps.documentConversations!, deps.memory, deps.auditLog!, {
+                    sessionId: session.id,
+                    actorId: actor.id,
+                    disclosure: {
+                      actor,
+                      nativeScopes: [resolution.orgScopeId],
+                      config: deps.config,
+                      currentScopeMembers: deps.currentScopeMembers,
+                      isCurrentSharedScopeMember,
+                    },
+                    applicability,
+                    facts,
+                    ...(input.runId ? { runId: input.runId } : {}),
+                  }),
+              }
+            : {}),
           memoryCaptureMetadata: () => ({
             sessionId: session.id,
             inheritedFacts: captureDependencies(),
