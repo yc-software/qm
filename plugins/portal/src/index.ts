@@ -10,7 +10,7 @@ import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts
 import { isDnsLabel } from "../../chassis/src/dns-label.ts";
 import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
-import { provisionTrustedAdmin } from "./trusted-admin.ts";
+import { provisionTrustedAdmin, selfServeWorkspace } from "./trusted-admin.ts";
 import {
   CARD_SCENE_PATH,
   cardPage,
@@ -32,13 +32,14 @@ import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./a
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
 import { createSignedInNames } from "./signed-in-name.ts";
-import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import { createTrustedEntry, trustedEntryConfig, trustedPrincipal } from "./trusted-entry.ts";
 import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
   coreEmailTenants,
   coreWorkspace,
   createTenantChoice,
   verifiedEmail,
+  type ExternalOrg,
   type SignInTenant,
   type TrustedSignIn,
   type VerifiedSignIn,
@@ -229,15 +230,15 @@ const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
 const trustedSignInLabel = trustedOidc ? process.env.PORTAL_TRUSTED_OIDC_LABEL?.trim() || undefined : undefined;
+const trustedAssertions = Boolean(
+  trustedOidc &&
+  CORE_SIGNING_SECRET &&
+  PORTAL_IDENTITY_SECRET &&
+  PORTAL_IDENTITY_SECRET.length >= 32 &&
+  PORTAL_IDENTITY_SECRET !== CORE_SIGNING_SECRET,
+);
 const trustedAdminEnabled = process.env.PORTAL_TRUSTED_OIDC_ADMIN === "1";
-if (
-  trustedAdminEnabled &&
-  (!trustedOidc ||
-    !CORE_SIGNING_SECRET ||
-    !PORTAL_IDENTITY_SECRET ||
-    PORTAL_IDENTITY_SECRET.length < 32 ||
-    PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
-)
+if (trustedAdminEnabled && !trustedAssertions)
   throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
 const claimTrusted = (key: string, expiresAt: number) =>
   claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt);
@@ -1428,6 +1429,25 @@ const tenantChoice = createTenantChoice({
     sendHtml(res, status, html, scriptHash ? `${PAGE_CSP}; script-src '${scriptHash}'` : PAGE_CSP),
   finishSignIn,
   finishTrustedSignIn,
+  ...(trustedAssertions
+    ? {
+        selfServe: async (who: { subject: string; email: string | null }, org: ExternalOrg) => {
+          const tenant = await selfServeWorkspace(
+            {
+              core: CORE,
+              signingSecret: CORE_SIGNING_SECRET!,
+              identitySecret: PORTAL_IDENTITY_SECRET!,
+              org: ORG,
+              issuer: trustedOidc!.issuer,
+            },
+            who,
+            org,
+          );
+          adminCache.delete(trustedPrincipal(trustedOidc!.issuer, who.subject));
+          return tenant;
+        },
+      }
+    : {}),
 });
 
 function setAuthenticatedSession(

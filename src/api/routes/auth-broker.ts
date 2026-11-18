@@ -8,10 +8,12 @@ import { externalMemberActive, validEmail } from "../../identity/external-member
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { inTenant } from "../../tenants/claim.ts";
+import { withTenant } from "../../tenants/context.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { bootTenant } from "../../tenants/boot.ts";
 import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
+import { externalOrgSchema } from "../../tenants/self-serve.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -141,6 +143,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
     shared: multitenant(),
+    ...(multitenant() && ctx.deps.admin?.selfServeEnabled ? { selfServe: true } : {}),
   });
 }
 
@@ -206,34 +209,13 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
 }
 
 async function trustedAdmin(ctx: ApiCtx): Promise<void> {
-  const { deps, res, body, tenant } = ctx;
+  const { deps, res, tenant } = ctx;
   if (!tenant) {
     res.writeHead(204);
     return void res.end();
   }
-  const secret = deps.portalIdentitySecret;
-  if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe)
-    return sendJson(res, 503, { error: "not_configured" });
-  const assertion = isObj(body) && typeof body.assertion === "string" ? body.assertion : "";
-  const claims = await verifySignedPayload(assertion, secret);
-  const now = Date.now();
-  if (
-    !isObj(claims) ||
-    claims.purpose !== "trusted-entry-admin" ||
-    claims.org !== orgScope() ||
-    typeof claims.issuer !== "string" ||
-    typeof claims.subject !== "string" ||
-    !claims.subject ||
-    claims.subject.length > 255 ||
-    claims.imp !== undefined ||
-    typeof claims.exp !== "number" ||
-    !Number.isFinite(claims.exp) ||
-    claims.exp <= now ||
-    claims.exp > now + 60_000 ||
-    typeof claims.jti !== "string" ||
-    !/^[a-f0-9-]{36}$/.test(claims.jti)
-  )
-    return sendJson(res, 403, { error: "invalid_assertion" });
+  const claims = await trustedAssertion(ctx, "trusted-entry-admin");
+  if (!claims || !deps.admin || !deps.replayDedupe) return;
   const principalId = `oidc:${createHash("sha256").update(claims.issuer).digest("hex")}:${Buffer.from(claims.subject).toString("base64url")}`;
   if (!(await activePrincipal(deps, principalId))) return sendJson(res, 403, { error: "inactive_principal" });
   if (!(await deps.replayDedupe.claim(`trusted-admin:${claims.jti}`, claims.exp)))
@@ -251,6 +233,77 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     if (error instanceof AdminError)
       return sendJson(res, error.status, { error: "grant_failed", message: error.message });
+    throw error;
+  }
+}
+
+interface TrustedAssertion extends Record<string, unknown> {
+  issuer: string;
+  subject: string;
+  exp: number;
+  jti: string;
+}
+
+async function trustedAssertion(ctx: ApiCtx, purpose: string): Promise<TrustedAssertion | null> {
+  const { deps, res, body } = ctx;
+  const secret = deps.portalIdentitySecret;
+  if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe) {
+    sendJson(res, 503, { error: "not_configured" });
+    return null;
+  }
+  const assertion = isObj(body) && typeof body.assertion === "string" ? body.assertion : "";
+  const claims = await verifySignedPayload(assertion, secret);
+  const now = Date.now();
+  if (
+    !isObj(claims) ||
+    claims.purpose !== purpose ||
+    claims.org !== orgScope() ||
+    typeof claims.issuer !== "string" ||
+    typeof claims.subject !== "string" ||
+    !claims.subject ||
+    claims.subject.length > 255 ||
+    claims.imp !== undefined ||
+    typeof claims.exp !== "number" ||
+    !Number.isFinite(claims.exp) ||
+    claims.exp <= now ||
+    claims.exp > now + 60_000 ||
+    typeof claims.jti !== "string" ||
+    !/^[a-f0-9-]{36}$/.test(claims.jti)
+  ) {
+    sendJson(res, 403, { error: "invalid_assertion" });
+    return null;
+  }
+  return claims as TrustedAssertion;
+}
+
+async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
+  const { deps, res } = ctx;
+  const claims = await trustedAssertion(ctx, "trusted-self-serve");
+  if (!claims || !deps.admin || !deps.replayDedupe) return;
+  const org = externalOrgSchema.safeParse(claims.externalOrg);
+  const email = claims.email;
+  if (!org.success || (email !== null && (typeof email !== "string" || !validEmail(email))))
+    return sendJson(res, 403, { error: "invalid_assertion" });
+  if (!(await deps.replayDedupe.claim(`trusted-self-serve:${claims.jti}`, claims.exp)))
+    return sendJson(res, 409, { error: "assertion_already_used" });
+  try {
+    const admin = deps.admin;
+    const { tenant, created } = await admin.selfServeWorkspace(claims.issuer, claims.subject, org.data);
+    await withTenant(tenant, async (bound) => {
+      const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
+      if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });
+      const { grant, granted } = await admin.provisionSelfServe(bound, claims.issuer, claims.subject, email);
+      const event = { principalId: grant.grantedBy!, scopeLabel: grant.scopeId };
+      if (granted)
+        audit(
+          { deps, tenant: bound },
+          { ...event, action: "grant.create", resource: `${grant.principalId}/org_admin` },
+        );
+    });
+    return sendJson(res, 200, { tenant, created });
+  } catch (error) {
+    if (error instanceof AdminError)
+      return sendJson(res, error.status, { error: "self_serve_failed", message: error.message });
     throw error;
   }
 }
@@ -310,6 +363,14 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     tenant: "optional",
     handle: trustedAdmin,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/self-serve",
+    actor: "system",
+    auth: "source",
+    tenant: "none",
+    handle: selfServeWorkspace,
   },
   {
     method: "POST",

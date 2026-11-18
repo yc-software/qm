@@ -411,6 +411,7 @@ import {
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
+import type { ExternalOrg } from "./tenants/self-serve.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
@@ -1869,6 +1870,14 @@ export function buildApp(
   const directory = createPostgresDirectoryStore(databaseUrl);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    ...(config.trustedOidcSelfServeIssuer && directory.externalOrgTenant
+      ? {
+          selfServe: {
+            issuer: config.trustedOidcSelfServeIssuer,
+            workspaceFor: (org: ExternalOrg) => directory.externalOrgTenant!(config.trustedOidcSelfServeIssuer!, org),
+          },
+        }
+      : {}),
     memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
     users,
   });

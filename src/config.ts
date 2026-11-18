@@ -88,6 +88,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   captureLlmRequests: boolean;
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
+  trustedOidcSelfServeIssuer?: string;
   emailAuthPrincipals?: string[];
   emailAuthDomain?: string;
   resendApiKey?: string;
@@ -547,6 +548,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(modelGateway ? { modelGateway } : {}),
     ...(brokerCredentials.length ? { brokerCredentials } : {}),
     ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),
+    ...(env.TRUSTED_OIDC_SELF_SERVE_ISSUER ? { trustedOidcSelfServeIssuer: env.TRUSTED_OIDC_SELF_SERVE_ISSUER } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS
       ? {

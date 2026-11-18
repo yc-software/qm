@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
-import { generateKeyPair, exportJWK, SignJWT } from "jose";
+import { compactVerify, generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 import { trustedPrincipal } from "../src/trusted-entry.ts";
@@ -25,6 +25,10 @@ let email: string | null = "founder@company.test";
 let principalTenants: unknown[] = [];
 let canonicalStatus = 200;
 let admitted = true;
+let orgs: unknown = undefined;
+let selfServe = false;
+const selfServed: Array<Record<string, unknown>> = [];
+const orgTenants: Record<string, string> = {};
 const principalLookups: string[] = [];
 const claimed = new Set<string>();
 const admissions: Array<string | undefined> = [];
@@ -53,14 +57,30 @@ const upstream = createServer((req, res) => {
       return void res.end(JSON.stringify({ access_token: "test-access", id_token: idToken }));
     }
     if (path === "/userinfo")
-      return void res.end(JSON.stringify({ sub: "idp-subject", ...(email ? { email, email_verified: true } : {}) }));
+      return void res.end(
+        JSON.stringify({
+          sub: "idp-subject",
+          ...(email ? { email, email_verified: true } : {}),
+          ...(orgs !== undefined ? { orgs } : {}),
+        }),
+      );
+    if (path === "/v1/auth/broker/self-serve") {
+      let raw = "";
+      for await (const chunk of req) raw += String(chunk);
+      const { assertion } = JSON.parse(raw) as { assertion: string };
+      const { payload } = await compactVerify(assertion, Buffer.from(identitySecret));
+      const claims = JSON.parse(Buffer.from(payload).toString()) as Record<string, unknown>;
+      selfServed.push(claims);
+      const org = claims.externalOrg as { id: string };
+      return void res.end(JSON.stringify({ tenant: orgTenants[org.id] ?? null, created: true }));
+    }
     if (path.startsWith("/v1/principals/") && canonicalStatus !== 200) {
       res.statusCode = canonicalStatus;
       return void res.end(JSON.stringify({ error: "unauthorized" }));
     }
     if (path === "/v1/auth/broker/principal-tenants") {
       principalLookups.push(new URL(req.url!, origin).searchParams.get("principal") ?? "");
-      return void res.end(JSON.stringify({ tenants: principalTenants, shared }));
+      return void res.end(JSON.stringify({ tenants: principalTenants, shared, selfServe }));
     }
     if (path === "/v1/auth/broker/claim") {
       let raw = "";
@@ -337,6 +357,75 @@ test("a trusted sign-in on a shared host picks the tenant by the provider's emai
     /<div class="actions">\s*<a class="btn ghost workspace" href="\/auth\/login">Sign in with a different account<\/a>\s*<\/div>/,
   );
   assert.equal(sessionOf(nobody), null);
+});
+
+test("a trusted founder with no workspace opens or joins their company's, and picks among several companies", async () => {
+  shared = true;
+  tenants = [];
+  principalTenants = [];
+  selfServed.length = 0;
+  Object.assign(orgTenants, { "42": alpha, "43": beta });
+  selfServe = true;
+  const principal = trustedPrincipal(upstreamUrl, "idp-subject");
+  try {
+    orgs = [{ id: "42", name: "Acme", handle: "Acme" }, { id: "" }, "junk"];
+    const one = await trustedCallback("founder@acme.test");
+    assert.equal(one.status, 302);
+    assert.deepEqual([sessionOf(one)?.sub, sessionOf(one)?.t], [principal, alpha]);
+    assert.equal(selfServed.length, 1);
+    assert.deepEqual(
+      [selfServed[0]!.purpose, selfServed[0]!.issuer, selfServed[0]!.subject, selfServed[0]!.email, selfServed[0]!.org],
+      ["trusted-self-serve", upstreamUrl, "idp-subject", "founder@acme.test", "org:acme"],
+    );
+    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme", handle: "Acme" });
+
+    orgs = [
+      { id: "42", name: "Acme" },
+      { id: "43", name: "Beta Labs" },
+    ];
+    const several = await trustedCallback("founder@acme.test");
+    assert.equal(several.status, 200);
+    const page = await several.text();
+    assert.match(page, /Pick the one to open a workspace for\.[\s\S]*Acme[\s\S]*Beta Labs/);
+    assert.equal(selfServed.length, 1, "nothing is created until the founder picks");
+    const cookie = cookieFrom(several, "portal_tenant_choice")!;
+    assert.equal((await choose(cookie, alpha)).status, 400, "a workspace id is not one of the offered companies");
+    assert.equal((await choose(cookie, "org:99")).status, 400);
+    const chosen = await choose(cookie, "org:43");
+    assert.equal(chosen.status, 302);
+    assert.deepEqual([sessionOf(chosen)?.sub, sessionOf(chosen)?.t], [principal, beta]);
+    assert.deepEqual(selfServed.at(-1)!.externalOrg, { id: "43", name: "Beta Labs" });
+    const searched = await fetch(`${base}/auth/tenant?q=beta`, { headers: { cookie } });
+    assert.match(await searched.text(), /Beta Labs/);
+
+    orgs = Array.from({ length: 40 }, (_, i) => ({ id: `${i}`, name: `Company ${i} ${"x".repeat(200)}` }));
+    const many = await trustedCallback("founder@acme.test");
+    const kept = (await many.text()).match(/name="tenant" value="org:/g)?.length ?? 0;
+    assert.ok(kept > 1 && kept < 40, `${kept} organizations offered`);
+    assert.ok(cookieFrom(many, "portal_tenant_choice")!.length <= 4096);
+
+    tenants = [{ id: beta, brandName: "Beta Labs" }];
+    selfServed.length = 0;
+    const member = await trustedCallback("founder@acme.test");
+    assert.deepEqual([member.status, sessionOf(member)?.t], [302, beta]);
+    assert.equal(selfServed.length, 0, "a founder who already has a workspace is not given another");
+
+    tenants = [];
+    orgs = [];
+    const staff = await trustedCallback("staff@acme.test");
+    assert.equal(staff.status, 403);
+    assert.match(await staff.text(), /No QM workspace for this account yet/);
+    assert.equal(selfServed.length, 0);
+
+    orgs = [{ id: "42", name: "Acme" }];
+    selfServe = false;
+    const off = await trustedCallback("founder@acme.test");
+    assert.equal(off.status, 403, "with self-serve off in core the founder still gets the no-workspace page");
+    assert.equal(selfServed.length, 0);
+  } finally {
+    orgs = undefined;
+    selfServe = false;
+  }
 });
 
 test("a trusted sign-in on a single-tenant install stays untenanted when the directory does not list the email", async () => {
