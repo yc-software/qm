@@ -1180,6 +1180,30 @@ export function makeRunResumeStreamFn(
   return fn as unknown as StreamFn;
 }
 
+export interface LocatedRun {
+  runId: string;
+  run: RunPoll;
+}
+
+export function makeLiveTurnStreamFn(
+  locate: Promise<LocatedRun | null>,
+  seedWork: Pick<WorkBlock, "startedAt" | "activity">,
+  onWork?: WorkObserver,
+  slot?: RunSlot,
+  seedText?: string,
+): StreamFn {
+  const fn = (
+    model: Model<Api>,
+    _context: Context,
+    options?: { signal?: AbortSignal },
+  ): AssistantMessageEventStream => {
+    const stream = createAssistantMessageEventStream();
+    void resumeDrive(stream, model, locate, undefined, options?.signal, onWork, slot, seedText, seedWork);
+    return stream;
+  };
+  return fn as unknown as StreamFn;
+}
+
 export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
   if (decision.requestId.startsWith("keychain:")) {
     if (resolvedCredentialApprovals.has(decision.requestId)) return "";
@@ -1456,19 +1480,25 @@ async function drive(
 async function resumeDrive(
   stream: AssistantMessageEventStream,
   model: Model<Api>,
-  runId: string,
-  initialRun?: RunPoll,
+  target: string | Promise<LocatedRun | null>,
+  knownRun?: RunPoll,
   signal?: AbortSignal,
   onWork?: WorkObserver,
   slot?: RunSlot,
   seedText?: string,
+  seedWork?: Pick<WorkBlock, "startedAt" | "activity">,
 ): Promise<void> {
   const gen = beginSubmit(slot);
   const partial = baseAssistant(model);
-  const snapshotText = initialRun?.partial ?? "";
-  (partial as AssistantWork).streamingBaseline =
-    snapshotText.length > (seedText?.length ?? 0) ? snapshotText : (seedText ?? "");
-  const work: WorkBlock = { status: "thinking", activity: [] };
+  const setBaseline = (run: RunPoll | undefined): void => {
+    const snapshotText = run?.partial ?? "";
+    (partial as AssistantWork).streamingBaseline =
+      snapshotText.length > (seedText?.length ?? 0) ? snapshotText : (seedText ?? "");
+  };
+  setBaseline(knownRun);
+  const work: WorkBlock = seedWork
+    ? { status: "working", startedAt: seedWork.startedAt, activity: seedWork.activity }
+    : { status: "thinking", activity: [] };
   (partial as AssistantWork).work = work;
   const notify = (): void => onWork?.(work);
   try {
@@ -1477,8 +1507,18 @@ async function resumeDrive(
     stream.push({ type: "text_start", contentIndex: 0, partial });
     const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
     if (seedText?.trim()) pushDelta(stream, partial, st, seedText);
+    const located = typeof target === "string" ? { runId: target, run: knownRun } : await target;
+    if (!located) {
+      work.status = "complete";
+      work.finishedAt = Date.now();
+      notify();
+      finish(stream, partial, st, st.acc);
+      return;
+    }
+    const initialRun = located.run;
+    if (typeof target !== "string") setBaseline(initialRun);
     if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
-    await followRun(stream, partial, runId, signal, notify, st, slot, gen);
+    await followRun(stream, partial, located.runId, signal, notify, st, slot, gen);
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();

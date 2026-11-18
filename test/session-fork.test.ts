@@ -162,6 +162,31 @@ test("side chats preserve their anchor, stay out of session pages, and expand in
   assert.equal((await app.sideChats("U1", source.session.id))![0]!.sideChat?.expanded, true);
 });
 
+test("side chats with a running turn are flagged working with the run's start time", async () => {
+  const { app, runs } = freshApp();
+  const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat-working"));
+  const source = (await app.getSession(result.sessionId!))!;
+  const fork = (await app.forkSession(source.session.id, "U1", {
+    upToSeq: source.items.at(-1)!.seq,
+    sideChat: { entrySeq: source.items[0]!.seq, quote: "shared queues", occurrence: 0 },
+  }))!;
+  await app.turn(dm("Explain that passage", fork.session.threadRef));
+  assert.equal((await app.sideChats("U1", source.session.id))![0]!.working, undefined);
+  const principal = { id: "internal:U1", type: "internal" as const };
+  const { run } = await runs.enqueue({
+    sessionId: fork.session.threadRef,
+    request: {
+      actor: principal,
+      conversation: { kind: "dm", threadRef: fork.session.threadRef, audience: [principal] },
+      origin: { kind: "direct" },
+      text: "Keep going",
+    },
+  });
+  const [row] = (await app.sideChats("U1", source.session.id))!;
+  assert.equal(row!.working, true);
+  assert.equal(row!.workingSince, run.startedAt ?? run.createdAt);
+});
+
 test("side chats reject missing anchors and anchors beyond the fork boundary", async () => {
   const { app } = freshApp();
   const result = await app.turn(dm("Explain shared queues", "web:U1:bad-side-chat"));

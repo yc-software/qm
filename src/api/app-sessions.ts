@@ -629,13 +629,17 @@ export function createSessionMethods(
         principalId,
       );
       const sharedAccess = new Map<string, Promise<boolean>>();
+      const visible = rows.filter((row) => membership.get(row.scopeId) !== false);
+      const running = await deps.runs.activeForThreads(visible.map((row) => row.threadRef));
       return Promise.all(
-        rows
-          .filter((row) => membership.get(row.scopeId) !== false)
-          .map(async (row) => ({
+        visible.map(async (row) => {
+          const run = running.get(row.threadRef);
+          return {
             ...withoutStoredFacts(row),
             canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
-          })),
+            ...(run ? { working: true, workingSince: run.startedAt ?? run.createdAt } : {}),
+          };
+        }),
       );
     },
 

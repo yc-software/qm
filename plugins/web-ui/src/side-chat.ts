@@ -1,5 +1,5 @@
 import "./side-chat.css";
-import { cachedTranscript, storeTranscript } from "./transcript-cache";
+import { cachedTranscript, refreshCachedTranscript, storeTranscript } from "./transcript-cache";
 import { passageOccurrence, passageRange } from "./passage-range";
 import { html, nothing } from "lit";
 import { markdown } from "./message-markdown";
@@ -222,6 +222,7 @@ export function createSideChatController(ctx: ConvCtx) {
       const { items } = page;
       if (sourceId !== id || previews.get(session.id) !== preview) return;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
+      else refreshCachedTranscript(session.id);
       const messages = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1))).filter(
         (message): message is AssistantWork => message.role === "assistant",
       );
@@ -538,6 +539,7 @@ export function createSideChatController(ctx: ConvCtx) {
       const chat = chats.find((session) => session.threadRef === threadRef);
       if (!chat) return;
       void loadPreview(chat);
+      refreshHighlights();
     },
     select,
     dismissSelection,
