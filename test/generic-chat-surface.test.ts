@@ -553,7 +553,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
   );
 });
 
-test("a chat with any member the deployment does not vouch for is neither mirrored nor answered", async () => {
+test("a chat with any member neither the deployment nor the host vouches for, or that is deactivated, is neither mirrored nor answered", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
     const withGuest = event({ body: "!post hi", mentions: true, eventId: "ev-guest", messageId: "1040" });
@@ -573,6 +573,14 @@ test("a chat with any member the deployment does not vouch for is neither mirror
       await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }),
       [],
     );
+    const vouched = event({ body: "!post hi", mentions: true, eventId: "ev-vouched", messageId: "1042" });
+    const founder = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
+    vouched.message.user = founder;
+    vouched.chat.members.push(vouched.message.user);
+    assert.equal((await deliver(vouched)).body.ignored, undefined);
+    await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev"));
+    const again = { ...vouched, event_id: "ev-vouched-2", message: { ...vouched.message, id: "1043" } };
+    assert.equal((await deliver(again)).body.ignored, "unvouched_participants");
   } finally {
     await genericChat.close();
   }
