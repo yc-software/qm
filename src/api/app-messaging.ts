@@ -27,7 +27,7 @@ import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
-import { linkedChanges, propagateCronEdit, withSharing } from "./app-cron-share.ts";
+import { linkedChanges, withSharing } from "./app-cron-share.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 import { editableIn, SLACK } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
@@ -239,9 +239,11 @@ export function createMessagingMethods(
       const linked = linkedChanges(before, patch);
       const edited = Object.keys(linked).length > 0;
       const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
-      const updated = await deps.crons.update(id, forks ? { ...patch, forkedAt: Date.now() } : patch);
+      const own = forks ? { ...patch, forkedAt: Date.now() } : patch;
+      const updated = edited
+        ? ((await deps.crons.updateLinked(id, own, linked))[0] ?? null)
+        : await deps.crons.update(id, own);
       auditCron("cron_update", before, by);
-      if (edited) await propagateCronEdit(deps.crons, id, linked);
       return updated;
     },
     async deleteCron(id, by) {

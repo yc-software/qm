@@ -56,14 +56,6 @@ function scheduleText(s: CronSchedule): string {
   return "once";
 }
 
-export async function propagateCronEdit(crons: AppDeps["crons"], id: string, changes: CronPatch): Promise<void> {
-  for (const copy of await crons.copiesOf(id)) {
-    if (copy.forkedAt) continue;
-    await crons.update(copy.id, changes);
-    await propagateCronEdit(crons, copy.id, changes);
-  }
-}
-
 export function createCronShareMethods(
   deps: AppDeps,
   app: App,

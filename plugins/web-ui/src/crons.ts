@@ -584,18 +584,13 @@ function cronTitleTpl(c: CronView, manageable: boolean): TemplateResult {
 
 function cronCopyBanner(c: CronView): TemplateResult | typeof nothing {
   if (!c.sharedFrom) return nothing;
-  const from = c.sharedBy ? friendlyPrincipal(c.sharedBy) : "A teammate";
-  if (c.forkedAt)
+  const from = c.sharedBy ? friendlyPrincipal(c.sharedBy) : "a teammate";
+  if (c.forkedAt || c.enabled)
     return html`<div class="cron-banner">
-      <span><strong>Shared by ${from}.</strong> You've edited your copy, so ${from}'s changes no longer reach it.</span>
-    </div>`;
-  const body = html`It runs as you and posts to your chat. ${from}'s edits keep reaching your copy until you change it.`;
-  if (c.enabled)
-    return html`<div class="cron-banner">
-      <span><strong>Shared by ${from}.</strong> ${body}</span>
+      <span>Shared by <strong>${from}</strong>${c.forkedAt ? " · your edited copy" : " · linked to their cron"}</span>
     </div>`;
   return html`<div class="cron-banner">
-    <span><strong>${from} shared this with you.</strong> ${body}</span>
+    <span><strong>${from}</strong> shared this with you. It runs as you once you turn it on.</span>
     <span class="cron-banner-actions">
       <button class="btn" type="button" @click=${() => showCronDialog("delete", c)}>Decline</button>
       <button class="btn primary" type="button" @click=${() => void setCronEnabled(c.id, true)}>Turn on</button>
