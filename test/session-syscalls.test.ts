@@ -3716,3 +3716,26 @@ test("blocked private senders do not hide a later readable message", async () =>
     ["message-4"],
   );
 });
+
+test("a shared-audience child can message its newly private parent without disclosing its title", async () => {
+  const r = await rig({ audienceScopeId: "group:team" });
+  const threadRef = "agent:main:subagent:private-parent-title";
+  const child = await recordContext(r.sessions, await r.sessions.getOrCreateByThread(threadRef, "dm", scope), {
+    actor,
+    conversation: { ...conversation, threadRef },
+    surface: "slack",
+  });
+  await r.sessions.setParentSession(child.id, r.room.id);
+  await r.sessions.addParticipant(child.id, actor.id);
+  await r.sessions.markPersonalOnly(r.room.id, scope);
+  await r.sessions.updateTitle(r.room.id, "PRIVATE_TITLE_CHECKPOINT");
+  const api = r.syscallsFor(await freshSession(r.sessions, child.id));
+  const read = await api.read({ target: "parent" });
+  assert.equal(read.ok, false);
+  assert.ok(!JSON.stringify(read).includes("PRIVATE_TITLE_CHECKPOINT"));
+  const wrote = await api.write({ target: "parent", text: "Public progress update" });
+  assert.ok(wrote.ok);
+  assert.equal(wrote.title, r.room.id);
+  assert.ok(!JSON.stringify(wrote).includes("PRIVATE_TITLE_CHECKPOINT"));
+  assert.ok((await r.mailbox.pending(r.room.id)).some((message) => message.text.includes("Public progress update")));
+});

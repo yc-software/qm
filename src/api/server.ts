@@ -141,7 +141,7 @@ async function verifyCapability(
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
   }
-  const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
+  let capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
   if (!capability) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
     return null;
@@ -201,8 +201,12 @@ async function verifyCapability(
     });
     return null;
   }
-  if (personAtKeyboard(capability) && !(await runIsActive({deps,capability})))
-    capability = {...capability,triggered:true,...(capability.memory ? {memory:{...capability.memory,orgWrite:undefined,teamWrite:undefined}} : {})};
+  if (personAtKeyboard(capability) && !(await runIsActive({ deps, capability })))
+    capability = {
+      ...capability,
+      triggered: true,
+      ...(capability.memory ? { memory: { ...capability.memory, orgWrite: undefined, teamWrite: undefined } } : {}),
+    };
   let sourceProvenance: import("../memory/facts.ts").SourceProvenance | undefined;
   if (capability.sessionId) {
     const context = await app.getSessionContext(capability.sessionId);

@@ -1,3 +1,4 @@
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { attachmentSnapshot, restoreAttachmentState } from "../src/core/orchestrator/attach-tool.ts";
 import { disclosedMemory } from "../src/memory/disclosure.ts";
 import { recordReplyFiles } from "../src/core/orchestrator/settle.ts";
@@ -30,6 +31,8 @@ test("private document capability and skill privacy survive memory opt-out and a
   let copies = 0;
   let sourceSessionId = "";
   let extractions = 0;
+  const heldRuns: { id: string; leaseToken: string }[] = [];
+  const capabilityRunStore = createPostgresRunStore(config.databaseUrl!);
   const raw = createPostgresMemoryService(config.databaseUrl!);
   const fetchActual = globalThis.fetch;
   t.mock.method(globalThis, "fetch", (input: string | URL | Request, init?: RequestInit) => {
@@ -204,6 +207,8 @@ test("private document capability and skill privacy survive memory opt-out and a
   const server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
+    for (const run of heldRuns) await capabilityRunStore.runs.complete(run.id, run.leaseToken, { status: "ok" });
+    await capabilityRunStore.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await built.runtime.stop();
   });
@@ -584,11 +589,39 @@ test("private document capability and skill privacy survive memory opt-out and a
   );
   const writer = await built.sessions.getOrCreateByThread("shared-origin-writer", "channel", teamScope);
   const reader = await built.sessions.getOrCreateByThread("shared-origin-reader", "channel", teamScope);
-  const cap = (actor: string, scope: string, sessionId: string) =>
-    mintCapabilityToken(
-      { actorId: actor, scopeId: scope, sessionId, liveActor: true, aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
+  const capabilityRuns = capabilityRunStore.runs;
+  const cap = async (actor: string, scope: string, sessionId: string) => {
+    const session = await built.sessions.get(sessionId);
+    assert.ok(session);
+    const { run } = await capabilityRuns.enqueue({
+      sessionId: session.threadRef,
+      request: {
+        surface: "web",
+        actor: { id: actor, type: "internal" },
+        conversation: { kind: "channel", threadRef: session.threadRef, audience: [{ id: actor, type: "internal" }] },
+        origin: { kind: "human" },
+        text: "Shared origin test operation",
+      },
+    });
+    const claimed = await capabilityRuns.claimById(run.id, "capability-test", 60_000);
+    assert.ok(claimed?.leaseToken);
+    heldRuns.push({ id: run.id, leaseToken: claimed.leaseToken });
+    return mintCapabilityToken(
+      {
+        actorId: actor,
+        scopeId: scope,
+        sessionId,
+        threadRef: session.threadRef,
+        liveActor: true,
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + 60_000,
+        runId: run.id,
+        runAttempt: claimed.attempts,
+        runLeaseToken: claimed.leaseToken,
+      },
       secret,
     );
+  };
   const writerToken = await cap(actorId, teamScope, writer.id);
   const readerToken = await cap("bob", teamScope, reader.id);
   const call = (path: string, capability: string, method = "GET", body?: unknown) =>

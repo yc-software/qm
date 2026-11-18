@@ -31,7 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { routedTo, startMcpTestServer, type McpTestServer } from "./support/mcp-test-server.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { sleep } from "../src/util/async.ts";
 
@@ -686,7 +686,7 @@ test("an agent reaches every registry route only where the registry may be shown
 
 test("blue-green: a binding written through one instance serves turns on the other, in both directions", async (t) => {
   const brain = await startBrain(t);
-  const databaseUrl = testDatabaseUrl();
+  const databaseUrl = testMigratedDatabaseUrl();
   const reach = { memoryRegistryFetch: routedTo(brain.url) };
   const blue = buildApp(testConfig({ databaseUrl }), reach);
   const green = buildApp(testConfig({ databaseUrl }), reach);

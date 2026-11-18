@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import { inheritSessionContext, inheritSearchContext } from "./private-context.ts";
+import { inheritSessionContext, inheritSearchContext, privateSourceAllowed } from "./private-context.ts";
 import type {
   ChildIsolation,
   ChildIsolationMode,
@@ -734,9 +734,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         };
         const current = await deps.sessions.get(binding.session.id);
         const found = async (session: Session | null) => {
-          if (!session || await visible(session)) return session ?? missing;
+          if (!session || (await visible(session))) return session ?? missing;
           if (session.id !== current?.parentSessionId) return missing;
-          return writing ? session : HIDDEN_PARENT;
+          if (writing) return session;
+          return session.personalOnly
+            ? "your parent conversation is private and is not readable from this context; you can still write to it."
+            : HIDDEN_PARENT;
         };
         if (trimmed.toLowerCase() === "parent")
           return found(current?.parentSessionId ? await deps.sessions.get(current.parentSessionId) : null);
@@ -759,7 +762,20 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       const visibleTitle = (target: Session) =>
-        (sessionVisibleTo(binding.request, target) && target.title?.trim()) || target.id;
+        (sessionVisibleTo(binding.request, target) &&
+          (!target.personalOnly ||
+            privateSourceAllowed(
+              {
+                actorId: binding.request.actor.id,
+                scopeId: binding.scopeId,
+                audienceScopeId: binding.audienceScopeId,
+                sessionId: binding.session.id,
+                botActor: binding.request.botActor,
+              },
+              target.scopeId,
+            )) &&
+          target.title?.trim()) ||
+        target.id;
 
       function peerRefusal(target: Session): string | null {
         const refusal = sidebarRefusal();
