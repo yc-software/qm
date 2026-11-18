@@ -1738,12 +1738,15 @@ export async function pollRun(
   }
 }
 
+import type { ReplyNotice } from "./notifications";
+
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
+  state: "working" | "awaiting_approval" | "idle" | "metadata" | "ui" | "notify";
   at: number;
   ui?: unknown;
+  notice?: ReplyNotice;
 }
 
 export interface InboxItemEvent {

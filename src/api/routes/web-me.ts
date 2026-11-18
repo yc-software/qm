@@ -12,6 +12,7 @@ import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
+import { webNotificationsOn } from "../../notifications/web-push.ts";
 
 export interface WebMeConfig {
   analytics?: { module: string; options?: unknown };
@@ -33,16 +34,18 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
 }
 
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
-  const [admin, preview] = await Promise.all([
+  const [admin, preview, notifications] = await Promise.all([
     ctx.actor?.imp
       ? null
       : adminPermissions(ctx.deps, tenantOf(ctx), { id: user, type: "internal" }).catch(
           swallowAs("web: /me admin status", null),
         ),
     inboxPreviewEnabled(ctx.deps, user).catch(swallowAs("web: /me inbox preview flag", false)),
+    webNotificationsOn(ctx.deps, user).catch(swallowAs("web: /me notifications flag", false)),
   ]);
   const permissions = [...(admin?.permissions ?? [])];
   if (preview) permissions.push("loops", "inbox");
+  if (notifications) permissions.push("notifications");
   return permissions;
 }
 

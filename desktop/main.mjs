@@ -147,6 +147,8 @@ async function finishBrowserSignIn(url) {
   }
 }
 
+const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "notifications"]);
+
 async function showInstance(url) {
   pendingLogin?.controller.abort();
   pendingLogin = undefined;
@@ -171,14 +173,12 @@ async function showInstance(url) {
   mainWindow = window;
   const origin = new URL(url).origin;
   const session = window.webContents.session;
-  const canWriteClipboard = (permission, requestingUrl) =>
-    permission === "clipboard-sanitized-write" && requestingUrl !== "about:blank" && internalUrl(requestingUrl, origin);
+  const allowed = (permission, requestingUrl) =>
+    ALLOWED_PERMISSIONS.has(permission) && requestingUrl !== "about:blank" && internalUrl(requestingUrl, origin);
   session.setPermissionRequestHandler((_contents, permission, callback, details) =>
-    callback(canWriteClipboard(permission, details.requestingUrl)),
+    callback(allowed(permission, details.requestingUrl)),
   );
-  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
-    canWriteClipboard(permission, requestingOrigin),
-  );
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) => allowed(permission, requestingOrigin));
   let handedOff = false;
   const children = new Set();
   const configureNavigation = (page) => {
