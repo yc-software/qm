@@ -81,6 +81,40 @@ export function createSideChatController(ctx: ConvCtx) {
   let hovered: string | undefined;
   let choices = new Set<string>();
   const highlightResize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => paintHighlights());
+  const glideTiming = { duration: 260, easing: "cubic-bezier(0.2, 0, 0, 1)", id: "side-chat-glide" };
+  const settledHeights = new Map<string, number>();
+  let glideUntil = 0;
+  let pressedOutside: number | null = null;
+  const glideResize =
+    typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver((entries) => {
+          for (const card of new Set(entries.map(({ target }) => target.parentElement)))
+            if (card instanceof HTMLElement) glide(card);
+        });
+  function moving() {
+    glideUntil = performance.now() + 700;
+  }
+  function glide(card: HTMLElement) {
+    if (!card.isConnected || !card.parentElement?.classList.contains("side-chat-markers")) return;
+    const key = card.dataset.sideChatId ?? "";
+    const running = card.getAnimations().filter((animation) => animation.id === glideTiming.id);
+    let from = settledHeights.get(key);
+    if (running.length) from = card.getBoundingClientRect().height;
+    else if (from === undefined && !key) from = 0;
+    else if (from === undefined && key === active?.id) from = settledHeights.get("");
+    for (const animation of running) animation.cancel();
+    const to = card.getBoundingClientRect().height;
+    settledHeights.set(key, to);
+    if (from === undefined || Math.abs(to - from) < 1) return;
+    if (!running.length && performance.now() > glideUntil) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    card.animate({ height: [`${from}px`, `${to}px`] }, glideTiming);
+  }
+  function openCard() {
+    const panel = panelHost()?.parentElement;
+    return panel?.closest<HTMLElement>(".side-chat-card") ?? panel ?? null;
+  }
   function paintHighlights() {
     for (const [host, entries] of anchors) {
       if (!host.isConnected) {
@@ -177,6 +211,9 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function dismiss() {
     const target = returnFocus;
+    const card = openCard();
+    if (card) ctx.chat.holdTranscript(card);
+    moving();
     close();
     redraw();
     if (target?.isConnected) target.focus({ preventScroll: true });
@@ -313,6 +350,7 @@ export function createSideChatController(ctx: ConvCtx) {
   }
 
   function close() {
+    settledHeights.delete("");
     if (active) {
       const chat = active;
       const id = sourceId;
@@ -341,6 +379,8 @@ export function createSideChatController(ctx: ConvCtx) {
     document.addEventListener("selectionchange", selectionChanged);
     document.addEventListener("mousedown", selectionStarted, true);
     document.addEventListener("mouseup", selectionEnded, true);
+    document.addEventListener("pointerdown", pressStarted, true);
+    document.addEventListener("click", clickedOutside);
     const id = ctx.chat.state.sessionId;
     if (id === sourceId) return;
     close();
@@ -348,6 +388,8 @@ export function createSideChatController(ctx: ConvCtx) {
     previewFrame = null;
     sourceId = id;
     highlightResize?.disconnect();
+    glideResize?.disconnect();
+    settledHeights.clear();
     observedRows.clear();
     for (const host of anchors.keys())
       host.querySelectorAll(":scope > .side-chat-highlight").forEach((element) => element.remove());
@@ -370,6 +412,25 @@ export function createSideChatController(ctx: ConvCtx) {
     const wasSelecting = selecting;
     selecting = false;
     if (wasSelecting) selectionChanged(new Event("selectionchange"));
+  }
+
+  function pressStarted(event: PointerEvent) {
+    const card = openCard();
+    pressedOutside = card && !(event.target instanceof Node && card.contains(event.target)) ? epoch : null;
+  }
+
+  function clickedOutside(event: MouseEvent) {
+    const pressed = pressedOutside;
+    pressedOutside = null;
+    const target = event.target;
+    if (pressed !== epoch || event.button !== 0) return;
+    if (!(target instanceof Element) || !target.isConnected || pendingDraft.trim() || sendOnOpen) return;
+    if (target.closest(".side-chat-card, .side-chat-discuss, .side-chat-error, dialog, [popover]")) return;
+    if (window.getSelection()?.toString().trim()) return;
+    ctx.chat.holdTranscript(target.closest<HTMLElement>(".message-row") ?? undefined);
+    moving();
+    close();
+    redraw();
   }
 
   const selectionChanged = (event: Event) =>
@@ -441,7 +502,12 @@ export function createSideChatController(ctx: ConvCtx) {
   }
 
   async function show(session: CoreSession, creating = false) {
+    const card = [...(ctx.chat.state.host?.querySelectorAll<HTMLElement>(".side-chat-card") ?? [])].find(
+      (element) => element.dataset.sideChatId === session.id,
+    );
+    if (card) ctx.chat.holdTranscript(card);
     if (!creating) close();
+    moving();
     active = session;
     includeExcerpt = true;
     maximized = false;
@@ -487,6 +553,7 @@ export function createSideChatController(ctx: ConvCtx) {
         pendingQuote = null;
         pendingDraft = "";
         sendOnOpen = false;
+        moving();
         redraw();
         conv.drawActiveChat();
         conv.composer.focusComposerEnd();
@@ -509,6 +576,7 @@ export function createSideChatController(ctx: ConvCtx) {
     const id = sourceId;
     const messages = [...ctx.chat.state.inheritedMessages, ...(ctx.chat.state.agent?.state.messages ?? [])];
     close();
+    moving();
     const opening = epoch;
     pendingAnchor = anchor;
     pendingQuote = anchor.quote;
@@ -611,6 +679,8 @@ export function createSideChatController(ctx: ConvCtx) {
       document.removeEventListener("selectionchange", selectionChanged);
       document.removeEventListener("mousedown", selectionStarted, true);
       document.removeEventListener("mouseup", selectionEnded, true);
+      document.removeEventListener("pointerdown", pressStarted, true);
+      document.removeEventListener("click", clickedOutside);
       selecting = false;
       close();
       sourceId = null;
@@ -621,6 +691,8 @@ export function createSideChatController(ctx: ConvCtx) {
       anchors.clear();
       observedRows.clear();
       highlightResize?.disconnect();
+      glideResize?.disconnect();
+      settledHeights.clear();
     },
     hover(event: MouseEvent) {
       const card = (event.target as Element).closest<HTMLElement>(".side-chat-card");
@@ -677,6 +749,7 @@ export function createSideChatController(ctx: ConvCtx) {
               return;
             }
             highlightResize?.observe(host);
+            for (const card of host.children) for (const part of card.children) glideResize?.observe(part);
             if (row) {
               observedRows.set(host, row as HTMLElement);
               highlightResize?.observe(row);
@@ -768,6 +841,7 @@ export function createSideChatController(ctx: ConvCtx) {
                   aria-label=${maximized ? "Collapse side chat" : "Expand side chat"}
                   @click=${() => {
                     maximized = !maximized;
+                    moving();
                     redraw();
                   }}
                 >
