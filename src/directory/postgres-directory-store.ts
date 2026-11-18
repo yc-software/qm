@@ -22,6 +22,8 @@ import {
 } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
+import { perTenant } from "../tenants/cache.ts";
+import DataLoader from "dataloader";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -210,11 +212,45 @@ function groupMembershipOf(row: Record<string, unknown>): boolean | undefined {
   return row.roster_known === true ? false : undefined;
 }
 
+function present<T, R>(value: T | Error | undefined, entry: (value: T) => R): R[] {
+  if (value instanceof Error) throw value;
+  return value === undefined ? [] : [entry(value)];
+}
+
+function batchedByPrincipal<V>(read: (refs: readonly string[], principalId: string) => Promise<Map<string, V>>) {
+  const loader = perTenant(
+    () =>
+      new DataLoader<readonly [string, string], V | undefined>(
+        async (keys) => {
+          const results = new Map<string, Map<string, V>>();
+          await Promise.all(
+            [...Map.groupBy(keys, ([principalId]) => principalId)].map(async ([principalId, held]) =>
+              results.set(
+                principalId,
+                await read(
+                  held.map(([, ref]) => ref),
+                  principalId,
+                ),
+              ),
+            ),
+          );
+          return keys.map(([principalId, ref]) => results.get(principalId)?.get(ref));
+        },
+        { cache: false },
+      ),
+  );
+  return async (refs: readonly string[], principalId: string): Promise<Map<string, V>> => {
+    const unique = [...new Set(refs)];
+    const found = await loader().loadMany(unique.map((ref) => [principalId, ref] as const));
+    return new Map(unique.flatMap((ref, index) => present(found[index], (value) => [ref, value] as const)));
+  };
+}
+
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
-  async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
+  async function readMembers(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
     if (!principalIds.length) return new Map();
     const emails = principalIds.map(foldPrincipalId).filter((id) => id.includes("@"));
     const rows = (
@@ -235,7 +271,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     );
   }
 
-  async function channelMemberships(
+  async function readChannelMemberships(
     channelIds: readonly string[],
     principalId: string,
   ): Promise<Map<string, ChannelMembershipFacts>> {
@@ -262,7 +298,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     );
   }
 
-  async function groupMemberships(
+  async function readGroupMemberships(
     groupIds: readonly string[],
     principalId: string,
   ): Promise<Map<string, ScopeMembershipFacts>> {
@@ -282,6 +318,25 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       rows.map((row) => [row.group_id as string, { member: row.member === true, membership: groupMembershipOf(row) }]),
     );
   }
+
+  const memberLoader = perTenant(
+    () =>
+      new DataLoader<string, DirectoryMember | undefined>(
+        async (ids) => {
+          const found = await readMembers(ids);
+          return ids.map((id) => found.get(id));
+        },
+        { cache: false },
+      ),
+  );
+  async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
+    const ids = [...new Set(principalIds)];
+    const found = await memberLoader().loadMany(ids);
+    return new Map(ids.flatMap((id, index) => present(found[index], (member) => [id, member] as const)));
+  }
+
+  const channelMemberships = batchedByPrincipal(readChannelMemberships);
+  const groupMemberships = batchedByPrincipal(readGroupMemberships);
 
   async function pick<T>(
     query: string,
