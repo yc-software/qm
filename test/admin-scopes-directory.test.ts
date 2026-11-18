@@ -43,7 +43,7 @@ test("the scope directory starts independent resource reads together", async () 
     };
   const app = s.built.app;
   app.listCrons = hold("crons", app.listCrons.bind(app));
-  app.listDeployments = hold("deployments", app.listDeployments.bind(app));
+  app.listApps = hold("deployments", app.listApps.bind(app));
   app.listSkills = hold("skills", app.listSkills.bind(app));
   app.listEnvironments = hold("environments", app.listEnvironments.bind(app));
   const request = fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN });

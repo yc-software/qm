@@ -1,4 +1,4 @@
-import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
+import { SandboxSnapshotNotFoundError, type SandboxSnapshotKind } from "@renderinc/sdk";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
@@ -14,10 +14,10 @@ import {
   type RenderSnapshot,
 } from "../../src/sandbox/render-client.ts";
 import type { RenderApi } from "../../src/deploy/render-api.ts";
-import type { Deployment } from "../../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../../src/deploy/deploy-store.ts";
 import { scopeId } from "../../src/types.ts";
 
-export function fakeDeployment(versions: Deployment["versions"] = []): Deployment {
+export function fakeApp(versions: PublishedApp["versions"] = []): PublishedApp {
   return {
     id: randomUUID(),
     ownerScopeId: scopeId("personal", "U1"),
@@ -56,8 +56,9 @@ export function createFakeRender() {
   const root = mkdtempSync(join(tmpdir(), "fake-render-"));
   const sandboxes = new Map<string, RenderSandboxInfo>();
   const labels = new Map<string, { name?: string; createdAtMs: number }>();
+  const allowlists = new Map<string, string[]>();
   const snapshots = new Map<string, RenderSnapshot>();
-  const snapshotSources = new Map<string, { sandboxId: string; name: string; requestedAtMs: number }>();
+  const snapshotSources = new Map<string, { sandboxId: string; name: string; kind: string; requestedAtMs: number }>();
   const images = new Map<string, RenderImage & { name: string; source: string }>();
   const goldens = new Map<string, RenderSnapshot>();
   const registry = new Map<string, string>();
@@ -141,7 +142,7 @@ export function createFakeRender() {
     return image;
   };
   const client: RenderClient = {
-    async create({ name, snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, egressAllowlist, onCreated }) {
       const id = `sbx-${sandboxes.size + 1}`;
       const info: RenderSandboxInfo = { id, status: "running", expiresAtMs: Date.now() + lifetimeSec * 1000 };
       if (snapshotId) {
@@ -156,6 +157,7 @@ export function createFakeRender() {
       }
       sandboxes.set(id, info);
       labels.set(id, { ...(name ? { name } : {}), createdAtMs: Date.now() });
+      if (egressAllowlist) allowlists.set(id, egressAllowlist);
       createdFrom.push(snapshotId ?? image);
       try {
         await onCreated?.(id);
@@ -176,7 +178,10 @@ export function createFakeRender() {
       };
     },
     async get(id) {
-      return sandboxes.get(id) ?? null;
+      const info = sandboxes.get(id);
+      if (!info) return null;
+      const egressAllowlist = allowlists.get(id);
+      return { ...info, ...(egressAllowlist ? { egressAllowlist } : {}) };
     },
     async listLive(name) {
       return [...sandboxes.values()]
@@ -207,7 +212,7 @@ export function createFakeRender() {
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, data);
     },
-    async createSnapshot(id, name) {
+    async createSnapshot(id, name, kind) {
       requireRunning(id);
       if (checkpointError) throw checkpointError;
       const snapshotId = `snp-${snapshots.size + deleted.length + 1}`;
@@ -220,7 +225,7 @@ export function createFakeRender() {
       };
       cpSync(home(id), join(root, snapshotId), { recursive: true });
       snapshots.set(snapshotId, snapshot);
-      snapshotSources.set(snapshotId, { sandboxId: id, name, requestedAtMs: snapshot.capturedAtMs! });
+      snapshotSources.set(snapshotId, { sandboxId: id, name, kind, requestedAtMs: snapshot.capturedAtMs! });
       if (loseCheckpointReply) {
         snapshot.status = loseCheckpointReply;
         loseCheckpointReply = undefined;
@@ -284,6 +289,9 @@ export function createFakeRender() {
     loseCheckpointReply(status: RenderSnapshot["status"] = "available") {
       loseCheckpointReply = status;
     },
+    allowlistOf(sandboxId: string) {
+      return allowlists.get(sandboxId);
+    },
     nameOf(sandboxId: string) {
       return labels.get(sandboxId)?.name;
     },
@@ -333,7 +341,9 @@ export function serveFakeRenderApi(
     status: fake.sandboxes.get(id)!.status,
     plan: "starter",
     region: "oregon",
-    networkPolicy: { type: "allow-all" },
+    networkPolicy: fake.allowlistOf(id)
+      ? { type: "allow-list", rules: fake.allowlistOf(id)!.map((domain) => ({ domain, protocol: "https" })) }
+      : { type: "allow-all" },
     timeoutSeconds: 86400,
     ...lifetimes.get(id),
     createdAt: new Date(fake.createdAtMs(id)!).toISOString(),
@@ -343,7 +353,7 @@ export function serveFakeRenderApi(
     name: fake.snapshotSource(snapshot.id)?.name ?? null,
     sandboxGroupId: snapshot.sandboxGroupId,
     sourceSandboxId: fake.snapshotSource(snapshot.id)?.sandboxId ?? "sbx-source",
-    kind: "filesystem",
+    kind: fake.snapshotSource(snapshot.id)?.kind ?? "runtime",
     status: snapshot.status,
     plan: "starter",
     requestedAt: new Date().toISOString(),
@@ -374,11 +384,15 @@ export function serveFakeRenderApi(
         snapshotId?: string;
         buildId?: string;
         timeoutSeconds?: number;
+        networkPolicy?: { type: string; rules?: Array<{ domain: string }> };
       };
       const { id } = await fake.client.create({
         ...(body.name ? { name: body.name } : {}),
         ...(body.snapshotId ? { snapshotId: body.snapshotId } : {}),
         ...(body.buildId ? { image: body.buildId } : {}),
+        ...(body.networkPolicy?.type === "allow-list"
+          ? { egressAllowlist: (body.networkPolicy.rules ?? []).map((rule) => rule.domain) }
+          : {}),
         lifetimeSec: body.timeoutSeconds ?? 86400,
       });
       lifetimes.set(id, { timeoutSeconds: body.timeoutSeconds ?? 86400 });
@@ -419,8 +433,10 @@ export function serveFakeRenderApi(
       });
     }
     if ((match = /^\/sandboxes\/([^/]+)\/snapshots$/.exec(path)) && request.method === "POST") {
-      const body = (await request.json()) as { name: string };
-      return Response.json(snapshotJson(await fake.client.createSnapshot(match[1]!, body.name)), { status: 201 });
+      const body = (await request.json()) as { name: string; kind: SandboxSnapshotKind };
+      return Response.json(snapshotJson(await fake.client.createSnapshot(match[1]!, body.name, body.kind)), {
+        status: 201,
+      });
     }
     const group = () => ({
       id: "sbg-test",

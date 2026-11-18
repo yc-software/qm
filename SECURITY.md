@@ -24,8 +24,9 @@ that planned controls will ship.
 ### Scope
 
 QM's interactive agent surfaces currently assume one organization of authenticated
-internal users. Guests and external users are outside that interaction boundary,
-apart from a deployment's explicit, admin-controlled exception for internal users in
+internal users. Guests and external users are outside that interaction boundary
+unless an org admin has invited their address, and then only until that invitation
+expires, apart from a deployment's explicit, admin-controlled exception for internal users in
 Slack rooms that include external participants. Published apps are a separate,
 deliberate exception: an owner can distribute a capability link to visitors outside
 the organization. Holding that link authorizes reach to that app only; it does not

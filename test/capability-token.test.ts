@@ -184,9 +184,9 @@ test("a deployment claim round-trips and must be a non-empty string", async () =
     ...tenantClaim(),
     ...c,
   });
-  for (const deployment of [7, "", null] as unknown[]) {
-    const token = await mintCapabilityToken(claims({ deployment } as Partial<CapabilityClaims>), SECRET);
-    assert.equal(await verifyCapabilityToken(token, SECRET), null, `deployment=${JSON.stringify(deployment)}`);
+  for (const publishedApp of [7, "", null] as unknown[]) {
+    const token = await mintCapabilityToken(claims({ deployment: publishedApp } as Partial<CapabilityClaims>), SECRET);
+    assert.equal(await verifyCapabilityToken(token, SECRET), null, `deployment=${JSON.stringify(publishedApp)}`);
   }
 });
 

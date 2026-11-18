@@ -24,12 +24,15 @@ import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { buildWakeEnvelope, type WakeMessage } from "../wake/wake-envelope.ts";
 import { liveTurnOf, routeIncoming } from "../wake/route-incoming.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import { isTerminal } from "../runs/run-store.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { ambientActorId } from "../resolution/ambient-wake.ts";
+
+type Asker = { message: CachedMessage; member: DirectoryMember };
+
+const canAsk = (m: CachedMessage) => Boolean(!m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim());
 
 export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
@@ -237,14 +240,9 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     return decision;
   }
 
-  async function solicitedAsker(
-    batch: AmbientBatch,
-    decision: AmbientDecision,
-  ): Promise<{ message: CachedMessage; member: DirectoryMember } | undefined> {
+  async function solicitedAsker(batch: AmbientBatch, decision: AmbientDecision): Promise<Asker | undefined> {
     if (!decision.askedBy) return undefined;
-    const eligible = batch.messages.filter(
-      (m) => !m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim(),
-    );
+    const eligible = batch.messages.filter(canAsk);
     const asking = eligible.find((m) => m.ts === decision.askedBy);
     const newest = eligible.reduce<CachedMessage | undefined>((max, m) => (!max || m.ts > max.ts ? m : max), undefined);
     if (!asking?.authorId || asking.authorId !== newest?.authorId) return undefined;
@@ -294,8 +292,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   }
 
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
-    const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
-    const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
     if (solicited) {
@@ -308,6 +304,44 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         audience = resolved;
       }
     }
+    const asked = batch.messages.some((m) => m.ts === decision.askedBy && canAsk(m));
+    const activeIds =
+      solicited || !deps.signals
+        ? []
+        : await deps.runs.activeSessionIds().catch(swallowAs("ambient: active session ids", [] as string[]));
+    const context = { solicited, audience, activeIds };
+    const part = (bot: boolean): AmbientBatch => {
+      const other = new Set(batch.messages.filter((m) => Boolean(m.bot) !== bot).map((m) => m.ts));
+      return {
+        ...batch,
+        messages: batch.messages.filter((m) => !other.has(m.ts)),
+        recent: batch.recent.filter((m) => !other.has(m.ts)),
+      };
+    };
+    const outcomes = await Promise.allSettled(
+      !solicited && asked && batch.messages.some((m) => m.bot)
+        ? [
+            startAmbientWorker(part(true), { act: true }, false, context),
+            startAmbientWorker(part(false), decision, true, context),
+          ]
+        : [startAmbientWorker(batch, decision, asked, context)],
+    );
+    return (
+      outcomes
+        .map((o) => (o.status === "fulfilled" ? o.value : `failed: ${errMessage(o.reason)}`))
+        .filter(Boolean)
+        .join("; ") || undefined
+    );
+  }
+
+  async function startAmbientWorker(
+    batch: AmbientBatch,
+    decision: AmbientDecision,
+    asked: boolean,
+    { solicited, audience, activeIds }: { solicited?: Asker; audience: ActorAssertion[]; activeIds: string[] },
+  ): Promise<string | undefined> {
+    const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
+    const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
     const surfaceOrigin = sourceOrigin(batch, solicited?.message);
     const conversation = workerConversation(batch, threadRef, audience);
     if (decision.askedBy && !solicited)
@@ -377,40 +411,42 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           spawned: true,
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return undefined;
+    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req, asked, activeIds))) return undefined;
     const result = await app.turn(req);
     return result.status === "refused" || result.status === "failed"
       ? `${result.status}: ${result.reason ?? "no reason given"}`
       : undefined;
   }
 
-  async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {
-    if (!deps.signals) return false;
+  async function steerIntoLiveAmbientRun(
+    batch: AmbientBatch,
+    latestTs: string,
+    req: TurnRequest,
+    asked: boolean,
+    activeIds: string[],
+  ): Promise<boolean> {
     const prefix = `${batch.surface}:${batch.container}:ambient:`;
-    const activeIds = await deps.runs
-      .activeSessionIds()
-      .catch(swallowAs("ambient: active session ids", [] as string[]));
-    const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
-    if (!liveRef) return false;
-    const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status)) return false;
-    const route = routeIncoming(
-      {
-        origin: "ambient",
-        person: false,
-        text: req.text,
-        hasFiles: Boolean(req.attachments?.length),
-        actorId: req.actor.externalId,
-        modelAccount: "company",
-        ...(req.botActor ? { bot: true } : {}),
-        ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
-        routed: false,
-      },
-      liveTurnOf(live),
-      {},
+    const live = await deps.runs.activeForThreads(
+      activeIds.filter((id) => id.startsWith(prefix) && id !== req.conversation.threadRef),
     );
-    if (route.kind !== "steer") return false;
-    await h.steerRun(live, {
+    const incoming = {
+      origin: "ambient" as const,
+      person: asked,
+      text: req.text,
+      hasFiles: Boolean(req.attachments?.length),
+      actorId: req.actor.externalId,
+      modelAccount: "company",
+      ...(req.botActor ? { bot: true } : {}),
+      ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
+      routed: false,
+    };
+    const target = [...live.values()].find(
+      (run) =>
+        run.request.actor.id === ambientActorId() &&
+        routeIncoming(incoming, liveTurnOf(run), { midTurn: "steer" }).kind === "steer",
+    );
+    if (!target) return false;
+    await h.steerRun(target, {
       kind: "steer",
       text: req.text,
       ts: latestTs,

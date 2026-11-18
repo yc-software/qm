@@ -8,16 +8,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 
-function deployment(id: string, ownerScopeId: string, createdBy: string): Deployment {
+function publishedApp(id: string, ownerScopeId: string, createdBy: string): PublishedApp {
   return {
     id,
-    ownerScopeId: ownerScopeId as Deployment["ownerScopeId"],
+    ownerScopeId: ownerScopeId as PublishedApp["ownerScopeId"],
     createdBy,
     name: id,
     currentVersion: 1,
@@ -29,20 +29,20 @@ function deployment(id: string, ownerScopeId: string, createdBy: string): Deploy
 
 async function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-offboard-")) }));
-  const deployments = [
-    deployment("app-personal", "personal:U1", "U1"),
-    deployment("app-shared", "channel:C1", "U1"),
-    deployment("app-other", "personal:U9", "U9"),
-    deployment("app-broken", "personal:U1", "U1"),
+  const publishedApps = [
+    publishedApp("app-personal", "personal:U1", "U1"),
+    publishedApp("app-shared", "channel:C1", "U1"),
+    publishedApp("app-other", "personal:U9", "U9"),
+    publishedApp("app-broken", "personal:U1", "U1"),
   ];
   const archivedApps: string[] = [];
   const app = {
     ...built.app,
-    listDeployments: async () => deployments,
-    archiveDeployment: async (id: string) => {
+    listApps: async () => publishedApps,
+    archiveApp: async (id: string) => {
       if (id === "app-broken") throw new Error("runtime destroy failed");
       archivedApps.push(id);
-      deployments.find((d) => d.id === id)!.status = "archived";
+      publishedApps.find((d) => d.id === id)!.status = "archived";
     },
   };
   const server = createInsecureTestServer(app, {

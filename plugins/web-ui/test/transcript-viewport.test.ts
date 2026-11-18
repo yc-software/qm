@@ -773,6 +773,26 @@ test("asynchronous growth leaves a reader in place", () => {
   }
 });
 
+test("opening a thought at the bottom grows below the clicked row instead of following", () => {
+  const f = fixture();
+  try {
+    const doc = f.s.ownerDocument;
+    const row = doc.createElement("details");
+    row.className = "thinking-row";
+    const summary = doc.createElement("summary");
+    row.append(summary);
+    f.s.querySelector(".message-stack")!.append(row);
+    summary.getBoundingClientRect = () => ({ top: 150 }) as DOMRect;
+    summary.dispatchEvent(new doc.defaultView!.MouseEvent("click", { bubbles: true }));
+    f.grow();
+    f.resize(30, 50);
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
+  } finally {
+    f.close();
+  }
+});
+
 test("reaching the real bottom by hand resumes following", () => {
   const f = fixture();
   try {

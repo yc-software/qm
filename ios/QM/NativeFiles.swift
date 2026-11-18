@@ -55,6 +55,7 @@ final class WorkspaceFilesModel {
   let client: APIClient
   let scope: String?
   var files: [WorkspaceFile] = []
+  var loaded = false
   var nextCursor: String?
   var uploading = false
   var filtering = false
@@ -91,6 +92,7 @@ final class WorkspaceFilesModel {
         throw QMError.message("The file list did not advance. Pull to refresh and try again.")
       }
       nextCursor = result.nextCursor
+      self.loaded = true
       error = nil
     } failed: {
       error = $0.localizedDescription
@@ -157,7 +159,7 @@ struct NativeFilesView: View {
     }.sorted { $0.createdAt > $1.createdAt }
   }
 
-  var body: some View {
+  private var fileList: some View {
     QMList {
       Section {
         Picker("Type", selection: $category) {
@@ -168,8 +170,11 @@ struct NativeFilesView: View {
         }
       }
       if let error = model.error { Text(error).foregroundStyle(.red) }
+      if model.loading && !model.loaded && model.error == nil {
+        NativeCollectionLoading(label: "Loading files", symbol: "doc")
+      }
       ForEach(visible) { file in
-        Button {
+        NativeLinkRow {
           preview = file
         } label: {
           WorkspaceFileRow(file: file)
@@ -178,57 +183,71 @@ struct NativeFilesView: View {
       if model.nextCursor != nil {
         Button("Load more files") { Task { await model.load() } }.disabled(model.loading)
       }
-      if visible.isEmpty && !model.loading && model.error == nil {
-        ContentUnavailableView {
-          Label(hasFilters ? "No matching files" : "No files here yet", systemImage: "doc.on.doc")
-        } description: {
-          Text(
-            hasFilters
-              ? "Try a different search or filter." : "Upload a file or create one with QM.")
-        } actions: {
-          if hasFilters {
-            Button("Reset filters") {
-              query = ""
-              category = "All types"
-              ownership = "All files"
-            }
+      emptyState
+    }
+  }
+
+  @ViewBuilder
+  private var emptyState: some View {
+    if visible.isEmpty && model.loaded && (!hasFilters || !model.loading) && model.error == nil {
+      ContentUnavailableView {
+        Label(hasFilters ? "No matching files" : "No files here yet", systemImage: "doc.on.doc")
+      } description: {
+        Text(
+          hasFilters
+            ? "Try a different search or filter." : "Upload a file or create one with QM.")
+      } actions: {
+        if hasFilters {
+          Button("Reset filters") {
+            query = ""
+            category = "All types"
+            ownership = "All files"
           }
         }
       }
     }
-    .scrollContentBackground(.hidden).background(QMTheme.paper)
-    .navigationTitle("Files").searchable(text: $query, prompt: "Find files")
-    .toolbar {
-      Button("Upload files", systemImage: "square.and.arrow.up") { importing = true }.disabled(
-        model.uploading)
-    }
-    .safeAreaInset(edge: .bottom) {
-      if model.loading || model.uploading {
-        ProgressView(model.uploading ? "Uploading…" : "Loading files…").padding().frame(
-          maxWidth: .infinity
-        ).background(.regularMaterial)
+  }
+
+  var body: some View {
+    fileList
+      .scrollContentBackground(.hidden).background(QMTheme.paper)
+      .navigationTitle("Files").searchable(text: $query, prompt: "Find files")
+      .modifier(
+        NativeCollectionRefresh(
+          active: model.loading && (model.loaded || model.error != nil) && !model.uploading,
+          label: "Loading files")
+      )
+      .toolbar {
+        Button("Upload files", systemImage: "square.and.arrow.up") { importing = true }.disabled(
+          model.uploading)
       }
-    }
-    .refreshable { await model.load(reset: true) }
-    .task { await model.load(reset: true) }
-    .task(id: query + "|" + category + "|" + ownership) {
-      model.filtering = hasFilters
-      if model.filtering {
-        await model.loadAll()
+      .safeAreaInset(edge: .bottom) {
+        if model.uploading {
+          ProgressView("Uploading…").padding().frame(
+            maxWidth: .infinity
+          ).background(.regularMaterial)
+        }
       }
-    }
-    .fileImporter(
-      isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true
-    ) { result in
-      switch result {
-      case .success(let urls): Task { await model.upload(urls) }
-      case .failure(let error): model.error = error.localizedDescription
+      .refreshable { await model.load(reset: true) }
+      .task { await model.load(reset: true) }
+      .task(id: query + "|" + category + "|" + ownership) {
+        model.filtering = hasFilters
+        if model.filtering {
+          await model.loadAll()
+        }
       }
-    }
-    .sheet(item: $preview) { file in
-      FilePreviewSheet(
-        file: DeliveredFile(name: file.name, artifactId: file.id), client: model.client)
-    }
+      .fileImporter(
+        isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true
+      ) { result in
+        switch result {
+        case .success(let urls): Task { await model.upload(urls) }
+        case .failure(let error): model.error = error.localizedDescription
+        }
+      }
+      .sheet(item: $preview) { file in
+        FilePreviewSheet(
+          file: DeliveredFile(name: file.name, artifactId: file.id), client: model.client)
+      }
   }
 }
 
@@ -247,9 +266,7 @@ struct WorkspaceFileRow: View {
           .font(.caption2).foregroundStyle(.secondary)
         if !file.openable { Text("Preview unavailable").font(.caption) }
       }
-      Spacer()
-      Image(systemName: "chevron.right").font(.caption)
-    }.padding(.vertical, 6).foregroundStyle(QMTheme.ink)
+    }
   }
 }
 
@@ -258,11 +275,13 @@ struct NativeFileLibrary: View {
   @State private var scope = ""
   @State private var contexts: [WorkspaceContext] = []
   @State private var error: String?
+  @State private var scopeLoads = 0
   var body: some View {
     NativeFilesView(client: client, scope: scope.isEmpty ? nil : scope).id(scope)
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Menu {
+            if scopeLoads > 0 { Text("Loading scopes") }
             Picker("Scope", selection: $scope) {
               Text("All accessible files").tag("")
               ForEach(contexts) { Text($0.title).tag($0.scopeId) }
@@ -276,10 +295,13 @@ struct NativeFileLibrary: View {
               contexts.first { $0.scopeId == scope }?.title ?? "All scopes",
               systemImage: "line.3.horizontal.decrease")
           }
+          .accessibilityValue(scopeLoads > 0 ? "Loading scopes" : "")
         }
       }.task { await load() }
   }
   private func load() async {
+    scopeLoads += 1
+    defer { scopeLoads -= 1 }
     do {
       let result: WorkspaceContexts = try await client.fetch("api/contexts")
       contexts = result.contexts

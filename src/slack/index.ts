@@ -23,7 +23,7 @@ import {
   slackAccountConfigsFromEnv,
   slackPluginConfigFromEnv,
 } from "./config.ts";
-import { createTurnFlow } from "./turn-flow.ts";
+import { createTurnFlow } from "../surfaces/turn-flow.ts";
 import { createActorGate, createDenyResponder } from "./allow-from.ts";
 import { createAckEmojiPicker } from "./ack-emoji.ts";
 import { type BotIdentity, createDirectory } from "./directory.ts";
@@ -33,7 +33,7 @@ import { createApprovals } from "./approvals.ts";
 import { createTurnHandler } from "./turn-handler.ts";
 import { registerSlackEvents } from "./events.ts";
 import { createSurfaceContextFulfiller } from "./surface-context.ts";
-import { createDeliveryPoller } from "./deliveries.ts";
+import { createSlackDeliverer } from "./deliveries.ts";
 import { createDeferredAckReceiver } from "./deferred-ack.ts";
 import { createHttpEventsReceiver } from "./http-events.ts";
 import { parseChannelPage, parseLogLevel } from "./payloads.ts";
@@ -52,6 +52,7 @@ const slackAccountClients = perTenant(
       string,
       {
         client: any;
+        deliveryClient: WebClient;
         teamId: string;
         policy?: ExternalSlackAccess;
         inFlightRuns?: { add(id: string): void; delete(id: string): void };
@@ -89,13 +90,15 @@ export async function startSlackPlugin(
   const IDENTITY_TOKENS: Record<string, string | undefined> = {
     copilot: cfg.copilotBotToken,
   };
+  const DELIVERY_CLIENT_OPTIONS = { ...CLIENT_OPTIONS, rejectRateLimitedCalls: true } as const;
+  const deliveryClient = new WebClient(BOT_TOKEN, DELIVERY_CLIENT_OPTIONS);
   const identityClients = new Map<string, WebClient>();
   function clientForIdentity(identity: string): WebClient {
     const token = IDENTITY_TOKENS[identity];
     if (!token) throw new Error(`no token for post identity "${identity}" (set its *_BOT_TOKEN env)`);
     let c = identityClients.get(identity);
     if (!c) {
-      c = new WebClient(token, { ...CLIENT_OPTIONS });
+      c = new WebClient(token, DELIVERY_CLIENT_OPTIONS);
       identityClients.set(identity, c);
     }
     return c;
@@ -222,7 +225,7 @@ export async function startSlackPlugin(
   const deduper = createDeduper(1000);
   const threads = createThreadTracker();
 
-  const flow = createTurnFlow(core);
+  const flow = createTurnFlow(core, "slack");
   const ackEmoji = createAckEmojiPicker(core, { candidatesOverride: ackEmojiOverride });
   const directory = createDirectory({
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
@@ -439,11 +442,11 @@ export async function startSlackPlugin(
     ...(cfg.userToken ? { userToken: cfg.userToken } : {}),
     clientOptions: CLIENT_OPTIONS,
   });
-  const deliveries = createDeliveryPoller({
+  const deliveries = createSlackDeliverer({
     clientForAccount: (id, teamId) => {
       const account = slackAccountClients().get(id);
       if (!account || (teamId && account.teamId !== teamId)) return undefined;
-      return account.client;
+      return account.deliveryClient;
     },
     externalNamespace: (id) => {
       const account = slackAccountClients().get(id);
@@ -481,6 +484,7 @@ export async function startSlackPlugin(
     if (accounts.has(ACCOUNT_LABEL)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
     accounts.set(ACCOUNT_LABEL, {
       client: app.client,
+      deliveryClient,
       inFlightRuns: flow.inFlightRuns,
       teamId: ids.ownTeamId,
       ...(cfg.externalAccess ? { policy: cfg.externalAccess } : {}),
@@ -527,44 +531,11 @@ export async function startSlackPlugin(
     emojiCatalogTimer = setInterval(publishEmojiCatalog, EMOJI_CATALOG_REFRESH_MS);
   }
 
-  let deliveriesPollInFlight = false;
-  let deliveriesPollAgain = false;
-  let followerRetry: ReturnType<typeof setTimeout> | undefined;
-  const drainDeliveries = (): void => {
-    if (stopped) return;
-    if (deliveriesPollInFlight) {
-      deliveriesPollAgain = true;
-      return;
-    }
-    deliveriesPollInFlight = true;
-    void deliveries
-      .pollDeliveries(app.client)
-      .then((ranAsLeader) => {
-        if (!ranAsLeader && !stopped && !followerRetry) {
-          followerRetry = setTimeout(() => {
-            followerRetry = undefined;
-            drainDeliveries();
-          }, 5_000);
-          followerRetry.unref?.();
-        }
-      })
-      .catch(swallowAs("slack: delivery drain", undefined))
-      .finally(() => {
-        deliveriesPollInFlight = false;
-        if (deliveriesPollAgain) {
-          deliveriesPollAgain = false;
-          drainDeliveries();
-        }
-      });
-  };
   statusSweep.start();
-  let unsubscribeDeliveries = (): void => {};
-  let deliveriesTimer: NodeJS.Timeout | undefined;
-  if (CORE_SINGLETON || cfg.externalAccess) {
-    unsubscribeDeliveries = core.onDeliveryEnqueued(drainDeliveries);
-    deliveriesTimer = setInterval(drainDeliveries, 60_000);
-    drainDeliveries();
-  }
+  const stopServingDeliveries =
+    CORE_SINGLETON || cfg.externalAccess
+      ? core.serveDeliveries(tenant, (d) => deliveries.deliver(deliveryClient, d))
+      : () => {};
 
   const contextRequestsInFlight = new Set<string>();
 
@@ -596,10 +567,8 @@ export async function startSlackPlugin(
       if (accounts.get(ACCOUNT_LABEL)?.client === app.client) accounts.delete(ACCOUNT_LABEL);
       await statusSweep.stop();
       await replaySweeper?.stop();
-      if (deliveriesTimer) clearInterval(deliveriesTimer);
       if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
-      if (followerRetry) clearTimeout(followerRetry);
-      unsubscribeDeliveries();
+      stopServingDeliveries();
       unsubscribeContextRequests();
       try {
         await app.stop();

@@ -8,6 +8,7 @@ import {
   UNTRUSTED_CONTENT_SANDBOX_CSP,
 } from "../http.ts";
 import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 
 const PLAYGROUND_CSP = [
   "sandbox allow-scripts allow-pointer-lock",
@@ -32,7 +33,12 @@ function viewerOf(ctx: ApiCtx): string | null {
 async function openForViewer(ctx: ApiCtx) {
   const viewer = viewerOf(ctx);
   if (!viewer) return null;
-  const opened = await ctx.app.openFileForViewer(tenantOf(ctx), ctx.params.id!, viewer);
+  const opened = await ctx.app.openFileForViewer(
+    tenantOf(ctx),
+    ctx.params.id!,
+    viewer,
+    isOwnScopeBotWork(ctx.capability),
+  );
   if (!opened) sendJson(ctx.res, 404, { error: "not_found" });
   return opened;
 }

@@ -16,7 +16,7 @@ export const appHandleResource: AdminResource = {
     if (!setAppHandle) return { error: "app handles are not available on this install", status: 404 };
     const parsed = appHandleSchema.safeParse(String((ctx.body as { handle?: unknown })?.handle ?? "").trim());
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "invalid handle" };
-    for (const d of await ctx.app.listDeployments()) {
+    for (const d of await ctx.app.listApps()) {
       const problem = appLabelLimitError(parsed.data, d.name ?? d.id);
       if (problem) return { error: problem };
     }

@@ -20,6 +20,7 @@ import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-not
 import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
 import {
   personAtKeyboard,
   resolveShareTarget,
@@ -32,6 +33,8 @@ import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../typ
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
+import { PERSON_REQUIRED } from "./http.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -762,7 +765,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     readSoul(capability) {
-      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId);
+      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId, {
+        actorId: capability.actorId,
+        ownScopeBotWork: isOwnScopeBotWork(capability),
+      });
       return { effectiveSoul, soul, soulVersion };
     },
 
@@ -770,6 +776,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,
+          botActor: capability.botActor === true,
           expectedVersion,
           sessionId: capability.sessionId,
         });
@@ -784,6 +791,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
+      if (req.type === "deploy" && !personAtKeyboard(capability))
+        return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
@@ -795,6 +804,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             req.type === "file"
               ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
+        };
+      const sourceWithheld =
+        req.type === "skill" ? capability.botActor === true : req.type === "file" && isOwnScopeBotWork(capability);
+      if (!loadsScopeContext(capability.actorId, home.ownerScopeId, sourceWithheld))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move a person's own files or skills",
         };
 
       const target = await resolveArtifactTarget(app, req);
@@ -809,6 +826,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           candidates: target.candidates,
         };
       const toScope = target.scope;
+      if (!loadsScopeContext(capability.actorId, toScope, capability.botActor === true))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move anything into a person's own library",
+        };
       const toKind = parseScopeId(toScope).kind;
 
       const isOrg = toKind === "org";
@@ -907,7 +930,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
         const invite =
           req.type === "deploy" && req.email !== undefined && permission === "read"
-            ? await app.inviteToDeployment(
+            ? await app.inviteToApp(
                 home.id,
                 req.email,
                 { createdBy: capability.actorId, botActor: capability.botActor },
@@ -936,7 +959,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           permission,
         };
       } catch (e) {
-        if (e instanceof AdminError) {
+        if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         return { ok: false, code: "share_failed", message: errMessage(e) };

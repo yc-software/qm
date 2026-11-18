@@ -48,6 +48,10 @@ const renderBaseStore = (pg: PgPool) =>
   createPostgresMap<StoredRenderBase>(pg, "render_sandbox_bases", [], [], [processLevelMap("render_sandbox_bases")]);
 
 const prepare = (base: RenderBase) => base.prepare(new AbortController().signal);
+const source = async (base: RenderBase) => {
+  const { ref, snapshotId } = await base.ready();
+  return { ref, snapshotId };
+};
 
 function countWrites<T>(map: DurableMap<T>) {
   const writes: string[] = [];
@@ -90,7 +94,9 @@ test("Render base imports the tagged image, snapshots a builder, and does nothin
   assert.ok(record.readyAtMs);
   const builder = fake.snapshotSource(record.snapshot!.id)!.sandboxId;
   assert.ok(fake.terminated.includes(builder));
-  assert.deepEqual(await base.ready(), { ref: REF_A, snapshotId: record.snapshot!.id });
+  assert.deepEqual(await source(base), { ref: REF_A, snapshotId: record.snapshot!.id });
+  assert.deepEqual((await base.ready()).tools, record.tools);
+  assert.ok(record.tools?.includes("git") && !record.tools.includes("flyctl"));
 
   const writes = countWrites(store);
   const calls = { imports: fake.imports.length, creates: fake.createdFrom.length };
@@ -145,12 +151,12 @@ test("Render base keeps serving the previous golden until a new release's golden
   await prepare(make(REF_A));
   const goldenA = (await store.get(DIGEST_A))!.snapshot!.id;
   const releaseB = make(REF_B);
-  assert.deepEqual(await releaseB.ready(), { ref: REF_A, snapshotId: goldenA });
+  assert.deepEqual(await source(releaseB), { ref: REF_A, snapshotId: goldenA });
 
   await prepare(releaseB);
   const goldenB = (await store.get(DIGEST_B))!.snapshot!.id;
-  assert.deepEqual(await releaseB.ready(), { ref: REF_B, snapshotId: goldenB });
-  assert.deepEqual(await make(REF_A).ready(), { ref: REF_A, snapshotId: goldenA });
+  assert.deepEqual(await source(releaseB), { ref: REF_B, snapshotId: goldenB });
+  assert.deepEqual(await source(make(REF_A)), { ref: REF_A, snapshotId: goldenA });
   assert.ok(fake.snapshots.has(goldenA));
 });
 

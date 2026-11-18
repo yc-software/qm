@@ -8,7 +8,8 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createApprovalStore } from "../src/slack/approval-store.ts";
+import { createApprovalStore } from "../src/surfaces/approval-store.ts";
+import { slackApprovalCardRoute } from "../src/slack/approval-cards.ts";
 import { createSkillPackStore, type SkillPack } from "../src/skills/skill-pack-store.ts";
 import { createSkillSyncEngine } from "../src/skills/skill-sync-engine.ts";
 import { createSwarmStore, type SwarmStorage } from "../src/swarms/swarm-store.ts";
@@ -151,12 +152,16 @@ describeTwoTenants("monitor, approval, skill and swarm sweeps bind each row's te
         } as PendingApprovalRecord),
       );
     const enqueued: Array<[string | undefined, string]> = [];
-    const approvals = createApprovalStore(backing, {
-      enqueue: async (delivery) => {
-        enqueued.push([delivery.destination.commandApprovalId, currentTenant()]);
-        return { id: "d1" } as never;
+    const approvals = createApprovalStore(
+      backing,
+      {
+        enqueue: async (delivery) => {
+          enqueued.push([delivery.destination.commandApprovalId, currentTenant()]);
+          return { id: "d1" } as never;
+        },
       },
-    });
+      { slack: slackApprovalCardRoute },
+    );
     await approvals.deliverPending();
     const [a, b] = db.tenants;
     assert.deepEqual(enqueued.sort(), [

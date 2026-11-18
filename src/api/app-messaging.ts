@@ -28,6 +28,7 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { editableIn, SLACK } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
@@ -90,6 +91,7 @@ export function createMessagingMethods(
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
   | "surfaceMirrored"
+  | "chatSurfaces"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -110,7 +112,8 @@ export function createMessagingMethods(
   | "upsertDirectory"
   | "upsertChannels"
   | "upsertGroups"
-  | "setDirectoryWorkspaceUrl"
+  | "registerGroupRoster"
+  | "setDirectoryWorkspace"
   | "directoryMeta"
   | "channelMember"
   | "channelVisibleTo"
@@ -305,6 +308,9 @@ export function createMessagingMethods(
     surfaceMirrored(kind) {
       return deps.surfaces.get(kind)?.capabilities.mirrored === true;
     },
+    chatSurfaces() {
+      return deps.surfaces.list().map(({ kind, label, mark }) => ({ kind, label, ...(mark ? { mark } : {}) }));
+    },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
@@ -426,10 +432,12 @@ export function createMessagingMethods(
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
-      const apps = members.filter((m) => m.isBot).map((m) => m.principalId);
-      if (apps.length && deps.admin)
-        await deps.admin.users.markApps(apps).catch(reportFailureAs("users: mark apps", 0));
-      const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
+      const internal = members.filter((m) => m.type === "internal");
+      const split = deps.admin
+        ? await deps.admin.users.applyDirectoryBots(members).catch(reportFailureAs("users: directory bots", 0))
+        : 0;
+      if (split) await deps.identity.refresh(true);
+      const present = internal.map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
       const outcome = await deps.identity.recordDirectorySync(removed, present);
@@ -469,8 +477,11 @@ export function createMessagingMethods(
     async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
       return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
     },
-    async setDirectoryWorkspaceUrl(url) {
-      await deps.directory.setWorkspaceUrl(url);
+    registerGroupRoster(groupId, principalIds) {
+      return deps.directory.upsertGroup(groupId, principalIds, SLACK);
+    },
+    async setDirectoryWorkspace(meta) {
+      await deps.directory.setWorkspace(meta);
     },
     directoryMeta() {
       return deps.directory.meta();
@@ -588,12 +599,13 @@ export function createMessagingMethods(
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
       }
-      if (input.edit && baseDestination.type !== "slack" && baseDestination.type !== "group") {
+      if (input.edit && !editableIn(deps.surfaces, baseDestination.type, input.turn ?? {})) {
         return {
           ok: false,
           status: 400,
           error: "bad_request",
-          message: "edit rewrites a Slack message in a channel, group DM, or this Slack conversation",
+          message:
+            "edit rewrites a message in this chat conversation, or a Slack message in a named channel or group DM",
         };
       }
       if (input.threadTs) {

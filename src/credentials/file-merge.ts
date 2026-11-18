@@ -1,18 +1,23 @@
+import { isDeepStrictEqual } from "node:util";
 import type { CredentialFile } from "./keychain.ts";
 
-const EXPIRY_FIELDS: ReadonlyArray<{ directory: string; field: readonly string[] }> = [
-  { directory: ".aws/sso/cache/", field: ["expiresAt"] },
-  { directory: ".aws/cli/cache/", field: ["Credentials", "Expiration"] },
+const TOKEN_CACHES: ReadonlyArray<{ directory: string; expiry: readonly string[]; tokens?: readonly string[] }> = [
+  { directory: ".aws/sso/cache/", expiry: ["expiresAt"], tokens: ["accessToken", "expiresAt", "refreshToken"] },
+  { directory: ".aws/cli/cache/", expiry: ["Credentials", "Expiration"] },
 ];
 
+const tokenCache = (file: CredentialFile) => TOKEN_CACHES.find(({ directory }) => file.path.startsWith(directory));
+const parsed = (file: CredentialFile): unknown =>
+  JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8"));
+
 export function credentialFileExpiry(file: CredentialFile): number | undefined {
-  const declared = EXPIRY_FIELDS.find(({ directory }) => file.path.startsWith(directory));
+  const declared = tokenCache(file)?.expiry;
   if (!declared) return undefined;
   let value: unknown;
   try {
-    value = declared.field.reduce<unknown>(
+    value = declared.reduce<unknown>(
       (node, key) => (node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined),
-      JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")),
+      parsed(file),
     );
   } catch {
     value = file.path.endsWith(".json") ? "unparseable" : undefined;
@@ -24,9 +29,35 @@ export function credentialFileExpiry(file: CredentialFile): number | undefined {
   return undefined;
 }
 
+function refreshRefusal(
+  ours: CredentialFile | undefined,
+  theirs: CredentialFile | undefined,
+  inBaseline: boolean,
+): string | undefined {
+  if (!ours) return "deleted";
+  if (!theirs) return inBaseline ? "no longer in the saved login" : "a new file";
+  const tokens = tokenCache(ours)?.tokens;
+  if (!tokens) return "not a refreshable token cache";
+  const [refreshed, current] = [ours, theirs].map((file) => {
+    try {
+      const value = parsed(file);
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  if (!refreshed || !current) return "unreadable";
+  const rest = (value: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(value).filter(([key]) => !tokens.includes(key)));
+  return isDeepStrictEqual(rest(refreshed), rest(current)) ? undefined : "changed beyond its token fields";
+}
+
 export interface CredentialFileMerge {
   files: CredentialFile[];
   overruled: string[];
+  withheld: Array<{ path: string; reason: string }>;
   byExpiry: Array<{ path: string; kept: "stored" | "refreshed" }>;
 }
 
@@ -35,17 +66,24 @@ export function mergeCredentialFiles(input: {
   stored: readonly CredentialFile[];
   refreshed: readonly CredentialFile[];
   hash(file: CredentialFile): string;
+  refreshOnly: boolean;
 }): CredentialFileMerge {
   const version = (file: CredentialFile | undefined) => (file ? input.hash(file) : undefined);
   const stored = new Map(input.stored.map((file) => [file.path, file]));
   const refreshed = new Map(input.refreshed.map((file) => [file.path, file]));
-  const merged: CredentialFileMerge = { files: [], overruled: [], byExpiry: [] };
+  const merged: CredentialFileMerge = { files: [], overruled: [], withheld: [], byExpiry: [] };
   for (const path of [...new Set([...stored.keys(), ...refreshed.keys()])].sort()) {
     const ours = refreshed.get(path);
     const theirs = stored.get(path);
     const base = input.baseline.get(path);
     let pick = theirs;
     if (version(ours) !== version(theirs) && version(ours) !== base) {
+      const reason = input.refreshOnly ? refreshRefusal(ours, theirs, base !== undefined) : undefined;
+      if (reason) {
+        merged.withheld.push({ path, reason });
+        if (theirs) merged.files.push(theirs);
+        continue;
+      }
       const a = ours && credentialFileExpiry(ours);
       const b = theirs && credentialFileExpiry(theirs);
       const decided = version(theirs) !== base && !!theirs && a !== undefined && b !== undefined && a !== b;

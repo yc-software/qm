@@ -9,7 +9,7 @@ import {
   deployCurrentGitRef,
   deployTouchDebounceMs,
   publicUrlOf,
-  type Deployment,
+  type PublishedApp,
 } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -44,9 +44,9 @@ test("deploy versions are immutable and rollback flips the pointer", async () =>
   await assert.rejects(s.setCurrentVersion(d.id, 99), /no such version/);
 });
 
-test("addVersion on an unknown deployment throws", async () => {
+test("addVersion on an unknown app throws", async () => {
   const s = createDeployStore(testDeployBackings());
-  await assert.rejects(s.addVersion("nope", { entrypoint: "x", snapshotDir: "/x" }), /unknown deployment/);
+  await assert.rejects(s.addVersion("nope", { entrypoint: "x", snapshotDir: "/x" }), /unknown app/);
 });
 
 test("addVersionFromCommit registers a pushed commit as a new version inheriting entrypoint/env", async () => {
@@ -95,7 +95,7 @@ test("a provider without reconcile receives durable Git contents after a push", 
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
-      apply: async (_deployment, version) => {
+      apply: async (_publishedApp, version) => {
         applied.push(readFileSync(join(version.snapshotDir, "server.js"), "utf8"));
         return { host: "127.0.0.1", port: 8080 };
       },
@@ -212,9 +212,9 @@ test("touch is debounced per id within the window", async () => {
   assert.equal((await s.get(d.id))!.lastAccessAt, 11_001, "a touch past the window writes");
 });
 
-test("touch does not rewrite the deployment blob and falls back to the blob's legacy value", async () => {
+test("touch does not rewrite the app blob and falls back to the blob's legacy value", async () => {
   const backing = testDeployBackings();
-  const { deployments } = backing;
+  const { deployments: publishedApps } = backing;
   const s1 = createDeployStore(backing);
   const d = await s1.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -222,13 +222,13 @@ test("touch does not rewrite the deployment blob and falls back to the blob's le
     entrypoint: "node s.js",
     snapshotDir: "/snap",
   });
-  await deployments.merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
+  await publishedApps.merge(d.id, { lastAccessAt: 777 } as Partial<PublishedApp>);
 
   const s2 = createDeployStore({ ...backing, touchDebounceMs: 0 });
   assert.equal((await s2.get(d.id))!.lastAccessAt, 777, "a never-touched row reads the blob's value");
   await s2.touch(d.id, 9_999);
   assert.equal((await s2.get(d.id))!.lastAccessAt, 9_999);
-  assert.equal((await deployments.get(d.id))!.lastAccessAt, 777, "the blob is not rewritten by touch");
+  assert.equal((await publishedApps.get(d.id))!.lastAccessAt, 777, "the blob is not rewritten by touch");
 });
 
 test("deploy versions carry git commits for app files and rollback moves the current ref", async () => {
@@ -271,7 +271,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
   );
   await s2.setAppliedVersion(d.id, 2);
   assert.equal(await s2.refOf(d.id, deployCurrentGitRef), v2.commit);
-  assert.ok(existsSync(await s2.repoUrl(d.id)), "a real bare git repo backs the deployment");
+  assert.ok(existsSync(await s2.repoUrl(d.id)), "a real bare git repo backs the app");
 
   const tree = await s2.treeOf(d.id, 2);
   assert.deepEqual(
@@ -307,7 +307,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
   );
 });
 
-test("an upload cannot smuggle files into the deployment repo's own git directory", async () => {
+test("an upload cannot smuggle files into the app repo's own git directory", async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), "deploy-git-dotgit-"));
   const s = createDeployStore(testDeployBackings({ git: { repoRoot } }));
   await assert.rejects(
@@ -365,7 +365,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
   );
 });
 
-test("uploaded files a .gitignore would exclude still reach the deployment's git history", async () => {
+test("uploaded files a .gitignore would exclude still reach the app's git history", async () => {
   const backing = testDeployBackings();
   const repoRoot = mkdtempSync(join(tmpdir(), "deploy-git-ignored-"));
   const s = createDeployStore({ ...backing, git: { repoRoot } });
@@ -501,7 +501,7 @@ test("deploy git archives keep bundle bytes in the byte store, not the row", asy
   assert.notEqual(row2.blobKey, firstBlobKey, "a new commit stores a new blob");
   assert.ok(
     await archiveBytes.open(firstBlobKey),
-    "superseded blobs are kept — content-addressed keys can be shared across deployments",
+    "superseded blobs are kept — content-addressed keys can be shared across apps",
   );
 });
 

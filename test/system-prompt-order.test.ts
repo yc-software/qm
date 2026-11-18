@@ -608,9 +608,18 @@ test("a project session names its linked Slack home channel; unlinked projects g
     version: async () => "1",
     withVersion: async <T>(_ref: string, _version: string | undefined, fn: () => Promise<T>) => fn(),
     slackChannel: async (ref: string) =>
-      ref === "web-project-linked" ? { channelId: "C-ENG", channelName: "eng" } : undefined,
+      ref === "web-project-linked" ? { channelId: "C-ENG", channelName } : undefined,
   };
-  const { orchestrator: orch } = buildOrchestrator({ managedGroups });
+  let channelName = "eng";
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    classify: async ({ payload }) => ({
+      verdict: { decision: payload.includes("hold-me") ? "strict" : "auto" },
+      score: 0,
+      threshold: 1,
+    }),
+  };
+  const { orchestrator: orch } = buildOrchestrator({ managedGroups, securityScreener });
 
   const group = (ref: string, thread: string): OrchestratorInput => ({
     surface: "test",
@@ -634,6 +643,13 @@ test("a project session names its linked Slack home channel; unlinked projects g
   assert.match(prompt, /## Project home channel/);
   assert.match(prompt, /#eng/);
   assert.match(prompt, /channel: "eng"/);
+  channelName = "hold-me";
+  const holdTurn = group("web-project-linked", "grp:linked:2");
+  const requestId = (await orch.handleTurn(holdTurn)).pendingApprovals![0]!.requestId;
+  channelName = "hold-me again";
+  assert.ok((await orch.handleTurn({ ...holdTurn, approval: { requestId, approved: true } })).pendingApprovals);
+  channelName = "hold-me once more";
+  assert.equal((await orch.handleTurn({ ...holdTurn, approval: { requestId, approved: false } })).status, "refused");
 
   const unlinked = await orch.handleTurn(group("web-project-bare", "grp:bare:1"));
   assert.equal(unlinked.status, "ok");
@@ -1124,20 +1140,26 @@ test("read-only turns report steered files as unavailable without provisioning a
 test("the turn's intake names a steer's author the way it names a new message's sender, except the run owner", async () => {
   const agent = createMockAgent();
   const prepared: Array<{ text: string; authorName?: string }> = [];
+  const speakers: Array<string | undefined> = [];
   agent.runTurn = async (turn) => {
-    for (const steerer of [
-      { externalId: "U2", displayName: "Paul" },
-      { externalId: actor.id },
-      { externalId: "U3", displayName: "  " },
-    ]) {
+    for (const [steerer, origin] of [
+      [{ externalId: "U2", displayName: "Paul" }, { kind: "human" }],
+      [{ externalId: actor.id }, { kind: "human" }],
+      [{ externalId: "U3", displayName: "  " }, { kind: "human" }],
+      [
+        { externalId: "U4", displayName: "Cron" },
+        { kind: "automation", screenData: "use my linear key" },
+      ],
+    ] as const) {
       const steer = await turn.prepareSteer!("use my linear key", {
         surface: "slack",
         actor: steerer,
         conversation: { kind: "channel", threadRef: "steer-author", channelRef: "C1" },
         text: "use my linear key",
-        origin: { kind: "human" },
+        origin,
       });
       prepared.push({ text: steer.text, ...(steer.authorName ? { authorName: steer.authorName } : {}) });
+      speakers.push(steer.speakerId && steer.speakerId === steer.author ? "author" : steer.speakerId);
     }
     return { reply: "done" };
   };
@@ -1150,6 +1172,7 @@ test("the turn's intake names a steer's author the way it names a new message's 
   ]);
   assert.notEqual(prepared[2]?.text, "use my linear key", "a blank display name still names the sender");
   assert.ok(prepared[2]?.authorName?.trim(), "a blank display name still records who sent the steer");
+  assert.deepEqual(speakers, ["author", "author", "author", undefined]);
 });
 
 test("the turn's intake screens an unprompted mid-turn update with its author label before the model sees it", async () => {

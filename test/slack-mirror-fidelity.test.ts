@@ -183,7 +183,8 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
       readHistory,
     });
     const page = await readHistory({ conversations: { history: async () => ({ messages: [raw] }) } }, "C");
-    shaped.push(await serializer.shapeRecentMessages({}, page.raw, "", new Map([["U1", "New name"]])));
+    const people = { names: new Map([["U1", "New name"]]), principals: new Map<string, string>() };
+    shaped.push(await serializer.shapeRecentMessages({}, page.raw, "", people));
   }
   assert.deepEqual(shaped[1], shaped[0]);
   assert.equal(shaped[1]![0]!.text, "Hi <@U1> and <@U2> & welcome");

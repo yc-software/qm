@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createApprovalStore } from "../src/slack/approval-store.ts";
+import { createApprovalStore as createRoutedApprovalStore } from "../src/surfaces/approval-store.ts";
+import { slackApprovalCardRoute } from "../src/slack/approval-cards.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+
+type StoreArgs = Parameters<typeof createRoutedApprovalStore>;
+const createApprovalStore = (backing: StoreArgs[0], deliveries: StoreArgs[1]) =>
+  createRoutedApprovalStore(backing, deliveries, { slack: slackApprovalCardRoute });
 
 function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
   return {

@@ -80,7 +80,11 @@ struct ConnectionRequest {
 
 @MainActor
 final class ConnectionAuthorization {
-  private let authentication = WebAuthentication()
+  private let authentication: WebAuthentication
+
+  init(authentication: WebAuthentication = WebAuthentication()) {
+    self.authentication = authentication
+  }
 
   func cancel() {
     authentication.cancel()

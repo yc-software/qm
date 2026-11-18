@@ -21,18 +21,21 @@ import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
+import type { DecisionBackend } from "../src/decisions/decisions.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
 const CAROL = "U_CAROL";
 
-function setup() {
+function setup(overrides: Parameters<typeof buildApp>[1] = {}) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "personas-")),
       signingSecret: "test-secret",
       apiBaseUrl: "https://core.example.com",
     }),
+    overrides,
   );
   const personas = built.app.personas!;
   const enable = (who: string) => built.featureFlags.setEnabled("personas", scopeId("personal", who), true, "admin");
@@ -199,13 +202,13 @@ test("skills written into a persona show for everyone with a role on it, and nob
   });
   assert.equal(skill?.scopeId, scopeId("persona", ada.id));
   const sees = async (who: string) =>
-    (await built.app.listVisibleSkills(who)).some((row) => row.skill?.id === skill!.id);
+    (await built.app.listVisibleSkills(who, false)).some((row) => row.skill?.id === skill!.id);
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);
 });
 
-test("a persona's page lists crons from conversations with it, only to people who can see them", async () => {
+test("a persona's page lists its skills and the crons from conversations with it, to people who can see them", async () => {
   const { built, personas, enable, sysprompt } = setup();
   for (const who of [ALICE, BOB]) await enable(who);
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
@@ -232,17 +235,21 @@ test("a persona's page lists crons from conversations with it, only to people wh
     );
   await cron("Ada digest", withAda.sessionId);
   await cron("Unrelated", plain.sessionId);
+  const notes = { name: "notes", description: "d", body: "b" };
+  await built.app.createOwnedSkill({ principalId: BOB, homeScope: scopeId("personal", BOB), ...notes });
+  await built.app.createOwnedSkill({ principalId: ALICE, homeScope: scopeId("persona", ada.id), ...notes });
   const server = createInsecureTestServer(built.app, { sessions: built.sessions });
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const cronsFor = async (who: string) => {
       const r = await fetch(`${base}/v1/personas/${ada.id}?principalId=${who}`);
-      const body = (await r.json()) as { persona: { crons: Array<{ title: string; enabled: boolean }> } };
-      return body.persona.crons.map((c) => [c.title, c.enabled]);
+      const { persona } = (await r.json()) as { persona: { crons: { title: string }[]; skills: { id: string }[] } };
+      const opens = await Promise.all(persona.skills.map((s) => fetch(`${base}/v1/skills/${s.id}?principalId=${who}`)));
+      return [...persona.crons.map((c) => c.title), ...opens.map((o) => o.status)];
     };
-    assert.deepEqual(await cronsFor(ALICE), [["Ada digest", true]]);
-    assert.deepEqual(await cronsFor(BOB), []);
+    assert.deepEqual(await cronsFor(ALICE), ["Ada digest", 200]);
+    assert.deepEqual(await cronsFor(BOB), [200]);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -499,7 +506,7 @@ test("what a persona conversation posts carries the persona, so Slack can name i
 });
 
 test("a persona pinned in a channel is worn by every conversation there until it's unpinned", async () => {
-  const { personas, enable, sysprompt } = setup();
+  const { built, personas, enable, sysprompt } = setup();
   for (const who of [ALICE, CAROL]) await enable(who);
   const ada = ok(await personas.create(ALICE, { name: "Ada", icon: { kind: "emoji", value: "🎨" } }));
   const bea = ok(await personas.create(ALICE, { name: "Bea" }));
@@ -519,7 +526,14 @@ test("a persona pinned in a channel is worn by every conversation there until it
     true,
   );
 
-  assert.match((await sysprompt(CAROL, thread(2))).reply, /## Persona: Ada/);
+  const pinnedTurn = await sysprompt(CAROL, thread(2));
+  assert.match(pinnedTurn.reply, /## Persona: Ada/);
+  const replies = (await built.sessions.getItems(pinnedTurn.sessionId)).filter((i) => i.kind === "AgentMessage");
+  assert.deepEqual(
+    replies.map((i) => i.body.personaId),
+    [ada.id],
+    "the reply records the persona that wore it",
+  );
 
   const second = await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]);
   assert.equal(second.status, "invalid");
@@ -590,4 +604,49 @@ test("an agent's runtime write lands on the scope it names, only where it may wr
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
+});
+
+test("a persona decision rule routes a conversation without one to the persona it picks", async () => {
+  const states: string[] = [];
+  const decisionBackend: DecisionBackend = {
+    async choose({ state }) {
+      states.push(state);
+      return { "route-ada": { ada: 0.9, keep: 0.1 } };
+    },
+  };
+  const { built, personas, enable, sysprompt } = setup({ decisionBackend });
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  const by = { actorId: ALICE };
+  await built.decisions!.saveProvider(testTenant, { id: "gw", protocol: "chat-completions" }, by);
+  await built.decisions!.saveRule(
+    testTenant,
+    {
+      id: "route-ada",
+      hook: "persona",
+      question: "Is the latest message in a DM addressed to Ada?",
+      options: {
+        keep: { description: "No", action: "keep" },
+        ada: { description: "Yes", action: "use_persona", persona: ada.id },
+      },
+      model: { provider: "gw", model: "example/decision-model" },
+      mode: "enforce",
+      onError: "keep",
+    },
+    by,
+  );
+  const dm = { kind: "dm" as const, threadRef: "dm:U_ALICE:routed" };
+  const first = await sysprompt(ALICE, dm);
+  assert.match(first.reply, /## Persona: Ada[\s\S]*route-ada/);
+  assert.equal((await built.sessions.get(first.sessionId))?.personaId, ada.id);
+  assert.match(states[0]!, /conversation: dm/);
+  const second = await sysprompt(ALICE, dm);
+  assert.match(second.reply, /## Persona: Ada/);
+  assert.equal(second.reply.includes("route-ada"), false);
+  assert.equal(states.length, 1);
+
+  const bob = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:routed" });
+  assert.equal(bob.reply.includes("## Persona:"), false, "no role on the persona, so no routing");
+  assert.match(bob.reply, /route-ada picked the persona "Ada"/);
+  assert.equal((await built.sessions.get(bob.sessionId))?.personaId, undefined);
 });

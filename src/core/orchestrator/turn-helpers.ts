@@ -224,6 +224,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.addressed ? { addressed: true } : {}),
     ...(input.envelopeWrapped ? { envelopeWrapped: true } : {}),
+    ...(input.liveReplies ? { liveReplies: true } : {}),
     ...(input.displayText ? { displayText: input.displayText } : {}),
     ...(typeof input.turnWallClockMs === "number" ? { turnWallClockMs: input.turnWallClockMs } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),

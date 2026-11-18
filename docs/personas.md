@@ -53,7 +53,9 @@ one is refused until the first is unpinned. Removing the channel's grant unpins 
 Checks sit where every path already flows: turn resolution (below) and the scope checks
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
 write. Only an owner can attach a credential, only their own, and only on a turn they
-sent; readers use it through the persona but never hold it.
+sent that is still running; readers use it through the persona but never hold it.
+Detaching a credential, changing who holds a role and deleting the persona also take an
+owner, on a turn they sent that is still running.
 
 **Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
 default admin becomes an owner: the active org admin with the oldest grant, so the admins named
@@ -79,6 +81,36 @@ if the sender holds a role on the persona (counting the conversation's channel),
 
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
+
+An org admin can also route conversations to personas with a decision rule on the `persona`
+hook (Settings → Decision rules). Its options are `keep` or `use_persona` with a `persona` id,
+and its `onError` must be a `keep` option. The hook runs on a person's own message (a Slack or
+web message, or a turn a person submits through the API; not cron, webhook, ambient, bot,
+subagent or session-to-session turns) in a conversation that has no persona of its own and no
+pinned one; its state is the surface, the conversation kind
+(`dm`, `group` or `channel`) and the message, so "only in DMs" and which personas exist are part
+of the rule's question and options. When the enforcing rule picks a persona the sender holds a
+role on, the conversation keeps it, the turn wears it, and that turn's context names the rule and
+how to switch. If the sender has no role on it or it no longer exists, the turn goes on without
+one and its `## Personas` block says which rule picked what. Dropping a routed persona
+(`personaId: null`) returns the conversation to routing, so a later message the rule judges
+addressed to a persona routes it again; a message it isn't keeps the conversation as it is.
+Example:
+
+```json
+{
+  "id": "route-research",
+  "hook": "persona",
+  "question": "Is this direct message addressed to the Research persona, by name or as a research request?",
+  "options": {
+    "keep": { "description": "Not a DM, or not for Research", "action": "keep" },
+    "research": { "description": "A DM for Research", "action": "use_persona", "persona": "<persona id>" }
+  },
+  "model": { "provider": "gateway", "model": "<decision model>" },
+  "mode": "enforce",
+  "onError": "keep"
+}
+```
 
 A cron set up in a conversation with a persona fires as that persona: when it fires, the
 scheduler looks up the persona of the cron's home conversation and the fire's turn wears it

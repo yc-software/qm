@@ -29,6 +29,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "memory-brain-drop-test-secret".repeat(2);
 const BRAIN = {
@@ -71,6 +72,7 @@ async function setup(
     auditLog: built.auditLog,
     admin: built.admin,
     memoryRegistry: registry,
+    runs: liveRunStore(),
     ...browserSessionDeps,
     ...(opts.fireDropResolution ? { fireDropResolution: opts.fireDropResolution } : {}),
   });
@@ -141,7 +143,7 @@ async function setup(
       {
         actorId,
         scopeId: scopeId("personal", actorId),
-        liveActor: true,
+        ...liveRunClaims(actorId),
         exp: Date.now() + CAPABILITY_TTL_MS,
         ...extra,
       },
@@ -317,6 +319,7 @@ test("a member connects their own brain from chat and sets its secret through th
   assert.equal((await fetch(`${base}/v1/memory/brain`)).status, 401);
   assert.equal((await self("U-member", "PUT", own, { triggered: true })).status, 403);
   assert.equal((await self("U-member", "PUT", own, { liveActor: false })).status, 403);
+  assert.equal(JSON.parse((await self("U-member", "PUT", own, { runId: "finished-run" })).text).error, "inactive_run");
 
   const put = await self("U-member", "PUT", own);
   assert.equal(put.status, 200);

@@ -16,6 +16,7 @@ import type { Loop, ShipGrant } from "../src/loops/types.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -74,7 +75,7 @@ async function call(
         ? {
             actorId: actor,
             scopeId: scopeId("personal", actor),
-            ...(liveActor ? { liveActor: true } : {}),
+            ...(liveActor ? liveRunClaims(actor) : {}),
             ...(botActor ? { botActor: true } : {}),
             ...(triggered ? { triggered: true } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
@@ -87,7 +88,7 @@ async function call(
         loops.map((loop) => loop.owner === actor || managesScope),
       samePerson: async (a: string, b: string) => a === b,
     },
-    deps: { loops: deps, admin: { adminStatusOf: async () => ({ isAdmin }) } },
+    deps: { loops: deps, runs: liveRunStore(), admin: { adminStatusOf: async () => ({ isAdmin }) } },
   } as unknown as ApiCtx;
   await found.route.handle(ctx);
   return out;

@@ -47,7 +47,7 @@ test("Pi and MCP security overrides are materialized by the root lockfile", () =
 
   assert.deepEqual(lockedVersions(packages, "brace-expansion"), ["5.0.12"]);
   assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.9", "4.2.3"]);
-  assert.deepEqual(lockedVersions(packages, "hono"), ["4.13.13"]);
+  assert.deepEqual(lockedVersions(packages, "hono"), ["4.13.18"]);
   assert.deepEqual(lockedVersions(packages, "protobufjs"), ["7.6.5"]);
   assert.deepEqual(lockedVersions(packages, "undici"), ["8.12.3"]);
   assert.equal(

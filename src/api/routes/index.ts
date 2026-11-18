@@ -11,8 +11,8 @@ import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
-import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
-import { deploymentSharingRoutes } from "./deployment-sharing.ts";
+import { appRawRoutes, appRoutes } from "./apps.ts";
+import { appSharingRoutes } from "./app-sharing.ts";
 import { blobRoutes, browserUploadRoutes } from "./blobs.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
@@ -47,7 +47,7 @@ import { contextPolicyRoutes } from "./context-policy.ts";
 import { deploymentLayerRoutes } from "./deployment-layer.ts";
 import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
-import { partnerChatEventRawRoutes } from "./partner-chat-events.ts";
+import { genericChatEventRawRoutes } from "./generic-chat-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
 import { inboxRoutes } from "./inbox.ts";
 import { loopItemRoutes } from "./loop-items.ts";
@@ -93,11 +93,11 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     },
   },
   ...slackEventRawRoutes,
-  ...partnerChatEventRawRoutes,
+  ...genericChatEventRawRoutes,
   { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
-  ...deploymentRawRoutes,
+  ...appRawRoutes,
   ...blobRoutes,
   ...webhookRawRoutes,
   ...loopIngressRawRoutes,
@@ -158,8 +158,8 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...environmentRoutes,
   ...emojiRoutes,
   ...inboxRoutes,
-  ...deploymentRoutes,
-  ...deploymentSharingRoutes,
+  ...appRoutes,
+  ...appSharingRoutes,
   ...egressAuditRoutes,
   ...authBrokerRoutes,
   ...userModelAuthRoutes,

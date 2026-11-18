@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { assignedGoal, createGoalRecord } from "../src/agent/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const goal = { objective: "Survey every archive for the lane", floor: { minMs: 3_600_000 }, token_cap: 2_000_000 };
 
@@ -14,8 +15,8 @@ test("a spawn goal reaches the worker turn without the swarm turn deadline", asy
   const message = (await f.store.get(f.root.id))!.messages[0]!;
   assert.deepEqual(run.request.swarmGoal, { ...goal, assignedAt: message.createdAt });
   assert.equal(run.request.turnWallClockMs, undefined);
-  assert.ok(await f.service.binding({ ...run.request, runId: run.id }));
-  await assert.rejects(f.service.binding({ ...run.request, runId: run.id, turnWallClockMs: 600_000 }));
+  assert.ok(await f.service.binding(testTenant, { ...run.request, runId: run.id }));
+  await assert.rejects(f.service.binding(testTenant, { ...run.request, runId: run.id, turnWallClockMs: 600_000 }));
 });
 
 test("goals are validated, and any member can give any worker, itself included, a goal that wakes it", async () => {
@@ -122,7 +123,7 @@ test("a running goal turn takes its worker's queued messages once, under its lea
   await f.runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" });
   const straggler = (await f.runs.claimById(noteRun.id, "late-worker", 60_000))!;
   await assert.rejects(
-    f.service.binding({ ...straggler.request, runId: straggler.id }),
+    f.service.binding(testTenant, { ...straggler.request, runId: straggler.id }),
     /already handed/,
     "a run that could not be withdrawn still never replays a handed message",
   );

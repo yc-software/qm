@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { entitledScopes } from "../src/resolution/context-filter.ts";
+import { entitledScopes as entitledScopesFor } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+const entitledScopes = entitledScopesFor(false);
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";

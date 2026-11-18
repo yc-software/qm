@@ -116,17 +116,19 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   };
   const resolvedCredential = (materialized: MaterializedCred, writeback: boolean) => {
     if (materialized.kind === "env") return { env: materialized.env };
+    const live = liveAuthorTurn ? { live: true } : {};
     return {
       env: [],
       files: {
         files: materialized.files,
-        save: (files: CredentialFile[]) => deps.keychain!.updateFiles({ ...materialized, writeback }, files),
+        save: (files: CredentialFile[]) => deps.keychain!.updateFiles({ ...materialized, writeback, ...live }, files),
         source: {
           credentialId: materialized.credentialId,
           ownerId: materialized.ownerId,
           service: materialized.service,
           ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
           writeback,
+          ...live,
         },
       },
     };
@@ -460,14 +462,14 @@ export async function loadServiceCredentialGrants(turn: {
           conversation.audience,
           scopeId,
           resolution.orgScopeId,
-          entitledScopes,
+          entitledScopes(false),
         )
       ).map((g) => parseRef(g.ref).id),
     );
   const orgWideAudience =
     conversation.audience.length > 0 &&
     conversation.audience.every((p) =>
-      principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
+      principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId, false),
     );
   const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
     const granted = await aclGrantedServiceCredSlugs();

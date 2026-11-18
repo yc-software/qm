@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
 import { createMicrovmApi, vmFetch } from "../src/sandbox/aws-microvm-api.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp, AppVersion } from "../src/deploy/deploy-store.ts";
 import { swallow } from "../src/util/errors.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
@@ -25,7 +25,7 @@ const api = createMicrovmApi({ region, ...(awsDeploy.profile ? { profile: awsDep
 const store = smokeMap<StoredDeployBody>("aws_deploy");
 const provider = createAwsDeployProvider({ advisoryLock: createNoopAdvisoryLock(), ...awsDeploy, store });
 
-function makeVersion(v: number): DeploymentVersion {
+function makeVersion(v: number): AppVersion {
   const snapshotDir = mkdtempSync(join(tmpdir(), `aws-deploy-app-v${v}-`));
   writeFileSync(
     join(snapshotDir, "server.js"),
@@ -40,7 +40,7 @@ function makeVersion(v: number): DeploymentVersion {
   return { version: v, createdAt: 0, entrypoint: "node server.js", snapshotDir, homeDir, env: { SMOKE: "1" } };
 }
 
-const d: Deployment = {
+const d: PublishedApp = {
   id: randomUUID(),
   ownerScopeId: scopeId("personal", `smoke-${randomUUID().slice(0, 8)}`),
   createdBy: "smoke",

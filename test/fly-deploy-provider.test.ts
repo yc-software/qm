@@ -12,7 +12,7 @@ import {
   type FlyMachineConfig,
 } from "../src/deploy/fly-deploy-provider.ts";
 import { parseTar } from "../src/sandbox/tar.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp, AppVersion } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -198,7 +198,7 @@ function provider(fetchImpl: typeof fetch, extra: Partial<FlyDeployProviderOptio
   });
 }
 
-function deployment(id: string): Deployment {
+function publishedApp(id: string): PublishedApp {
   return {
     id,
     ownerScopeId: scopeId("personal", "U1"),
@@ -220,7 +220,7 @@ function snapshot(files: Record<string, string | Uint8Array>): string {
   return dir;
 }
 
-function version(snapshotDir: string, over: Partial<DeploymentVersion> = {}): DeploymentVersion {
+function version(snapshotDir: string, over: Partial<AppVersion> = {}): AppVersion {
   return { version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir, env: { API_KEY: "secret" }, ...over };
 }
 
@@ -236,7 +236,7 @@ const machineCreate = (
 test("apply: creates an isolated Fly app, injects the snapshot, and returns private Flycast ingress", async () => {
   const { fetchImpl, calls } = fakeFly();
   const endpoint = await provider(fetchImpl).apply(
-    deployment(ID),
+    publishedApp(ID),
     version(snapshot({ "index.html": "<h1>hi</h1>", "lib/util.js": "export const x = 1;" })),
   );
 
@@ -282,9 +282,9 @@ test("apply: creates an isolated Fly app, injects the snapshot, and returns priv
   assert.equal(unpacked.find((f) => f.path === "index.html")!.data.toString("utf8"), "<h1>hi</h1>");
 });
 
-test("apply: keeps an always-on deployment running under Fly managed lifecycle", async () => {
+test("apply: keeps an always-on app running under Fly managed lifecycle", async () => {
   const { fetchImpl, calls } = fakeFly();
-  await provider(fetchImpl).apply({ ...deployment(ID), alwaysOn: true }, version(snapshot({ "server.js": "" })));
+  await provider(fetchImpl).apply({ ...publishedApp(ID), alwaysOn: true }, version(snapshot({ "server.js": "" })));
   const { config } = machineCreate(calls);
   assert.equal(config.services[0]!.min_machines_running, 1);
   assert.equal(config.services[0]!.autostart, true);
@@ -293,7 +293,7 @@ test("apply: keeps an always-on deployment running under Fly managed lifecycle",
 test("apply: refuses a pre-existing public IP before creating a machine", async () => {
   const unsafe = fakeFly({ existingApp: OWNED_APP, ips: ["2a09:8280:1::1"] });
   await assert.rejects(
-    provider(unsafe.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    provider(unsafe.fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
     /public IP assignment; refusing to expose/,
   );
   assert.ok(!unsafe.calls.some((c) => c.path.endsWith("/machines")), "an unsafe app never gets a machine");
@@ -306,7 +306,7 @@ test("apply: an app created concurrently is reused whatever the create failure s
     { createAppStatus: 500, createAppBody: '{"error":"internal"}' },
   ]) {
     const { fetchImpl, calls } = fakeFly({ ...over, racingApp: OWNED_APP });
-    const endpoint = await provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" })));
+    const endpoint = await provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" })));
     assert.deepEqual(endpoint, { host: `${APP}.flycast`, port: 8080 });
     assert.ok(calls.some((c) => c.method === "POST" && c.path === "/v1/apps"));
   }
@@ -319,7 +319,7 @@ test("apply: a name conflict is reused only when its organization and isolated n
   ]) {
     const { fetchImpl, calls } = fakeFly({ createAppStatus: 422, racingApp });
     await assert.rejects(
-      provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
       /not the isolated app owned by this deployment/,
     );
     assert.ok(!calls.some((c) => c.path.endsWith("/machines")));
@@ -333,7 +333,7 @@ test("apply: a rejected app creation still surfaces", async () => {
   ] as const) {
     const { fetchImpl } = fakeFly({ createAppStatus: status, createAppBody: body });
     await assert.rejects(
-      provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
       new RegExp(`create app .*http ${status}`),
     );
   }
@@ -342,7 +342,7 @@ test("apply: a rejected app creation still surfaces", async () => {
 test("apply: a failed create whose app cannot be re-read reports the create failure", async () => {
   const { fetchImpl } = fakeFly({ createAppStatus: 500, createAppBody: '{"error":"boom"}', rereadAppStatus: 503 });
   await assert.rejects(
-    provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
     (e: Error) => {
       assert.match(e.message, /create app .*http 500.*boom/);
       assert.match(String((e.cause as Error).message), /read app .*http 503/);
@@ -353,7 +353,7 @@ test("apply: a failed create whose app cannot be re-read reports the create fail
 
 test("apply: the previous version stays up until its healthy replacement is ready", async () => {
   const { fetchImpl, calls, machines } = fakeFly({ existingMachines: ["machine-old"] });
-  await provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" })));
+  await provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" })));
 
   const destroyIndex = calls.findIndex((c) => c.method === "DELETE" && c.path.endsWith("/machines/machine-old"));
   const createIndex = calls.findIndex((c) => c.method === "POST" && c.path.endsWith("/machines"));
@@ -370,7 +370,7 @@ test("apply: a failed stale cleanup leaves the old machine cordoned, never mixed
   const logged = console.warn;
   console.warn = () => {};
   try {
-    await provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" })));
+    await provider(fake.fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" })));
   } finally {
     console.warn = logged;
   }
@@ -382,7 +382,7 @@ test("apply: a failed cutover restores the old route and removes the replacement
   for (const status of [404, 500]) {
     const fake = fakeFly({ existingMachines: ["machine-old"], uncordonStatus: status });
     await assert.rejects(
-      provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      provider(fake.fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
       new RegExp(`uncordon machine machine-1.*http ${status}`),
     );
     assert.deepEqual([...fake.machines.keys()], ["machine-old"]);
@@ -393,7 +393,7 @@ test("apply: a failed cutover restores the old route and removes the replacement
 test("apply: rollback restores an old route when the cordon response is lost", async () => {
   const fake = fakeFly({ existingMachines: ["machine-old"], cordonFailsAfterApply: true });
   await assert.rejects(
-    provider(fake.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    provider(fake.fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
     /connection lost after cordon/,
   );
   assert.deepEqual([...fake.machines.keys()], ["machine-old"]);
@@ -403,7 +403,7 @@ test("apply: rollback restores an old route when the cordon response is lost", a
 test("apply: an app bundle over the machine-file cap is refused with its actual and maximum size", async () => {
   const { fetchImpl, calls } = fakeFly();
   const big = snapshot({ "blob.bin": randomBytes(1_800_000) });
-  await assert.rejects(provider(fetchImpl).apply(deployment(ID), version(big)), (e: Error) => {
+  await assert.rejects(provider(fetchImpl).apply(publishedApp(ID), version(big)), (e: Error) => {
     assert.match(e.message, /app bundle is too large for the Fly deploy provider/);
     assert.match(e.message, /maximum 2000000 bytes/);
     assert.match(e.message, /^the app bundle is too large for the Fly deploy provider: \d{7,} bytes/);
@@ -415,7 +415,7 @@ test("apply: an app bundle over the machine-file cap is refused with its actual 
 test("apply: a machine that never starts reports its last state", async () => {
   const { fetchImpl, machines } = fakeFly({ existingMachines: ["machine-old"], states: ["created"] });
   await assert.rejects(
-    provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
     /never reached state "started" within 0s \(last state: created\)/,
   );
   assert.deepEqual(
@@ -432,7 +432,7 @@ test("apply: an entrypoint that exits without binding the port reports why, with
     events: [{ request: { exit_event: { exit_code: 127, oom_killed: false } } }],
   });
   await assert.rejects(
-    provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
     /entrypoint exited without binding port 8080 \(fly machine machine-1 is stopped\).*exit code 127/s,
   );
 });
@@ -445,7 +445,7 @@ test("apply: an app that only answers 5xx fails publish and reports its output",
   });
   await assert.rejects(
     provider(fetchImpl, { onError: (e) => reported.push(e) }).apply(
-      deployment(ID),
+      publishedApp(ID),
       version(snapshot({ "server.js": "" })),
     ),
     /answered HTTP 500 on \/ .*database unreachable/s,
@@ -463,7 +463,7 @@ test("a visit finds a Fly app with no supervisor, reports it and asks for a rela
     existingMachines: ["machine-live"],
     exec: (script) => (script.includes(".reported") ? { exit_code: 99, stdout: "down\nfatal: out of widgets" } : {}),
   });
-  const d = { ...deployment(ID), endpoint: { host: `${APP}.flycast`, port: 8080 } };
+  const d = { ...publishedApp(ID), endpoint: { host: `${APP}.flycast`, port: 8080 } };
   const deploy = provider(fetchImpl, { onError: (e) => reported.push(e) });
   assert.equal(await deploy.resolveEndpoint!(d, version(snapshot({}))), null);
   assert.equal(reported[0]!.code, "app_down");
@@ -473,14 +473,14 @@ test("a visit finds a Fly app with no supervisor, reports it and asks for a rela
 test("apply: an app that stays up but never passes its service check reports the readiness window", async () => {
   const { fetchImpl } = fakeFly({ checkStates: ["critical"] });
   await assert.rejects(
-    provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    provider(fetchImpl).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
     /never listened on port 8080 within 0s; the machine reported no exit event/,
   );
 });
 
 test("destroy: deletes the whole Fly app and tolerates one that is already gone", async () => {
   const { fetchImpl, calls } = fakeFly({ existingApp: OWNED_APP });
-  await provider(fetchImpl).destroy(deployment(ID));
+  await provider(fetchImpl).destroy(publishedApp(ID));
   assert.deepEqual(
     calls.map((c) => `${c.method} ${c.path}`),
     [`GET /v1/apps/${APP}`, `GET /v1/apps/${APP}/volumes`, `DELETE /v1/apps/${APP}`],
@@ -488,16 +488,16 @@ test("destroy: deletes the whole Fly app and tolerates one that is already gone"
   assert.equal(calls.at(-1)!.query, "?force=true");
 
   const gone = fakeFly({ deleteAppStatus: 404 });
-  await provider(gone.fetchImpl).destroy(deployment(ID));
+  await provider(gone.fetchImpl).destroy(publishedApp(ID));
 });
 
 test("destroy: refuses a mismatched app and surfaces a failed deletion", async () => {
   const mismatched = fakeFly({ existingApp: { ...OWNED_APP, network: "default" } });
-  await assert.rejects(provider(mismatched.fetchImpl).destroy(deployment(ID)), /not the isolated app owned/);
+  await assert.rejects(provider(mismatched.fetchImpl).destroy(publishedApp(ID)), /not the isolated app owned/);
   assert.ok(!mismatched.calls.some((c) => c.method === "DELETE"));
 
   const { fetchImpl } = fakeFly({ existingApp: OWNED_APP, deleteAppStatus: 500 });
-  await assert.rejects(provider(fetchImpl).destroy(deployment(ID)), /delete app .*http 500/);
+  await assert.rejects(provider(fetchImpl).destroy(publishedApp(ID)), /delete app .*http 500/);
 });
 
 test("profile: shared Flycast manages suspension while existing standalone apps retain idle cleanup", () => {
@@ -519,10 +519,10 @@ test("missing fly configuration fails at the point of use with the env var that 
   ];
   for (const [over, expected] of missing) {
     await assert.rejects(
-      provider(fetchImpl, over).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      provider(fetchImpl, over).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
       expected,
     );
-    await assert.rejects(provider(fetchImpl, over).destroy(deployment(ID)), expected);
+    await assert.rejects(provider(fetchImpl, over).destroy(publishedApp(ID)), expected);
   }
   assert.deepEqual(calls, [], "a misconfigured provider never reaches Fly");
 });
@@ -531,7 +531,7 @@ test("an invalid app prefix fails before reaching Fly", async () => {
   const { fetchImpl, calls } = fakeFly();
   for (const appPrefix of ["Bad_Prefix", "a".repeat(27)]) {
     await assert.rejects(
-      provider(fetchImpl, { appPrefix }).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      provider(fetchImpl, { appPrefix }).apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
       /FLY_DEPLOY_APP_PREFIX must be a lowercase DNS label no longer than 26 characters/,
     );
   }
@@ -541,7 +541,7 @@ test("an invalid app prefix fails before reaching Fly", async () => {
 test("durable apply retains one volume across updates, rollback, archive and recreation", async () => {
   const fake = fakeFly();
   const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1, appReadyTimeoutMs: 10 });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   const first = version(snapshot({ "server.js": "first" }));
   await deploy.apply(d, first);
   const original = structuredClone(fake.configs.get("machine-1")!);
@@ -573,7 +573,7 @@ test("durable apply refuses to replace an existing ephemeral machine", async () 
   const fake = fakeFly({ existingMachines: ["old"] });
   await assert.rejects(
     provider(fake.fetchImpl, { dataVolumeSizeGb: 1 }).apply(
-      deployment(ID),
+      publishedApp(ID),
       version(snapshot({ "server.js": "first" })),
     ),
     /explicit migration/,
@@ -585,7 +585,7 @@ test("durable apply refuses to replace an existing ephemeral machine", async () 
 test("durable retry restores routing after an accepted create loses its response", async () => {
   const fake = fakeFly({ loseFirstCreateResponse: true });
   const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1 });
-  const d = deployment(ID),
+  const d = publishedApp(ID),
     v = version(snapshot({ "server.js": "app" }));
   await assert.rejects(deploy.apply(d, v), /create response lost/);
   assert.equal(fake.cordoned.has("machine-1"), true);
@@ -596,7 +596,7 @@ test("durable retry restores routing after an accepted create loses its response
 
 test("missing volume configuration cannot downgrade or destroy durable storage", async () => {
   const fake = fakeFly();
-  const d = deployment(ID),
+  const d = publishedApp(ID),
     v = version(snapshot({ "server.js": "app" }));
   await provider(fake.fetchImpl, { dataVolumeSizeGb: 1 }).apply(d, v);
   const missing = provider(fake.fetchImpl);
@@ -614,7 +614,7 @@ test("durable rollback uses the accepted configuration after a provider restart"
   const fake = fakeFly();
   const configStore = testMap<FlyMachineConfig>();
   const opts = { dataVolumeSizeGb: 1, configStore, appReadyTimeoutMs: 10 };
-  const d = deployment(ID),
+  const d = publishedApp(ID),
     good = version(snapshot({ "server.js": "good" }));
   await provider(fake.fetchImpl, opts).apply(d, good);
   const accepted = structuredClone(fake.configs.get("machine-1")!);
@@ -630,7 +630,7 @@ test("durable rollback uses the accepted configuration after a provider restart"
 test("always-on toggles update an existing machine without replacing its data", async () => {
   const fake = fakeFly();
   const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1 });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await deploy.apply(d, version(snapshot({ "server.js": "app" })));
   for (const alwaysOn of [true, false]) {
     await deploy.setAlwaysOn!(d, alwaysOn);
@@ -643,7 +643,7 @@ test("always-on toggles update an existing machine without replacing its data", 
 test("always-on toggles preserve the latest ephemeral publication after a prior toggle", async () => {
   const fake = fakeFly();
   const deploy = provider(fake.fetchImpl);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await deploy.apply(d, version(snapshot({ "server.js": "first" })));
   await deploy.setAlwaysOn!(d, true);
   await deploy.apply({ ...d, alwaysOn: true }, version(snapshot({ "server.js": "second" }), { version: 2 }));
@@ -658,7 +658,7 @@ test("always-on toggles preserve the latest ephemeral publication after a prior 
 test("an update that leaves the machine stopped explicitly starts it", async () => {
   const fake = fakeFly({ updateLeavesStopped: true });
   const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1 });
-  const d = deployment(ID),
+  const d = publishedApp(ID),
     v = version(snapshot({ "server.js": "app" }));
   await deploy.apply(d, v);
   await deploy.setAlwaysOn!(d, true);
@@ -675,7 +675,7 @@ test("configuration-store failure rolls back an updated machine", async () => {
     await put(id, value);
   };
   const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1, configStore });
-  const d = deployment(ID),
+  const d = publishedApp(ID),
     v = version(snapshot({ "server.js": "first" }));
   await deploy.apply(d, v);
   const accepted = structuredClone(fake.configs.get("machine-1"));
@@ -687,7 +687,7 @@ test("configuration-store failure rolls back an updated machine", async () => {
 test("always-on uses the accepted configuration after an interrupted update", async () => {
   const fake = fakeFly();
   const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1 });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await deploy.apply(d, version(snapshot({ "server.js": "good" })));
   const accepted = structuredClone(fake.configs.get("machine-1")!);
   fake.configs.set("machine-1", { ...accepted, env: { BROKEN: "1" } });
@@ -695,7 +695,7 @@ test("always-on uses the accepted configuration after an interrupted update", as
   assert.deepEqual(fake.configs.get("machine-1")!.env, accepted.env);
 });
 
-test("shared app updates and archives only the owning deployment", async () => {
+test("shared app updates and archives only the owning app", async () => {
   const fake = fakeFly({
     existingApp: { name: "company-app", network: "company-app", organization: { slug: ORG } },
     ips: ["fdaa:1:2:3::1"],
@@ -704,8 +704,8 @@ test("shared app updates and archives only the owning deployment", async () => {
   const configStore = testMap<FlyMachineConfig>();
   const options = { sharedAppName: "company-app", portStore, configStore, dataVolumeSizeGb: 1 };
   const deploy = provider(fake.fetchImpl, options);
-  const a = deployment(ID),
-    b = deployment("other-deployment");
+  const a = publishedApp(ID),
+    b = publishedApp("other-deployment");
   const v = version(snapshot({ "server.js": "good" }));
   const ea = await deploy.apply(a, v),
     eb = await deploy.apply(b, v);
@@ -731,7 +731,7 @@ test("shared app refuses missing durable port ownership before API calls", async
   const fake = fakeFly();
   await assert.rejects(
     provider(fake.fetchImpl, { sharedAppName: "company-app", dataVolumeSizeGb: 1 }).apply(
-      deployment(ID),
+      publishedApp(ID),
       version(snapshot({})),
     ),
     /persistent port assignments/,
@@ -753,7 +753,7 @@ test("shared ports preserve an existing owner's claim and survive provider recre
     configStore: testMap<FlyMachineConfig>(),
     dataVolumeSizeGb: 1,
   };
-  const d = deployment(ID),
+  const d = publishedApp(ID),
     v = version(snapshot({ "server.js": "good" }));
   const endpoint = await provider(fake.fetchImpl, options).apply(d, v);
   assert.notEqual(endpoint.port, first);
@@ -772,7 +772,7 @@ test("shared publishing requires pre-provisioned app and ingress without creatin
       portStore: testMap<string>(),
       dataVolumeSizeGb: 1,
     });
-    await assert.rejects(deploy.apply(deployment(ID), version(snapshot({}))), /provisioned before publishing/);
+    await assert.rejects(deploy.apply(publishedApp(ID), version(snapshot({}))), /provisioned before publishing/);
     assert.equal(
       fake.calls.some((call) => call.method === "POST"),
       false,
@@ -791,7 +791,7 @@ test("private transport is restored when resolving a persisted endpoint", async 
       },
     },
   });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   const endpoint = await deploy.apply(d, version(snapshot({ "server.js": "app" })));
   assert.equal(endpoint.socksProxyPort, 18096);
   assert.deepEqual(await deploy.resolveEndpoint!({ ...d, endpoint }, version(snapshot({}))), endpoint);
@@ -840,7 +840,7 @@ test("shared publishing rejects missing or permissive ingress isolation before c
       dataVolumeSizeGb: 1,
     });
     await assert.rejects(
-      deploy.apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      deploy.apply(publishedApp(ID), version(snapshot({ "index.html": "hi" }))),
       /requires.*(private network|ingress restricted)/,
     );
     assert.ok(fake.calls.every((call) => call.method === "GET"));

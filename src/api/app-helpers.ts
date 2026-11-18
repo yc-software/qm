@@ -35,10 +35,11 @@ import {
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
-import type { Deployment } from "../deploy/deploy-store.ts";
+import type { PublishedApp } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { sessionTurnOrigin } from "../core/turn-origin.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import {
   openGroupViaSurface,
   resolveReachTarget,
@@ -59,9 +60,10 @@ import {
 import type { ParticipantScope } from "../sessions/session-store.ts";
 import type { App, AppDeps, ContextSummary, ProjectView, FileListPage } from "./app-types.ts";
 import { toFileItem } from "./app-types.ts";
+import { SLACK } from "../surfaces/registry.ts";
 import { personLabel } from "../identity/person-names.ts";
 
-type DeploymentAccess = Pick<Deployment, "id" | "ownerScopeId" | "createdBy" | "createdInScope">;
+type AppAccess = Pick<PublishedApp, "id" | "ownerScopeId" | "createdBy" | "createdInScope">;
 
 export function createAppHelpers(deps: AppDeps, app: App) {
   const adminBase = deps.publicWebUrl?.replace(/\/$/, "");
@@ -78,11 +80,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     resolveRecipient: (q) => deps.directory.resolve(q),
     resolveChannel: (q) => deps.directory.resolveChannel(q),
     channelMember: (c, p) => deps.directory.channelMember(c, p),
-    resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts),
+    resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, SLACK),
     groupMember: (g, p) => deps.directory.groupMember(g, p),
     directoryMember: (p) => deps.directory.get(p),
-    openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull("slack", query), parts),
-    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts),
+    openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull(SLACK, query), parts),
+    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts, SLACK),
   };
   const resolveReachTargetFor = (
     target: ReachTarget,
@@ -414,10 +416,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function filesForViewer(
     tenant: Tenant,
     principalId: string,
+    ownScopeBotWork: boolean,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
   ): Promise<FileListPage> {
-    const myScopes = await currentResourceScopesForViewer(principalId);
+    const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
     const handles = await deps.acl.handlesFor(tenant, myScopes);
     const page = await deps.files.listDocuments(
       myScopes,
@@ -434,7 +437,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     };
   }
 
-  async function currentResourceScopesForViewer(principalId: string): Promise<ScopeId[]> {
+  async function currentResourceScopesForViewer(principalId: string, ownScopeBotWork: boolean): Promise<ScopeId[]> {
     const actor = deps.identity?.classify(principalId);
     if (actor && !deps.identity?.isInternal(actor)) return [];
     const scopes = new Set<ScopeId>([
@@ -461,7 +464,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     } catch (error) {
       swallow("app: current resource scopes for viewer", error);
     }
-    return [...scopes];
+    return [...scopes].filter((scope) => loadsScopeContext(principalId, scope, ownScopeBotWork));
   }
 
   async function canUseContext(principalId: string, targetScope: ScopeId): Promise<boolean> {
@@ -498,8 +501,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       return publicChannel ? canAccessCurrentScope(principalId, targetScope) : canWriteScope(principalId, targetScope);
     }
 
-    async function deploymentPermission(
-      d: DeploymentAccess,
+    async function appPermission(
+      d: AppAccess,
       principalId: string,
       grantsOf: () => Promise<readonly Grant[]>,
     ): Promise<"read" | "write" | null> {
@@ -526,7 +529,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       managesArtifactHome,
       canAccessCurrentScope,
       canUseWriteGrant,
-      deploymentPermission,
+      appPermission,
     };
   }
 
@@ -614,7 +617,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (r.kind === "skill") return (await deps.skills.get(r.id))?.createdBy;
     if (r.kind === "cron") return (await deps.crons.get(r.id))?.createdBy;
     if (r.kind === "deploy") {
-      const d = await deps.deploy.getDeployment(r.id);
+      const d = await deps.deploy.getApp(r.id);
       return d?.id === r.id ? d.createdBy : undefined;
     }
     if (r.kind === "file") return (await deps.files.resolveByIds([{ ownerScopeId, id: r.id }]))[0]?.createdBy;
@@ -629,8 +632,15 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     recordErrorInBinding(deps.errors, e, error);
   }
 
-  function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {
-    return principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId);
+  async function canManageSkill(
+    skill: Pick<Skill, "scopeId" | "createdBy">,
+    principalId: string,
+    botWork: boolean,
+  ): Promise<boolean> {
+    return (
+      loadsScopeContext(principalId, skill.scopeId, botWork) &&
+      principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)
+    );
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
@@ -675,7 +685,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return best;
   }
 
-  async function effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null> {
+  async function effectiveAppPermission(d: PublishedApp, principalId: string): Promise<Permission | null> {
     if (!principalId || deps.identity.deactivationSource?.(principalId) === "manual") return null;
     if (await principalCanWriteScope(principalId, d.ownerScopeId)) return "write";
     const granted = await artifactGrantPermission(d.ownerScopeId, encodeRef(deployRef(d.id)), principalId);
@@ -683,37 +693,37 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
   }
 
-  async function principalCanReadDeployment(d: Deployment, principalId: string): Promise<boolean> {
-    return (await effectiveDeploymentPermission(d, principalId)) != null;
+  async function principalCanReadApp(d: PublishedApp, principalId: string): Promise<boolean> {
+    return (await effectiveAppPermission(d, principalId)) != null;
   }
 
-  const deploymentResource = (d: DeploymentAccess) => ({
+  const appResource = (d: AppAccess) => ({
     ownerScopeId: d.ownerScopeId,
     ref: encodeRef(deployRef(d.id)),
   });
   const resourceKey = (r: { ownerScopeId: ScopeId; ref: string }) => `${r.ownerScopeId}\n${r.ref}`;
 
-  async function deploymentGrants(tenant: Tenant, deployments: readonly DeploymentAccess[]): Promise<readonly Grant[]> {
+  async function appGrants(tenant: Tenant, publishedApps: readonly AppAccess[]): Promise<readonly Grant[]> {
     return (
       (await deps.acl
-        ?.find(tenant, { resources: deployments.map(deploymentResource) })
-        .catch(swallowAs("deployment permissions: grants", []))) ?? []
+        ?.find(tenant, { resources: publishedApps.map(appResource) })
+        .catch(swallowAs("app permissions: grants", []))) ?? []
     );
   }
 
-  function principalGitPermission(d: DeploymentAccess, principalId: string): Promise<"read" | "write" | null> {
-    return live.deploymentPermission(d, principalId, () => deploymentGrants(ambientTenant(), [d]));
+  function principalGitPermission(d: AppAccess, principalId: string): Promise<"read" | "write" | null> {
+    return live.appPermission(d, principalId, () => appGrants(ambientTenant(), [d]));
   }
 
-  async function deploymentPermissions(
+  async function appPermissions(
     tenant: Tenant,
-    deployments: readonly DeploymentAccess[],
+    publishedApps: readonly AppAccess[],
     principalId: string,
   ): Promise<Array<"read" | "write" | null>> {
-    if (!principalId || !deployments.length) return deployments.map(() => null);
-    const grants = await deploymentGrants(tenant, deployments);
+    if (!principalId || !publishedApps.length) return publishedApps.map(() => null);
+    const grants = await appGrants(tenant, publishedApps);
     const scopes = [
-      ...deployments.flatMap((d) => [d.ownerScopeId, ...(d.createdInScope ? [d.createdInScope] : [])]),
+      ...publishedApps.flatMap((d) => [d.ownerScopeId, ...(d.createdInScope ? [d.createdInScope] : [])]),
       ...grants.map((g) => g.granteeScopeId),
     ];
     const rules = scopeRules(
@@ -737,12 +747,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     );
     const byResource = Map.groupBy(grants, resourceKey);
     return Promise.all(
-      deployments.map((d) =>
-        rules.deploymentPermission(
-          d,
-          principalId,
-          async () => byResource.get(resourceKey(deploymentResource(d))) ?? [],
-        ),
+      publishedApps.map((d) =>
+        rules.appPermission(d, principalId, async () => byResource.get(resourceKey(appResource(d))) ?? []),
       ),
     );
   }
@@ -1001,11 +1007,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     artifactAuthor,
     canManageSkill,
     republishIfShared,
-    effectiveDeploymentPermission,
+    effectiveAppPermission,
     artifactGrantPermission,
-    principalCanReadDeployment,
+    principalCanReadApp,
     principalGitPermission,
-    deploymentPermissions,
+    appPermissions,
     refreshSurfaceDirectory,
     reconcileProjectMember,
     syncProjectChannelRoster,

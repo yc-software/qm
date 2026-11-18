@@ -63,6 +63,7 @@ interface Rig {
 
 async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+  liveReplies?: true;
 }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
@@ -85,7 +86,14 @@ async function rig(opts?: {
   const room = await recordContext(
     sessions,
     await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack"),
-    { actor, conversation, surface: "slack", deliveryTarget: "D1", timezone: "America/Los_Angeles" },
+    {
+      actor,
+      conversation,
+      surface: "slack",
+      deliveryTarget: "D1",
+      timezone: "America/Los_Angeles",
+      ...(opts?.liveReplies ? { liveReplies: true } : {}),
+    },
   );
   await sessions.updateTitle(room.id, "dm with alex");
   await sessions.addParticipant(room.id, actor.id);
@@ -98,7 +106,11 @@ async function rig(opts?: {
       actor,
       deliveryTarget: "D1",
       timezone: "America/Los_Angeles",
-    } as Pick<OrchestratorInput, "surface" | "conversation" | "actor" | "deliveryTarget" | "timezone" | "readOnly">,
+      ...(opts?.liveReplies ? { liveReplies: true } : {}),
+    } as Pick<
+      OrchestratorInput,
+      "surface" | "conversation" | "actor" | "deliveryTarget" | "timezone" | "readOnly" | "liveReplies"
+    >,
   });
   return {
     mailbox,
@@ -149,7 +161,7 @@ test("side chats cannot launch subagents until opened as a full session", async 
 });
 
 test("open creates a child session with parent pointer, spawn meta, and a queued task run", async () => {
-  const r = await rig();
+  const r = await rig({ liveReplies: true });
   const out = await r.syscallsFor(r.room).open({ task: "build a personal website for alex", name: "website" });
   assert.ok(out.ok);
   const child = await freshSession(r.sessions, out.sessionId);
@@ -163,6 +175,7 @@ test("open creates a child session with parent pointer, spawn meta, and a queued
   const request = inFlight[0]!.request;
   assert.equal(request.conversation.threadRef, child.threadRef);
   assert.equal(request.deliveryTarget, "D1");
+  assert.equal(request.liveReplies, true);
   assert.match(request.text, /subagent-task/);
   assert.match(request.text, /build a personal website/);
 });
@@ -415,10 +428,12 @@ test("a Slack bot can't reach a person's running subagent or interrupt a person'
     assert.deepEqual(await fromBot.write({ target: target.session.id, text: "drop it", ...mode }), hidden);
   const botTask = await fromBot.open({ task: "summarize the release" });
   assert.ok(botTask.ok);
+  const botRun = (await r.runs.inFlightForThread((await r.sessions.get(botTask.sessionId))!.threadRef))[0]!;
+  assert.ok(await r.runs.claimById(botRun.id, "worker", 60_000));
   const followUp = await r
     .syscallsFor(r.room)
     .write({ target: botTask.sessionId, wake: true, text: "include the changelog" });
-  assert.ok(followUp.ok);
+  assert.deepEqual(followUp.ok && followUp.delivered, "queued_turn");
   const overPerson = await fromBot.write({ target: botTask.sessionId, interrupt: true, text: "skip it" });
   assert.deepEqual(overPerson, { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" });
   assert.deepEqual(await r.signals.pending(target.run.id), []);
@@ -3469,7 +3484,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   });
   const forTurn = (
     liveTurn: boolean,
-    opts: { readOnly?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
+    opts: { readOnly?: boolean; botActor?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
   ) =>
     factory.forTurn({
       session: room,
@@ -3482,6 +3497,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
         actor,
         origin: { kind: "human" },
         ...(opts.readOnly ? { readOnly: true } : {}),
+        ...(opts.botActor ? { botActor: true } : {}),
       } as Parameters<typeof factory.forTurn>[0]["request"],
     });
   const live = forTurn(true);
@@ -3539,7 +3555,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     await slack.read({ peer: true, target: peer.id }),
   ])
     assert.deepEqual(out, { ok: false, message: "sessions are a web UI feature and aren't available here." });
-  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true })]) {
+  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true }), forTurn(true, { botActor: true })]) {
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }

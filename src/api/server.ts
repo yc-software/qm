@@ -32,7 +32,14 @@ import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
-import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import {
+  armBodyDeadline,
+  PayloadTooLargeError,
+  readRawBody,
+  refuseImpersonated,
+  sendJson,
+  verifyOrReject,
+} from "./http.ts";
 import {
   findRoute,
   run,
@@ -43,7 +50,7 @@ import {
   type Route,
 } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
-import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
+import { proxyAppSubdomain } from "./routes/apps.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
@@ -156,12 +163,12 @@ async function verifyCapability(
     }
   }
   if (capability.deployment !== undefined) {
-    const deployment = await app.getDeployment(capability.deployment);
+    const publishedApp = await app.getApp(capability.deployment);
     if (
-      !deployment ||
-      deployment.id !== capability.deployment ||
-      deployment.status !== "running" ||
-      deployment.createdBy !== capability.actorId
+      !publishedApp ||
+      publishedApp.id !== capability.deployment ||
+      publishedApp.status !== "running" ||
+      publishedApp.createdBy !== capability.actorId
     ) {
       sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
       return null;
@@ -287,7 +294,7 @@ async function gate(
         return null;
       }
       if ((route?.browser === "self" || route?.admin) && signedIn.imp) {
-        sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
+        refuseImpersonated(res);
         return null;
       }
       actor = signedIn;
@@ -570,7 +577,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
     await withRequestContext("core", req, res, () =>
       inRequestTenant(req, res, base, null, async () => {
-        if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
+        if (await proxyAppSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
         sendJson(res, 404, { error: "not_found" });
       }),
     );
@@ -633,7 +640,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     matched: Matched<ApiCtx>,
   ): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
-    if (await proxyDeploymentSubdomain(base)) {
+    if (await proxyAppSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
     }

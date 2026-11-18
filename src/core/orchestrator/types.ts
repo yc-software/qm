@@ -138,7 +138,6 @@ export interface OrchestratorDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
-  sandboxModels?: boolean;
   publicWebUrl?: string;
   webhookPublicUrl?: string;
   deploy: DeployService;
@@ -194,6 +193,7 @@ export interface OrchestratorDeps {
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   replyCheck?: import("../../decisions/hooks.ts").ReplyCheckFactory;
+  routePersona?: import("../../decisions/hooks.ts").PersonaRouter;
   surfaceDebugFooter?: boolean;
 }
 

@@ -1,10 +1,9 @@
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
-import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import type { WornPersona } from "../types.ts";
-import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
+import { emojiNameOf } from "./emoji-map.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -39,7 +38,7 @@ export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined)
 
 function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
   if (icon?.kind === "custom") return icon.name;
-  if (icon?.kind === "emoji") return EMOJI_NAME_BY_CHAR[icon.value.replace(/\uFE0F/g, "")];
+  if (icon?.kind === "emoji") return emojiNameOf(icon.value);
   return undefined;
 }
 
@@ -380,6 +379,13 @@ export function createDeliveryTracker(
   };
 }
 
+export function slackRetryAfterMs(err: unknown): number | undefined {
+  const { code, retryAfter } = (err ?? {}) as { code?: unknown; retryAfter?: unknown };
+  if (code !== "slack_webapi_rate_limited_error") return undefined;
+  const ms = Number(retryAfter) * 1000;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 export async function deliverWithRetry(opts: {
   tracker: DeliveryTracker;
   id: string;
@@ -396,6 +402,7 @@ export async function deliverWithRetry(opts: {
       tracker.markPosted(id, ackBody ?? undefined);
       postedState = tracker.posted(id);
     } catch (err) {
+      if (slackRetryAfterMs(err) !== undefined) throw err;
       opts.onError("post", err, tracker.recordFailure(id));
       return;
     }
@@ -481,10 +488,6 @@ export async function findPostedByKey(
     cursor = page.response_metadata?.next_cursor?.trim() || undefined;
   } while (cursor);
   return undefined;
-}
-
-export function statusPlaceholderKey(runId: string): string {
-  return `status:run:${runId}`;
 }
 
 export function recoveryVerifyOldest(createdAt: number | undefined, editRef: string | undefined): string | undefined {
@@ -574,17 +577,7 @@ export async function postWithVerify(
     } catch (err) {
       lastErr = err;
       const code = (err as { code?: string }).code;
-      if (code === "slack_webapi_platform_error") throw err;
-      if (code === "slack_webapi_rate_limited_error") {
-        const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
-        await sleep(retryAfter * 1000);
-
-        const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(
-          swallowAs("slack: rate-limit verify", null),
-        );
-        if (found) return { ...found, reused: true };
-        continue;
-      }
+      if (code === "slack_webapi_platform_error" || code === "slack_webapi_rate_limited_error") throw err;
       let found: { ts: string; channel: string } | undefined;
       try {
         found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);

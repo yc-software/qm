@@ -1,38 +1,22 @@
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
-import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
+import {
+  MAX_ATTACHMENTS_PER_TURN,
+  processInboundFiles,
+  readOutgoingFiles,
+  responseBytes,
+  type BlobSource,
+  type InboundFile,
+  type ProcessedInbound,
+} from "../surfaces/attachments.ts";
+import type { OutgoingAttachment } from "../types.ts";
 import { swallow } from "../util/errors.ts";
-import { slackFileName } from "./message-gating.ts";
 
-export interface IncomingAttachment {
-  name: string;
-  mimetype: string;
-  sizeBytes: number;
-  blobId: string;
-  sourceId?: string;
-  author?: string;
-}
-
-export interface OutgoingAttachment {
-  name: string;
-  mimetype: string;
-  sizeBytes: number;
-  blobId: string;
-  artifactId?: string;
-  artifactViewerId?: string;
-}
-
-export interface SlackFile {
-  id?: string;
-  name?: string;
-  title?: string;
-  mimetype?: string;
+export interface SlackFile extends InboundFile {
   filetype?: string;
-  size?: number;
   url_private?: string;
   url_private_download?: string;
   mode?: string;
-  user?: string;
 }
 
 async function hydrateSlackFiles(
@@ -53,12 +37,6 @@ async function hydrateSlackFiles(
   );
 }
 
-export const MAX_ATTACHMENT_BYTES = 1_000_000_000;
-
-export function isOversize(file: Pick<SlackFile, "size">): boolean {
-  return typeof file.size === "number" && file.size > MAX_ATTACHMENT_BYTES;
-}
-
 export function isTrustedSlackHost(url: string, extraHost?: string): boolean {
   try {
     const h = new URL(url).hostname.toLowerCase();
@@ -67,30 +45,6 @@ export function isTrustedSlackHost(url: string, extraHost?: string): boolean {
     return false;
   }
 }
-
-export function attachmentFromBytes(
-  file: SlackFile,
-  bytes: Uint8Array,
-  blobId: string,
-  author?: string,
-): IncomingAttachment {
-  const name = slackFileName(file);
-  const mimetype = file.mimetype || "application/octet-stream";
-  return {
-    name,
-    mimetype,
-    sizeBytes: bytes.length,
-    blobId,
-    ...(file.id ? { sourceId: file.id } : {}),
-    ...(author ? { author } : {}),
-  };
-}
-
-export const MAX_ATTACHMENTS_PER_TURN = 10;
-
-const CAP_MB = Math.floor(MAX_ATTACHMENT_BYTES / 1_000_000);
-const capLabel = CAP_MB >= 1000 ? `${Math.round(CAP_MB / 1000)} GB` : `${CAP_MB} MB`;
-const oversizeMsg = (label: string): string => `"${label}" is too large — I can handle files up to ~${capLabel}`;
 
 export interface DownloadOptions {
   token?: string;
@@ -110,56 +64,9 @@ export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions =
     redirect: "manual",
     signal: AbortSignal.timeout(opts.timeoutMs ?? 300_000),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("text/html")) throw new Error("got an HTML page (check files:read scope)");
-  const len = Number(res.headers.get("content-length") ?? "0");
-  if (len > MAX_ATTACHMENT_BYTES) throw new Error("file too large");
-  return new Uint8Array(await res.arrayBuffer());
-}
-
-export interface ProcessedInbound {
-  attachments: IncomingAttachment[];
-  issues: string[];
-}
-
-export async function processInboundFiles(
-  files: readonly SlackFile[],
-  download: (file: SlackFile) => Promise<Uint8Array>,
-  stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
-  resolveAuthor?: (userId: string | undefined) => Promise<string | undefined> | string | undefined,
-): Promise<ProcessedInbound> {
-  const attachments: IncomingAttachment[] = [];
-  const issues: string[] = [];
-  for (const f of files) {
-    const label = f.name || f.title || "that file";
-    if (attachments.length >= MAX_ATTACHMENTS_PER_TURN) {
-      issues.push(`skipped "${label}" — too many files at once (max ${MAX_ATTACHMENTS_PER_TURN})`);
-      continue;
-    }
-    if (isOversize(f)) {
-      issues.push(oversizeMsg(label));
-      continue;
-    }
-    try {
-      const bytes = await download(f);
-      if (bytes.length > MAX_ATTACHMENT_BYTES) {
-        issues.push(oversizeMsg(label));
-        continue;
-      }
-      const { blobId } = await stage(bytes);
-      const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
-      attachments.push(attachmentFromBytes(f, bytes, blobId, author));
-    } catch (err) {
-      swallow(`slack: inbound file "${label}"`, err);
-      const detail =
-        err instanceof BlobTooLargeError
-          ? "that request was too large — try fewer or smaller files"
-          : (err as Error).message;
-      issues.push(`I couldn't read "${label}" — check my file-access permission (files:read) (${detail})`);
-    }
-  }
-  return { attachments, issues };
+  if (res.ok && (res.headers.get("content-type") ?? "").includes("text/html"))
+    throw new Error("got an HTML page (check files:read scope)");
+  return responseBytes(res);
 }
 
 export async function stageSlackFiles(
@@ -182,6 +89,7 @@ export async function stageSlackFiles(
     (bytes) => deps.core.stageBlob(bytes),
     async (userId) =>
       userId ? (await deps.directory.classifyUserCached(client, userId)).actor.displayName : undefined,
+    " — check my file-access permission (files:read)",
   );
 }
 
@@ -204,11 +112,6 @@ async function waitForShareCommit(client: UploadClient, channel: string, fileId:
   return undefined;
 }
 
-interface BlobSource {
-  readBlob(blobId: string): Promise<Buffer>;
-  readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
-}
-
 export async function uploadAttachments(
   client: UploadClient,
   channel: string,
@@ -217,17 +120,7 @@ export async function uploadAttachments(
   blobs: BlobSource,
   opts: { initialComment?: string } = {},
 ): Promise<{ uploaded: boolean; messageTs?: string }> {
-  const fileUploads: Array<{ filename: string; file: Buffer }> = [];
-  for (const a of attachments) {
-    let file: Buffer;
-    try {
-      file = await blobs.readBlob(a.blobId);
-    } catch (err) {
-      if (!a.artifactId || !a.artifactViewerId) throw err;
-      file = await blobs.readFileArtifact(a.artifactId, a.artifactViewerId);
-    }
-    if (file.length > 0) fileUploads.push({ filename: a.name, file });
-  }
+  const fileUploads = (await readOutgoingFiles(attachments, blobs)).map(({ name, file }) => ({ filename: name, file }));
   if (!fileUploads.length) return { uploaded: false };
   const res = await client.files.uploadV2({
     channel_id: channel,

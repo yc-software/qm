@@ -295,10 +295,12 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
         pushes.push(body);
         return true;
       },
-      holdDirectorySync: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+      holdDirectorySync: (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) =>
+        fn(new Promise<void>(() => {})),
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       conversations: { info: async () => ({ channel: undefined }) },
       async *paginate(method: string, args: Record<string, unknown>) {
         if (method === "users.list") {
@@ -347,6 +349,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         listedMethods.push(method);
         if (method === "users.list") {
@@ -384,11 +387,12 @@ describe("the directory crawl when another instance holds the sync lease", () =>
         pushes.push(body);
         return true;
       },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) =>
+      holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) =>
         locked ? null : fn(new Promise<void>(() => {})),
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         if (method === "users.list") {
           yield {
@@ -439,10 +443,12 @@ describe("the directory crawl when another instance holds the sync lease", () =>
         pushes.push(body);
         return refusals-- <= 0;
       },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+      holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) =>
+        fn(new Promise<void>(() => {})),
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         if (method === "users.list") {
           yield {
@@ -489,10 +495,11 @@ describe("the directory crawl when another instance holds the sync lease", () =>
         pushes.push(body);
         return true;
       },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(Promise.resolve()),
+      holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<unknown>) => fn(Promise.resolve()),
     };
     const client = {
       users: { info: async () => ({ user: undefined }) },
+      bots: { info: async () => ({}) },
       async *paginate(method: string) {
         if (method === "users.list") {
           yield { members: [{ id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } }] };
@@ -550,10 +557,10 @@ describe("directory group upsert", () => {
   it("makes a just-opened group resolvable and its members visible at once", async () => {
     const store = createPostgresDirectoryStore(testDatabaseUrl());
     await store.replaceGroups([]);
-    assert.equal((await store.resolveGroupByParticipants(["a", "b"])).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants(["a", "b"], "slack")).kind, "none");
 
-    await store.upsertGroup("C-new", ["a", "b"]);
-    assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"]), { kind: "one", groupId: "C-new" });
+    await store.upsertGroup("C-new", ["a", "b"], "slack");
+    assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"], "slack"), { kind: "one", groupId: "C-new" });
     assert.equal(await store.groupMember("C-new", "a"), true);
     assert.equal(await store.groupMember("C-new", "c"), false);
   });

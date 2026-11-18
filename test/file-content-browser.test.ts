@@ -72,7 +72,7 @@ const app = {
             })(),
           ),
         }
-      : built.app.openFileForViewer(tenant, id, viewer),
+      : built.app.openFileForViewer(tenant, id, viewer, false),
 };
 
 async function frontDoor(t: TestContext, deps: Partial<ServerDeps> = {}): Promise<string> {

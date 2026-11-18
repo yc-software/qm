@@ -7,7 +7,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { attestsInAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
+import { attestsInAudience, attestedPerson, OutsideAudience, type AttestingTurn } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -74,21 +74,21 @@ export interface McpToolDescriptor {
 
 export interface McpToolService {
   toolDefs(): Promise<McpToolDescriptor[]>;
-  toolDefsFor(principalId?: string, audienceScopeId?: ScopeId, actAsActor?: boolean): Promise<McpToolDescriptor[]>;
+  toolDefsFor(principalId?: string, audienceScopeId?: ScopeId, turn?: AttestingTurn): Promise<McpToolDescriptor[]>;
   call(
     name: string,
     args: Record<string, unknown>,
     principalId?: string,
     approval?: string,
     audienceScopeId?: ScopeId,
-    actAsActor?: boolean,
+    turn?: AttestingTurn,
   ): Promise<string>;
   needsApproval(
     name: string,
     args: Record<string, unknown>,
     principalId?: string,
     audienceScopeId?: ScopeId,
-    actAsActor?: boolean,
+    turn?: AttestingTurn,
   ): Promise<boolean>;
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
@@ -98,6 +98,16 @@ export interface McpToolService {
 class SignInRequired extends Error {}
 
 type RemoteTool = NonNullable<McpServer["tools"]>[number];
+type SharedListing = { listing?: McpListing; error?: unknown };
+
+function shared(server: McpServer): boolean {
+  return !server.catalog && server.auth === "none" && !server.attestActor;
+}
+
+function unique(tools: McpToolDescriptor[]): McpToolDescriptor[] {
+  const seen = new Set<string>();
+  return tools.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+}
 
 function catalogDescriptor(server: McpServer): McpToolDescriptor {
   return {
@@ -141,14 +151,25 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
   return `${def.serverId}/${typeof args.tool === "string" ? args.tool : String(args.operation)}`;
 }
 
+function servesTurn(
+  server: McpServer,
+  principalId?: string,
+  audienceScopeId?: ScopeId,
+  turn: AttestingTurn = {},
+): boolean {
+  if (server.attestActor) return attestsInAudience(server.attestAudience, principalId, audienceScopeId, turn);
+  return turn.botActor !== true || server.credentialScope !== "per-user";
+}
+
 function refuseOutsideAudience(
   server: McpServer,
   principalId: string | undefined,
   audienceScopeId: ScopeId | undefined,
-  actAsActor: boolean | undefined,
+  turn: AttestingTurn | undefined,
 ): void {
-  if (server.attestActor && !attestsInAudience(server.attestAudience, principalId, audienceScopeId, actAsActor))
-    throw new OutsideAudience(`MCP server ${server.id}`);
+  if (servesTurn(server, principalId, audienceScopeId, turn)) return;
+  if (server.attestActor) throw new OutsideAudience(`MCP server ${server.id}`);
+  throw new Error(`MCP server ${server.id} acts as the person, so a Slack bot's turn cannot use it`);
 }
 
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
@@ -191,19 +212,35 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
+  const sharedListings = new LRUCache<string, SharedListing, McpServer>({
+    ttl: refreshIntervalMs,
+    ttlAutopurge: true,
+    ttlResolution: 0,
+    ignoreFetchAbort: true,
+    allowStaleOnFetchAbort: true,
+    perf: { now },
+    fetchMethod: async (_url, _stale, { context }) => {
+      try {
+        return { listing: await clientFor(context).listTools({}) };
+      } catch (error) {
+        return { error };
+      }
+    },
+  });
   const tenantState = perTenant<{
     clients: Map<string, { client: McpClient; server: McpServer }>;
     snapshot: McpToolDescriptor[];
     perUserServers: Map<string, McpServer>;
-    attestedServers: Map<string, McpServer>;
+    servers: Map<string, McpServer>;
     catalogs: LRUCache<string, Promise<RemoteTool[]>>;
     loadedAt?: number;
+    version?: string;
     pending?: Promise<void>;
   }>(() => ({
     clients: new Map(),
     snapshot: [],
     perUserServers: new Map(),
-    attestedServers: new Map(),
+    servers: new Map(),
     catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
   }));
 
@@ -321,7 +358,27 @@ export function createMcpToolService(opts: {
     return run;
   }
 
-  async function serverTools(server: McpServer): Promise<McpToolDescriptor[]> {
+  async function listServer(server: McpServer): Promise<McpListing> {
+    if (!shared(server)) return clientFor(server).listTools({ headers: headersFor(server, undefined) });
+    const entry = await sharedListings.fetch(server.url, { context: server });
+    if (!entry?.listing) throw entry?.error ?? new Error("the shared tool listing expired before the server answered");
+    return entry.listing;
+  }
+
+  async function adoptShared(state: ReturnType<typeof tenantState>): Promise<void> {
+    for (const server of state.servers.values()) {
+      if (!shared(server) || state.snapshot.some((t) => t.serverId === server.id)) continue;
+      const listing = sharedListings.get(server.url)?.listing;
+      if (listing?.tools.length) state.snapshot = unique([...state.snapshot, ...(await serverTools(server, []))]);
+      else if (!listing)
+        void sharedListings
+          .fetch(server.url, { forceRefresh: true, context: server })
+          .then((entry) => entry?.error && record("list", server.id, `error: ${errMessage(entry.error)}`))
+          .catch(reportFailureAs("mcp: list shared tools", undefined));
+    }
+  }
+
+  async function serverTools(server: McpServer, previous: McpToolDescriptor[]): Promise<McpToolDescriptor[]> {
     if (server.catalog) return [catalogDescriptor(server)];
     const next: McpToolDescriptor[] = [];
     try {
@@ -342,7 +399,7 @@ export function createMcpToolService(opts: {
         tools = server.tools ?? [];
         if (!tools.length) return next;
       } else {
-        const listing = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
+        const listing = await listServer(server);
         tools = listing.tools;
         about = listing.about ?? about;
       }
@@ -362,20 +419,24 @@ export function createMcpToolService(opts: {
       record("list", server.id, `ok tools=${tools.length}`);
     } catch (e) {
       record("list", server.id, `error: ${errMessage(e)}`);
+      const kept = previous.filter((t) => t.serverId === server.id);
+      if (kept.length) return kept;
     }
     return next;
   }
 
   async function load(state: ReturnType<typeof tenantState>): Promise<void> {
     state.catalogs.clear();
+    const version = await opts.servers.version();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
-    const next = (await Promise.all(servers.map(serverTools))).flat();
-    const seen = new Set<string>();
-    state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+    const previous = state.snapshot;
+    const next = await Promise.all(servers.map((s) => serverTools(s, previous)));
+    state.snapshot = unique(next.flat());
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
-    state.attestedServers = new Map(servers.filter((s) => s.attestActor).map((s) => [s.id, s]));
+    state.servers = new Map(servers.map((s) => [s.id, s]));
+    state.version = version;
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -401,16 +462,23 @@ export function createMcpToolService(opts: {
     return state;
   }
 
+  async function upToDate(): Promise<ReturnType<typeof tenantState>> {
+    const state = await loaded();
+    if (closed) return state;
+    const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
+    if (version !== state.version)
+      await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+    else await adoptShared(state);
+    return state;
+  }
+
   async function toolDefsFor(
     principalId?: string,
     audienceScopeId?: ScopeId,
-    actAsActor?: boolean,
+    turn?: AttestingTurn,
   ): Promise<McpToolDescriptor[]> {
-    const { snapshot, perUserServers: gated, attestedServers } = await loaded();
-    const current = snapshot.filter((t) => {
-      const attested = attestedServers.get(t.serverId);
-      return !attested || attestsInAudience(attested.attestAudience, principalId, audienceScopeId, actAsActor);
-    });
+    const { snapshot, perUserServers: gated, servers } = await upToDate();
+    const current = snapshot.filter((t) => servesTurn(servers.get(t.serverId)!, principalId, audienceScopeId, turn));
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
     const ready = new Set<string>();
@@ -436,7 +504,7 @@ export function createMcpToolService(opts: {
   return {
     toolDefs: async () => (await loaded()).snapshot,
     toolDefsFor,
-    async needsApproval(name, args, principalId, audienceScopeId, actAsActor) {
+    async needsApproval(name, args, principalId, audienceScopeId, turn) {
       const def = (await loaded()).snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
@@ -444,20 +512,20 @@ export function createMcpToolService(opts: {
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
-        refuseOutsideAudience(server, principalId, audienceScopeId, actAsActor);
+        refuseOutsideAudience(server, principalId, audienceScopeId, turn);
         return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
       } catch (e) {
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }
     },
-    async call(name, args, principalId, approval, audienceScopeId, actAsActor) {
+    async call(name, args, principalId, approval, audienceScopeId, turn) {
       const def = (await loaded()).snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        refuseOutsideAudience(server, principalId, audienceScopeId, actAsActor);
+        refuseOutsideAudience(server, principalId, audienceScopeId, turn);
         if (def.catalog) return await callCatalog(server, args, principalId, approval);
         const client = await callerClient(server, principalId);
         if (def.signIn) {

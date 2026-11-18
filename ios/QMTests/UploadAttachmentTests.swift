@@ -1,3 +1,6 @@
+import PhotosUI
+import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import QM
@@ -151,6 +154,77 @@ final class UploadAttachmentTests: XCTestCase {
     XCTAssertEqual(try cachedAttachmentData(account: account, sha: prepared.sha), Data("abc".utf8))
   }
 
+  func testPickedMediaIsNamedByKindDateAndPosition() throws {
+    let date = try XCTUnwrap(
+      Calendar.current.date(
+        from: DateComponents(year: 2026, month: 11, day: 10, hour: 14, minute: 3, second: 22)))
+    XCTAssertEqual(
+      AttachmentSource.mediaName(video: false, ordinal: 0, date: date), "Photo 2026-11-10 14.03.22")
+    XCTAssertEqual(
+      AttachmentSource.mediaName(video: true, ordinal: 2, date: date),
+      "Video 2026-11-10 14.03.22 (3)")
+  }
+
+  @MainActor func testPhotoLibrarySelectionKeepsOrderAndReportsItemsThatCannotLoad() async {
+    let items = [
+      PhotosPickerItem(itemIdentifier: "first"), PhotosPickerItem(itemIdentifier: "second"),
+    ]
+    let sources = AttachmentSource.photos(items, date: Date(timeIntervalSince1970: 0))
+    XCTAssertEqual(sources.count, 2)
+    XCTAssertTrue(sources[0].name.hasPrefix("Photo "))
+    XCTAssertEqual(sources[1].name, sources[0].name + " (2)")
+    do {
+      _ = try await sources[0].prepare()
+      XCTFail("An item that is not in the photo library cannot be prepared")
+    } catch {
+      XCTAssertEqual(
+        error.localizedDescription, "This item could not be loaded from the photo library.")
+    }
+  }
+
+  private func libraryFile(_ name: String, bytes: Int) throws -> URL {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent(name)
+    FileManager.default.createFile(atPath: file.path, contents: nil)
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.truncate(atOffset: UInt64(bytes))
+    try handle.close()
+    return file
+  }
+
+  @MainActor func testLibraryVideosAndPhotosAreCopiedAsFilesAndStagedFromDisk() async throws {
+    for (name, mimetype) in [("IMG_0001.MOV", "video/quicktime"), ("IMG_0002.heic", "image/heic")] {
+      let source = try libraryFile(name, bytes: 60_000_000)
+      let picked = try await library(source)
+      XCTAssertNotEqual(picked.url, source, name)
+      XCTAssertEqual(
+        try picked.url.resourceValues(forKeys: [.fileSizeKey]).fileSize, 60_000_000, name)
+      let prepared = try await AttachmentSource.media(name: "Picked") { picked.url }.prepare()
+      let suffix = URL(fileURLWithPath: name).pathExtension.lowercased()
+      XCTAssertEqual(prepared.name, "Picked.\(suffix)")
+      XCTAssertEqual(prepared.mimetype, mimetype)
+      XCTAssertEqual(prepared.size, 60_000_000)
+      XCTAssertEqual(
+        try prepared.url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup,
+        true)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: picked.url.path), name)
+    }
+  }
+
+  @MainActor func testLibraryVideoOverTheLimitIsRefusedByItsFileSizeAndCleanedUp() async throws {
+    let source = try libraryFile("IMG_0003.mov", bytes: AttachmentUpload.maximumBytes + 1)
+    let picked = try await library(source)
+    do {
+      _ = try await AttachmentSource.media(name: "Video") { picked.url }.prepare()
+      XCTFail("A video over 1 GB cannot be attached")
+    } catch {
+      XCTAssertEqual(error.localizedDescription, "Files up to 1 GB can be attached.")
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: picked.url.path))
+  }
+
   func testCachedAttachmentReferenceRoundTripsAndUncachedAttachmentsDecode() throws {
     let attachment = UploadAttachment(
       name: "report.txt", mimetype: "text/plain", sizeBytes: 3,
@@ -164,6 +238,13 @@ final class UploadAttachmentTests: XCTestCase {
     XCTAssertNil(try JSONDecoder().decode(UploadAttachment.self, from: uncached).localSHA)
   }
 
+}
+
+private func library(_ file: URL) async throws -> PickedMedia {
+  let provider = try XCTUnwrap(NSItemProvider(contentsOf: file))
+  return try await withCheckedThrowingContinuation { continuation in
+    _ = provider.loadTransferable(type: PickedMedia.self) { continuation.resume(with: $0) }
+  }
 }
 
 func attachmentFixture() throws -> PreparedAttachment {

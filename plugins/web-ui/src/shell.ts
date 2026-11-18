@@ -100,7 +100,7 @@ import { openSessionAtMessage, showLinkedSession } from "./open-message";
 import { closeBrowse, openBrowse, sidebarDestinations } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { openDeployById, renderDeploys } from "./deploys";
+import { openAppById, renderApps } from "./apps-page";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
 import {
@@ -116,6 +116,7 @@ import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
+import { welcomeThreadRef } from "./welcome-session";
 import { trapDialogFocus } from "./dialog-focus";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
@@ -174,7 +175,7 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
 }
 
 function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
-  if (view === "deploys" && item) openDeployById(item);
+  if (view === "apps" && item) openAppById(item);
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
@@ -254,7 +255,7 @@ const ICON = {
   contexts: Folder,
   files: Files,
   keychain: KeyRound,
-  deploys: Rocket,
+  apps: Rocket,
   webhooks: Webhook,
   crons: Clock,
   loops: Repeat,
@@ -767,8 +768,8 @@ function showView(v: View): void {
     case "keychain":
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
@@ -838,8 +839,8 @@ function refreshActiveView(v: View): void {
       clearConnectorNotice();
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
@@ -1095,6 +1096,8 @@ export async function boot(): Promise<void> {
   markDesktopEmbed(appEditEmbed);
   const prefillRoute = wanted === null || wanted === "new";
   const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
+  const onboard = wanted === "onboard" && !wantedSession;
+  const explicitChat = Boolean(wantedSession) || wanted === "app-edit" || prefill !== null || onboard;
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   let transcriptUnavailable = false;
@@ -1163,7 +1166,7 @@ export async function boot(): Promise<void> {
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
   const restoreLast = viewIntent || !(await openNewChatFetch);
   if (restoreLast) loadPersistedSplit();
-  if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null) {
+  if (restoreLast && !explicitChat) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {
       if (viewIntent && restoredCanvasNeedsSessionList()) await sessions;
     });
@@ -1174,7 +1177,7 @@ export async function boot(): Promise<void> {
     if (!viewIntent) await restore;
   }
 
-  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
+  const bareEntry = !viewIntent && !explicitChat && !connectedProvider;
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
@@ -1203,7 +1206,7 @@ export async function boot(): Promise<void> {
       const status = params.get("status");
       if (provider && status) noteConnectorResult(provider, status);
     }
-    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
+    if (wanted === "contexts" || wanted === "files" || wanted === "apps") {
       const scope =
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
@@ -1219,6 +1222,13 @@ export async function boot(): Promise<void> {
     saveDraft(newChatDraftKey(appState.me.user), prefill);
     exitSplitIfActive();
     mainConversation().newChat();
+    return;
+  }
+
+  if (onboard) {
+    history.replaceState(null, "", deepLinkPath(UI_BASE, "chats", null));
+    exitSplitIfActive();
+    mainConversation().newChat(undefined, welcomeThreadRef(appState.me.user));
     return;
   }
 

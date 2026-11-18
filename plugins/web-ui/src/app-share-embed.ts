@@ -18,8 +18,8 @@ export async function bootAppShare(params: URLSearchParams): Promise<void> {
     throw new Error(`app-share: /me answered ${r.status} ${body}`);
   }
   appState.me = (await r.json()) as Me;
-  const { openDeploymentPermissions } = await import("./deploy-permissions");
-  const opened = openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
+  const { openAppPermissions } = await import("./app-permissions");
+  const opened = openAppPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
     onChange: () => tellEmbedder({ type: "qm:app-check" }),
     onClose: closeEmbed,
   });

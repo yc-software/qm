@@ -99,7 +99,7 @@ for (const backend of ["memory", "postgres"] as const) {
           type: "web",
           target: thread,
           audienceScopeId: scope,
-          webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "200.123", name: "Alice" },
+          webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "200.123", name: "Alice", speakerId: "a" },
         },
         text: "Durable receipt",
         idempotencyKey: `receipt:${randomUUID()}`,

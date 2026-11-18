@@ -1,4 +1,4 @@
-import type { DeploymentInvitation } from "../deploy/email-access.ts";
+import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
@@ -106,11 +106,18 @@ export type ShareArtifactResult =
       id: string;
       target: { scope: ScopeId; label: string };
       permission: Permission;
-      invitation?: DeploymentInvitation;
+      invitation?: AppInvitation;
     }
   | {
       ok: false;
-      code: "bad_request" | "not_found" | "forbidden" | "recipient_not_found" | "ambiguous_recipient" | "share_failed";
+      code:
+        | "bad_request"
+        | "not_found"
+        | "forbidden"
+        | "human_consent_required"
+        | "recipient_not_found"
+        | "ambiguous_recipient"
+        | "share_failed";
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };

@@ -44,6 +44,10 @@ For example:
 }
 ```
 
+A turn doing a Slack bot's work never uses a server that acts as the person, per-user
+or attested, even in that person's own conversation or when the work runs in their
+name: QM does not offer its tools to that turn and refuses its calls.
+
 Per-user mode requires persistent keychain encryption (`CONNECTOR_SECRET_KEY`).
 Connect the user's account using an existing QM OAuth connector, or have a trusted
 integration save its token through the source-authenticated

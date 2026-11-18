@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { extractDirectives } from "./directives.ts";
+import { extractDirectives } from "../surfaces/reply-directives.ts";
 import type { SlackUser, ActorAssertion } from "./identity.ts";
 import type { ExternalAudienceAccess } from "../surfaces/contract.ts";
 

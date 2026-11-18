@@ -8,7 +8,7 @@ import {
   type MicrovmDescription,
   type MicrovmLifecycleState,
 } from "../../src/sandbox/aws-microvm-api.ts";
-import type { Deployment, DeploymentVersion } from "../../src/deploy/deploy-store.ts";
+import type { PublishedApp, AppVersion } from "../../src/deploy/deploy-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "./single-process.ts";
 import { testMap } from "./test-database.ts";
@@ -191,7 +191,7 @@ export function provider(
   });
 }
 
-export function deployment(id: string, name?: string): Deployment {
+export function publishedApp(id: string, name?: string): PublishedApp {
   return {
     id,
     ownerScopeId: scopeId("personal", "U1"),
@@ -212,7 +212,7 @@ export function localSnapshot(file: string, contents: string): string {
   return dir;
 }
 
-export function version(snapshotDir: string, over: Partial<DeploymentVersion> = {}): DeploymentVersion {
+export function version(snapshotDir: string, over: Partial<AppVersion> = {}): AppVersion {
   return { version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir, env: { API_KEY: "secret" }, ...over };
 }
 

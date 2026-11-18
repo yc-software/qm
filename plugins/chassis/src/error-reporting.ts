@@ -12,6 +12,16 @@ const KEPT_TRACE_DATA = new Set([
   "sentry.origin",
   "sentry.source",
   "sentry.sample_rate",
+  "sentry.trace_lifecycle",
+  "sentry.segment.id",
+  "sentry.segment.name",
+  "sentry.segment.name.source",
+  "sentry.sdk.name",
+  "sentry.sdk.version",
+  "sentry.sdk.integrations",
+  "sentry.release",
+  "sentry.environment",
+  "sentry.status.message",
   "otel.kind",
   "http.request.method",
   "http.method",
@@ -23,8 +33,6 @@ const KEPT_TRACE_DATA = new Set([
   "network.protocol.version",
   "db.system",
   "db.name",
-  "db.postgresql.idle.timeout.millis",
-  "db.postgresql.max.client",
   "messaging.system",
   "messaging.destination.name",
   "messaging.message.id",
@@ -32,9 +40,14 @@ const KEPT_TRACE_DATA = new Set([
   "messaging.message.receive.latency",
   "qm.surface",
   "qm.origin",
+  "qm.cancelled",
   "qm.facts",
   "qm.recalled",
   "qm.skills",
+  "service.name",
+  "deployment",
+  "time_to_model_request",
+  "time_to_first_text",
 ]);
 const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin"];
 const SENT_ROOTS = new Set(["http.server", "queue.process"]);
@@ -44,10 +57,13 @@ const SQL_VERBS = new Set(
   ),
 );
 const POOL_CHECKOUT = "pg-pool.connect";
-const POOL_SPANS = new Set(["pg.connect", POOL_CHECKOUT]);
-const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
+const SPAN_STATUS_NAMES = new Set<unknown>(
+  "cancelled unknown_error invalid_argument deadline_exceeded not_found already_exists permission_denied resource_exhausted failed_precondition aborted out_of_range unimplemented internal_error unavailable data_loss unauthenticated".split(
+    " ",
+  ),
+);
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
 export const REQUEST_ID_HEADERS = ["fly-request-id", "render-request-id", "x-amzn-requestid", "x-request-id"];
 let client: typeof Sentry | undefined;
@@ -67,25 +83,16 @@ export interface TraceCarrier {
   sentryTrace: string;
 }
 
-type TransactionEvent = Parameters<NonNullable<Sentry.NodeOptions["beforeSendTransaction"]>>[0];
-type ErrorEvent = Parameters<NonNullable<Sentry.NodeOptions["beforeSend"]>>[0];
-type SpanData = Record<string, unknown>;
-type SpanJSON = NonNullable<TransactionEvent["spans"]>[number];
-
-function scrubData(data: SpanData | undefined): { statement?: unknown } {
-  if (!data) return {};
-  const statement = data["db.statement"] ?? data["db.query.text"];
-  for (const key of Object.keys(data)) if (!KEPT_TRACE_DATA.has(key)) delete data[key];
-  return { statement };
-}
+type StreamedSpan = Parameters<Parameters<typeof Sentry.withStreamedSpan>[0]>[0];
+type Envelope = Parameters<NonNullable<ReturnType<typeof Sentry.getClient>>["sendEnvelope"]>[0];
 
 function firstWord(text: string | undefined, allowed: Set<string>): string | undefined {
   const word = /^[A-Za-z]+/.exec(text ?? "")?.[0]?.toUpperCase();
   return word && allowed.has(word) ? word : undefined;
 }
 
-function httpClientDescription(description: string | undefined): string {
-  const [method, target] = (description ?? "").split(/\s+/, 2);
+function httpClientName(name: string): string {
+  const [method, target] = name.split(/\s+/, 2);
   const verb = firstWord(method, HTTP_METHODS) ?? "HTTP";
   try {
     return `${verb} ${new URL(target ?? "").origin}`;
@@ -94,92 +101,55 @@ function httpClientDescription(description: string | undefined): string {
   }
 }
 
-function scrubDescription(
-  op: string | undefined,
-  description: string | undefined,
-  statement: unknown,
-): string | undefined {
-  if (op === "http.client") return httpClientDescription(description);
+function spanName(op: unknown, name: string, statement: unknown): string {
+  if (op === "http.client") return httpClientName(name);
   if (op === "db") {
-    if (typeof statement !== "string" && description && POOL_SPANS.has(description)) return description;
+    if (typeof statement !== "string" && name === POOL_CHECKOUT) return name;
     return firstWord(typeof statement === "string" ? statement : undefined, SQL_VERBS) ?? "query";
   }
-  return op === "step.tool" ? description : op;
+  if (op === "step.tool") return name;
+  return typeof op === "string" ? op : "span";
 }
 
-function scrubTraceContext<T extends TransactionEvent | ErrorEvent>(event: T): T {
-  const metadata = event.sdkProcessingMetadata as { dynamicSamplingContext?: Record<string, unknown> } | undefined;
-  if (!metadata?.dynamicSamplingContext) return event;
-  const sentryClient = client?.getClient();
-  const options = sentryClient?.getOptions();
-  const sampleRate = event.contexts?.trace?.data?.["sentry.sample_rate"];
-  metadata.dynamicSamplingContext = Object.fromEntries(
-    Object.entries({
-      trace_id: event.contexts?.trace?.trace_id,
-      public_key: sentryClient?.getDsn()?.publicKey,
-      release: options?.release,
-      environment: options?.environment,
-      ...(event.type === "transaction"
-        ? { sampled: "true", sample_rate: typeof sampleRate === "number" ? String(sampleRate) : undefined }
-        : {}),
-    }).filter(([, value]) => typeof value === "string" && value),
-  );
-  return event;
+function scrubSpan(span: StreamedSpan): StreamedSpan {
+  const attributes: Record<string, unknown> = span.attributes ?? {};
+  const op = attributes["sentry.op"];
+  const statement = attributes["db.statement"] ?? attributes["db.query.text"];
+  for (const key of Object.keys(attributes)) if (!KEPT_TRACE_DATA.has(key)) delete attributes[key];
+  if ("sentry.status.message" in attributes && !SPAN_STATUS_NAMES.has(attributes["sentry.status.message"]))
+    attributes["sentry.status.message"] = "internal_error";
+  if (!span.is_segment) span.name = spanName(op, span.name, statement);
+  if (typeof statement === "string") attributes["db.query.text"] = span.name;
+  return span;
 }
 
-function idleCheckout(span: SpanJSON, parents: Set<string | undefined>): boolean {
-  return (
-    span.description === POOL_CHECKOUT &&
-    span.status === "ok" &&
-    (span.timestamp ?? Infinity) - span.start_timestamp < IDLE_CHECKOUT_SECONDS &&
-    !parents.has(span.span_id)
-  );
-}
-
-function orderedSpans(spans: SpanJSON[]): SpanJSON[] {
-  const parents = new Set(spans.map((span) => span.parent_span_id));
-  return spans.filter((span) => !idleCheckout(span, parents)).sort((a, b) => a.start_timestamp - b.start_timestamp);
-}
-
-function duration(span: SpanJSON): number {
-  return (span.timestamp ?? span.start_timestamp) - span.start_timestamp;
-}
-
-function budgetedSpans(ordered: SpanJSON[]): SpanJSON[] {
-  if (ordered.length <= MAX_SENT_SPANS) return ordered;
-  const byId = new Map(ordered.map((span) => [span.span_id, span]));
-  const kept = new Set<string>();
-  const priority = ordered.toSorted((a, b) =>
-    a.op === "db" && b.op === "db" ? duration(b) - duration(a) : Number(a.op === "db") - Number(b.op === "db"),
-  );
-  for (const span of priority) {
-    if (kept.size >= MAX_SENT_SPANS) break;
-    const chain: string[] = [];
-    for (let at: SpanJSON | undefined = span; at && !kept.has(at.span_id); at = byId.get(at.parent_span_id ?? ""))
-      chain.push(at.span_id);
-    if (kept.size + chain.length <= MAX_SENT_SPANS) for (const id of chain) kept.add(id);
-  }
-  return ordered.filter((span) => kept.has(span.span_id));
-}
-
-function scrubTransaction(event: TransactionEvent): TransactionEvent | null {
-  const trace = event.contexts?.trace;
-  if (!SENT_ROOTS.has(trace?.op ?? "") || trace?.data?.["sentry.parent_span_already_sent"]) return null;
-  delete event.request;
-  delete event.user;
-  delete event.breadcrumbs;
-  scrubData(trace?.data as SpanData | undefined);
-  if (event.spans) {
-    const spans = orderedSpans(event.spans);
-    event.spans = budgetedSpans(spans);
-    if (spans.length > event.spans.length)
-      trace!.data = { ...trace!.data, "qm.truncated_spans": spans.length - event.spans.length };
-  }
-  for (const span of event.spans ?? []) {
-    const { statement } = scrubData(span.data);
-    span.description = scrubDescription(span.op, span.description, statement);
-  }
-  return scrubTraceContext(event);
+function ownTraceHeader(sdk: typeof Sentry): (envelope: Envelope) => void {
+  return (envelope) => {
+    const header = envelope[0] as { trace?: Record<string, unknown> };
+    if (!header.trace) return;
+    const sampleRate = header.trace.sample_rate;
+    delete header.trace;
+    try {
+      const payload = envelope[1][0]?.[1] as
+        { contexts?: { trace?: { trace_id?: string } }; items?: { trace_id?: string }[] } | undefined;
+      const spans = payload?.items;
+      const sentryClient = sdk.getClient();
+      const options = sentryClient?.getOptions();
+      header.trace = Object.fromEntries(
+        Object.entries({
+          trace_id: spans ? spans[0]?.trace_id : payload?.contexts?.trace?.trace_id,
+          public_key: sentryClient?.getDsn()?.publicKey,
+          release: options?.release,
+          environment: options?.environment,
+          sampled: spans ? "true" : undefined,
+          sample_rate:
+            spans && typeof sampleRate === "string" && parseSampleRate(sampleRate) > 0 ? sampleRate : undefined,
+        }).filter(([, value]) => typeof value === "string" && value),
+      );
+    } catch (error) {
+      swallow("tracing", error);
+    }
+  };
 }
 
 function untracedRequest(
@@ -205,8 +175,10 @@ function internalTraceTargets(env: NodeJS.ProcessEnv): RegExp[] {
 }
 
 function sampler(rate: number) {
-  return ({ attributes, inheritOrSampleWith }: SamplingContext): number =>
-    attributes?.["qm.origin"] === "human" ? 1 : inheritOrSampleWith(rate);
+  return ({ attributes, inheritOrSampleWith }: SamplingContext): number => {
+    if (!SENT_ROOTS.has(String(attributes?.["sentry.op"]))) return 0;
+    return attributes?.["qm.origin"] === "human" ? 1 : inheritOrSampleWith(rate);
+  };
 }
 
 export function initializeErrorReporting(
@@ -217,6 +189,7 @@ export function initializeErrorReporting(
   if (!env.SENTRY_DSN || client) return;
   const tracesSampleRate = parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE);
   const traced = tracesSampleRate > 0;
+  const deployment = env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID;
   sdk.init({
     dsn: env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV ?? "development",
@@ -239,8 +212,9 @@ export function initializeErrorReporting(
                 sdk.getIsolationScope().setTransactionName(name);
               },
             }),
-            sdk.nativeNodeFetchIntegration({ breadcrumbs: false }),
-            sdk.postgresIntegration(),
+            sdk.nativeNodeFetchIntegration({ breadcrumbs: false, ignoreOutgoingRequests: () => !sdk.getActiveSpan() }),
+            sdk.postgresIntegration({ ignoreConnectSpans: true }),
+            sdk.spanStreamingIntegration(),
           ]
         : []),
     ],
@@ -248,18 +222,22 @@ export function initializeErrorReporting(
     registerEsmLoaderHooks: false,
     ...(traced
       ? {
+          traceLifecycle: "stream",
           tracesSampler: sampler(tracesSampleRate),
-          beforeSendTransaction: scrubTransaction,
-          beforeSend: scrubTraceContext,
+          beforeSendSpan: sdk.withStreamedSpan(scrubSpan),
         }
       : {}),
     tracePropagationTargets: traced ? internalTraceTargets(env) : [],
     attachStacktrace: true,
     sendClientReports: false,
-    initialScope: { tags: { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID } },
+    initialScope: { tags: { service, deployment } },
     shutdownTimeout: FLUSH_MS,
   });
   sdk.addEventProcessor(tagActiveRequest);
+  if (traced) {
+    sdk.getGlobalScope().setAttributes({ "service.name": service, deployment });
+    sdk.getClient()?.on("beforeEnvelope", ownTraceHeader(sdk));
+  }
   client = sdk;
   tracing = traced;
   process.on("unhandledRejection", (reason: unknown) => {
@@ -363,7 +341,7 @@ export function traceQueued<T>(
       for (const key of RUN_TAGS) if (attributes[key] !== undefined) scope.setTag(key, attributes[key]);
       return sdk.startSpan({ op: "queue.process", name, forceTransaction: true, attributes }, async (span) => {
         const result = await work();
-        if (cancelled(result)) span.setStatus({ code: SPAN_STATUS_ERROR, message: "cancelled" });
+        if (cancelled(result)) span.setAttribute("qm.cancelled", true);
         return result;
       });
     });
@@ -395,6 +373,41 @@ export function startPhase(op: string): Phase | undefined {
   return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
 }
 
+export function untraced<T>(work: () => T): T {
+  return client && tracing ? client.suppressTracing(work) : work();
+}
+
+export async function tracePoolCheckout<T>(checkout: () => Promise<T>): Promise<T> {
+  if (!client || !tracing || !client.getActiveSpan()) return checkout();
+  const sdk = client;
+  const started = performance.now();
+  const record = (failed: boolean): void => {
+    try {
+      const seconds = (performance.now() - started) / 1000;
+      if (!failed && seconds < IDLE_CHECKOUT_SECONDS) return;
+      const end = Date.now() / 1000;
+      const span = sdk.startInactiveSpan({
+        op: "db",
+        name: POOL_CHECKOUT,
+        startTime: end - seconds,
+        onlyIfParent: true,
+      });
+      if (failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
+      span.end(end);
+    } catch (error) {
+      swallow("tracing", error);
+    }
+  };
+  try {
+    const checkedOut = await checkout();
+    record(false);
+    return checkedOut;
+  } catch (error) {
+    record(true);
+    throw error;
+  }
+}
+
 export interface DispatchTrace {
   modelRequest(): void;
   firstToken(): void;
@@ -417,7 +430,7 @@ export function startDispatchTrace(): DispatchTrace {
     let ended = false;
     const measure = (name: string): void => {
       try {
-        sdk.setMeasurement(name, Math.max(0, Date.now() - startedMs), "millisecond", root);
+        root.setAttribute(name, Math.max(0, Date.now() - startedMs));
       } catch (error) {
         swallow("tracing", error);
       }
@@ -437,7 +450,7 @@ export function startDispatchTrace(): DispatchTrace {
         if (ended || firstToken) return;
         firstToken = true;
         endDispatch();
-        measure("time_to_first_token");
+        measure("time_to_first_text");
       },
       end() {
         endDispatch();

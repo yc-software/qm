@@ -38,7 +38,8 @@ import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } fr
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
+import { activeRun, audit, isObj, orgScope } from "./shared.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -381,6 +382,7 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
       ...(nameQuery ? { nameQuery } : {}),
     },
     scope ? (scope as ScopeId) : undefined,
+    isOwnScopeBotWork(capability),
   );
   return sendJson(res, 200, page);
 }
@@ -584,7 +586,7 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
     files: out.files,
     crons: out.crons,
     webhooks: out.webhooks.map(redactWebhook),
-    deployments: out.deployments,
+    apps: out.apps,
     skills: out.skills,
     manageable: out.manageable,
   });
@@ -880,13 +882,13 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, false)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
   const archivedChecks = await Promise.all(
     (await app.listSkills())
       .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId) })),
+      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId, false) })),
   );
   const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
   const visible = resolved.flatMap((row) => [
@@ -907,7 +909,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
       pack: r.skill.pack,
       assetCount: r.skill.manifest.files?.length ?? 0,
       requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId),
+      editable: await app.canManageSkill(r.skill, principalId, false),
     })),
   );
   return sendJson(res, 200, { skills });
@@ -920,11 +922,14 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const ownScopeBotWork = isOwnScopeBotWork(capability);
   const skill = await app.getSkill(ctx.params.id!);
   if (
     !skill ||
-    (!(await app.canManageSkill(skill, principalId)) &&
-      !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
+    (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork))
+        .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+        .some((visible) => visible.id === skill.id))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
@@ -945,7 +950,7 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
       grantedCapabilities: skill.grantedCapabilities,
       createdAt: skill.createdAt,
       updatedAt: skill.updatedAt,
-      editable: await app.canManageSkill(skill, principalId),
+      editable: await app.canManageSkill(skill, principalId, capability?.botActor === true),
     },
   });
 }
@@ -959,7 +964,10 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const liveActor = ctx.capability ? personAtKeyboard(ctx.capability) : true;
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, { liveActor });
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
+    liveActor,
+    botActor: ctx.capability?.botActor === true,
+  });
   if (restored === "trigger_blocked")
     return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (restored === "exists")
@@ -1000,7 +1008,10 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1031,7 +1042,12 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     principalId = b.principalId;
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
-  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor });
+  const outcome = await app.deleteOwnedSkill({
+    principalId,
+    id,
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1080,6 +1096,12 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
+    });
+  }
+  if (homeScope && !loadsScopeContext(principalId, homeScope, capability?.botActor === true)) {
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "a Slack bot's work cannot add skills to a person's own library",
     });
   }
   if (typeof b.name !== "string" || !b.name.trim()) {
@@ -1148,6 +1170,7 @@ const SHARE_ERROR_STATUS: Record<string, number> = {
   bad_request: 400,
   not_found: 404,
   forbidden: 403,
+  human_consent_required: 403,
   recipient_not_found: 404,
   ambiguous_recipient: 409,
   share_failed: 400,
@@ -1169,6 +1192,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   if (typeof b.type !== "string" || !isArtifactType(b.type)) {
     return sendJson(res, 400, { error: "bad_request", message: `type must be one of: ${ARTIFACT_TYPES.join(", ")}` });
   }
+  if (b.type === "deploy" && !(await activeRun(ctx))) return;
   if (typeof b.id !== "string" || !b.id.trim())
     return sendJson(res, 400, { error: "bad_request", message: "id required" });
   if (
@@ -1396,14 +1420,19 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function getSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
-  if (capability) return sendJson(res, 200, app.getSoul(capability.scopeId));
+  if (capability)
+    return sendJson(
+      res,
+      200,
+      app.getSoul(capability.scopeId, { actorId: capability.actorId, ownScopeBotWork: isOwnScopeBotWork(capability) }),
+    );
   const scopeIdVal = url.searchParams.get("scopeId");
   const principalId = url.searchParams.get("principalId");
   if (!scopeIdVal || !principalId)
     return sendJson(res, 400, { error: "bad_request", message: "scopeId and principalId required" });
   if (!(await app.belongsToScope(principalId, scopeIdVal as ScopeId)))
     return sendJson(res, 403, { error: "forbidden" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId));
+  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId, { actorId: principalId, ownScopeBotWork: false }));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
@@ -1431,12 +1460,10 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     ? capability.botActor !== true
     : parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId));
   try {
-    const version = await app.updateSoul(
-      scopeIdVal,
-      content,
-      actorId,
-      allowSharedScope ? { allowSharedScope: true } : undefined,
-    );
+    const version = await app.updateSoul(scopeIdVal, content, actorId, {
+      ...(allowSharedScope ? { allowSharedScope: true } : {}),
+      botActor: capability?.botActor === true,
+    });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)

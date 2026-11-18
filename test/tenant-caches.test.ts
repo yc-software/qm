@@ -19,6 +19,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { scopeId } from "../src/types.ts";
 import { partition, tenantMap } from "./support/tenant-map.ts";
+import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import type { ScopeActivity, SessionStore, SpendRow } from "../src/sessions/session-store.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
@@ -238,6 +239,9 @@ function mcpStore(servers: Record<string, McpServer[]>): McpServerStore & { list
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    async version() {
+      return "";
+    },
   };
 }
 
@@ -436,4 +440,56 @@ test("Slack mention names stay with their tenant; the env bot identity is proces
     { username: "Bot" },
   );
   setDefaultBotIdentity(undefined);
+});
+
+async function flakyMcp(t: TestContext, auth: McpServer["auth"], tenants: string[], mode = "refusing") {
+  const server: McpServer = { ...signInServer("s"), url: (await startMcpTestServer(t)).url, auth, bearerToken: "x" };
+  const state = { mode, attempts: 0, clock: 1, held: [] as (() => void)[], ended: Promise.withResolvers<void>() };
+  const service = createMcpToolService({
+    now: () => state.clock,
+    refreshIntervalMs: 1,
+    servers: mcpStore(Object.fromEntries(tenants.map((tenant) => [tenant, [server]]))),
+    fetch: (input, init) => {
+      if (String(init?.body).includes('"initialize"')) state.attempts++;
+      const answer = async (): Promise<Response> => {
+        if (state.mode === "refusing") return new Response("Forbidden", { status: 403 });
+        if (state.mode !== "up") throw new TypeError("fetch failed");
+        return loopbackFetch(input, init).finally(() => init?.method === "DELETE" && state.ended.resolve());
+      };
+      return state.mode === "silent" ? new Promise((resolve) => state.held.push(() => resolve(answer()))) : answer();
+    },
+  });
+  t.after(() => (state.held.splice(0).forEach((drop) => drop()), service.close()));
+  await Promise.all(tenants.map((tenant) => withTenant(tenant, () => service.toolDefs())));
+  const names = (i: number) => withTenant(tenants[i]!, async () => (await service.toolDefsFor()).map((d) => d.name));
+  return { state, names, service };
+}
+
+test("tenants share one failed anonymous MCP listing, and once a turn's retry succeeds each tenant's next turn has it", async (t) => {
+  const { state, names, service } = await flakyMcp(t, "none", [A, B, randomUUID()], "unreachable");
+  assert.equal(state.attempts, 1);
+  state.mode = "up";
+  while ((await names(0)).length === 0) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([(await names(1)).length, (await names(2)).length, state.attempts], [2, 2, 2]);
+  state.mode = "refusing";
+  state.clock += 3_600_000;
+  await withTenant(B, () => service.refresh());
+  assert.deepEqual([(await names(1)).length, state.attempts], [2, 3]);
+});
+
+test("turns never wait on an MCP listing retry, a process keeps one shared retry and its late answer, and other servers get none", async (t) => {
+  const { state, names } = await flakyMcp(t, "none", [A, B]);
+  const promptly = (i: number) => Promise.race([names(i), new Promise((r) => setTimeout(r, 1000, "waits"))]);
+  assert.deepEqual(await promptly(0), []);
+  await new Promise((resolve) => setImmediate(resolve));
+  state.mode = "silent";
+  assert.deepEqual([await promptly(0), await promptly(1), state.attempts], [[], [], 3]);
+  state.clock += 2;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  state.mode = "up";
+  state.held.splice(0).forEach((answer) => answer());
+  await state.ended.promise.then(() => new Promise((resolve) => setImmediate(resolve)));
+  assert.deepEqual([(await names(0)).length, (await names(1)).length, state.attempts], [2, 2, 3]);
+  const bearer = await flakyMcp(t, "bearer", [A]);
+  assert.deepEqual([await bearer.names(0), await bearer.names(0), bearer.state.attempts], [[], [], 1]);
 });

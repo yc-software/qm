@@ -39,6 +39,7 @@ export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
   pinned?: boolean;
+  routedBy?: string;
 }
 
 export interface PersonaService {
@@ -69,6 +70,7 @@ export interface PersonaService {
     personaId: string | undefined,
     actorId: string,
     contextScope: ScopeId,
+    route?: () => Promise<{ personaId: string; ruleId: string } | undefined>,
   ): Promise<PersonaForTurn | string | null>;
 }
 
@@ -301,7 +303,7 @@ export function createPersonaService(deps: {
       };
     },
     startOnDefaultModel,
-    async forTurn(personaId, actorId, contextScope) {
+    async forTurn(personaId, actorId, contextScope, route) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
       let pinned = false;
@@ -309,13 +311,25 @@ export function createPersonaService(deps: {
         personaId = (await store.pinnedIn(contextScope)) ?? undefined;
         pinned = Boolean(personaId);
       }
-      if (!personaId) return PERSONAS_HINT;
+      let routedBy: string | undefined;
+      if (!personaId) {
+        const routed = await route?.();
+        if (!routed) return PERSONAS_HINT;
+        ({ personaId, ruleId: routedBy } = routed);
+      }
       const persona = await store.get(personaId);
+      const held = persona ? await role(actorId, personaId, contextScope) : null;
+      if (routedBy && !held)
+        return `The decision rule ${routedBy} picked ${persona ? `the persona "${persona.name}", which the sender has no access to` : `persona ${personaId}, which does not exist`}, so this turn runs without one. ${PERSONAS_HINT}`;
       if (!persona) return "This conversation's persona was deleted, so this turn runs without one.";
-      const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
+      return {
+        persona,
+        scope: personaScope(personaId),
+        ...(pinned ? { pinned: true } : {}),
+        ...(routedBy ? { routedBy } : {}),
+      };
     },
   };
 }
@@ -333,3 +347,6 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): strin
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");
 }
+
+export const personaRoutedNote = (name: string, ruleId: string): string =>
+  `The decision rule ${ruleId} routed this conversation to the persona ${name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`;

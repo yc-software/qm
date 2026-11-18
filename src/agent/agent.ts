@@ -92,6 +92,7 @@ export interface AgentTurnInput {
     images?: TurnImage[];
     documents?: DocumentInput[];
     author?: string;
+    speakerId?: string;
     authorName?: string;
     withheld?: boolean;
   }>;
@@ -101,6 +102,7 @@ export interface AgentTurnInput {
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
+  botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;

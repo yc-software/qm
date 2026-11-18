@@ -576,7 +576,14 @@ export type AssistantWork = AssistantMessage & {
   droppedAttachmentIds?: string[];
   continuing?: string;
   via?: string;
+  personaId?: string;
 };
+
+function tagPersona(item: Item, turnRows: AgentMessage[]): void {
+  const personaId = item.body.personaId;
+  if (typeof personaId !== "string") return;
+  for (const row of turnRows) if (row.role === "assistant") (row as AssistantWork).personaId = personaId;
+}
 
 export interface RunPoll {
   status: "pending" | "running" | "done" | "failed";
@@ -1735,42 +1742,58 @@ export function subscribeDeliveries(
   onInboxResync?: () => void,
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
-  const es = new EventSource(withBase("/api/deliveries/events"));
   let everOpened = false;
-  es.onopen = (): void => {
-    if (everOpened) {
-      onResync?.();
-      onInboxResync?.();
-    }
-    everOpened = true;
+  const connect = (): EventSource => {
+    const es = new EventSource(withBase("/api/deliveries/events"));
+    es.onopen = (): void => {
+      if (everOpened) {
+        onResync?.();
+        onInboxResync?.();
+      }
+      everOpened = true;
+    };
+    es.addEventListener("session_state_resync", () => onResync?.());
+    es.addEventListener("inbox_resync", () => onInboxResync?.());
+    es.addEventListener("session_state", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data) as SessionStateEvent;
+        if (typeof ev.threadRef === "string" && ev.threadRef && typeof ev.state === "string") onSessionState?.(ev);
+      } catch (err) {
+        swallow("web-ui: handle session-state frame", err);
+      }
+    });
+    es.addEventListener("inbox_item", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data) as InboxItemEvent;
+        if (typeof ev.loopId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
+      } catch (err) {
+        swallow("web-ui: handle inbox-item frame", err);
+      }
+    });
+    es.addEventListener("delivery", (e: MessageEvent) => {
+      try {
+        const d = JSON.parse(e.data) as { threadRef?: string };
+        if (typeof d.threadRef === "string" && d.threadRef) onThread(d.threadRef);
+      } catch (err) {
+        swallow("web-ui: handle delivery nudge", err);
+      }
+    });
+    return es;
   };
-  es.addEventListener("session_state_resync", () => onResync?.());
-  es.addEventListener("inbox_resync", () => onInboxResync?.());
-  es.addEventListener("session_state", (e: MessageEvent) => {
-    try {
-      const ev = JSON.parse(e.data) as SessionStateEvent;
-      if (typeof ev.threadRef === "string" && ev.threadRef && typeof ev.state === "string") onSessionState?.(ev);
-    } catch (err) {
-      swallow("web-ui: handle session-state frame", err);
-    }
-  });
-  es.addEventListener("inbox_item", (e: MessageEvent) => {
-    try {
-      const ev = JSON.parse(e.data) as InboxItemEvent;
-      if (typeof ev.loopId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
-    } catch (err) {
-      swallow("web-ui: handle inbox-item frame", err);
-    }
-  });
-  es.addEventListener("delivery", (e: MessageEvent) => {
-    try {
-      const d = JSON.parse(e.data) as { threadRef?: string };
-      if (typeof d.threadRef === "string" && d.threadRef) onThread(d.threadRef);
-    } catch (err) {
-      swallow("web-ui: handle delivery nudge", err);
-    }
-  });
-  return () => es.close();
+  let es = connect();
+  const suspend = (event: PageTransitionEvent): void => {
+    if (event.persisted) es.close();
+  };
+  const resume = (event: PageTransitionEvent): void => {
+    if (event.persisted) es = connect();
+  };
+  window.addEventListener("pagehide", suspend);
+  window.addEventListener("pageshow", resume);
+  return () => {
+    window.removeEventListener("pagehide", suspend);
+    window.removeEventListener("pageshow", resume);
+    es.close();
+  };
 }
 
 async function streamRunViaSse(
@@ -1957,6 +1980,7 @@ interface HistoryUserMessage {
   steered?: boolean;
   speaker?: string;
   speakerId?: string;
+  overheard?: boolean;
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
@@ -2130,6 +2154,7 @@ export function userItemMessage(item: Item): HistoryUserMessage | null {
     ...(mail ? { subagentMail: mail } : {}),
     ...(item.kind === "SteeringMessage" ? { steered: true } : {}),
     ...(typeof speakerId === "string" && speakerId ? { speakerId } : {}),
+    ...(item.body.overheard === true ? { overheard: true } : {}),
     ...(typeof name === "string" && name.trim() ? { speaker: name.trim() } : {}),
     ...(ts ? { ts } : {}),
     ...(attachments.length
@@ -2285,7 +2310,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     pending = [];
     deliveryFiles = [];
   };
+  let turn = { id: null as string | null, start: 0 };
   for (const e of items) {
+    if (e.turnId !== turn.id) turn = { id: e.turnId, start: out.length };
     const text = e.text ?? "";
     if (e.kind === "ElicitationResponse") {
       const decision = approvalDecisionMessage(e);
@@ -2374,6 +2401,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
           flushWork(text, e.createdAt, !posted, timing, stopped, [e.seq]);
         }
       }
+      tagPersona(e, out.slice(turn.start));
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));

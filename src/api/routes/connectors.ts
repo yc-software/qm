@@ -23,13 +23,11 @@ import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { activeRun } from "./composio.ts";
-import { audit, isObj } from "./shared.ts";
+import { audit, isObj, livePersonTurn } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { forInboxLoopsPeople } from "./loops.ts";
 
@@ -87,6 +85,34 @@ function safeReturnTo(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.startsWith("/")) return undefined;
   const url = new URL(value, "http://x");
   return url.host === "x" && !url.pathname.startsWith("//") ? value : undefined;
+}
+
+const APP_RETURN_CONTEXT = ["composioReturn", "slackReturn", "view", "session", "scope", "seq", "tab"];
+const APP_RETURN_OUTCOME = ["status", "error", "connectedAccountId", "connector"];
+
+export function appReturnPath(body: Record<string, unknown>, returnTo: string): string | null {
+  if (body.mobileReturn !== true) return returnTo;
+  if (typeof body.state !== "string" || !body.state) return null;
+  return `/api/app-return?${new URLSearchParams({ state: body.state, returnTo })}`;
+}
+
+function appReturn(ctx: BaseCtx): void {
+  ctx.res.setHeader("Cache-Control", "no-store");
+  ctx.res.setHeader("Referrer-Policy", "no-referrer");
+  const state = ctx.url.searchParams.get("state");
+  const returnTo = safeReturnTo(ctx.url.searchParams.get("returnTo"));
+  if (!state) return sendJson(ctx.res, 400, { error: "invalid_return_state" });
+  if (!returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_url" });
+  const target = new URL(returnTo, "http://x");
+  const kept = [
+    ...[...target.searchParams].filter(([key]) => APP_RETURN_CONTEXT.includes(key)),
+    ...[...ctx.url.searchParams].filter(([key]) => APP_RETURN_OUTCOME.includes(key)),
+  ].map(([key, value]) => `${key}=${encodeURIComponent(value)}`);
+  const path = `${target.pathname}${kept.length ? `?${kept.join("&")}` : ""}`;
+  ctx.res.writeHead(303, {
+    location: `qm://connection/callback?state=${encodeURIComponent(state)}&returnTo=${encodeURIComponent(path)}`,
+  });
+  ctx.res.end();
 }
 
 function latestRefreshFailure(
@@ -278,8 +304,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
-  if (!personAtKeyboard(capability)) return sendJson(res, 403, { error: "human_consent_required" });
-  if (!(await activeRun(ctx))) return;
+  if (!(await livePersonTurn(ctx))) return;
   const b = body as {
     provider?: unknown;
     accountType?: unknown;
@@ -378,11 +403,14 @@ async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "unauthorized", message: "portal identity required" });
   const base = ctx.deps.portalUrl.replace(/\/$/, "");
   const provider = ctx.params.provider!;
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const returnTo = appReturnPath(body, safeReturnTo(body.returnTo) ?? "/keychain");
+  if (!returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_state" });
   return startOAuth(ctx, {
     provider,
     principalId: ctx.actor.p,
     redirectUri: `${base}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`,
-    returnTo: safeReturnTo(isObj(ctx.body) ? ctx.body.returnTo : undefined) ?? "/keychain",
+    returnTo,
     accountType: "default",
   });
 }
@@ -454,8 +482,9 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
+async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
+  if (!(await livePersonTurn(ctx))) return;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;
@@ -607,11 +636,12 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/connectors/oauth/:provider/start",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "source",
     handle: browserOAuthStart,
   },
+  { method: "GET", path: "/v1/app-return", auth: "public", tenant: "none", handle: appReturn },
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
     actor: "query.principalId",
@@ -629,7 +659,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/connectors/oauth/revoke",
-    browser: true,
+    browser: "self",
     actor: "body.principalId",
     auth: "either",
     handle: oauthRevoke,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { SlackIdentityMode, SlackUser } from "../src/slack/identity.ts";
 import { externalSlackNamespace } from "../src/slack/external-access.ts";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { createSlackDeliverer } from "../src/slack/deliveries.ts";
 import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
 import { createSlackSurface } from "../src/surfaces/slack/adapter.ts";
 import type { DeliveryProvenance } from "../src/types.ts";
@@ -112,7 +112,6 @@ test("slack drainer delivers adapter posts under an external policy namespace on
   const byKey = new Map(queued.map((d) => [d.idempotencyKey, d.id]));
   const posts: { channel: string }[] = [];
   const acks: string[] = [];
-  let pending = true;
   const client = {
     conversations: { history: async () => ({ messages: [] }) },
     chat: {
@@ -122,14 +121,8 @@ test("slack drainer delivers adapter posts under an external policy namespace on
       },
     },
   };
-  const poller = createDeliveryPoller({
+  const deliverer = createSlackDeliverer({
     core: {
-      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-      claimDeliveries: async (type: string) => {
-        if (type !== "slack" || !pending) return [];
-        pending = false;
-        return queued;
-      },
       ackDelivery: async (id: string) => {
         acks.push(id);
       },
@@ -139,10 +132,10 @@ test("slack drainer delivers adapter posts under an external policy namespace on
     clientForIdentity: () => {
       throw new Error("wrong identity route");
     },
-    clientForAccount: (id, teamId) => (id === "partner" && teamId === "TPARTNER" ? client : undefined),
+    clientForAccount: (id: string, teamId?: string) => (id === "partner" && teamId === "TPARTNER" ? client : undefined),
     externalNamespace: () => namespace,
   });
-  await poller.pollDeliveries(client);
+  for (const d of queued) await deliverer.deliver(client, d);
   assert.deepEqual(
     posts.map((p) => p.channel),
     ["CSHARED"],

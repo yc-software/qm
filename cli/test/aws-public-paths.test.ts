@@ -7,7 +7,7 @@ import { assertAwsPublicRouting } from "../src/backends/aws.ts";
 import { loadConfigAt } from "../src/config.ts";
 import { terraformVars } from "../src/terraform.ts";
 
-function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2") {
+function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2", tagKey?: string) {
   const dir = mkdtempSync(join(tmpdir(), "qm-public-paths-"));
   const configPath = join(dir, "qm.config.jsonc");
   const service = (name: string) => ({
@@ -73,6 +73,8 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
         { Field: "path-pattern", PathPatternConfig: { Values: name === "core-public" ? ["/*"] : ["/hooks/*"] } },
       ],
     }));
+  if (tagKey)
+    rules.unshift({ ...rules[0]!, RuleArn: "relay", Actions: [{ Type: "forward", TargetGroupArn: "relay" }] });
   const responses = {
     "describe-load-balancers": {
       LoadBalancers: [{ LoadBalancerArn: "alb", DNSName: "acme.example", State: { Code: "active" } }],
@@ -94,6 +96,7 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
     },
     "describe-target-groups": { TargetGroups: groups },
     "describe-rules": { Rules: rules },
+    "describe-tags": { TagDescriptions: [{ ResourceArn: "relay", Tags: [{ Key: tagKey }] }] },
   };
   const bin = join(dir, "aws");
   writeFileSync(
@@ -205,5 +208,20 @@ test("the egress proxy may sit behind its own load balancer while other private 
     assert.throws(() => assertAwsPublicRouting(config, services), /private ECS service jobs is attached/);
   } finally {
     f.close();
+  }
+});
+
+test("routing leaves out only listener rules tagged as operator-managed", () => {
+  for (const blueGreen of [false, true]) {
+    for (const tagKey of ["qm:operator-managed", "Name"]) {
+      const f = fixture(undefined, blueGreen, "2", tagKey);
+      try {
+        const route = () => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services);
+        if (tagKey === "Name") assert.throws(route);
+        else assert.equal(route().get("hooks"), "hooks");
+      } finally {
+        f.close();
+      }
+    }
   }
 });

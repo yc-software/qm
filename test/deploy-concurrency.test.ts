@@ -59,10 +59,10 @@ test("reaper: a non-leader skips the sweep — returns 0 and destroys nothing", 
     entrypoint: "x",
     files: [],
   });
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
+  const stopped = await deploy.reapIdleApps(60_000, future);
   assert.equal(stopped, 0, "non-leader returns 0");
   assert.equal(destroys, 0, "non-leader destroyed nothing");
-  assert.equal((await deployStore.get(d.id))!.status, "running", "the deployment stays running");
+  assert.equal((await deployStore.get(d.id))!.status, "running", "the app stays running");
 });
 
 test("reaper: the leader (default no-op lease) reaps as before", async () => {
@@ -73,8 +73,8 @@ test("reaper: the leader (default no-op lease) reaps as before", async () => {
     entrypoint: "x",
     files: [],
   });
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
-  assert.equal(stopped, 1, "the leader reaps the idle deployment");
+  const stopped = await deploy.reapIdleApps(60_000, future);
+  assert.equal(stopped, 1, "the leader reaps the idle app");
   assert.equal((await deployStore.get(d.id))!.status, "stopped");
   assert.equal((await deployStore.get(d.id))!.endpoint, null);
 });
@@ -103,8 +103,8 @@ test("withDeployLock: redeploy/rollback/archive each acquire the advisory mutex 
   assert.deepEqual(keys, [], "the initial create takes no deploy lock");
 
   await deploy.redeploy(d.id, { entrypoint: "y", files: [] });
-  await deploy.rollbackDeployment(d.id, 1);
-  await deploy.archiveDeployment(d.id);
+  await deploy.rollbackApp(d.id, 1);
+  await deploy.archiveApp(d.id);
 
   const want = `deploy:${d.id}`;
   assert.deepEqual(keys, [want, want, want], "redeploy, rollback, archive each lock deploy:<id>");
@@ -143,7 +143,7 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
     deploy.redeploy(d.id, { entrypoint: "a", files: [] }),
     deploy.redeploy(d.id, { entrypoint: "b", files: [] }),
   ]);
-  assert.equal(maxActive, 1, "two redeploys on one deployment never ran apply() concurrently");
+  assert.equal(maxActive, 1, "two redeploys on one app never ran apply() concurrently");
 });
 
 function copyingDeployStore(): DeployStore {
@@ -191,14 +191,12 @@ for (const [visit, stop, status] of [
       files: [],
       alwaysOn: visit === "keep-warm",
     });
-    const stopping = stop === "archive" ? deploy.archiveDeployment(d.id) : deploy.reapIdleDeployments(60_000, future);
+    const stopping = stop === "archive" ? deploy.archiveApp(d.id) : deploy.reapIdleApps(60_000, future);
     await destroying.promise;
     let settled = false;
-    const visiting = (visit === "reach" ? deploy.reachDeployment(d.id, "U1") : deploy.maintainDeployments()).finally(
-      () => {
-        settled = true;
-      },
-    );
+    const visiting = (visit === "reach" ? deploy.reachApp(d.id, "U1") : deploy.maintainApps()).finally(() => {
+      settled = true;
+    });
     await resolving.promise;
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(settled, false, `the ${visit} waits while the ${stop} holds the deploy lock`);
