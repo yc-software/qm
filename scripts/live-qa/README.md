@@ -8,7 +8,7 @@ node scripts/live-qa/live-qa.ts credentials
 node scripts/live-qa/live-qa.ts sandbox
 ```
 
-Run it from the worktree of a running dev instance (`bash scripts/dev-instance.sh up --sandbox <backend>`); it reads the instance's settings from the core process. To target another instance, set `CORE_URL`, `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`, `DATABASE_URL`, `ORG_ID`, `ADMIN_GRANTS` (or `QA_ADMIN`), and `PUBLIC_API_URL` when sandboxes reach core through a tunnel. The three surfaces can run in parallel against one instance. Exit status is non-zero when any check fails.
+Run it from the worktree of a running dev instance (`bash scripts/dev-instance.sh up --sandbox <backend>`); it reads the instance's settings from the core process. To target another instance, set `CORE_URL`, `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`, `DATABASE_URL`, `ORG_ID`, `ADMIN_GRANTS`, and `PUBLIC_API_URL` when sandboxes reach core through a tunnel. The three surfaces can run in parallel against one instance. Exit status is non-zero when any check fails.
 
 | Surface       | Checks                                                                                                                                                                                                                                                                                                            |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

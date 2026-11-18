@@ -28,8 +28,8 @@ const env: Env = process.env.CORE_URL ? process.env : { ...devInstanceEnv(), ...
 const core = env.CORE_URL ?? `http://127.0.0.1:${env.PORT}`;
 const publicApi = env.PUBLIC_API_URL || core;
 const org = env.ORG_ID ?? "";
-const admin = env.QA_ADMIN ?? firstAdminPrincipal(env.ADMIN_GRANTS);
-const nonAdmin = env.QA_NON_ADMIN ?? "qa-member@example.test";
+const admin = firstAdminPrincipal(env.ADMIN_GRANTS);
+const nonAdmin = "qa-member@example.test";
 const db = new pg.Pool({ connectionString: env.DATABASE_URL, max: 4 });
 const [surface = "", ...args] = process.argv.slice(2);
 const evidence =
@@ -91,6 +91,7 @@ async function newRun(kind: string, since: number, actor = "%"): Promise<string 
     if (rows[0]) return rows[0].id;
     await sleep(2000);
   }
+  note(`no ${kind} run appeared within 90s`);
 }
 
 async function waitRun(id: string, seconds = 360): Promise<Run> {
@@ -106,12 +107,13 @@ async function waitRun(id: string, seconds = 360): Promise<Run> {
   );
   const items = row?.sid
     ? await sql(
-        `select seq, kind, coalesce(tool,'') as tool, case when kind='ToolCall' then left(coalesce(body->>'command', body->'wire'->>'argumentsJson', body::text),1500) else left(coalesce(text,''),2500) end as text
+        `select seq, kind, coalesce(tool,'') as tool, case when kind='ToolCall' then coalesce(body->>'command', body->'wire'->>'argumentsJson', body::text) else coalesce(text,'') end as text
          from items where session_id=$1 and turn_id=(select turn_id from items where session_id=$1 order by seq desc limit 1)
          and kind in ('UserMessage','ToolCall','ToolResult','AgentMessage') order by seq`,
         [row.sid],
       )
     : [];
+  if (status !== "done" && status !== "failed") note(`run ${id} still ${status || "missing"} after ${seconds}s`);
   return {
     status,
     provenance: row?.p ?? "",
@@ -191,7 +193,7 @@ async function fireTyped() {
   );
   check("TYPED", typed, "HOST", /.+/);
   check("TYPED", typed, "ADMIN_READ", /200/);
-  verdict(/"ok":true|status.:200/.test(output(write, "admin")), "TYPED admin write (admin tool configure) ok");
+  verdict(parseJson(output(write, "admin"))?.body?.ok === true, "TYPED admin write (admin tool configure) ok");
   check("TYPED", typed, "MEM_ADD", /20[01]/);
   check("TYPED", typed, "SKILL_SAVE", /20[01]/);
   check("TYPED", typed, "CRONS", /200/);
@@ -214,7 +216,7 @@ async function fireCronAs(who: string) {
     },
   });
   save(`20-${t}-create.txt`, created.text);
-  const id = created.json?.id ?? created.json?.cron?.id;
+  const id = created.json?.cron?.id;
   if (!id) return verdict(false, `${t} create: HTTP ${created.status}`);
   const since = await maxSeq();
   save(`20-${t}-create.txt`, (await api(who, "POST", `/v1/crons/${id}/run?principalId=${uri(who)}`, {})).text);
@@ -282,7 +284,7 @@ async function fireLoop() {
     successCondition: "The probe output was posted verbatim.",
   });
   save("40-loop.txt", created.text);
-  const id = created.text.match(/"id":"([0-9a-f]{16})"/)?.[1];
+  const id = created.json?.loop?.id;
   if (!id) return verdict(false, `loop create: HTTP ${created.status}`);
   const since = await maxSeq();
   save("40-loop.txt", (await api(admin, "POST", `/v1/loops/${id}/fire`, {})).text);
@@ -313,14 +315,13 @@ async function fires(steps: string[]) {
 }
 
 async function credentials() {
-  const who = env.QA_CREDENTIAL_USER ?? admin;
   const value = `QASYNTH-${randomBytes(8).toString("hex")}`;
   const sha = createHash("sha256").update(value).digest("hex").slice(0, 12);
   const thread = `qa-cred-${tag()}`;
-  note(`credentials QA as ${who} (synthetic value sha256 prefix ${sha})`);
+  note(`credentials QA as ${admin} (synthetic value sha256 prefix ${sha})`);
   const body = JSON.stringify({ service: "qa-synthetic", envKey: "QA_SYNTH", secret: value });
   const saved = await turn(
-    who,
+    admin,
     thread,
     `Disposable QA dev instance. Save a synthetic test credential with one command via the execute tool and reply with its raw output only: curl -s -w '\\nSAVE_HTTP:%{http_code}\\n' -X POST -H "x-agent-capability: $AGENT_API_TOKEN" -H content-type:application/json $AGENT_API_URL/v1/keychain/credentials -d '${body}'`,
     "10-save.txt",
@@ -329,13 +330,13 @@ async function credentials() {
   verdict(/SAVE_HTTP:20[01]/.test(saved.transcript), `credential saved via self-API (handle ${handle ?? "?"})`);
   const probe = `echo QA_LEN=\${#QA_SYNTH} QA_SHA=$(printf %s "$QA_SYNTH" | sha256sum | cut -c1-12); echo "QA_ECHO=$QA_SYNTH"`;
   const withCred = await turn(
-    who,
+    admin,
     thread,
     `Now run exactly this with the execute tool, selecting credential handle ${handle} in the execute call's credentials parameter, and reply with the raw output only: ${probe}`,
     "20-with.txt",
   );
   const without = await turn(
-    who,
+    admin,
     thread,
     `Run exactly this with the execute tool WITHOUT selecting any credentials, reply with raw output only: ${probe}`,
     "30-without.txt",
@@ -346,8 +347,7 @@ async function credentials() {
   );
   verdict(output(without, "execute").includes("QA_LEN=0"), "unselected execute does not see the secret");
   const echoed = output(withCred, "execute").match(/QA_ECHO=\S*/)?.[0];
-  if (echoed) verdict(echoed.startsWith("QA_ECHO=<redacted"), `echoed secret is masked in tool output (${echoed})`);
-  else note("SKIP masking: the model dropped the echo; the stored-items check below still applies");
+  verdict(!!echoed?.startsWith("QA_ECHO=<redacted"), `echoed secret is masked in tool output (${echoed ?? "no echo"})`);
   const [leaks] = await sql(
     "select count(*)::int as n from items where kind in ('ToolResult','AgentMessage') and (coalesce(text,'')||coalesce(body::text,'')) like $1",
     [`%${value}%`],
@@ -360,8 +360,15 @@ async function credentials() {
 async function sandbox() {
   const who = `qa-fresh-${Date.now()}@example.test`;
   const thread = `qa-sbx-${tag()}`;
-  const scope = uri(`personal:${who}`);
   const cmd = `echo SBX_HOST=$(hostname) SBX_KERNEL=$(uname -r); curl -s -o /dev/null -w "SBX_SELFAPI:%{http_code}\\n" -H "x-agent-capability: $AGENT_API_TOKEN" $AGENT_API_URL/v1/apis`;
+  try {
+    await sandboxTurns(who, thread, cmd);
+  } finally {
+    await retireBoxes(who);
+  }
+}
+
+async function sandboxTurns(who: string, thread: string, cmd: string) {
   const t0 = Date.now();
   const cold = await turn(
     who,
@@ -384,10 +391,12 @@ async function sandbox() {
     );
   }
   note(`cold turn ${Math.round((t1 - t0) / 1000)}s, warm turn ${Math.round((t2 - t1) / 1000)}s`);
+}
+
+async function retireBoxes(who: string) {
+  const scope = uri(`personal:${who}`);
   const listed = await api(admin, "GET", `/v1/admin/sandboxes/${scope}`);
-  const boxes = ((Array.isArray(listed.json) ? listed.json : (listed.json?.sandboxes ?? [])) as any[]).filter(
-    (box) => box.ownerScopeId === `personal:${who}`,
-  );
+  const boxes = ((listed.json?.sandboxes ?? []) as any[]).filter((box) => box.ownerScopeId === `personal:${who}`);
   save(
     "30-cleanup.txt",
     (await api(admin, "POST", `/v1/admin/sandboxes/${scope}`, { action: "default", sandboxId: null })).text,
