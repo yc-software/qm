@@ -1,3 +1,4 @@
+import { developmentImpersonation } from "./development-impersonation.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
@@ -900,6 +901,27 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       session = canonical.stale ? null : known;
     }
   }
+
+  if (
+    await developmentImpersonation({
+      req,
+      res,
+      url,
+      session,
+      enabled: LOCAL_AUTH_BYPASS,
+      allowedOrigin: (method === "GET" && !req.headers.origin) || sameOriginRequest(req) || Boolean(crossOrigin),
+      key: impersonateKey,
+      secure: SECURE_COOKIES,
+      ttlSeconds: IMPERSONATE_TTL_S,
+      isAdmin: (actor) => isAdmin(actor.sub, actor.t),
+      canonical: async (target, actor) => {
+        const principal = await canonicalPrincipal(target, actor.t);
+        return principal && !(principal instanceof IdentityRejected) && !principal.stale ? principal.id : null;
+      },
+      impersonate: (action, actor, target) => coreImpersonate(action, actor.sub, target, actor.t),
+    })
+  )
+    return;
 
   if (pathname === "/auth/impersonate" && method === "POST") {
     if (!session) return staleSession ? identityUnavailable(req, res) : json(res, 401, { error: "sign in" });

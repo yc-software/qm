@@ -7,9 +7,12 @@ const EXPOSED_HEADERS = "content-disposition";
 const PREFLIGHT_MAX_AGE_S = 600;
 
 const CHAT_API_ROUTES = [
+  { method: "GET", path: "/api/development/impersonation" },
+  { method: "POST", path: "/api/development/impersonation" },
   { method: "GET", path: "/me" },
   { method: "POST", path: "/api/turn" },
   { method: "POST", path: "/api/documents/resolve" },
+  { method: "POST", path: "/api/documents/:sessionId/restart" },
   { method: "GET", path: "/api/contexts" },
   { method: "POST", path: "/api/projects" },
   { method: "POST", path: "/api/skills" },
