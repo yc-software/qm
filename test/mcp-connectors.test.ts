@@ -729,7 +729,6 @@ test("an app a connector serves is connected for a person only when that person'
   assert.deepEqual(await status("alice@example.com"), [
     ["mail", "host", true],
     ["calendar", "host", false],
-    ["notes", "host", false],
   ]);
   assert.deepEqual(
     new Set(mcp.requests.filter((r) => r.rpc === "tools/list").map((r) => r.actor)),
@@ -737,7 +736,7 @@ test("an app a connector serves is connected for a person only when that person'
   );
   assert.deepEqual(
     (await status("jörg@example.com")).map(([, , connected]) => connected),
-    [false, false, false],
+    [false, false],
   );
   service.close();
 });

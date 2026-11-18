@@ -29,9 +29,10 @@ export function withConnectorApps(items: CatalogApp[], apps: ConnectorApp[], fir
     const app = byToolkit.get(item.id);
     return app ? { ...item, connectUrl: app.connectUrl, connector: app.connector } : item;
   });
+  const ids = new Set(items.map((item) => item.id));
   const unlisted = firstPage
     ? apps
-        .filter((app) => !items.some((item) => item.id === app.toolkit))
+        .filter((app) => !ids.has(app.toolkit))
         .map((app) => ({
           id: app.toolkit,
           logoUrl: `https://logos.composio.dev/api/${app.toolkit}`,

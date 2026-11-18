@@ -564,16 +564,15 @@ export function createMcpToolService(opts: {
     async appConnections(principalId, servers) {
       const perServer = await Promise.all(
         servers.map(async (server) => {
-          const apps = connectorApps([server]);
+          const apps = connectorApps([server]).filter((app) => app.tool);
+          if (!apps.length) return [];
           let listed = new Set<string>();
-          if (apps.some((app) => app.tool)) {
-            try {
-              listed = new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
-            } catch (e) {
-              record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
-            }
+          try {
+            listed = new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
+          } catch (e) {
+            record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
           }
-          return apps.map((app) => ({ ...app, connected: app.tool !== undefined && listed.has(app.tool) }));
+          return apps.map((app) => ({ ...app, connected: listed.has(app.tool!) }));
         }),
       );
       return perServer.flat();
