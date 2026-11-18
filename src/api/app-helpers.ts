@@ -32,7 +32,7 @@ import {
   scopeMembershipSnapshot,
   type ScopeMembershipDeps,
 } from "../resolution/scope-membership.ts";
-import { samePerson } from "../directory/person.ts";
+import { ownsPersonalScope, samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { PublishedApp } from "../deploy/deploy-store.ts";
@@ -551,7 +551,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const actor = deps.identity.classify(principalId);
     if (!deps.identity.isInternal(actor)) return false;
     const { kind, ref } = parseScopeId(session.scopeId);
-    if (kind === "personal") return session.scopeId === scopeId("personal", actor.id);
+    if (kind === "personal") return ownsPersonalScope(session.scopeId, actor.id);
     if (kind !== "channel" && kind !== "group") return false;
     const subagent = isSubagentThreadRef(session.threadRef);
     const key = subagent ? `subagent ${session.scopeId}` : session.scopeId;

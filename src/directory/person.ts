@@ -86,6 +86,11 @@ export function personIds(id: string): string[] {
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
+export function ownsPersonalScope(scope: string | undefined, id: string | undefined): boolean {
+  const { kind, ref } = parseScopeId(scope ?? "");
+  return kind === "personal" && samePerson(ref, id);
+}
+
 export function ownsWebThread(threadRef: string, id: string): boolean {
   return personIds(id).some((owner) => threadRef.startsWith(`web:${owner}:`));
 }
@@ -112,6 +117,15 @@ export function pickForPerson<T>(
     if (rec && (best === undefined || recency(rec) > recency(best))) best = rec;
   }
   return best;
+}
+
+export async function recordForPerson<T>(
+  id: string,
+  recordOf: (principalId: string) => Promise<T | null | undefined>,
+  recency: (rec: T) => number = () => 0,
+): Promise<T | undefined> {
+  const found = new Map(await Promise.all(rosterIds(id).map(async (p) => [p, await recordOf(p)] as const)));
+  return pickForPerson(id, (p) => found.get(p), recency);
 }
 
 export function personKey(id: string | null | undefined): string {

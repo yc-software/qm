@@ -20,7 +20,7 @@ import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.
 import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
-import { personalScope, scopeId, type Permission } from "../../types.ts";
+import { scopeId, type Permission } from "../../types.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
@@ -34,7 +34,7 @@ import { appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
 import { appSubdomainUrlOf } from "../../deploy/deploy-store.ts";
-import { canonicalPerson } from "../../directory/person.ts";
+import { canonicalPerson, ownsPersonalScope, samePerson } from "../../directory/person.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { relayWebSocket } from "../../../plugins/chassis/src/websocket-relay.ts";
@@ -1313,7 +1313,7 @@ async function createPublishedApp(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   if (!isDeployInput(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a DeployInput" });
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
-  if (principalId && body.createdBy !== principalId) return sendJson(res, 403, { error: "forbidden" });
+  if (principalId && !samePerson(body.createdBy, principalId)) return sendJson(res, 403, { error: "forbidden" });
   try {
     return sendJson(res, 200, { app: appView(await app.deploy(body)) });
   } catch (e) {
@@ -1613,7 +1613,7 @@ async function visibleAppsExport(ctx: BaseCtx): Promise<void> {
     ...(d.displayName ? { displayName: d.displayName } : {}),
     url: app.appUrl(publishedApp) ?? null,
     createdBy: d.createdBy,
-    owned: d.ownerScopeId === personalScope(principalId),
+    owned: ownsPersonalScope(d.ownerScopeId, principalId),
     permission,
     ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),

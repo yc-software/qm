@@ -1,5 +1,5 @@
-import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
-import { scopeId } from "../types.ts";
+import { scopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
+import { recordForPerson } from "../directory/person.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -722,12 +722,12 @@ export function createConfigStore(
     setIndividualModelAuth: (on) => settings.individualModelAuth.set(org, on),
     async getIndividualModelAuthDurable(principalId) {
       if (await settings.individualModelAuth.durable(org)) return true;
-      return principalId
-        ? ((await settings.individualModelAuth.durable(scopeId("personal", principalId))) ?? false)
-        : false;
+      const own = (p: string) => settings.individualModelAuth.durable(scopeId("personal", p));
+      return !!principalId && !!(await recordForPerson(principalId, own));
     },
     async getModelAccountDurable(principalId) {
-      const row = await settings.individualModelAuth.store.get(scopeId("personal", principalId));
+      const own = (p: string) => settings.individualModelAuth.store.get(scopeId("personal", p));
+      const row = await recordForPerson(principalId, own);
       if (row?.on) return row.provider ?? "personal";
       return (await settings.individualModelAuth.durable(org)) ? "personal" : "company";
     },
