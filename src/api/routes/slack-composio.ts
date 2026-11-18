@@ -5,12 +5,16 @@ import { rosterIds, samePerson } from "../../directory/person.ts";
 import { composioUserIds, credential, request as composioRequest } from "./composio.ts";
 import type { ApiCtx } from "./route.ts";
 
+async function personSlackAccounts(ctx: ApiCtx, principalId: string) {
+  const ids = rosterIds(principalId);
+  const records = (await ctx.deps.slackAccounts?.getMany(ids)) ?? [];
+  return records
+    .filter((record) => samePerson(record.memberId, principalId))
+    .sort((a, b) => ids.indexOf(a.principalId) - ids.indexOf(b.principalId));
+}
+
 export async function hasSlackAccount(ctx: ApiCtx): Promise<boolean> {
-  for (const id of rosterIds(ctx.actor!.p)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
-    if (record && samePerson(record.memberId, ctx.actor!.p)) return true;
-  }
-  return false;
+  return (await personSlackAccounts(ctx, ctx.actor!.p)).length > 0;
 }
 
 export async function composioSlackConnection(ctx: ApiCtx) {
@@ -24,9 +28,7 @@ export async function composioSlackConnection(ctx: ApiCtx) {
       throw sanitized;
     }
   };
-  for (const id of rosterIds(access.principal)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
-    if (!record || !samePerson(record.memberId, access.principal)) continue;
+  for (const record of await personSlackAccounts(ctx, access.principal)) {
     const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
     if (
       account.id !== record.accountId ||
