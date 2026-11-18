@@ -62,7 +62,7 @@ const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
 
 const DELIVERY_SETTLE_WAIT_MS = 1_000;
-const DELIVERY_SETTLE_POLL_MS = 25;
+const DELIVERY_SETTLE_POLL_MS = 40;
 
 function deliversOwnMessageTs(destination: Destination): boolean {
   return (
@@ -75,27 +75,28 @@ function deliversOwnMessageTs(destination: Destination): boolean {
   );
 }
 
-async function waitForDeliverySettle(
-  deliveries: Pick<DeliveryStore, "get">,
-  id: string,
-): Promise<Delivery | null> {
-  const deadline = Date.now() + DELIVERY_SETTLE_WAIT_MS;
-  for (;;) {
+async function waitForDeliverySettle(deliveries: Pick<DeliveryStore, "get">, id: string): Promise<Delivery | null> {
+  const maxPolls = DELIVERY_SETTLE_WAIT_MS / DELIVERY_SETTLE_POLL_MS;
+  for (let polls = 0; ; polls++) {
     let d: Delivery | null;
     try {
       d = await deliveries.get(id);
-    } catch {
+    } catch (err) {
+      console.error("%s", "[surface] delivery settle check failed:", (err as Error).message);
       return null;
     }
     if (d && (d.deliveredAt !== null || d.failedReason !== undefined)) return d;
-    if (Date.now() + DELIVERY_SETTLE_POLL_MS >= deadline) return d;
+    if (polls >= maxPolls) return d;
     await sleep(DELIVERY_SETTLE_POLL_MS, { unref: true });
   }
 }
 
 function deliveryFailureMessage(reason: string, destination: Destination): string {
   const ref = destination.edit?.messageTs;
-  if (ref && (reason === "cant_update_message" || reason === "edit_target_not_found" || reason === "edit_window_closed"))
+  if (
+    ref &&
+    (reason === "cant_update_message" || reason === "edit_target_not_found" || reason === "edit_window_closed")
+  )
     return `ref ${ref} isn't one of my own messages (Slack refused: ${reason}) — I can only edit or delete messages I posted; use the ts my own post or edit returned`;
   return `delivery failed (${reason})`;
 }
@@ -313,7 +314,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (deliversOwnMessageTs(destination)) {
         const settled = await waitForDeliverySettle(deps.deliveries, delivery.id);
         if (settled?.failedReason)
-          return { ok: false, message: deliveryFailureMessage(settled.failedReason, destination), deliveryId: delivery.id };
+          return {
+            ok: false,
+            message: deliveryFailureMessage(settled.failedReason, destination),
+            deliveryId: delivery.id,
+          };
         if (settled?.messageTs) return { ok: true, deliveryId: delivery.id, ts: settled.messageTs };
       }
       return { ok: true, deliveryId: delivery.id };

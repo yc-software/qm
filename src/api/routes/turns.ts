@@ -327,7 +327,8 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
     isObj(body) && typeof body.slackApiMs === "number" && Number.isFinite(body.slackApiMs) && body.slackApiMs >= 0
       ? body.slackApiMs
       : undefined;
-  const messageTs = isObj(body) && typeof body.messageTs === "string" && body.messageTs.trim() ? body.messageTs : undefined;
+  const messageTs =
+    isObj(body) && typeof body.messageTs === "string" && body.messageTs.trim() ? body.messageTs : undefined;
   if (recipientThreadRef) await app.recordPrincipalDelivery(id, recipientThreadRef);
   await app.ackDelivery(id, slackApiMs, messageTs);
   return sendJson(res, 200, { ok: true });

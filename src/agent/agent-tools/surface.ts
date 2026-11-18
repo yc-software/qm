@@ -161,7 +161,7 @@ export function surfaceTool(kit: ToolKit) {
           const r = await tc.post(params.text, opts, params.files, params.sandbox_id);
           const sent = [
             r.ok ? `[sent${r.ts ? ` ts=${r.ts}` : ""}]` : `[not sent] ${r.message ?? "delivery failed"}`,
-            ...(r.ok ? r.notes ?? [] : []),
+            ...(r.ok ? (r.notes ?? []) : []),
           ].join(" ");
           return recordResult(
             callId,
@@ -265,9 +265,7 @@ export function surfaceTool(kit: ToolKit) {
               ...(r.ts ? { ts: r.ts } : {}),
             },
             text(
-              r.ok
-                ? `[edited ref=${params.ref}]`
-                : `[not edited] ${r.message ?? "edit failed"} (ref ${params.ref})`,
+              r.ok ? `[edited ref=${params.ref}]` : `[not edited] ${r.message ?? "edit failed"} (ref ${params.ref})`,
             ),
             !r.ok,
           );

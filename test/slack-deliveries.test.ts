@@ -524,7 +524,6 @@ test("a reply revised by the reply check carries a plain-text edit note footer",
   });
 });
 
-
 test("a posted delivery acks with the Slack ts of the message it created", async () => {
   const { ackBodies } = await deliver();
   assert.equal(ackBodies.length, 1);

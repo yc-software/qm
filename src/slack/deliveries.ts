@@ -94,10 +94,7 @@ export function createSlackDeliverer(deps: {
   const { inFlightRuns } = flow;
 
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
-    core.ackDelivery(
-      id,
-      body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined,
-    );
+    core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
     const base = trimTrailingSlashes(deps.webUiPublicUrl?.trim() ?? "");
