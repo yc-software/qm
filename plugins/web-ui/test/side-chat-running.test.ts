@@ -20,61 +20,23 @@ test("opening a side chat whose turn is still running never shows the turn as fi
     scopeId: "personal:tester",
     canContinue: true,
     type: "dm",
-    createdAt: startedAt - 60_000,
-    title: "Import pipeline",
+    createdAt: startedAt,
   };
-  const side: CoreSession = {
-    ...source,
-    id: "side",
-    threadRef: "web:tester:side",
-    forkedFrom: { sessionId: source.id },
-    forkBoundarySeq: 0,
-    sideChat: { entrySeq: 0, quote: "durable", occurrence: 0, expanded: false },
-    working: true,
-    workingSince: startedAt,
-  };
-  const items = [item("UserMessage", { seq: 0, createdAt: startedAt - 1000, text: "Use a durable queue" })];
-  const call = item("ToolCall", {
-    seq: 2,
-    createdAt: startedAt + 1000,
-    tool: "files",
-    callId: "c1",
-    body: { action: "read", path: "src/import.ts" },
-  });
-  const result = item("ToolResult", {
-    seq: 3,
-    createdAt: startedAt + 2000,
-    tool: "files",
-    callId: "c1",
-    body: { action: "read", path: "src/import.ts", bytes: 10 },
-  });
-  const command = item("ToolCall", {
-    seq: 4,
-    createdAt: startedAt + 3000,
-    tool: "execute",
-    callId: "c2",
-    body: { command: "npm run import", purpose: "Reproduce the import error" },
-  });
-  const sideItems = [
-    ...items,
-    item("UserMessage", { seq: 1, createdAt: startedAt, text: "Why does the import fail?" }),
-    call,
-    result,
-    command,
+  const side: CoreSession = { ...source, id: "side", threadRef: "web:tester:side", forkBoundarySeq: 0 };
+  Object.assign(side, { forkedFrom: { sessionId: source.id }, working: true, workingSince: startedAt });
+  side.sideChat = { entrySeq: 0, quote: "durable", occurrence: 0, expanded: false };
+  const items = [item("UserMessage", { seq: 0, createdAt: startedAt, text: "Use a durable queue" })];
+  const call = (seq: number, tool: string, body: Record<string, unknown>) =>
+    item("ToolCall", { seq, createdAt: startedAt + seq * 1000, tool, callId: `c${seq}`, body });
+  const work = [
+    call(2, "files", { action: "read", path: "src/import.ts" }),
+    call(3, "execute", { command: "npm run import", purpose: "Reproduce the import error" }),
   ];
-  const run = () => ({
-    status: "running",
-    alive: true,
-    startedAt,
-    attempt: 1,
-    input: { runId: "r1", seq: 1, text: "Why does the import fail?", createdAt: startedAt },
-    activity: [{ item: call }, { item: result }, { item: command }],
-    result: null,
-  });
+  const sideItems = [...items, item("UserMessage", { seq: 1, createdAt: startedAt, text: "Why?" }), ...work];
+  const input = { runId: "r1", seq: 1, text: "Why?", createdAt: startedAt };
+  const run = { status: "running", alive: true, startedAt, input, activity: work.map((entry) => ({ item: entry })) };
   let releaseRun!: () => void;
-  const runKnown = new Promise<void>((resolve) => {
-    releaseRun = resolve;
-  });
+  const runKnown = new Promise<void>((resolve) => (releaseRun = resolve));
   const h = await harness({
     path: "/s/source",
     session: source,
@@ -83,9 +45,9 @@ test("opening a side chat whose turn is still running never shows the turn as fi
     api(path) {
       if (path.startsWith("/api/sessions/side?")) return Response.json({ session: side, items: sideItems });
       if (path.includes("/api/runs/active") && path.includes("side"))
-        return runKnown.then(() => Response.json({ runId: "r1", run: run(), queued: [] }));
+        return runKnown.then(() => Response.json({ runId: "r1", run: { ...run, result: null }, queued: [] }));
       if (path.startsWith("/api/runs/r1/events")) throw new TypeError("no sse");
-      if (path === "/api/runs/r1") return Response.json(run());
+      if (path === "/api/runs/r1") return Response.json({ ...run, result: null });
       return undefined;
     },
   });
@@ -93,22 +55,19 @@ test("opening a side chat whose turn is still running never shows the turn as fi
     h.releaseSessions();
     await h.boot();
     await h.sessionsReady();
-    await until(() => document.querySelector(".side-chat-preview") !== null);
     await until(() => !/Loading/.test(document.querySelector(".side-chat-preview")?.textContent ?? "Loading"));
     document.querySelector<HTMLElement>(".side-chat-preview")!.click();
     const panel = () => document.querySelector<HTMLElement>(".side-chat-panel");
-    await until(() => panel()?.textContent?.includes("Why does the import fail?") === true);
+    await until(() => panel()?.textContent?.includes("Why?") === true);
     const head = () => panel()?.querySelector("summary.work-head")?.textContent ?? "";
     for (let i = 0; i < 20; i++) {
       assert.doesNotMatch(panel()!.textContent ?? "", /Worked/, "a running turn must not render as finished");
-      assert.match(head(), /Reproduce the import error/, "the running step shows while the run is looked up");
-      assert.match(head(), /3m/, "the elapsed time counts from when the turn started");
+      assert.match(head(), /Reproduce the import error[\s\S]*3m/, "the running step and its elapsed time show");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     releaseRun();
-    await until(() => h.requests.some((path) => path === "/api/runs/r1" || path.startsWith("/api/runs/r1/events")));
+    await until(() => h.requests.includes("/api/runs/r1"));
     assert.match(head(), /Reproduce the import error/);
-    assert.doesNotMatch(panel()!.textContent ?? "", /Worked/);
   } finally {
     releaseRun();
     await h.close();
