@@ -103,7 +103,7 @@ import { createPrincipalLinkService, type PrincipalLinkService } from "./identit
 import { createPostgresUserStore, type UserStore } from "./identity/user-store.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
-import { externalMemberActive, type ExternalMember } from "./identity/external-members.ts";
+import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
@@ -2631,11 +2631,7 @@ export function buildApp(
             if (!email.includes("@")) return false;
             if (!vouchedByHost) return vouchedInternalEmail(email);
             await identity.refresh();
-            if (identity.deactivationSource(email) === "directory-sync") {
-              const external = identity.externalMember(email);
-              return external === undefined || externalMemberActive(external);
-            }
-            return isActiveMember(email);
+            return identity.isInternal(identity.classify(email, false, true));
           },
           unansweredReply: genericChatNotices.unanswered,
           guestReply: genericChatNotices.guest,
