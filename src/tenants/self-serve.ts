@@ -60,15 +60,16 @@ async function markSelfServeProvisioned(
   tenant: string,
   settings: ProvisionedSettings,
 ): Promise<void> {
-  const rows = await pg.q("SELECT qm_self_serve_provisioned($1, $2, $3) AS attached", [
+  const rows = await pg.q("SELECT qm_self_serve_provisioned($1, $2, $3)::text AS holder", [
     tenant,
     settings.modelGatewayKey,
     settings.partnerChatAccount ?? null,
   ]);
-  if (rows[0]?.attached === false)
+  const holder = rows[0]?.holder;
+  if (typeof holder === "string")
     reportFailure(
       "self-serve workspace provisioning",
-      new Error("the provisioner's partner chat account already belongs to another workspace"),
+      new Error(`partner chat account ${settings.partnerChatAccount} already belongs to workspace ${holder}`),
       tenant,
     );
 }
