@@ -54,11 +54,11 @@ export function cronDeliveryList(
     ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
     ${shares.map((g) => deliveryRow(granteeName(g.scope), g.permission === "write" ? "Can view and edit" : "Can view"))}
     ${
-        mine
-          ? html`<button class="cron-delivery-add" type="button" @click=${onAdd}>
-              ${icon(Plus, 15)}<span>Add people</span>
-            </button>`
-          : nothing
-      }
+      mine
+        ? html`<button class="cron-delivery-add" type="button" @click=${onAdd}>
+            ${icon(Plus, 15)}<span>Add people</span>
+          </button>`
+        : nothing
+    }
   </div>`;
 }
