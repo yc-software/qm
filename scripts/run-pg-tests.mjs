@@ -113,38 +113,34 @@ async function runIsolated(file, index) {
   }
 }
 
-const templateName = `${runId}_template`;
-
-function migrateTemplate() {
+function prepareTemplate() {
   return new Promise((resolve, reject) => {
+    let output = "";
     const child = spawn(
       process.execPath,
-      [new URL("../test/support/test-template.ts", import.meta.url).pathname, databaseUrl(templateName)],
-      { stdio: ["ignore", "ignore", "inherit"] },
+      [new URL("./pg-test-template.ts", import.meta.url).pathname, baseUrl, `${runId}_template`],
+      { stdio: ["ignore", "pipe", "inherit"] },
     );
+    child.stdout.on("data", (chunk) => (output += chunk));
     child.on("error", reject);
     child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`Migrating ${templateName} exited ${code}`)),
+      code === 0 ? resolve(output.trim()) : reject(new Error(`Preparing the test template exited ${code}`)),
     );
   });
 }
 
 const started = Date.now();
-await admin.query(`CREATE DATABASE ${templateName}`);
-await seedTestTenant(databaseUrl(templateName));
-await migrateTemplate().catch(async (error) => {
+const templateName = await prepareTemplate().catch(async (error) => {
   try {
-    await dropDatabase(templateName);
+    await dropDatabase(runId);
     await endPool();
   } catch (cleanupError) {
-    throw new AggregateError([error, cleanupError], `Migrating ${templateName} failed and cleanup failed`, {
+    throw new AggregateError([error, cleanupError], "Preparing the test template failed and cleanup failed", {
       cause: cleanupError,
     });
   }
   throw error;
 });
-await admin.query(`ALTER DATABASE ${templateName} WITH ALLOW_CONNECTIONS false`);
-await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [templateName]);
 const results = [];
 let next = 0;
 const work = Promise.all(

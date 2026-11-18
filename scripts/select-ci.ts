@@ -14,7 +14,7 @@ const RUN_ALL = {
     "scripts/run-pg-tests.mjs",
     "scripts/run-root-test-shard.mjs",
     "scripts/select-ci.ts",
-    "test/support/test-template.ts",
+    "scripts/pg-test-template.ts",
   ],
   prefixes: [".github/", "vendor/", "tsconfig"],
 };
