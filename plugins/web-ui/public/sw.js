@@ -27,11 +27,11 @@ self.addEventListener("notificationclick", (event) => {
   const notice = event.notification.data;
   event.notification.close();
   event.waitUntil(
-    windowClients().then(async (clients) => {
+    windowClients().then((clients) => {
       const client = clients.find((candidate) => candidate.focused) ?? clients[0];
       if (!client) return self.clients.openWindow(notice.url);
-      await client.focus();
       client.postMessage({ type: OPEN_SESSION_MESSAGE, sessionId: notice.sessionId });
+      return client.focus();
     }),
   );
 });
