@@ -7,6 +7,7 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
 import { boundUrl, seedTestTenant } from "../test/support/test-tenant.ts";
+import { databaseUrl, quoted } from "./pg-test-template.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -53,19 +54,13 @@ function killGroup(child) {
   }
 }
 
-function databaseUrl(name) {
-  const url = new URL(baseUrl);
-  url.pathname = `/${name}`;
-  return url.toString();
-}
-
 async function dropDatabase(name) {
   const { rows } = await admin.query(
     "SELECT datname FROM pg_database WHERE datname = $1 OR starts_with(datname, $1 || '_') ORDER BY datname DESC",
     [name],
   );
   for (const { datname } of rows) {
-    await admin.query(`DROP DATABASE IF EXISTS "${datname.replaceAll('"', '""')}" WITH (FORCE)`);
+    await admin.query(`DROP DATABASE IF EXISTS ${quoted(datname)} WITH (FORCE)`);
   }
 }
 
@@ -105,9 +100,12 @@ async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
     await admin.query(`CREATE DATABASE ${name}`);
-    await seedTestTenant(databaseUrl(name));
+    await seedTestTenant(databaseUrl(baseUrl, name));
     if (stopping) return { file, ok: false, ms: 0, output: "" };
-    return await runFile(file, { DATABASE_URL: boundUrl(databaseUrl(name)), QM_TEST_TEMPLATE_DATABASE: templateName });
+    return await runFile(file, {
+      DATABASE_URL: boundUrl(databaseUrl(baseUrl, name)),
+      QM_TEST_TEMPLATE_DATABASE: templateName,
+    });
   } finally {
     await dropDatabase(name);
   }
