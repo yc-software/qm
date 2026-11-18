@@ -30,7 +30,7 @@ import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
-import type { Tenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
 import {
@@ -375,6 +375,7 @@ export interface SessionSyscallDeps {
     | "participantsOf"
     | "getForParticipant"
     | "descendantsOf"
+    | "forkOrigin"
   > &
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
@@ -1067,7 +1068,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return leaveMail("a private turn cannot start work in another session");
               if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
                 return leaveMail("a notebook-only turn cannot start work in a session that isn't notebook-only");
-              if (!sessionVisibleTo(binding.request, target))
+              if (await hiddenFromBotWork(ambientTenant(), binding.request, target, deps))
                 return leaveMail("your parent is hidden from bot work, so this waits for the person's next turn");
               if (isPeerMessage(binding.session, target)) {
                 if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
