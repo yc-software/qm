@@ -32,7 +32,7 @@ export type DocumentRecord =
       scopeId: string;
       mode: DocumentMode;
       principalId?: string;
-      bindingKey?: string;
+      bindingKey: string;
     }
   | { kind: "document"; projectId: string; threadRef?: string }
   | { kind: "conversation"; scopeId: string; threadRef: string }
@@ -108,14 +108,13 @@ export function createDocumentConversations(deps: {
       const record = await deps.backing.get(key("session", sessionId));
       if (
         record?.kind !== "session" ||
-        !record.bindingKey ||
         (record.mode === "private" && !samePerson(record.principalId ?? "", principalId))
       )
         return { status: "forbidden" };
       const result = await deps.projects.withRosterLock(record.projectId, async (project) => {
         const members = await deps.projects.members(projectGroupRef(project.id));
         if (!members?.some((member) => samePerson(member, principalId))) return { status: "forbidden" as const };
-        const binding = await deps.backing.get(record.bindingKey!);
+        const binding = await deps.backing.get(record.bindingKey);
         const previous = await deps.sessions.get(sessionId);
         if (
           binding?.kind !== "conversation" ||
@@ -140,7 +139,7 @@ export function createDocumentConversations(deps: {
         )
           throw new Error("New conversation has a different document association");
         await deps.sessions.addParticipant(session.id, principalId);
-        await deps.backing.put(record.bindingKey!, { ...binding, threadRef });
+        await deps.backing.put(record.bindingKey, { ...binding, threadRef });
         return {
           status: "ok" as const,
           conversation: { scopeId: record.scopeId, threadRef, sessionId: session.id, mode: record.mode },
@@ -250,8 +249,7 @@ export function createDocumentConversations(deps: {
           association.mode !== mode
         )
           return { status: "conflict" as const };
-        if (association.bindingKey && association.bindingKey !== bindingKey) return { status: "conflict" as const };
-        if (!association.bindingKey) await deps.backing.merge(key("session", session.id), { bindingKey });
+        if (association.bindingKey !== bindingKey) return { status: "conflict" as const };
         await deps.sessions.addParticipant(session.id, input.principalId);
         if (input.mode !== undefined) await deps.backing.put(preferenceKey, { kind: "preference", mode });
         return {

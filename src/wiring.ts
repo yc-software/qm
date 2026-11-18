@@ -1,3 +1,4 @@
+import { DOCUMENT_BINDING_KEYS_MIGRATION } from "./documents/migrations.ts";
 import { createDocumentMemory } from "./documents/memory.ts";
 import { createDocumentGroups } from "./documents/groups.ts";
 import {
@@ -1922,6 +1923,7 @@ export function buildApp(
     projects,
     sessions,
   });
+  pgArtifactMap.pool.registerMigration(DOCUMENT_BINDING_KEYS_MIGRATION);
   const managedGroups = createDocumentGroups(documentConversations, projects);
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     databaseUrl,
