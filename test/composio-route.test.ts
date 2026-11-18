@@ -1400,4 +1400,13 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   assert.equal(refused.status, 409);
   assert.equal(refused.data.connectUrl, "https://host.example/google");
   assert.equal(f.calls.length, 2);
+
+  const bare = fixture();
+  bare.deps.mcpServers = f.deps.mcpServers;
+  bare.deps.mcpToolService = f.deps.mcpToolService;
+  assert.deepEqual((await bare.invoke("/v1/composio/connections")).data.items, [
+    { id: "", toolkit: "gmail", connector: "host", missingScopes: [] },
+  ]);
+  assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
+  assert.equal(bare.calls.length, 0);
 });

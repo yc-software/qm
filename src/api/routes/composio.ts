@@ -22,6 +22,7 @@ import type { McpServerApp } from "../../mcp/mcp-server-store.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 const TOOLKIT_ID = /^[a-z0-9_-]{1,100}$/;
+const NO_COMPOSIO: Record<string, unknown> = { items: [] };
 
 export function isToolkitId(value: unknown): value is string {
   return typeof value === "string" && TOOLKIT_ID.test(value);
@@ -37,7 +38,22 @@ export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
 }
 
-export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
+function composioUnavailable(ctx: ApiCtx, status: number): void {
+  sendJson(ctx.res, status, {
+    error: "composio_unavailable",
+    message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
+  });
+}
+
+export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null>;
+export async function credential(
+  ctx: ApiCtx,
+  optional: true,
+): Promise<{ key: string | null; principal: string } | null>;
+export async function credential(
+  ctx: ApiCtx,
+  optional = false,
+): Promise<{ key: string | null; principal: string } | null> {
   if (!(await activeRun(ctx))) return null;
   const principal = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principal) {
@@ -105,11 +121,9 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
     (c) => c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY" && allowed.has(c.slug),
   );
+  if (!records.length && optional) return { key: null, principal };
   if (records.length !== 1) {
-    sendJson(ctx.res, records.length ? 409 : 403, {
-      error: "composio_unavailable",
-      message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
-    });
+    composioUnavailable(ctx, records.length ? 409 : 403);
     return null;
   }
   const record = await ctx.deps.serviceCreds!.getServiceCredentialSecret(org, records[0]!.slug);
@@ -196,14 +210,16 @@ export async function externalApps(ctx: ApiCtx): Promise<Array<McpServerApp & { 
 }
 
 async function catalog(ctx: ApiCtx): Promise<void> {
-  const access = await credential(ctx);
+  const access = await credential(ctx, true);
   if (!access) return;
+  const apps = await externalApps(ctx);
+  if (!access.key && !apps.length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
   const query = new URLSearchParams({ sort_by: "usage", limit: "1000" });
   if (cursor) query.set("cursor", cursor);
   try {
-    const data = await request(ctx, access.key, `/toolkits?${query}`);
+    const data = access.key ? await request(ctx, access.key, `/toolkits?${query}`) : NO_COMPOSIO;
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
       if (
@@ -222,7 +238,7 @@ async function catalog(ctx: ApiCtx): Promise<void> {
         },
       ];
     });
-    const external = new Map((await externalApps(ctx)).map((app) => [app.toolkit, app]));
+    const external = new Map(apps.map((app) => [app.toolkit, app]));
     const listed = items.map((item) => {
       const app = external.get(item.id);
       return app ? { ...item, connectUrl: app.connectUrl, connector: app.connector } : item;
@@ -305,8 +321,9 @@ function missingScopes(account: { state?: { val?: { scope?: unknown } } }, confi
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {
-  const access = await credential(ctx);
+  const access = await credential(ctx, true);
   if (!access) return;
+  if (!access.key && !(await externalApps(ctx)).length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
   const userIds = composioUserIds(access.principal);
@@ -314,7 +331,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
   if (cursor) query.set("cursor", cursor);
   try {
     const [data, external] = await Promise.all([
-      request(ctx, access.key, `/connected_accounts?${query}`),
+      access.key ? request(ctx, access.key, `/connected_accounts?${query}`) : NO_COMPOSIO,
       cursor ? [] : (ctx.deps.mcpToolService?.appConnections(access.principal) ?? []),
     ]);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
@@ -327,7 +344,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
       ),
     ];
     const scopes = new Map(
-      await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key, id)] as const)),
+      await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key!, id)] as const)),
     );
     const items = [
       ...accounts.map((item) => ({
