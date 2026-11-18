@@ -211,7 +211,7 @@ export function createCronStore(
       const shared = cronFields(linked);
       return backing.mutateMany([
         { id, apply: (c) => ({ ...c!, ...own }) },
-        ...copies.map((copy) => ({ id: copy, apply: (c: Cron | null) => ({ ...c!, ...shared }) })),
+        ...copies.map((copy) => ({ id: copy, apply: (c: Cron | null) => (c!.forkedAt ? c! : { ...c!, ...shared }) })),
       ]);
     },
     delete: (id) => backing.delete(id),
