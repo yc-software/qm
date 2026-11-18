@@ -18,6 +18,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken, verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
@@ -585,6 +586,7 @@ test("an agent's runtime write lands on the scope it names, only where it may wr
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     capabilitySecret: TEST_CAPABILITY_SECRET,
+    runs: liveRunStore(),
   });
   server.listen(0);
   try {
@@ -594,7 +596,12 @@ test("an agent's runtime write lands on the scope it names, only where it may wr
         headers: {
           "content-type": "application/json",
           "x-agent-capability": await mintCapabilityToken(
-            { actorId, scopeId: scopeId("personal", actorId), liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+            {
+              ...liveRunClaims(actorId),
+              actorId,
+              scopeId: scopeId("personal", actorId),
+              exp: Date.now() + CAPABILITY_TTL_MS,
+            },
             TEST_CAPABILITY_SECRET,
           ),
         },
