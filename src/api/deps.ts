@@ -24,6 +24,7 @@ import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { MemoryRegistryStore } from "../memory/registry.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
+import type { SelfServe } from "../tenants/self-serve.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
 import type { OAuthFlowStore } from "../connectors/oauth-flow-store.ts";
@@ -111,6 +112,7 @@ export interface ServerDeps {
   web?: { events: WebEvents; me: WebMeConfig; shell: WebShell };
   control: ControlService;
   replayDedupe?: ReplayDedupe;
+  selfServe?: SelfServe;
   deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };
   brokerSessions?: BrokerSessionStore;
   connectorTokens?: ConnectorTokenStore;

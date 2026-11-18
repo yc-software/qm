@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
-import { tenantSettings } from "../tenants/settings.ts";
+import { loadedTenantSettings } from "../tenants/settings.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
@@ -123,7 +123,10 @@ function gatewayScopeId(scopeId: string | undefined, key: string | undefined): s
 }
 
 export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
-  return tenantSettings().modelGatewayKey ?? config.apiKey;
+  const settings = loadedTenantSettings();
+  if (settings?.modelGatewayKey) return settings.modelGatewayKey;
+  if (settings?.deploymentModelKey === false) throw new Error("this workspace has no model gateway key of its own");
+  return config.apiKey;
 }
 
 export function modelGatewayHeaders(

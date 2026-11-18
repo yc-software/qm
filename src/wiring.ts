@@ -411,6 +411,8 @@ import {
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
+import { createPgPool } from "./persistence/pg-pool.ts";
+import { createSelfServe, provisionerSigningKey, provisionWorkspace, type SelfServe } from "./tenants/self-serve.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
@@ -566,6 +568,7 @@ export interface BuiltApp {
   teams?: TeamStore;
   decisions?: DecisionStore;
   replayDedupe: ReplayDedupe;
+  selfServe?: SelfServe;
   brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
   projects: ProjectStore;
@@ -1872,6 +1875,12 @@ export function buildApp(
     memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
     users,
   });
+  const selfServe = config.workspaceProvisionerUrl
+    ? createSelfServe(
+        createPgPool(databaseUrl),
+        provisionWorkspace.bind(null, config.workspaceProvisionerUrl, provisionerSigningKey(config.signingSecret!)),
+      )
+    : undefined;
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     agent,
     memory: baseMemory,
@@ -3308,6 +3317,7 @@ export function buildApp(
     teams,
     ...(decisions ? { decisions } : {}),
     replayDedupe,
+    ...(selfServe ? { selfServe } : {}),
     ...(brokerSessions ? { brokerSessions } : {}),
     directory,
     projects,
@@ -3398,6 +3408,7 @@ export function serverDeps(
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
     ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
     admin: built.admin,
+    ...(built.selfServe ? { selfServe: built.selfServe } : {}),
     ...(config.emailAuthPrincipals ? { emailAuthPrincipals: config.emailAuthPrincipals } : {}),
     ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
     ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
