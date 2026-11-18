@@ -1,6 +1,11 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
-import { shareButton } from "./share-dialog";
+import { Archive, Ellipsis, Pause, Pencil, Play, Plus, RotateCcw, Sparkles, Trash2 } from "lucide";
+import { live } from "lit/directives/live.js";
+import { openShare, shareButton } from "./share-dialog";
+import { cronDeliveryList } from "./cron-delivery";
+import { friendlyPrincipal } from "./app-view";
+import { draftFromSchedule, schedulePicker, type ScheduleDraft } from "./cron-schedule-picker";
+import { closeFormMenus, relTime, toggleFormMenu } from "./ui";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
@@ -8,15 +13,16 @@ import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
-import { sessionsState, sessionTitle, startNewChat } from "./sessions";
-import { friendlyPrincipal } from "./app-view";
+import { startNewChat } from "./sessions";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import {
   cronNextFire,
   cronRunSummary,
   cronRunSummaryTitle,
-  cronScheduleDetail,
   cronScheduleSummary,
+  describeSchedule,
+  formatCronDateTime,
+  timezoneLabel,
 } from "./cron-format";
 import { tip } from "./tooltip";
 
@@ -86,7 +92,11 @@ let cronMutationInFlight = false;
 let cronsSearch = "";
 const cronRuns = new Map<string, CronRunView[]>();
 const cronRunsLoading = new Set<string>();
-let cronDialog: { kind: "rename" | "delete"; cron: CronView } | null = null;
+let cronDialog: { kind: "delete"; cron: CronView } | null = null;
+type CronEditField = "title" | "task" | "schedule";
+let cronEdit: { id: string; field: CronEditField } | null = null;
+let scheduleDraft: ScheduleDraft | null = null;
+const cronShares = new Map<string, Array<{ scope: string; permission: "read" | "write" }>>();
 let activeCronId: string | null = null;
 let pendingCronId: string | null = null;
 
@@ -179,11 +189,6 @@ function isPersonalScope(c: CronView): boolean {
 function cronStatusLabel(c: CronView): "enabled" | "disabled" | "archived" {
   if (c.archived) return "archived";
   return c.enabled ? "enabled" : "disabled";
-}
-
-function cronStatusText(c: CronView): string {
-  const status = cronStatusLabel(c);
-  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 export async function renderCronsPage(): Promise<void> {
@@ -405,8 +410,8 @@ function cronRowActions(c: CronView): TemplateResult {
         ${tip("Edit")}
         aria-label="Edit cron"
         @click=${() => {
-          openCron(c);
-          showCronDialog("rename", c);
+          openCron(c, { push: true });
+          startEdit(c, c.message === undefined ? "task" : "title");
         }}
       >
         ${icon(Pencil, 14)}
@@ -431,237 +436,381 @@ function cronRowActions(c: CronView): TemplateResult {
   `;
 }
 
+function cronPaneHost(): HTMLElement | null {
+  const main = appState.mainEl;
+  if (!main) return null;
+  const existing = main.querySelector<HTMLElement>(":scope > .cron-detail-pane");
+  if (existing) return existing;
+  const host = document.createElement("div");
+  host.className = "resource-pane cron-pane cron-detail-pane";
+  main.replaceChildren(host);
+  return host;
+}
+
 function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } = {}): void {
-  if (!appState.mainEl) return;
-  const shouldRefreshRuns = opts.refreshRuns || activeCronId !== c.id;
+  const switching = activeCronId !== c.id;
+  const shouldRefreshRuns = opts.refreshRuns || switching;
+  if (switching) {
+    cronEdit = null;
+    scheduleDraft = null;
+  }
   activeCronId = c.id;
   syncCronUrl(c.id, opts.push);
+  const host = cronPaneHost();
+  if (!host) return;
   const mine = cronList.some((x) => x.id === c.id);
   const manageable = canManageCron(c, mine);
   const notice = cronActionNotice;
   cronActionNotice = "";
-  const next = cronNextFire(c);
-  let stateActions = html`
-    <button class="btn" @click=${() => void setCronEnabled(c.id, true)}>${icon(Play, 15)}<span>Enable</span></button>
-    <button class="btn" @click=${() => void archiveCron(c.id, true)}>${icon(Archive, 15)}<span>Archive</span></button>
-  `;
-  if (c.archived) {
-    stateActions = html`<button class="btn" @click=${() => void archiveCron(c.id, false)}>
-      ${icon(RotateCcw, 15)}<span>Unarchive</span>
-    </button>`;
-  } else if (c.enabled) {
-    stateActions = html`
-      <button class="btn" @click=${() => void runCronNow(c.id)}>${icon(Play, 15)}<span>Run now</span></button>
-      <button class="btn" @click=${() => void setCronEnabled(c.id, false)}>
-        ${icon(Pause, 15)}<span>Disable</span>
-      </button>
-      <button class="btn" @click=${() => void archiveCron(c.id, true)}>${icon(Archive, 15)}<span>Archive</span></button>
-    `;
-  }
-  const host = document.createElement("div");
-  host.className = "resource-pane cron-pane";
   render(
     html`
-      <div class="resource-detail">
+      <div class="resource-detail cron-detail">
         ${listBackLink("Crons", drawCronsPage)}
-        <div class="resource-heading">
-          <h2 dir="auto">${cronTitle(c)}</h2>
+        <div class="resource-heading cron-heading">
+          ${cronTitleTpl(c, manageable)}
           <div class="actions">
+            ${manageable && !c.archived ? cronSwitch(c) : nothing}
+            ${
+              manageable && c.enabled && !c.archived
+                ? html`<button class="btn" @click=${() => void runCronNow(c.id)}>
+                    ${icon(Play, 15)}<span>Run now</span>
+                  </button>`
+                : nothing
+            }
             ${mine ? shareButton({ type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId }) : nothing}
-            <button class="btn" @click=${showNewCron}>${icon(Plus, 15)}<span>New cron</span></button>
+            ${manageable ? cronMenu(c) : nothing}
           </div>
         </div>
-        ${notice ? html`<div class="hint">${notice}</div>` : ""}
-        <div class="field">
-          <label>Context</label>
-          <div class="value">${scopeChip(c.ownerScopeId, c.scopeName ?? null)}</div>
-        </div>
+        <div class="cron-summary">${cronSummaryLine(c)}</div>
+        ${notice ? html`<div class="action-notice">${notice}</div>` : nothing}
         ${
-          c.title
-            ? html`<div class="field">
-                <label>Title</label>
-                <div class="value" dir="auto">${c.title}</div>
+          c.archived
+            ? html`<div class="cron-banner">
+                <span>Archived. It won't run until you restore it.</span>
+                ${
+                  manageable
+                    ? html`<button class="btn" @click=${() => void archiveCron(c.id, false)}>
+                        ${icon(RotateCcw, 15)}<span>Unarchive</span>
+                      </button>`
+                    : nothing
+                }
               </div>`
             : nothing
         }
-        <div class="field">
-          <label>${c.message !== undefined ? "Message" : "Task"}</label>
-          <div class="value pre">${cronText(c)}</div>
-        </div>
-        <div class="field">
-          <label>Schedule</label>
-          <div class="value">${cronScheduleDetail(c)}</div>
-        </div>
-        ${
-          mine
-            ? ""
-            : html`<div class="field">
-                <label>Owner</label>
-                <div class="value">${c.owner}</div>
-              </div>`
-        }
-        ${
-          mine
-            ? ""
-            : html`<div class="field">
-                <label>Scope</label>
-                <div class="value">${cronScopeLabel(c)}</div>
-              </div>`
-        }
-        <div class="field">
-          <label>Status</label>
-          <div class="value">${cronStatusText(c)}</div>
-        </div>
-        ${cronSharingFields(c, mine)}
-        <div class="field">
-          <label>Next run</label>
-          <div class="value">${next != null ? new Date(next).toLocaleString() : "Never"}</div>
-        </div>
-        <div class="field">
-          <label>Last fired</label>
-          <div class="value">${c.lastFiredAt ? new Date(c.lastFiredAt).toLocaleString() : "Never"}</div>
-        </div>
-        ${
-          c.lastFireNote
-            ? html`<div class="field">
-                <label>
-                  ${c.lastFireNote.by ? `Note left by ${c.lastFireNote.by}` : "Note from last fire"}
-                  (${new Date(c.lastFireNote.at).toLocaleString()})
-                </label>
-                <div class="value" dir="auto">${c.lastFireNote.text}</div>
-              </div>`
-            : nothing
-        }
-        ${manageable ? cronRunHistory(c) : nothing}
         ${
           manageable
-            ? html`
-                <div class="actions">
-                  <button class="btn" @click=${() => showCronDialog("rename", c)}>
-                    ${icon(Pencil, 15)}<span>Edit</span>
-                  </button>
-                  ${stateActions}
-                  <button class="btn danger" @click=${() => showCronDialog("delete", c)}>
-                    ${icon(Trash2, 15)}<span>Delete</span>
-                  </button>
-                </div>
-              `
-            : html`<div class="hint">Shared from ${cronScopeLabel(c)}. You can view it, but not change it.</div>`
+            ? nothing
+            : html`<div class="cron-banner">Shared from ${cronScopeLabel(c)}. You can view it, but not change it.</div>`
         }
+        ${cronCopyBanner(c)} ${cronInstructions(c, manageable)} ${cronScheduleSection(c, manageable)}
+        ${cronSection(
+          "Delivers to",
+          cronDeliveryList(c, mine, mine && !c.copies ? (cronShares.get(c.id) ?? []) : [], () =>
+            openShare(
+              { type: "cron", id: c.id, title: cronTitle(c), owner: c.ownerScopeId },
+              { onChange: () => void loadCronShares(c.id) },
+            ),
+          ),
+        )}
+        ${manageable ? cronRunHistory(c) : nothing}
+        <div class="cron-details">
+          ${scopeChip(c.ownerScopeId, c.scopeName ?? null)} ${mine ? nothing : html`<span>Owner ${c.owner}</span>`}
+          <span>Created ${new Date(c.createdAt).toLocaleDateString()}</span>
+          <span class="cron-id">${c.id}</span>
+        </div>
         ${cronDialog?.cron.id === c.id ? cronDialogTpl(cronDialog) : nothing}
       </div>
     `,
     host,
   );
-  appState.mainEl.replaceChildren(host);
   if (manageable && (shouldRefreshRuns || !cronRuns.has(c.id)) && !cronRunsLoading.has(c.id)) void loadCronRuns(c.id);
+  if (mine && (shouldRefreshRuns || !cronShares.has(c.id))) void loadCronShares(c.id);
 }
 
-function cronCopyStatus(copy: NonNullable<CronView["copies"]>[number]): string {
-  if (copy.forkedAt) return "Edited their copy";
-  return copy.enabled ? "On" : "Pending";
+function cronSection(title: string, body: TemplateResult, aside: TemplateResult | typeof nothing = nothing) {
+  return html`<section class="cron-section">
+    <div class="cron-section-head">
+      <h3>${title}</h3>
+      ${aside}
+    </div>
+    ${body}
+  </section>`;
 }
 
-function destinationLabel(d: NonNullable<CronView["destination"]>, mine = false): TemplateResult | string {
-  if (d.type === "web") {
-    const session = sessionsState.list.find((s) => s.threadRef === d.target);
-    if (!session) return mine ? "Your chat" : "A chat";
-    const link = html`<a href=${deepLinkPath(UI_BASE, "chats", session.id)}>${sessionTitle(session)}</a>`;
-    return mine ? html`Your chat: ${link}` : link;
-  }
-  if (d.type === "principal") return `${friendlyPrincipal(d.target)}'s DM`;
-  if (d.audienceScopeId) return scopeChip(d.audienceScopeId);
-  if (d.type === "slack") return d.target.startsWith("D") ? "A Slack DM" : "A Slack channel";
-  return d.type === "group" ? "A group DM" : "Somewhere else";
+function editing(c: CronView, field: CronEditField): boolean {
+  return cronEdit?.id === c.id && cronEdit.field === field;
 }
 
-function copyDestinationLabel(type: string | undefined): string {
-  if (type === "web") return "Their own chat";
-  if (type === "principal") return "Their DM";
-  if (type === "slack" || type === "group") return "A Slack conversation of theirs";
-  return "Nowhere yet";
+function startEdit(c: CronView, field: CronEditField): void {
+  cronEdit = { id: c.id, field };
+  if (field === "schedule") scheduleDraft = draftFromSchedule(c.schedule);
+  openCron(c);
+  queueMicrotask(() =>
+    document.querySelector<HTMLElement>(`.cron-detail [data-autofocus="${field}"]`)?.focus({ preventScroll: true }),
+  );
 }
 
-function deliveryRow(who: string, where: TemplateResult | string, status?: string): TemplateResult {
-  return html`<div class="cron-delivery-row">
-    <span class="cron-delivery-who">${who}</span>
-    <span class="cron-delivery-where">${where}</span>
-    ${status ? html`<span class="badge">${status}</span>` : nothing}
+function cancelEdit(c: CronView): void {
+  cronEdit = null;
+  scheduleDraft = null;
+  openCron(c);
+}
+
+function cronTitleTpl(c: CronView, manageable: boolean): TemplateResult {
+  if (editing(c, "title"))
+    return html`<form
+      class="cron-title-form"
+      @submit=${(e: SubmitEvent) => void saveCronField(e, c, "title")}
+      @keydown=${(e: KeyboardEvent) => e.key === "Escape" && cancelEdit(c)}
+    >
+      <input
+        name="title"
+        maxlength="80"
+        aria-label="Title"
+        data-autofocus="title"
+        .value=${live(c.title ?? cronTitle(c))}
+        required
+      />
+      <button class="btn" type="button" @click=${() => cancelEdit(c)}>Cancel</button>
+      <button class="btn primary" type="submit">Save</button>
+    </form>`;
+  if (!manageable) return html`<h2 dir="auto">${cronTitle(c)}</h2>`;
+  return html`<h2 class="cron-title" dir="auto">
+    <button class="cron-title-button" type="button" ${tip("Rename")} @click=${() => startEdit(c, "title")}>
+      <span>${cronTitle(c)}</span>${icon(Pencil, 14)}
+    </button>
+  </h2>`;
+}
+
+function cronCopyBanner(c: CronView): TemplateResult | typeof nothing {
+  if (!c.sharedFrom) return nothing;
+  const from = c.sharedBy ? friendlyPrincipal(c.sharedBy) : "A teammate";
+  if (c.forkedAt)
+    return html`<div class="cron-banner">
+      <span><strong>Shared by ${from}.</strong> You've edited your copy, so ${from}'s changes no longer reach it.</span>
+    </div>`;
+  const body = html`It runs as you and posts to your chat. ${from}'s edits keep reaching your copy until you change it.`;
+  if (c.enabled)
+    return html`<div class="cron-banner">
+      <span><strong>Shared by ${from}.</strong> ${body}</span>
+    </div>`;
+  return html`<div class="cron-banner">
+    <span><strong>${from} shared this with you.</strong> ${body}</span>
+    <span class="cron-banner-actions">
+      <button class="btn" type="button" @click=${() => showCronDialog("delete", c)}>Decline</button>
+      <button class="btn primary" type="button" @click=${() => void setCronEnabled(c.id, true)}>Turn on</button>
+    </span>
   </div>`;
 }
 
-function cronSharingFields(c: CronView, mine: boolean): TemplateResult {
-  let origin: string | null = null;
-  if (c.sharedFrom && c.forkedAt)
-    origin = "Your own copy now: you edited it, so the original's edits no longer reach it.";
-  else if (c.sharedFrom)
-    origin = c.enabled
-      ? "Linked: edits to the original reach this copy until you edit it."
-      : "Waiting for you: turn it on to accept, or delete it to decline.";
-  const own = c.destination ? destinationLabel(c.destination, mine) : "Nowhere yet";
-  const copies = c.copies ?? [];
-  return html`
-    ${
-      origin
-        ? html`<div class="field">
-            <label>Shared by</label>
-            <div class="value">${c.sharedBy ? friendlyPrincipal(c.sharedBy) : "A teammate"}</div>
-            <div class="hint">${origin}</div>
-          </div>`
-        : nothing
-    }
-    <div class="field">
-      <label>Delivers to</label>
-      <div class="cron-delivery-list">
-        ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), own)}
-        ${copies.map((copy) => deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), cronCopyStatus(copy)))}
+function cronSwitch(c: CronView): TemplateResult {
+  return html`<button
+    class="cron-switch ${c.enabled ? "on" : ""}"
+    type="button"
+    role="switch"
+    aria-checked=${c.enabled ? "true" : "false"}
+    ${tip(c.enabled ? "Pause this cron" : "Turn this cron on")}
+    @click=${() => void setCronEnabled(c.id, !c.enabled)}
+  >
+    <span class="cron-switch-track"><span></span></span><span>${c.enabled ? "On" : "Off"}</span>
+  </button>`;
+}
+
+function cronMenu(c: CronView): TemplateResult {
+  const item = (glyph: Parameters<typeof icon>[0], label: string, run: () => void, danger = false) => html`
+    <button
+      class="menu-option ${danger ? "danger" : ""}"
+      type="button"
+      role="menuitem"
+      @click=${() => {
+        closeFormMenus();
+        run();
+      }}
+    >
+      ${icon(glyph, 16)}<span class="menu-option-copy"><span class="menu-option-label">${label}</span></span>
+    </button>
+  `;
+  return html`<div class="form-menu-control cron-more" data-align="right" data-drop="down">
+    <button
+      class="icon-btn menu-button"
+      type="button"
+      aria-label="More actions"
+      aria-haspopup="menu"
+      aria-expanded="false"
+      @click=${toggleFormMenu}
+    >
+      ${icon(Ellipsis, 18)}
+    </button>
+    <div class="menu-popover" role="menu" hidden>
+      ${item(Sparkles, "Change with QM…", () => editCronWithAgent(c))} ${item(Plus, "New cron", showNewCron)}
+      ${
+        c.archived
+          ? item(RotateCcw, "Unarchive", () => void archiveCron(c.id, false))
+          : item(Archive, "Archive", () => void archiveCron(c.id, true))
+      }
+      ${item(Trash2, "Delete…", () => showCronDialog("delete", c), true)}
+    </div>
+  </div>`;
+}
+
+function cronSummaryLine(c: CronView): TemplateResult {
+  const next = cronNextFire(c);
+  const tz = c.schedule.cron ? timezoneLabel(c.schedule.timezone) : "";
+  const last = cronRuns.get(c.id)?.at(-1);
+  const lastMark =
+    last?.status === "failed" || last?.status === "refused"
+      ? html` <span class="cron-mark bad">failed</span>`
+      : last && (last.status === "completed" || last.status === undefined)
+        ? html` <span class="cron-mark ok" aria-label="succeeded">✓</span>`
+        : nothing;
+  const parts: TemplateResult[] = [html`<strong>${describeSchedule(c.schedule)}</strong>${tz ? ` ${tz}` : ""}`];
+  if (c.archived) parts.push(html`Archived`);
+  else if (!c.enabled) parts.push(html`Paused`);
+  else if (next != null) parts.push(html`Next ${formatCronDateTime(next, Date.now(), c.schedule.timezone)}`);
+  if (c.lastFiredAt) parts.push(html`Last ran ${relTime(c.lastFiredAt)}${lastMark}`);
+  return html`${parts.map((part, i) => (i ? html`<span class="cron-dot">·</span>${part}` : part))}`;
+}
+
+function cronInstructions(c: CronView, manageable: boolean): TemplateResult {
+  const isMessage = c.message !== undefined;
+  const title = isMessage ? "Message" : "Instructions";
+  if (editing(c, "task"))
+    return cronSection(
+      title,
+      html`<form
+        class="cron-card cron-task-form"
+        @submit=${(e: SubmitEvent) => void saveCronField(e, c, "task")}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key === "Escape") cancelEdit(c);
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.currentTarget as HTMLFormElement).requestSubmit();
+        }}
+      >
+        <textarea
+          name="task"
+          rows="8"
+          aria-label="Instructions"
+          data-autofocus="task"
+          .value=${live(cronText(c))}
+        ></textarea>
+        <div class="cron-card-actions">
+          <button class="btn" type="button" @click=${() => cancelEdit(c)}>Cancel</button>
+          <button class="btn primary" type="submit">Save</button>
+        </div>
+      </form>`,
+    );
+  const canEdit = manageable && !isMessage;
+  return cronSection(
+    title,
+    html`<div class="cron-card">
+      ${
+        canEdit
+          ? html`<button
+              class="cron-task cron-task-button"
+              type="button"
+              dir="auto"
+              @click=${() => startEdit(c, "task")}
+            >
+              <span class="cron-task-text">${cronText(c)}</span>
+            </button>`
+          : html`<div class="cron-task" dir="auto"><span class="cron-task-text">${cronText(c)}</span></div>`
+      }
+    </div>`,
+    canEdit
+      ? html`<button class="link-button" type="button" @click=${() => startEdit(c, "task")}>Edit</button>`
+      : nothing,
+  );
+}
+
+function cronScheduleSection(c: CronView, manageable: boolean): TemplateResult {
+  if (editing(c, "schedule") && scheduleDraft)
+    return cronSection(
+      "Schedule",
+      schedulePicker(scheduleDraft, {
+        change: (patch) => {
+          scheduleDraft = scheduleDraft && { ...scheduleDraft, ...patch };
+          openCron(c);
+        },
+        save: (schedule) => void saveSchedule(c, schedule),
+        cancel: () => cancelEdit(c),
+      }),
+    );
+  const next = cronNextFire(c);
+  const sub = [
+    c.schedule.cron ? timezoneLabel(c.schedule.timezone) : "",
+    next != null ? `next ${formatCronDateTime(next, Date.now(), c.schedule.timezone)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return cronSection(
+    "Schedule",
+    html`<div class="cron-card cron-when">
+      <div>
+        <div class="cron-when-main">${describeSchedule(c.schedule)}</div>
+        ${sub ? html`<div class="cron-when-sub">${sub}</div>` : nothing}
       </div>
       ${
-        copies.length
-          ? html`<div class="hint">
-              Each person you share with gets a linked copy that runs as them and posts to their own chat.
-            </div>`
+        manageable
+          ? html`<button class="btn" type="button" @click=${() => startEdit(c, "schedule")}>Change</button>`
           : nothing
       }
-    </div>
-  `;
+    </div>`,
+  );
+}
+
+async function loadCronShares(id: string): Promise<void> {
+  try {
+    const r = await api<{ grantees: Array<{ scope: string; permission: "read" | "write" }> }>(
+      `/api/shares/cron/${encodeURIComponent(id)}`,
+    );
+    cronShares.set(id, r.grantees ?? []);
+  } catch {
+    cronShares.set(id, []);
+  }
+  if (activeCronId !== id || appState.currentView !== "crons") return;
+  const current = cronList.find((x) => x.id === id);
+  if (current) openCron(current);
+}
+
+function runStatusTone(status: string | undefined): string {
+  if (status === "failed" || status === "refused") return "bad";
+  if (status === "running") return "busy";
+  return status === "completed" || status === undefined ? "ok" : "";
 }
 
 function cronRunHistory(c: CronView): TemplateResult {
   const runs = cronRuns.get(c.id);
-  const heading = html`<div class="cron-run-heading">
-    <label>Recent runs</label>
-  </div>`;
-  if (!runs)
-    return html`<div class="field">
-      ${heading}
-      <div class="hint">Loading…</div>
-    </div>`;
-  if (!runs.length)
-    return html`<div class="field">
-      ${heading}
-      <div class="hint">No runs yet.</div>
-    </div>`;
-  return html` <div class="field">
-    ${heading}
-    <div class="cron-run-list">
+  let body: TemplateResult;
+  if (!runs) body = html`<div class="hint">Loading…</div>`;
+  else if (!runs.length) body = html`<div class="hint">No runs yet.</div>`;
+  else
+    body = html`<div class="cron-card cron-run-list">
       ${[...runs].reverse().map((run) => {
         const detail = run.note ?? (run.reply ? clipWords(run.reply, 120) : "");
-        return html` <div class="cron-run-row">
-          <span class="badge">${run.status ?? "completed"}</span>
+        return html`<div class="cron-run-row">
+          <span class="cron-run-dot ${runStatusTone(run.status)}" ${tip(run.status ?? "completed")}></span>
           <span class="cron-run-time">${cronRunTiming(run)}</span>
-          <span class=${run.note ? "cron-run-detail cron-run-error" : "cron-run-detail"} ${tip(detail)}>
-            ${detail}
-          </span>
           ${
             run.sessionId
               ? html`<a class="cron-run-link" href=${deepLinkPath(UI_BASE, "chats", run.sessionId)}>Worklog</a>`
               : nothing
           }
+          ${
+            detail
+              ? html`<span class=${run.note ? "cron-run-detail cron-run-error" : "cron-run-detail"} ${tip(detail)}>
+                  ${detail}
+                </span>`
+              : nothing
+          }
         </div>`;
       })}
-    </div>
-  </div>`;
+    </div>`;
+  const note = c.lastFireNote
+    ? html`<div class="cron-note">
+        <span>${c.lastFireNote.by ? `Note from ${c.lastFireNote.by}` : "Note for the next run"}</span>
+        <span dir="auto">${c.lastFireNote.text}</span>
+      </div>`
+    : nothing;
+  return cronSection("Recent runs", html`${note}${body}`);
 }
 
 async function loadCronRuns(id: string): Promise<void> {
@@ -727,10 +876,9 @@ function patchCron(
   }, false);
 }
 
-function showCronDialog(kind: "rename" | "delete", cron: CronView): void {
+function showCronDialog(kind: "delete", cron: CronView): void {
   cronDialog = { kind, cron };
   openCron(cron);
-  queueMicrotask(() => document.querySelector<HTMLInputElement>(".cron-edit-dialog input")?.focus());
 }
 
 function closeCronDialog(c: CronView): void {
@@ -738,85 +886,48 @@ function closeCronDialog(c: CronView): void {
   openCron(c);
 }
 
-function cronDialogTpl(dialog: { kind: "rename" | "delete"; cron: CronView }): TemplateResult {
+function cronDialogTpl(dialog: { kind: "delete"; cron: CronView }): TemplateResult {
   const c = dialog.cron;
-  if (dialog.kind === "delete") {
-    return html` <div
-      class="project-dialog-backdrop"
-      @click=${(event: MouseEvent) => event.target === event.currentTarget && closeCronDialog(c)}
-    >
-      <div class="project-dialog cron-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="cron-delete-title">
-        <div class="project-dialog-head">
-          <div>
-            <h2 id="cron-delete-title">Delete <bdi>${cronTitle(c)}</bdi>?</h2>
-          </div>
-        </div>
-        <p>
-          This permanently removes the schedule and its retained run history. Archive it instead if you may need it
-          later.
-        </p>
-        <div class="project-dialog-actions">
-          <button class="btn" type="button" @click=${() => closeCronDialog(c)}>Cancel</button>
-          <button class="btn danger" type="button" @click=${() => void confirmDeleteCron(c.id)}>
-            Delete permanently
-          </button>
-        </div>
-      </div>
-    </div>`;
-  }
   return html` <div
     class="project-dialog-backdrop"
     @click=${(event: MouseEvent) => event.target === event.currentTarget && closeCronDialog(c)}
   >
-    <form
-      class="project-dialog cron-edit-dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="cron-edit-title"
-      @submit=${(event: SubmitEvent) => void saveCronEdit(event, c)}
-    >
+    <div class="project-dialog cron-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="cron-delete-title">
       <div class="project-dialog-head">
-        <div><h2 id="cron-edit-title">Edit cron</h2></div>
+        <div>
+          <h2 id="cron-delete-title">Delete <bdi>${cronTitle(c)}</bdi>?</h2>
+        </div>
       </div>
-      <label>Title<input name="title" maxlength="80" value=${c.title ?? cronTitle(c)} required /></label>
-      ${
-        c.message === undefined
-          ? html`<label>Task<textarea name="task" rows="5" required>${cronText(c)}</textarea></label>`
-          : html`<div class="field">
-              <label>Message</label>
-              <div class="value pre">${c.message}</div>
-            </div>`
-      }
-      <p class="hint">
-        To change
-        ${c.message === undefined ? "the schedule, timezone, destination, or run mode" : "the message, schedule, timezone, destination, or run mode"},
-        use the agent so it can validate the resulting behavior and permissions.
+      <p>
+        This permanently removes the schedule and its retained run history. Archive it instead if you may need it later.
       </p>
-      <div class="form-error"></div>
       <div class="project-dialog-actions">
-        <button class="btn" type="button" @click=${() => editCronWithAgent(c)}>Edit behavior with agent</button>
         <button class="btn" type="button" @click=${() => closeCronDialog(c)}>Cancel</button>
-        <button class="btn primary" type="submit">Save</button>
+        <button class="btn danger" type="button" @click=${() => void confirmDeleteCron(c.id)}>
+          Delete permanently
+        </button>
       </div>
-    </form>
+    </div>
   </div>`;
 }
 
-async function saveCronEdit(event: SubmitEvent, c: CronView): Promise<void> {
+async function saveCronField(event: SubmitEvent, c: CronView, field: "title" | "task"): Promise<void> {
   event.preventDefault();
-  const form = event.currentTarget as HTMLFormElement;
-  const title = (form.elements.namedItem("title") as HTMLInputElement).value.trim();
-  const taskControl = form.elements.namedItem("task") as HTMLTextAreaElement | null;
-  const task = taskControl?.value.trim();
-  const error = form.querySelector<HTMLElement>(".form-error");
-  if (!title || (taskControl && !task)) {
-    if (error) error.textContent = taskControl ? "Title and task are required." : "Title is required.";
-    return;
-  }
-  const ok = await patchCron(c.id, { title, ...(task ? { task } : {}) }, "edit failed");
+  const control = (event.currentTarget as HTMLFormElement).elements.namedItem(field) as
+    HTMLInputElement | HTMLTextAreaElement;
+  const value = control.value.trim();
+  if (!value) return control.focus();
+  const ok = await patchCron(c.id, { [field]: value }, `${field} update failed`);
   if (!ok) return;
-  cronDialog = null;
-  cronActionNotice = "Cron updated.";
+  cronEdit = null;
+  await reopenCron(c.id);
+}
+
+async function saveSchedule(c: CronView, schedule: { cron: string; timezone: string }): Promise<void> {
+  const ok = await patchCron(c.id, { schedule }, "schedule update failed");
+  if (!ok) return;
+  cronEdit = null;
+  scheduleDraft = null;
   await reopenCron(c.id);
 }
 
