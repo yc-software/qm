@@ -175,7 +175,7 @@ import {
   environmentNote,
   renderGatewayContext,
   renderSandboxProviders,
-  rosterShown,
+  previousRoster,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
   webSurfaceLabel,
@@ -202,6 +202,7 @@ import {
   appendTurnGuidance,
   conversationRoster,
   finishSystemPrompt,
+  loadConversationKeychain,
   shownNames,
 } from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
@@ -677,16 +678,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
-      const rosterMembers =
-        !external && conversation.kind !== "dm"
-          ? await conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
+      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
+      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
+      const hasRoster = !external && conversation.kind !== "dm";
+      const [rosterMembers, previous, conversationKeychain] = await Promise.all([
+        hasRoster
+          ? conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
               swallowAs("orchestrator: conversation roster", undefined),
             )
-          : undefined;
-      const shownPeople = rosterShown(rosterMembers ?? [])
-        .filter((m) => !samePerson(m.principalId, actor.id))
-        .map((m) => m.displayName);
-      const peopleNames = shownNames(actor, rosterMembers);
+          : undefined,
+        hasRoster && storedSession
+          ? deps.sessions.getContextWindow(storedSession.id).then((window) => previousRoster(window.items))
+          : undefined,
+        loadConversationKeychain({ deps, actor, conversation, scopeId, external, strictReadOnly }),
+      ]);
+      const peopleNames = shownNames(actor, rosterMembers, previous, conversationKeychain);
+      const shownPeople = [...peopleNames].filter(([key]) => key !== personKey(actor.id)).map(([, name]) => name);
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
@@ -787,8 +794,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
       }
-      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
-      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const notebookOnly =
         input.memoryNotebookOnly === true ||
         delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
@@ -1475,6 +1480,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeKeychainGrants,
           rosterMembers,
           peopleNames,
+          keychain: conversationKeychain,
         });
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
@@ -2203,6 +2209,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             context,
             recallOutcomes,
             rosterMembers,
+            peopleNames,
             rawEntries,
             session,
             deps,

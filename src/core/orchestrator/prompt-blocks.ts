@@ -8,6 +8,7 @@ import { IO_SATURATED_FULL60, type LoadSample } from "../../sandbox/load-probe.t
 import type { Item } from "../../sessions/items.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
+import { personKey } from "../../directory/person.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
 
 const memberIds = (m: { principalId: string; slackId?: string }): string =>
@@ -38,29 +39,31 @@ interface RosterSnapshot {
   sessionId: string;
 }
 
+export function previousRoster(history: readonly Item[]): RosterSnapshot["roster"] | undefined {
+  return retainedSnapshot(history, rosterOf).previous?.roster;
+}
+
 export function membershipEvent(
   current: ReadonlyArray<{ principalId: string; displayName: string; slackId?: string }> | undefined,
   history: readonly Item[],
   sessionId: string,
+  names: ReadonlyMap<string, string>,
 ): { text: string; record?: RosterSnapshot } {
   if (!current) return { text: "" };
   const roster = current
     .map((m) => ({ id: m.principalId, name: m.displayName }))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const { previous } = retainedSnapshot(history, rosterOf);
+  const previous = previousRoster(history);
   if (!previous) return { text: "", record: { roster, sessionId } };
   const absentFrom = (list: RosterSnapshot["roster"], id: string) => !list.some((o) => o.id === id);
-  const listed = new Set(rosterShown(current).map((m) => m.principalId));
   const joined = current
-    .filter((m) => absentFrom(previous.roster, m.principalId))
+    .filter((m) => absentFrom(previous, m.principalId))
     .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
-    .map((m) => (listed.has(m.principalId) ? memberLabel(m) : memberIds(m)));
-  const listedBefore = new Set(
-    rosterShown(previous.roster.map((m) => ({ principalId: m.id }))).map((m) => m.principalId),
-  );
-  const left = previous.roster
-    .filter((m) => absentFrom(roster, m.id))
-    .map((m) => (listedBefore.has(m.id) ? m.name : m.id));
+    .map((m) => {
+      const displayName = names.get(personKey(m.principalId));
+      return displayName ? memberLabel({ ...m, displayName }) : memberIds(m);
+    });
+  const left = previous.filter((m) => absentFrom(roster, m.id)).map((m) => names.get(personKey(m.id)) ?? m.id);
   const parts = [
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",
