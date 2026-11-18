@@ -21,7 +21,6 @@ import {
   PRINCIPAL_USER_TENANTS,
 } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { TENANT_EXTERNAL_ORGS } from "../tenants/self-serve.ts";
 import { withTenant } from "../tenants/context.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
@@ -196,7 +195,6 @@ END $tenants_for_email$`,
     id: "directory/store/0014-meta-app-icon",
     statements: ["ALTER TABLE directory_meta ADD COLUMN app_icon_url TEXT"],
   },
-  TENANT_EXTERNAL_ORGS,
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
