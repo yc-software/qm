@@ -808,7 +808,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
         error: "forbidden",
         message:
           requestedScope === "org"
-            ? "org memory writes require an org admin"
+            ? "org memory writes need an org admin in a turn that is still running"
             : "memory capture is not enabled for this conversation",
       });
     }
