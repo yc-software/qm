@@ -15,6 +15,7 @@ import { entitledScopes, loadsScopeContext } from "../resolution/context-filter.
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { errMessage } from "../util/errors.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -157,7 +158,7 @@ async function reconcilePack(
       at: Date.now(),
       commit: pack.ref,
       status: "error",
-      error: e instanceof Error ? e.message : String(e),
+      error: errMessage(e),
     });
     throw e;
   }
@@ -223,7 +224,7 @@ async function reconcilePack(
         at: Date.now(),
         commit: pack.ref,
         status: "error",
-        error: e instanceof Error ? e.message : String(e),
+        error: errMessage(e),
       });
       throw e;
     }
@@ -343,7 +344,7 @@ export function createSkillMethods(
           at: Date.now(),
           commit: pack.ref,
           status: "error",
-          error: e instanceof Error ? e.message : String(e),
+          error: errMessage(e),
         });
         return (await packs.get(pack.id)) ?? pack;
       }

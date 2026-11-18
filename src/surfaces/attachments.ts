@@ -1,6 +1,6 @@
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 import type { IncomingAttachment, OutgoingAttachment } from "../types.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 
 export interface InboundFile {
   id?: string;
@@ -83,9 +83,7 @@ export async function processInboundFiles<F extends InboundFile>(
     } catch (err) {
       swallow(`inbound file "${label}"`, err);
       const detail =
-        err instanceof BlobTooLargeError
-          ? "that request was too large — try fewer or smaller files"
-          : (err as Error).message;
+        err instanceof BlobTooLargeError ? "that request was too large — try fewer or smaller files" : errMessage(err);
       issues.push(`I couldn't read "${label}"${unreadableHint} (${detail})`);
     }
   }

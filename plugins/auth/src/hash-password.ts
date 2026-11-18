@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { hashPassword, passwordProblem } from "./password.ts";
+import { errChain } from "../../chassis/src/errors.ts";
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -59,7 +60,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.stdout.write(`${line}\n`);
     },
     (err: unknown) => {
-      process.stderr.write(`hash-password: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.stderr.write(`hash-password: ${errChain(err)}\n`);
       process.exit(1);
     },
   );

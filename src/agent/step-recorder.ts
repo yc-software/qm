@@ -10,6 +10,7 @@ import {
   type ToolCallWire,
   type ToolResultWire,
 } from "./replay.ts";
+import { errMessage } from "../util/errors.ts";
 
 type Persist = (write: () => Promise<unknown>) => void;
 type Positioned = { index: number; block: TextContent };
@@ -202,7 +203,7 @@ export function recordingTools(tools: ToolDefinition[], recorder: () => StepReco
         recorder()?.toolReturned(callId, result.content ?? [], false);
         return result;
       } catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
+        const text = errMessage(error);
         recorder()?.toolReturned(callId, [{ type: "text", text }], true);
         throw error;
       }

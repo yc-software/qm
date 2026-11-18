@@ -1,6 +1,7 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { once } from "node:events";
 import type WebSocket from "ws";
+import { errMessage } from "../util/errors.ts";
 
 export const SANDBOX_AGENT_PORT = 8443;
 
@@ -124,7 +125,7 @@ export async function openManagedAgentsTunnel(opts: ManagedAgentsTunnelOptions):
         local.on("error", () => ws.close());
       })
       .catch((err: unknown) => {
-        fail(err instanceof Error ? err.message : String(err));
+        fail(errMessage(err));
         local.destroy();
       });
   };

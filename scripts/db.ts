@@ -1,5 +1,6 @@
 import { grantAppRole } from "../src/persistence/app-role-grants.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { errMessage } from "../src/util/errors.ts";
 
 const USAGE = "usage: qm db grant <role>";
 const [command, role, ...rest] = process.argv.slice(2);
@@ -22,7 +23,7 @@ try {
     console.log(`granted ${role} on schema ${String(nspname)}`);
   }
 } catch (e) {
-  console.error(e instanceof Error ? e.message : e);
+  console.error(errMessage(e));
   process.exitCode = 1;
 } finally {
   await db.close();

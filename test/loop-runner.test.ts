@@ -266,6 +266,19 @@ test("a failing item is retried until its attempt cap, then parked", async () =>
   assert.equal((await s.items.get(second.parked[0]!))?.parkedReason, "sandbox died");
 });
 
+test("a failing item's failure and park reason keep the error's cause", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxItemAttempts: 1 } });
+  const oom = effects(s, {
+    work: async () => {
+      throw new Error("sandbox died", { cause: new Error("out of memory") });
+    },
+  });
+  const summary = await runLoopFire(loop, s, oom);
+  assert.deepEqual(summary.failures, ["SENTRY-1: sandbox died <- Error: out of memory"]);
+  assert.equal((await s.items.get(summary.parked[0]!))?.parkedReason, "sandbox died <- Error: out of memory");
+});
+
 test("a failing item without an explicit cap parks at the default attempt limit", async () => {
   const s = stores();
   const loop = await loopIn(s);

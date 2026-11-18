@@ -129,7 +129,7 @@ export function createApprovals(deps: {
       if (!stored) return { state: "gone" };
       return { state: "found", stored: stored as StoredApproval };
     } catch (err) {
-      console.error("[slack-plugin] approval recovery fetch failed:", (err as Error).message);
+      console.error("[slack-plugin] approval recovery fetch failed:", errMessage(err));
       return { state: "unavailable" };
     }
   }
@@ -374,7 +374,7 @@ export function createApprovals(deps: {
           try {
             await uploadAttachments(client, ctx.channel, ctx.replyThreadTs, result.attachments, core);
           } catch (err) {
-            console.error("[slack-plugin] file upload failed:", (err as Error).message);
+            console.error("[slack-plugin] file upload failed:", errMessage(err));
             await postApprovalFollowup(client, ctx, uploadFailureNote(err));
           }
         }

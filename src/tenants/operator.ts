@@ -4,6 +4,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { scopeId } from "../types.ts";
 import { isTenantId, withTenant } from "./context.ts";
 import { TENANT_SETTING_KEYS, tenantSettingsSchema, type TenantSettings } from "./settings.ts";
+import { errMessage } from "../util/errors.ts";
 
 type Db = Pick<PgPool, "q">;
 
@@ -101,7 +102,7 @@ function parsedArgs(args: string[]) {
       options: { "brand-name": { type: "string" }, admin: { type: "boolean" } },
     });
   } catch (e) {
-    throw new TenantCommandError(`${e instanceof Error ? e.message : String(e)}\n${TENANT_USAGE}`);
+    throw new TenantCommandError(`${errMessage(e)}\n${TENANT_USAGE}`);
   }
 }
 

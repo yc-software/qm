@@ -55,6 +55,7 @@ import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
+import { errChain } from "../../chassis/src/errors";
 
 export type InboxSource = "gmail" | "slack" | "generic";
 
@@ -569,7 +570,7 @@ export async function refreshInbox(
     inboxState.error = null;
     inboxState.fetchedAt = Date.now();
   } catch (e) {
-    inboxState.error = e instanceof Error ? e.message : String(e);
+    inboxState.error = errChain(e);
   } finally {
     inboxState.loading = false;
     drawAll();
@@ -847,7 +848,7 @@ async function continueSentReply(item: InboxItem): Promise<void> {
     replaceItem(await postAction(item, "reply"));
     drawAll();
   } catch (error) {
-    notify(`Couldn't start a reply: ${error instanceof Error ? error.message : error}`);
+    notify(`Couldn't start a reply: ${errChain(error)}`);
   }
 }
 
@@ -1002,7 +1003,7 @@ async function persistDraftNow(itemId: string): Promise<void> {
     drawAll();
   } catch (e) {
     if (isDraftConflict(e)) return explainDraftConflict(item, true);
-    notify(`Couldn't save the draft: ${e instanceof Error ? e.message : e}`);
+    notify(`Couldn't save the draft: ${errChain(e)}`);
   }
 }
 
@@ -1015,7 +1016,7 @@ export async function setItemStatus(item: InboxItem, status: "open" | "dismissed
     if (status === "dismissed") showArchiveToast(item);
     return true;
   } catch (e) {
-    notify(`Couldn't update the item: ${e instanceof Error ? e.message : e}`);
+    notify(`Couldn't update the item: ${errChain(e)}`);
     return false;
   } finally {
     acting.delete(item.id);
@@ -1063,7 +1064,7 @@ export async function askAgent(
     return true;
   } catch (e) {
     if (isDraftConflict(e)) await refetchItem(item);
-    notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
+    notify(`The agent couldn't answer: ${errChain(e)}`);
     return false;
   } finally {
     chatting.delete(item.id);
@@ -1085,7 +1086,7 @@ async function setUpSync(loopId?: string): Promise<void> {
     notify("Sync is on. First pass runs within 15 minutes.");
     await refreshInbox({ silent: true });
   } catch (e) {
-    notify(`Couldn't set up sync: ${e instanceof Error ? e.message : e}`);
+    notify(`Couldn't set up sync: ${errChain(e)}`);
   } finally {
     inboxState.syncBusy = false;
     drawAll();
@@ -1102,7 +1103,7 @@ async function syncNow(viewId: string): Promise<void> {
       await api(`/api/crons/${encodeURIComponent(cron.id)}/run`, { method: "POST", body: "{}" });
     notify("Sync kicked off. New items appear as the agent finishes drafting.");
   } catch (e) {
-    notify(`Couldn't start a sync: ${e instanceof Error ? e.message : e}`);
+    notify(`Couldn't start a sync: ${errChain(e)}`);
   } finally {
     inboxState.syncBusy = false;
     drawAll();
@@ -1510,7 +1511,7 @@ async function overrideTriage(item: InboxItem, kind: "prioritize" | "ungroup", a
     upsertItem(await postAction(item, kind, args));
     void refreshInbox({ silent: true });
   } catch (e) {
-    notify(`Couldn't update the item: ${e instanceof Error ? e.message : e}`);
+    notify(`Couldn't update the item: ${errChain(e)}`);
   } finally {
     acting.delete(item.id);
     drawAll();
@@ -1585,7 +1586,7 @@ async function archiveGroup(head: InboxItem): Promise<void> {
     showArchiveToast(head);
     await refreshInbox({ silent: true });
   } catch (e) {
-    notify(`Couldn't archive the group: ${e instanceof Error ? e.message : e}`);
+    notify(`Couldn't archive the group: ${errChain(e)}`);
   } finally {
     acting.delete(head.id);
     drawAll();
