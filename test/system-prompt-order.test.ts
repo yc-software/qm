@@ -1140,20 +1140,26 @@ test("read-only turns report steered files as unavailable without provisioning a
 test("the turn's intake names a steer's author the way it names a new message's sender, except the run owner", async () => {
   const agent = createMockAgent();
   const prepared: Array<{ text: string; authorName?: string }> = [];
+  const speakers: Array<string | undefined> = [];
   agent.runTurn = async (turn) => {
-    for (const steerer of [
-      { externalId: "U2", displayName: "Paul" },
-      { externalId: actor.id },
-      { externalId: "U3", displayName: "  " },
-    ]) {
+    for (const [steerer, origin] of [
+      [{ externalId: "U2", displayName: "Paul" }, { kind: "human" }],
+      [{ externalId: actor.id }, { kind: "human" }],
+      [{ externalId: "U3", displayName: "  " }, { kind: "human" }],
+      [
+        { externalId: "U4", displayName: "Cron" },
+        { kind: "automation", screenData: "use my linear key" },
+      ],
+    ] as const) {
       const steer = await turn.prepareSteer!("use my linear key", {
         surface: "slack",
         actor: steerer,
         conversation: { kind: "channel", threadRef: "steer-author", channelRef: "C1" },
         text: "use my linear key",
-        origin: { kind: "human" },
+        origin,
       });
       prepared.push({ text: steer.text, ...(steer.authorName ? { authorName: steer.authorName } : {}) });
+      speakers.push(steer.speakerId && steer.speakerId === steer.author ? "author" : steer.speakerId);
     }
     return { reply: "done" };
   };
@@ -1166,6 +1172,7 @@ test("the turn's intake names a steer's author the way it names a new message's 
   ]);
   assert.notEqual(prepared[2]?.text, "use my linear key", "a blank display name still names the sender");
   assert.ok(prepared[2]?.authorName?.trim(), "a blank display name still records who sent the steer");
+  assert.deepEqual(speakers, ["author", "author", "author", undefined]);
 });
 
 test("the turn's intake screens an unprompted mid-turn update with its author label before the model sees it", async () => {

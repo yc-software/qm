@@ -6,12 +6,17 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: cicd-${{ github.ref }}
+  group: cicd-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
@@ -19,7 +24,7 @@ jobs:
     name: Resolve exact tested tree
     timeout-minutes: 3
     continue-on-error: true
-    if: github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'merge_group' || (github.event_name == 'push' && !inputs.full)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,6 +44,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/reuse-ci.ts
+
+  select:
+    name: Select tests
+    timeout-minutes: 3
+    runs-on: ubuntu-latest
+    outputs:
+      core-tests: ${{ steps.select.outputs.core-tests }}
+      shards: ${{ steps.select.outputs.shards }}
+      shard-count: ${{ steps.select.outputs.shard-count }}
+      render-runner: ${{ steps.select.outputs.render-runner }}
+      web-ui: ${{ steps.select.outputs.web-ui }}
+      cli: ${{ steps.select.outputs.cli }}
+      core-image: ${{ steps.select.outputs.core-image }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+      - name: Install the TypeScript parser alone
+        run: |
+          version=$(node -p 'require("./package-lock.json").packages["node_modules/typescript"].version')
+          npm install --prefix "$RUNNER_TEMP/parser" --no-audit --no-fund --ignore-scripts "typescript@$version"
+          mkdir -p node_modules
+          ln -s "$RUNNER_TEMP/parser/node_modules/typescript" node_modules/typescript
+      - name: Select the tests this change can reach
+        id: select
+        env:
+          CI_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+        run: |
+          if [ -n "$CI_BASE" ] && ! git cat-file -e "$CI_BASE^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$CI_BASE" || true
+          fi
+          node --disable-warning=ExperimentalWarning scripts/select-ci.ts
 
   core-typecheck:
     name: Core typecheck
@@ -70,15 +111,15 @@ jobs:
           npm test --prefix desktop
 
   core-tests:
-    name: Core tests (${{ matrix.shard }}/8)
+    name: Core tests (${{ matrix.shard }}/${{ needs.select.outputs.shard-count }})
     timeout-minutes: 25
-    needs: reuse
-    if: always() && !cancelled()
+    needs: [reuse, select]
+    if: always() && !cancelled() && needs.select.result == 'success' && needs.select.outputs.shard-count != '0'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: ${{ fromJSON(needs.select.outputs.shards) }}
     services:
       postgres:
         image: pgvector/pgvector:0.8.1-pg16
@@ -130,11 +171,12 @@ jobs:
       - name: Root tests
         if: needs.reuse.outputs.reusable != 'true'
         env:
-          CORE_TEST_SHARD: ${{ matrix.shard }}/8
+          CORE_TEST_SHARD: ${{ matrix.shard }}/${{ needs.select.outputs.shard-count }}
+          CORE_TESTS: ${{ needs.select.outputs.core-tests }}
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: npm run test:root:shard
       - name: Render runner tests as root
-        if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 8
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.render-runner == 'true' && matrix.shard == fromJSON(needs.select.outputs.shard-count)
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: sudo env "PATH=$PATH" "DATABASE_URL=$DATABASE_URL" node scripts/run-pg-tests.mjs test/render-deploy-runner.test.ts
@@ -145,29 +187,34 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     needs:
+      - select
       - core-typecheck
       - core-tests
     steps:
       - name: Core checks passed
         env:
+          SELECT: ${{ needs.select.result }}
           TYPECHECK: ${{ needs.core-typecheck.result }}
           TESTS: ${{ needs.core-tests.result }}
-        run: test "$TYPECHECK" = success && test "$TESTS" = success
+          SHARDS: ${{ needs.select.outputs.shard-count }}
+        run: |
+          test "$SELECT" = success && test "$TYPECHECK" = success
+          test "$TESTS" = success || { test "$TESTS" = skipped && test "$SHARDS" = 0; }
 
   cli:
     name: CLI
     timeout-minutes: 15
-    needs: reuse
+    needs: [reuse, select]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact tested tree
-        if: needs.reuse.outputs.reusable == 'true'
-        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
+      - name: Reuse the exact tested tree or skip an unaffected suite
+        if: needs.reuse.outputs.reusable == 'true' || needs.select.outputs.cli != 'true'
+        run: echo "Already tested for this exact tree, or this change cannot reach this suite; see Resolve exact tested tree and Select tests."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.cli == 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.cli == 'true'
         with:
           node-version-file: .node-version
           cache: npm
@@ -175,12 +222,12 @@ jobs:
             cli/package-lock.json
             package-lock.json
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.cli == 'true'
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
       - name: Install, typecheck, unit + packaged-artifact + e2e tests
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.cli == 'true'
         working-directory: cli
         env:
           QM_TERRAFORM_BIN: terraform
@@ -191,14 +238,14 @@ jobs:
           npm test
           npm run test:e2e
       - name: Install root dependencies
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.cli == 'true'
         run: npm ci
       - name: Build the CLI package
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.cli == 'true'
         working-directory: cli
         run: npm run build
       - name: Deployment stack contracts
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && needs.select.outputs.cli == 'true'
         run: |
           npm run typecheck:contract
           node --test "deploy/stacks/*/test/*.test.ts"
@@ -374,21 +421,23 @@ jobs:
   web-ui-checks:
     name: Web UI plugin (${{ matrix.check }})
     timeout-minutes: 20
-    needs: reuse
+    needs: [reuse, select]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         check: [tests 1/2, tests 2/2, core image]
+    env:
+      SELECTED: ${{ matrix.check == 'core image' && needs.select.outputs.core-image || needs.select.outputs.web-ui }}
     steps:
-      - name: Reuse the exact tested tree
-        if: needs.reuse.outputs.reusable == 'true'
-        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
+      - name: Reuse the exact tested tree or skip an unaffected suite
+        if: needs.reuse.outputs.reusable == 'true' || env.SELECTED != 'true'
+        run: echo "Already tested for this exact tree, or this change cannot reach this suite; see Resolve exact tested tree and Select tests."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        if: needs.reuse.outputs.reusable != 'true'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true' && matrix.check != 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check != 'core image'
         with:
           node-version-file: .node-version
           cache: npm
@@ -396,10 +445,10 @@ jobs:
             package-lock.json
             plugins/web-ui/package-lock.json
       - name: Install core dependencies
-        if: needs.reuse.outputs.reusable != 'true' && matrix.check != 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check != 'core image'
         run: npm ci
       - name: Install, typecheck, test
-        if: needs.reuse.outputs.reusable != 'true' && matrix.check != 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check != 'core image'
         working-directory: plugins/web-ui
         env:
           SHARD: ${{ matrix.check }}
@@ -408,7 +457,7 @@ jobs:
           npm run typecheck
           node --test --test-shard="${SHARD#tests }" "test/**/*.test.ts"
       - name: Build and boot the core image's web front door
-        if: needs.reuse.outputs.reusable != 'true' && matrix.check == 'core image'
+        if: needs.reuse.outputs.reusable != 'true' && env.SELECTED == 'true' && matrix.check == 'core image'
         run: bash scripts/smoke-core-image.sh
 
   web-ui-plugin:
@@ -512,7 +561,7 @@ jobs:
     name: Notify deployments of green main
     timeout-minutes: 3
     continue-on-error: true
-    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.full
     needs: [core, cli, lint, dependency-audit, core-postgres, web-ui-plugin, auth-plugin, portal-plugin]
     runs-on: ubuntu-latest
     permissions: {}

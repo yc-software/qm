@@ -62,7 +62,7 @@ for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
             command = 'test "$ERROR_SOURCE_TOKEN" = synthetic-error-source-token && printf source-readable';
           else if (stage === "work") command = "printf 'RCA and proposed fix' > loop-proposal.txt && printf prepared";
           else if (stage === "judge") command = `${check} && printf verified`;
-          else command = "printf shipped";
+          else command = "printf '{\"done\":true}'";
           const result = await built.app.turn({
             ...req,
             text:
@@ -113,7 +113,7 @@ for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
     const held = await outputs.awaitingReview(loop.id);
     if (checkResult === "gated") {
       await assert.rejects(fire.shipOutput(loop.id, held[0]!.id, "U1"), (e: Error) => e.message.includes(GATED));
-      assert.equal((await outputs.get(held[0]!.id))?.state, "ready");
+      assert.equal((await outputs.get(held[0]!.id))?.state, "unconfirmed");
       assert.equal(await built.app.pendingApprovalForThread(shipThread), null);
     } else if (checkResult === "passed") {
       assert.equal(result.summary?.ready.length, 1);

@@ -51,12 +51,9 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, workspaceUrl, auth, branding, starters] = await Promise.all([
+  const [permissions, slack, auth, branding, starters] = await Promise.all([
     permissionsOf(ctx, user),
-    app
-      .directoryMeta()
-      .then((meta) => meta.workspaceUrl ?? null)
-      .catch(swallowAs("web: /me directory meta", null)),
+    app.directoryMeta().catch(swallowAs("web: /me directory meta", { workspaceUrl: null, appIconUrl: null })),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
     starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
@@ -70,7 +67,8 @@ async function me(ctx: ApiCtx): Promise<void> {
     ...(config.analytics && !actor.imp ? { analytics: config.analytics } : {}),
     ...(config.browserErrors && !actor.imp ? { browserErrors: config.browserErrors } : {}),
     mode: "portal",
-    slackWorkspaceUrl: workspaceUrl,
+    slackWorkspaceUrl: slack.workspaceUrl,
+    slackAppIconUrl: slack.appIconUrl,
     chatSurfaces: app.chatSurfaces(),
     individualModelAuth: auth.individualModelAuth,
     modelAuthConnected: auth.connections.some(

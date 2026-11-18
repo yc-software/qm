@@ -327,10 +327,8 @@ class FakeCore implements SlackCoreClient {
     this.directories.push(body);
     return true;
   }
-  holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-    return fn(new Promise<void>(() => {}));
-  }
-  holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
+  async registerGroupRoster(): Promise<void> {}
+  holdDirectorySync<T>(_team: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
     return fn(new Promise<void>(() => {}));
   }
 
@@ -338,13 +336,10 @@ class FakeCore implements SlackCoreClient {
     return fn(new Promise<void>(() => {}));
   }
 
-  async claimDeliveries(): Promise<[]> {
-    return [];
-  }
   async ackDelivery(): Promise<void> {}
   async failDelivery(): Promise<void> {}
   deliverySubscriptions = 0;
-  onDeliveryEnqueued(): () => void {
+  serveDeliveries(): () => void {
     this.deliverySubscriptions++;
     return () => {};
   }

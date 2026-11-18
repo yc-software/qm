@@ -110,7 +110,14 @@ export type ShareArtifactResult =
     }
   | {
       ok: false;
-      code: "bad_request" | "not_found" | "forbidden" | "recipient_not_found" | "ambiguous_recipient" | "share_failed";
+      code:
+        | "bad_request"
+        | "not_found"
+        | "forbidden"
+        | "human_consent_required"
+        | "recipient_not_found"
+        | "ambiguous_recipient"
+        | "share_failed";
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };

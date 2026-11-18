@@ -512,11 +512,21 @@ async function oauthRevoke(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
     for (const h of provider.hosts)
       for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
-    audit(ctx, { principalId, action: "connector.oauth.revoked", resource: providerName, scopeLabel: principalId });
+    audit(ctx, {
+      principalId: capability?.actorId ?? principalId,
+      action: "connector.oauth.revoked",
+      resource: providerName,
+      scopeLabel: principalId,
+    });
     return sendJson(res, 200, { ok: true, principalId, provider: providerName, hosts: provider.hosts });
   }
   for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
-  audit(ctx, { principalId, action: "connector.oauth.revoked", resource: host, scopeLabel: principalId });
+  audit(ctx, {
+    principalId: capability?.actorId ?? principalId,
+    action: "connector.oauth.revoked",
+    resource: host,
+    scopeLabel: principalId,
+  });
   return sendJson(res, 200, { ok: true, principalId, host });
 }
 

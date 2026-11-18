@@ -28,7 +28,7 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
-import { editableIn } from "../surfaces/registry.ts";
+import { editableIn, SLACK } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
@@ -112,7 +112,8 @@ export function createMessagingMethods(
   | "upsertDirectory"
   | "upsertChannels"
   | "upsertGroups"
-  | "setDirectoryWorkspaceUrl"
+  | "registerGroupRoster"
+  | "setDirectoryWorkspace"
   | "directoryMeta"
   | "channelMember"
   | "channelVisibleTo"
@@ -476,8 +477,11 @@ export function createMessagingMethods(
     async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
       return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
     },
-    async setDirectoryWorkspaceUrl(url) {
-      await deps.directory.setWorkspaceUrl(url);
+    registerGroupRoster(groupId, principalIds) {
+      return deps.directory.upsertGroup(groupId, principalIds, SLACK);
+    },
+    async setDirectoryWorkspace(meta) {
+      await deps.directory.setWorkspace(meta);
     },
     directoryMeta() {
       return deps.directory.meta();

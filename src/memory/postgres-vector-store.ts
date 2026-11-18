@@ -2,7 +2,7 @@ import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool
 import { PGVECTOR_MAX_DIMENSIONS, unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
+import { claimFunction, claimRows, servingTenant, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -147,6 +147,17 @@ export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
         "",
         `SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL
            UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors`,
+      ),
+    ],
+  },
+  {
+    id: "memory/vectors/0006-serving-claim-tenants",
+    statements: [
+      claimFunction(
+        "claim_memory_tenants",
+        "",
+        `SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL${servingTenant("tenant_id")}
+           UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors WHERE true${servingTenant("tenant_id")}`,
       ),
     ],
   },
