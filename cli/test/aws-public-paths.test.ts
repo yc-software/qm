@@ -7,14 +7,7 @@ import { assertAwsPublicRouting } from "../src/backends/aws.ts";
 import { loadConfigAt } from "../src/config.ts";
 import { terraformVars } from "../src/terraform.ts";
 
-type Rule = { RuleArn: string; IsDefault: false; Priority: string; Actions: unknown[]; Conditions: unknown[] };
-
-function fixture(
-  paths: unknown = ["/hooks/*"],
-  blueGreen = false,
-  priority = "2",
-  extra: { rule: Rule; tags: Array<{ Key: string; Value: string }> } | undefined = undefined,
-) {
+function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2", tagKey?: string) {
   const dir = mkdtempSync(join(tmpdir(), "qm-public-paths-"));
   const configPath = join(dir, "qm.config.jsonc");
   const service = (name: string) => ({
@@ -80,6 +73,8 @@ function fixture(
         { Field: "path-pattern", PathPatternConfig: { Values: name === "core-public" ? ["/*"] : ["/hooks/*"] } },
       ],
     }));
+  if (tagKey)
+    rules.unshift({ ...rules[0]!, RuleArn: "relay", Actions: [{ Type: "forward", TargetGroupArn: "relay" }] });
   const responses = {
     "describe-load-balancers": {
       LoadBalancers: [{ LoadBalancerArn: "alb", DNSName: "acme.example", State: { Code: "active" } }],
@@ -100,13 +95,8 @@ function fixture(
       ],
     },
     "describe-target-groups": { TargetGroups: groups },
-    "describe-rules": { Rules: extra ? [extra.rule, ...rules] : rules },
-    "describe-tags": {
-      TagDescriptions: [
-        ...rules.map((rule) => ({ ResourceArn: rule.RuleArn, Tags: [] })),
-        ...(extra ? [{ ResourceArn: extra.rule.RuleArn, Tags: extra.tags }] : []),
-      ],
-    },
+    "describe-rules": { Rules: rules },
+    "describe-tags": { TagDescriptions: [{ ResourceArn: "relay", Tags: [{ Key: tagKey }] }] },
   };
   const bin = join(dir, "aws");
   writeFileSync(
@@ -221,27 +211,17 @@ test("the egress proxy may sit behind its own load balancer while other private 
   }
 });
 
-for (const blueGreen of [false, true]) {
-  test(`${blueGreen ? "blue/green" : "rolling"} routing leaves out only rules tagged as operator-managed`, () => {
-    const rule: Rule = {
-      RuleArn: "relay-rule",
-      IsDefault: false,
-      Priority: "1",
-      Actions: [{ Type: "forward", TargetGroupArn: "relay" }],
-      Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/relay/*"] } }],
-    };
-    for (const [tags, accepted] of [
-      [[{ Key: "qm:operator-managed", Value: "model relay" }], true],
-      [[{ Key: "Name", Value: "model relay" }], false],
-    ] as const) {
-      const f = fixture(undefined, blueGreen, "2", { rule, tags: [...tags] });
+test("routing leaves out only listener rules tagged as operator-managed", () => {
+  for (const blueGreen of [false, true]) {
+    for (const tagKey of ["qm:operator-managed", "Name"]) {
+      const f = fixture(undefined, blueGreen, "2", tagKey);
       try {
-        const config = loadConfigAt(f.configPath).config;
-        if (accepted) assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
-        else assert.throws(() => assertAwsPublicRouting(config, f.services));
+        const route = () => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services);
+        if (tagKey === "Name") assert.throws(route);
+        else assert.equal(route().get("hooks"), "hooks");
       } finally {
         f.close();
       }
     }
-  });
-}
+  }
+});
