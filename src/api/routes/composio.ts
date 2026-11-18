@@ -38,7 +38,7 @@ export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
 }
 
-function composioUnavailable(ctx: ApiCtx, status: number): void {
+export function composioUnavailable(ctx: ApiCtx, status: number): void {
   sendJson(ctx.res, status, {
     error: "composio_unavailable",
     message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",

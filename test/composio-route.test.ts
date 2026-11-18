@@ -1408,5 +1408,6 @@ test("apps a connector serves elsewhere link to their own connect page and repor
     { id: "", toolkit: "gmail", connector: "host", missingScopes: [] },
   ]);
   assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
+  assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);
   assert.equal(bare.calls.length, 0);
 });

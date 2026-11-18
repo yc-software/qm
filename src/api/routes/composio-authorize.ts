@@ -9,7 +9,15 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import { refuseWithoutPerson, sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
-import { ACCOUNT_ID, composioUserId, credential, externalApps, isToolkitId, request } from "./composio.ts";
+import {
+  ACCOUNT_ID,
+  composioUnavailable,
+  composioUserId,
+  credential,
+  externalApps,
+  isToolkitId,
+  request,
+} from "./composio.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -38,7 +46,7 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
 
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
   if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
-  const access = await credential(ctx);
+  const access = await credential(ctx, true);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
   if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
@@ -52,6 +60,7 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
       connector: external.connector,
       message: `${external.name} connects at ${external.connectUrl}, not through this API. Give the person that link; once it is connected, use the ${external.connector} connector's tools for ${external.name}.`,
     });
+  if (!access.key) return composioUnavailable(ctx, 403);
   if (callbackUrl !== undefined) {
     try {
       if (typeof callbackUrl !== "string" || callbackUrl.length > 4096) throw new Error("Invalid callback");
