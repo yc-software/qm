@@ -60,3 +60,17 @@ The TypeScript provenance shape adds optional `personalOnly: true`; false SQL va
 Opaque memory providers cannot retain this provenance. Routing therefore withholds direct and inherited personal-only captures from those providers. A configured provenance-aware notebook receives the private capture; if no eligible notebook route exists, capture is denied rather than sent to the opaque provider. Existing provider capture-off policies remain effective.
 
 Deploy the migration and updated API/workers before enabling the Excel changes; do not enable private capture while older workers can still process new turns. Older code does not enforce the new provenance field, so rolling back requires disabling the new client behavior first. There is no automatic publication or audience expansion for previously captured private facts.
+
+## Fresh discussions and client tool execution
+
+`POST /api/documents/:sessionId/restart` creates an empty conversation in the same mode and audience, then atomically rotates its current document binding. The signed core equivalent is `/v1/web/documents/:sessionId/restart`. Old sessions and durable knowledge remain. Restarting an obsolete binding or a child session returns a conflict; another member cannot restart a private conversation.
+
+Session metadata now also stores `bindingKey`, the opaque hash of the conversation binding. Invented before: `{ "kind": "session", "documentKey": "doc-hash", "projectId": "p1", "scopeId": "group:web-project-p1", "mode": "shared" }`. After: the same fields plus `"bindingKey": "binding-hash"`. Private metadata keeps its existing `principalId`. Resolution fills this field for existing current bindings; no session history, grant, or SQL index changes.
+
+Authenticated browser run responses add `clientToolsFor`, containing the canonical viewer id only when that viewer initiated the web run and declared client tools. It is null otherwise. Other callers do not receive this field. For example, `{ "status": "running", "result": null }` becomes `{ "status": "running", "result": null, "clientToolsFor": "alice" }` for the initiating browser and uses null for a collaborator. Clients must obtain fresh run authorization before dispatching native tools; matching a tool name in shared history is insufficient. Deploy the server first. An older server omits the field, so updated clients refuse execution.
+
+## Development identities
+
+Local development portal instances expose `/api/development/impersonation` for administrator-only testing. GET verifies the original actor and selected view; POST starts or stops ordinary audited impersonation. The endpoint is unavailable outside the existing localhost development-auth mode; it adds no environment setting.
+
+Each pane sends an opaque `development_view` and, while impersonating, `development_impersonating=1`. The portal stores the selected target in a sealed HttpOnly cookie unique to that view, preserving ordinary impersonation permissions and expiry. Optional `driver` identifiers must resolve to the original signed-in actor. Missing or expired active-view cookies fail closed. Browser storage contains identity hints, never an authentication credential. These cookies are disposable testing sessions; authoritative membership and audit state continue to use existing durable stores.

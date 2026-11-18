@@ -32,6 +32,7 @@ export type DocumentRecord =
       scopeId: string;
       mode: DocumentMode;
       principalId?: string;
+      bindingKey?: string;
     }
   | { kind: "document"; projectId: string; threadRef?: string }
   | { kind: "conversation"; scopeId: string; threadRef: string }
@@ -84,6 +85,53 @@ export function createDocumentConversations(deps: {
         mode: record.mode,
         sharedAccess: members?.some((member) => samePerson(member, principalId)) === true,
       };
+    },
+    async restart(
+      sessionId: string,
+      principalId: string,
+    ): Promise<{ status: "ok"; conversation: DocumentConversation } | { status: "forbidden" | "conflict" }> {
+      const record = await deps.backing.get(key("session", sessionId));
+      if (
+        record?.kind !== "session" ||
+        !record.bindingKey ||
+        (record.mode === "private" && !samePerson(record.principalId ?? "", principalId))
+      )
+        return { status: "forbidden" };
+      const result = await deps.projects.withRosterLock(record.projectId, async (project) => {
+        const members = await deps.projects.members(projectGroupRef(project.id));
+        if (!members?.some((member) => samePerson(member, principalId))) return { status: "forbidden" as const };
+        const binding = await deps.backing.get(record.bindingKey!);
+        const previous = await deps.sessions.get(sessionId);
+        if (
+          binding?.kind !== "conversation" ||
+          !previous ||
+          binding.threadRef !== previous.threadRef ||
+          binding.scopeId !== record.scopeId
+        )
+          return { status: "conflict" as const };
+        const threadRef = `web:${principalId}:${randomUUID()}`;
+        const session = await deps.sessions.getOrCreateByThread(
+          threadRef,
+          record.mode === "private" ? "dm" : "group",
+          record.scopeId,
+          undefined,
+          "web",
+        );
+        const associated = await deps.backing.putIfAbsent(key("session", session.id), record);
+        if (
+          associated.kind !== "session" ||
+          associated.documentKey !== record.documentKey ||
+          associated.scopeId !== record.scopeId
+        )
+          throw new Error("New conversation has a different document association");
+        await deps.sessions.addParticipant(session.id, principalId);
+        await deps.backing.put(record.bindingKey!, { ...binding, threadRef });
+        return {
+          status: "ok" as const,
+          conversation: { scopeId: record.scopeId, threadRef, sessionId: session.id, mode: record.mode },
+        };
+      });
+      return result ?? { status: "forbidden" };
     },
     async configure(surface: string, projectId: string): Promise<boolean> {
       if (!(await deps.projects.get(projectId))) return false;
@@ -172,6 +220,7 @@ export function createDocumentConversations(deps: {
         const association = await deps.backing.putIfAbsent(key("session", session.id), {
           kind: "session",
           documentKey,
+          bindingKey,
           projectId: project.id,
           scopeId,
           mode,
@@ -185,6 +234,8 @@ export function createDocumentConversations(deps: {
           association.mode !== mode
         )
           return { status: "conflict" as const };
+        if (association.bindingKey && association.bindingKey !== bindingKey) return { status: "conflict" as const };
+        if (!association.bindingKey) await deps.backing.merge(key("session", session.id), { bindingKey });
         await deps.sessions.addParticipant(session.id, input.principalId);
         if (input.mode !== undefined) await deps.backing.put(preferenceKey, { kind: "preference", mode });
         return {

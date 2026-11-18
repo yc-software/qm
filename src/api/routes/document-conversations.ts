@@ -53,6 +53,22 @@ async function resolve(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, result);
 }
 
+async function restart(ctx: ApiCtx): Promise<void> {
+  const user = ctx.actor?.p;
+  if (!user || !(await activePrincipal(ctx.deps, user))) return sendJson(ctx.res, 403, { error: "forbidden" });
+  if (!ctx.deps.documentConversations) return sendJson(ctx.res, 503, { error: "unavailable" });
+  const result = await ctx.deps.documentConversations.restart(ctx.params.sessionId!, user);
+  if (result.status !== "ok")
+    return sendJson(ctx.res, result.status === "conflict" ? 409 : 403, { error: result.status });
+  audit(ctx, {
+    principalId: user,
+    action: "documents.conversation.restart",
+    resource: result.conversation.sessionId,
+    scopeLabel: result.conversation.scopeId,
+  });
+  return sendJson(ctx.res, 200, result);
+}
+
 async function configure(ctx: ApiCtx): Promise<void> {
   if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
   const admin = await authorizeAdmin(ctx, orgScope(ctx.deps));
@@ -73,6 +89,14 @@ async function configure(ctx: ApiCtx): Promise<void> {
 }
 
 export const documentConversationRoutes: readonly Route<ApiCtx>[] = [
+  {
+    method: "POST",
+    path: "/v1/web/documents/:sessionId/restart",
+    actor: "person",
+    browser: "embed",
+    auth: "source",
+    handle: restart,
+  },
   {
     method: "POST",
     path: "/v1/web/documents/resolve",

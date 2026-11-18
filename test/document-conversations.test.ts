@@ -177,3 +177,108 @@ test("adopting an existing document preserves its audience and thread while new 
     await built.runtime.stop();
   }
 });
+
+test("fresh discussions preserve audience and knowledge, isolate private mode, and reject stale or unauthorized rotation", async () => {
+  const built = buildApp(testConfig());
+  try {
+    const project = await built.projects.create({ name: "Operations", ownerId: "owner" });
+    await built.projects.addMember(project.id, "owner", "member");
+    await built.documentConversations.configure(surface, project.id);
+    const input = { surface, documentId: "fresh-discussion", principalId: "owner" };
+    const shared = await built.documentConversations.resolve(input);
+    const personal = await built.documentConversations.resolve({ ...input, mode: "private" });
+    if (shared.status !== "ok" || personal.status !== "ok") throw new Error("missing bindings");
+    await built.sessions.append(
+      { sessionId: shared.conversation.sessionId },
+      { kind: "UserMessage", text: "Original shared discussion" },
+    );
+    await assert.rejects(built.documentConversations.knowledgeForSession(personal.conversation.sessionId, "member"));
+    assert.deepEqual(await built.documentConversations.restart(personal.conversation.sessionId, "member"), {
+      status: "forbidden",
+    });
+    assert.deepEqual(await built.documentConversations.restart(shared.conversation.sessionId, "outsider"), {
+      status: "forbidden",
+    });
+    const results = await Promise.all([
+      built.documentConversations.restart(shared.conversation.sessionId, "member"),
+      built.documentConversations.restart(shared.conversation.sessionId, "owner"),
+    ]);
+    const fresh = results.find((result) => result.status === "ok");
+    assert.ok(fresh && fresh.status === "ok");
+    assert.equal(results.filter((result) => result.status === "conflict").length, 1);
+    assert.equal(fresh.conversation.scopeId, shared.conversation.scopeId);
+    assert.notEqual(fresh.conversation.threadRef, shared.conversation.threadRef);
+    assert.equal((await built.sessions.getItems(shared.conversation.sessionId)).length, 1);
+    assert.equal((await built.sessions.getItems(fresh.conversation.sessionId)).length, 0);
+    assert.deepEqual(
+      await built.documentConversations.knowledgeForSession(fresh.conversation.sessionId, "owner"),
+      await built.documentConversations.knowledgeForSession(shared.conversation.sessionId, "owner"),
+    );
+    const resumed = await built.documentConversations.resolve({ ...input, mode: "shared" });
+    assert.deepEqual(resumed, fresh);
+    const privateAgain = await built.documentConversations.resolve({ ...input, mode: "private" });
+    assert.deepEqual(privateAgain, personal);
+    const newPrivate = await built.documentConversations.restart(personal.conversation.sessionId, "owner");
+    assert.equal(newPrivate.status, "ok");
+    if (newPrivate.status !== "ok") throw new Error("missing fresh private conversation");
+    assert.equal(newPrivate.conversation.scopeId, "personal:owner");
+    assert.equal(await built.app.getSessionForViewer(newPrivate.conversation.sessionId, { actorId: "member" }), null);
+    await built.projects.removeMember(project.id, "owner", "member");
+    assert.deepEqual(await built.documentConversations.restart(fresh.conversation.sessionId, "member"), {
+      status: "forbidden",
+    });
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a run's client-tool authority is bound to its authenticated actor rather than a project viewer", async () => {
+  const built = buildApp(testConfig());
+  try {
+    const project = await built.projects.create({ name: "Operations", ownerId: "owner" });
+    await built.projects.addMember(project.id, "owner", "member");
+    await built.documentConversations.configure(surface, project.id);
+    const binding = await built.documentConversations.resolve({
+      surface,
+      documentId: "tool-authority",
+      principalId: "member",
+    });
+    if (binding.status !== "ok") throw new Error("missing shared conversation");
+    const request = {
+      scopeVersion: await built.projects.version(binding.conversation.scopeId.slice(6)),
+      surface: "web",
+      actor: { id: "member", type: "internal" as const },
+      conversation: {
+        kind: "group" as const,
+        channelRef: binding.conversation.scopeId.slice(6),
+        threadRef: binding.conversation.threadRef,
+        audience: [
+          { id: "owner", type: "internal" as const },
+          { id: "member", type: "internal" as const },
+        ],
+      },
+      text: "Request a workbook action",
+      origin: { kind: "human" as const },
+      clientTools: [{ name: "ui__victim_write", description: "Write", inputSchema: { type: "object" as const } }],
+    };
+    const { run } = await built.runs.enqueue({ sessionId: binding.conversation.threadRef, request });
+    assert.equal((await built.app.getRun(run.id, "owner", { clientTools: true }))?.clientToolsFor, null);
+    assert.equal((await built.app.getRun(run.id, "member", { clientTools: true }))?.clientToolsFor, "member");
+    assert.equal((await built.app.getRun(run.id, "member", { clientTools: false }))?.clientToolsFor, undefined);
+    await built.principalLinks.link({
+      principalId: "member-alias",
+      canonicalId: "member",
+      evidence: "test: verified account link",
+      linkedBy: "member",
+    });
+    const aliased = await built.runs.enqueue({
+      sessionId: binding.conversation.threadRef,
+      request: { ...request, actor: { id: "member-alias", type: "internal" } },
+    });
+    assert.equal((await built.app.getRun(aliased.run.id, "member", { clientTools: true }))?.clientToolsFor, "member");
+    await built.projects.removeMember(project.id, "owner", "member");
+    assert.equal(await built.app.getRun(run.id, "member", { clientTools: true }), null);
+  } finally {
+    await built.runtime.stop();
+  }
+});
