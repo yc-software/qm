@@ -2089,7 +2089,7 @@ export function createChatSurface(
         });
       return html`
         <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""}"
+          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
@@ -2233,7 +2233,7 @@ export function createChatSurface(
           ${
             labeled
               ? html`<div class="speaker-label">
-                  ${assistantMark(msg)}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
+                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -2397,11 +2397,6 @@ export function createChatSurface(
   function workTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
     const timeline = messageWorkTimeline(work, finalText);
     return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
-  }
-
-  function assistantMark(message: AgentMessage): TemplateResult {
-    const icon = slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl);
-    return icon ? avatarTpl({ key: brandName(), name: brandName(), avatarUrl: icon }) : brandMark();
   }
 
   function rendersInsideWork(message: AgentMessage): boolean {
