@@ -21,7 +21,7 @@ function setup(t: { after(fn: () => void): void }) {
   });
   const link = () =>
     installPrincipalLinks({
-      canonical: (key) => (key === SIGN_IN ? PERSON : key === PERSON ? PERSON : undefined),
+      canonical: (key) => ([SIGN_IN, PERSON].includes(key) ? PERSON : undefined),
       aliases: (key) => (key === PERSON ? [SIGN_IN] : []),
     });
   t.after(() => installPrincipalLinks(null));
