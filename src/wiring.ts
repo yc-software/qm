@@ -2631,7 +2631,7 @@ export function buildApp(
             if (!email.includes("@")) return false;
             if (!vouchedByHost) return vouchedInternalEmail(email);
             await identity.refresh();
-            return identity.isInternal(identity.classify(email, false, true));
+            return identity.isInternal(identity.classify(email));
           },
           unansweredReply: genericChatNotices.unanswered,
           turns: genericChatTurns,

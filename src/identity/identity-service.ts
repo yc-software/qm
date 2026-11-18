@@ -8,8 +8,7 @@ import { externalMemberActive, type ExternalMember } from "./external-members.ts
 
 interface IdentityProvider {
   resolve(actor: ActorAssertion): Principal;
-  /** `vouchedByHost`: a chat host vouches for the person, so Slack directory-sync deactivation does not apply. */
-  classify(externalId: string, isExternalGuest?: boolean, vouchedByHost?: boolean): Principal;
+  classify(externalId: string, isExternalGuest?: boolean): Principal;
 }
 
 type DeactivationSource = "manual" | "directory-sync";
@@ -89,7 +88,7 @@ export function createIdentityService(
     directorySyncProtected.some((id) => personKey(id) === key) || roster().externals.has(key);
   const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
 
-  function classify(externalId: string, isExternalGuest?: boolean, vouchedByHost?: boolean): Principal {
+  function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
     const key = personKey(externalId);
     const { deactivated, externals } = roster();
@@ -97,7 +96,7 @@ export function createIdentityService(
     const external = externals.get(key);
     const inactive =
       record?.source === "manual" ||
-      (record?.source === "directory-sync" && !vouchedByHost && !keptByDirectorySync(key)) ||
+      (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
       (external !== undefined && !externalMemberActive(external));
     const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
     return { id, type };
