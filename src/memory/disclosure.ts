@@ -1,6 +1,6 @@
 import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, personalScope } from "../types.ts";
-import { samePerson } from "../directory/person.ts";
+import { samePerson, sameScope } from "../directory/person.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { CurrentScopeMembers, IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
 import { MemoryFactsMissing, parseFactId, renderFacts, type MemoryFact, type MemoryProvenance } from "./facts.ts";
@@ -31,13 +31,12 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
   };
   let currentAudience: Promise<readonly Principal[]> | undefined;
   const audience = () =>
-    (currentAudience ??=
-      input.targetScope === personalScope(input.actor.id)
-        ? Promise.resolve(input.audience)
-        : (input
-            .currentScopeMembers?.(input.targetScope)
-            .then((members) => members ?? [])
-            .catch(swallowAs("memory disclosure: audience", [])) ?? Promise.resolve([])));
+    (currentAudience ??= sameScope(input.targetScope, personalScope(input.actor.id))
+      ? Promise.resolve(input.audience)
+      : (input
+          .currentScopeMembers?.(input.targetScope)
+          .then((members) => members ?? [])
+          .catch(swallowAs("memory disclosure: audience", [])) ?? Promise.resolve([])));
   const native = (scope: ScopeId) => input.nativeScopes.includes(scope);
   function entitled(person: Principal, scope: ScopeId): Promise<boolean> {
     return once(`member:${person.id}:${scope}`, async () => {
@@ -59,7 +58,10 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
   function sourceAllowed(source: ScopeId, sensitivity: MemoryProvenance["sensitivity"]): Promise<boolean> {
     return once(`source:${source}:${sensitivity}`, async () => {
       if (!(await entitled(input.actor, source))) return false;
-      if (source === input.targetScope || (native(source) && ["org", "team"].includes(parseScopeId(source).kind ?? "")))
+      if (
+        sameScope(source, input.targetScope) ||
+        (native(source) && ["org", "team"].includes(parseScopeId(source).kind ?? ""))
+      )
         return allEntitled(source);
       if (!input.open || !input.config) return false;
       const personal = personalScope(input.actor.id);
@@ -69,7 +71,7 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
       if (await allEntitled(source, [...members])) return true;
       return (
         sensitivity === "ordinary" &&
-        source === personal &&
+        sameScope(source, personal) &&
         members.length > 0 &&
         members.every((person) => person.type === "internal")
       );

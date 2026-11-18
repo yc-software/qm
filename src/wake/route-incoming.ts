@@ -99,7 +99,7 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
   const sameAccount =
     message.modelAccount !== undefined &&
     message.modelAccount === live.modelAccount &&
-    (message.modelAccount === "company" || message.actorId === live.actorId);
+    (message.modelAccount === "company" || samePerson(message.actorId, live.actorId));
   if (!sameAccount) return { kind: "turn", reason: "account" };
   if (botIntoPersonsWork) return { kind: "turn", reason: "bot-message" };
   if (!live.handlesThisMessage) {

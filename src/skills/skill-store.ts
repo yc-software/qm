@@ -6,6 +6,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { personScopes } from "../directory/person.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -294,11 +295,13 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       await skills.merge(id, { lastUsedAt: at ?? Date.now() });
     },
 
-    async resolve(name, orderedScopes) {
+    async resolve(name, scopes) {
+      const orderedScopes = [...new Set(scopes.flatMap(personScopes))];
       return resolveFromIndex(publishedByScopeAndName(await inScopes(orderedScopes)), name, orderedScopes);
     },
 
-    async visibleFor(orderedScopes, granted) {
+    async visibleFor(scopes, granted) {
+      const orderedScopes = [...new Set(scopes.flatMap(personScopes))];
       const all = await inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
       return visibleSkillRows(all, orderedScopes, granted);
     },

@@ -169,7 +169,7 @@ async function verifyCapability(
       !publishedApp ||
       publishedApp.id !== capability.deployment ||
       publishedApp.status !== "running" ||
-      publishedApp.createdBy !== capability.actorId
+      !samePerson(publishedApp.createdBy, capability.actorId)
     ) {
       sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
       return null;

@@ -3,6 +3,7 @@ import {
   type ComposioAccountRecord,
   EXECUTE_TIMEOUT_MS,
   composioUserIds,
+  personAccounts,
   credential,
   activeOwnedAccount,
   request,
@@ -149,9 +150,12 @@ async function pickAccount(
   });
   const data = await request(ctx, access.key, `/connected_accounts?${query}`);
   if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-  const accounts = (data.items as Array<ComposioAccountRecord | null>)
-    .filter((item) => usableAccount(item, userIds))
-    .filter((item) => toolkits.includes(item.toolkit.slug));
+  const accounts = personAccounts(
+    access.principal,
+    (data.items as Array<ComposioAccountRecord | null>)
+      .filter((item) => usableAccount(item, userIds))
+      .filter((item) => toolkits.includes(item.toolkit.slug)),
+  );
   if (accounts.length === 1) return accounts[0]!.id;
   if (accounts.length === 0)
     sendJson(ctx.res, 409, {

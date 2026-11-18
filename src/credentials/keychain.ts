@@ -6,7 +6,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SurfaceUser } from "../surfaces/contract.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personIds, personKey, pickForPerson, rosterIds, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { mergeCredentialFiles, type CredentialFileMerge } from "./file-merge.ts";
@@ -794,11 +794,19 @@ export function createKeychain(deps: {
     accountType?: string,
   ): Promise<KeychainCredential> {
     const prior = await connectorRecord(host, principalId, accountType);
-    const ownerId = prior?.ownerId ?? canonicalPerson(principalId);
-    const id = prior?.id ?? oauthId(host, ownerId, accountType);
-    const rec = connectorRec(id, host, ownerId, token, accountType, prior);
+    const owner = prior?.ownerId ?? canonicalPerson(principalId);
+    const id = prior?.id ?? oauthId(host, owner, accountType);
+    const rec = connectorRec(id, host, owner, token, accountType, prior);
     await deps.creds.put(id, rec);
     return rec;
+  }
+
+  async function personConnectorRecords(
+    host: string,
+    principalId: string,
+    accountType?: string,
+  ): Promise<KeychainCredential[]> {
+    return deps.creds.getMany([...new Set(rosterIds(principalId).map((p) => oauthId(host, p, accountType)))]);
   }
 
   async function connectorRecord(
@@ -806,9 +814,14 @@ export function createKeychain(deps: {
     principalId: string,
     accountType?: string,
   ): Promise<KeychainCredential | null> {
-    const ids = [...new Set([principalId, ...personIds(principalId)])].map((id) => oauthId(host, id, accountType));
-    const recs = await deps.creds.getMany(ids);
-    return ids.map((id) => recs.find((rec) => rec.id === id)).find((rec) => rec !== undefined) ?? null;
+    const byId = new Map((await personConnectorRecords(host, principalId, accountType)).map((r) => [r.id, r]));
+    return (
+      pickForPerson(
+        principalId,
+        (p) => byId.get(oauthId(host, p, accountType)),
+        (r) => r.updatedAt,
+      ) ?? null
+    );
   }
 
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
@@ -1520,8 +1533,7 @@ export function createKeychain(deps: {
     },
 
     async deleteConnectorToken(host, principalId, accountType) {
-      const rec = await connectorRecord(host, principalId, accountType);
-      if (rec) await deleteCredential(rec.id);
+      for (const rec of await personConnectorRecords(host, principalId, accountType)) await deleteCredential(rec.id);
     },
 
     async connectorTokenStatus(host, principalId, accountType) {

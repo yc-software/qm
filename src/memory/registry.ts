@@ -4,6 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
+import { pickForPerson } from "../directory/person.ts";
 import {
   isPrivateHost,
   MEMORY_PROVIDER_ID,
@@ -365,6 +366,13 @@ const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label"]);
 export const memberBrainsOn = (record: MemoryRegistry): boolean => record.memberBrains !== false;
 
 export const memberBrainId = (owner: string): string => `member-${hashId([owner])}`;
+
+export const memberBrainOwner = (record: MemoryRegistry, person: string): string =>
+  pickForPerson(
+    person,
+    (id) => record.brains.find((brain) => brain.id === memberBrainId(id) && brain.owner === id),
+    (brain) => brain.updatedAt,
+  )?.owner ?? person;
 
 const memberBrainsOff = () =>
   new MemoryRegistryError(403, "member brains are turned off for this org; an org admin can turn them back on");

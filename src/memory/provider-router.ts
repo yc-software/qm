@@ -19,7 +19,7 @@ import {
   withEnvelope,
 } from "./provider-outcome.ts";
 import { reportFailure } from "../util/errors.ts";
-import { OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
+import { OutsideAudience, ownPrivateConversation, sameScope } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -35,7 +35,7 @@ export interface MemoryProviderRoute {
 
 function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
   const kind = parseScopeId(scopeId).kind;
-  return route.scopes.some((scope) => scope === scopeId || scope === kind);
+  return route.scopes.some((scope) => sameScope(scope, scopeId) || scope === kind);
 }
 
 function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {

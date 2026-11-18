@@ -1,6 +1,6 @@
 import type { Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
-import { attestableAudience } from "../directory/person.ts";
+import { attestableAudience, personScopes } from "../directory/person.ts";
 
 export function loadsScopeContext(actorId: string, scope: ScopeId, botWork: boolean): boolean {
   return !botWork || !attestableAudience(actorId, scope);
@@ -14,9 +14,12 @@ export function isOwnScopeBotWork(
 
 export function entitledScopes(ownScopeBotWork: boolean) {
   return (p: Principal, sessionScopeId: ScopeId, orgScopeId: ScopeId): ScopeId[] =>
-    [orgScopeId, sessionScopeId, scopeId("personal", p.id), ...(p.teamIds ?? []).map((t) => scopeId("team", t))].filter(
-      (scope) => loadsScopeContext(p.id, scope, ownScopeBotWork),
-    );
+    [
+      orgScopeId,
+      sessionScopeId,
+      ...personScopes(scopeId("personal", p.id)),
+      ...(p.teamIds ?? []).map((t) => scopeId("team", t)),
+    ].filter((scope) => loadsScopeContext(p.id, scope, ownScopeBotWork));
 }
 
 export function principalEntitledToScope(

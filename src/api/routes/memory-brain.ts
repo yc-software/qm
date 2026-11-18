@@ -2,6 +2,7 @@ import { canonicalPerson } from "../../directory/person.ts";
 import {
   deleteMemberBrain,
   memberBrainId,
+  memberBrainOwner,
   memberBrainsOn,
   putMemberBrain,
   readRegistry,
@@ -46,12 +47,13 @@ async function member(ctx: ApiCtx) {
   return { owner, registry: deps.memoryRegistry };
 }
 
-function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, owner: string) {
+function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, person: string) {
+  const owner = memberBrainOwner(record, person);
   const id = memberBrainId(owner);
   const brain = record.brains.find((entry) => entry.id === id && entry.owner === owner);
   const bindings = brain ? record.bindings.filter((binding) => binding.brain === id) : [];
   return {
-    principalId: owner,
+    principalId: person,
     memberBrains: memberBrainsOn(record),
     brain: brain ? redactBrain(brain) : null,
     binding: bindings[0] ?? null,
@@ -91,7 +93,7 @@ async function changeOwnBrain(
     registry,
     action,
     resource: memberBrainId(owner),
-    apply: (record, change) => apply(record, owner, change),
+    apply: (record, change) => apply(record, memberBrainOwner(record, owner), change),
     show: (record) => ownBrain(record, registry, owner),
   });
 }

@@ -10,7 +10,7 @@ import { inboxView } from "./inbox.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
 import { postRunSignal, postTurn } from "./turns.ts";
 import { isObj } from "./shared.ts";
-import { ownsWebThread } from "../../directory/person.ts";
+import { ownsWebThread, rosterIds } from "../../directory/person.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 type WebConversation = TurnRequest["conversation"];
@@ -38,6 +38,8 @@ function conversationForScope(threadRef: string, scope?: string, channelName?: s
   return { kind, channelRef: ref, threadRef, ...(channelName ? { channelName } : {}) };
 }
 
+const ownInbox = (threadRef: string, user: string) => rosterIds(user).some((id) => threadRef === `web:${id}:inbox`);
+
 async function resolveWebConversation(
   ctx: ApiCtx,
   user: string,
@@ -45,16 +47,16 @@ async function resolveWebConversation(
   scope?: string,
   channelName?: string,
 ): Promise<{ conversation: WebConversation } | Refusal> {
-  const inbox = `web:${user}:inbox`;
-  if (/^web:.+:inbox$/.test(threadRef) && threadRef !== inbox)
+  const inbox = ownInbox(threadRef, user);
+  if (/^web:.+:inbox$/.test(threadRef) && !inbox)
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   const conversation = conversationForScope(threadRef, scope, channelName);
-  if (!conversation || (threadRef === inbox && conversation.kind !== "dm"))
+  if (!conversation || (inbox && conversation.kind !== "dm"))
     return {
       error: "forbidden_scope",
       message: "you can only chat in your personal context or a shared context you're in",
     };
-  if (threadRef === inbox && !(await inboxPreviewEnabled(ctx.deps, user)))
+  if (inbox && !(await inboxPreviewEnabled(ctx.deps, user)))
     return { error: "feature_disabled", message: "inbox access is not enabled for this user" };
   return { conversation };
 }
@@ -127,7 +129,7 @@ async function webTurnBase(
 ): Promise<TurnRequest> {
   const displayName = ctx.actor?.n;
   const appSlug = appEditSlug(threadRef, user);
-  const inbox = threadRef === `web:${user}:inbox` ? await inboxContext(ctx) : undefined;
+  const inbox = ownInbox(threadRef, user) ? await inboxContext(ctx) : undefined;
   const liveEdit = appSlug ? await ctx.app.appLiveEdit(appSlug) : null;
   const failure = liveEdit?.draft?.failure;
   const failedPublish =
