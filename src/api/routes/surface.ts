@@ -39,7 +39,7 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
-import { activeRun, audit, isObj, orgScope, runIsActive } from "./shared.ts";
+import { audit, isObj, orgScope } from "./shared.ts";
 import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
@@ -873,9 +873,7 @@ const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
     turnAuthority(
       capability.actorId,
       capability.memory,
-      personAtKeyboard(capability) &&
-        (await runIsActive(ctx)) &&
-        !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
+      personAtKeyboard(capability) && !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
     ),
     capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
@@ -1209,7 +1207,6 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   if (typeof b.type !== "string" || !isArtifactType(b.type)) {
     return sendJson(res, 400, { error: "bad_request", message: `type must be one of: ${ARTIFACT_TYPES.join(", ")}` });
   }
-  if (b.type === "deploy" && !(await activeRun(ctx))) return;
   if (typeof b.id !== "string" || !b.id.trim())
     return sendJson(res, 400, { error: "bad_request", message: "id required" });
   if (

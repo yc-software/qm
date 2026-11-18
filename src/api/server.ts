@@ -51,6 +51,7 @@ import {
 } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyAppSubdomain } from "./routes/apps.ts";
+import { runIsActive } from "./routes/shared.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
@@ -199,7 +200,9 @@ async function verifyCapability(
     });
     return null;
   }
-  return capability;
+  return personAtKeyboard(capability) && !(await runIsActive({ deps, capability }))
+    ? { ...capability, triggered: true }
+    : capability;
 }
 
 async function gate(
