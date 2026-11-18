@@ -10,6 +10,7 @@ const CHAT_API_ROUTES = [
   { method: "GET", path: "/api/development/impersonation" },
   { method: "POST", path: "/api/development/impersonation" },
   { method: "GET", path: "/me" },
+  { method: "GET", path: "/api/deliveries/events" },
   { method: "POST", path: "/api/turn" },
   { method: "POST", path: "/api/documents/resolve" },
   { method: "POST", path: "/api/documents/:sessionId/restart" },
