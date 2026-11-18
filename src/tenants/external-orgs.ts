@@ -51,38 +51,28 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
   ],
 };
 
-const partnerChatDefiner = `CREATE FUNCTION qm_self_serve_provisioned(tenant uuid, key text, partner text)
+const provisionedSettingsDefiner = `CREATE FUNCTION qm_self_serve_provisioned(tenant uuid, settings jsonb)
   RETURNS uuid LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE violated text;
+  DECLARE holder uuid;
   BEGIN
     UPDATE tenant_external_orgs o SET provisioned_at = now() WHERE o.tenant = $1 AND o.provisioned_at IS NULL;
     IF NOT FOUND THEN
       RETURN NULL;
     END IF;
-    UPDATE tenants t SET settings = t.settings || jsonb_build_object('modelGatewayKey', $2, 'serving', true)
+    SELECT t.id INTO holder FROM tenants t WHERE t.settings->>'partnerChatAccount' = $2->>'partnerChatAccount';
+    UPDATE tenants t SET settings = t.settings || ($2 - CASE WHEN holder IS NULL THEN '' ELSE 'partnerChatAccount' END)
+      || jsonb_build_object('serving', true)
       WHERE t.id = $1;
-    IF $3 IS NULL THEN
-      RETURN NULL;
-    END IF;
-    BEGIN
-      UPDATE tenants t SET settings = t.settings || jsonb_build_object('partnerChatAccount', $3) WHERE t.id = $1;
-    EXCEPTION WHEN unique_violation THEN
-      GET STACKED DIAGNOSTICS violated = CONSTRAINT_NAME;
-      IF violated IS DISTINCT FROM 'tenants_partner_chat_account' THEN
-        RAISE;
-      END IF;
-      RETURN (SELECT t.id FROM tenants t WHERE t.settings->>'partnerChatAccount' = $3);
-    END;
-    RETURN NULL;
+    RETURN holder;
   END $f$`;
 
-export const TENANT_EXTERNAL_ORG_PARTNER_CHAT: PgMigrationDefinition = {
-  id: "0000-tenancy/external-orgs-partner-chat",
+export const TENANT_EXTERNAL_ORG_SETTINGS: PgMigrationDefinition = {
+  id: "0000-tenancy/external-orgs-provisioned-settings",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `DROP FUNCTION IF EXISTS qm_self_serve_provisioned(uuid, text)`,
-    `DO $self_serve$ BEGIN EXECUTE format($sql$${partnerChatDefiner}$sql$, current_schema()); END $self_serve$`,
-    `REVOKE ALL ON FUNCTION qm_self_serve_provisioned(uuid, text, text) FROM PUBLIC`,
+    `DO $self_serve$ BEGIN EXECUTE format($sql$${provisionedSettingsDefiner}$sql$, current_schema()); END $self_serve$`,
+    `REVOKE ALL ON FUNCTION qm_self_serve_provisioned(uuid, jsonb) FROM PUBLIC`,
   ],
 };

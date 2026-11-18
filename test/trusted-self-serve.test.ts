@@ -340,6 +340,7 @@ test("self-serve never creates a deployment's first workspace", async (t) => {
 
 test("a provisioner can hand a new workspace its partner chat account, but never one another workspace holds", async (t) => {
   const { s, provision, db } = await shared(t);
+  const errors = t.mock.method(console, "error", () => {});
   const signIn = (id: string) =>
     withoutTenant(() => selfServeWorkspace(s.config, { subject: `p${id}`, email: null }, { id, name: `Chat ${id}` }));
   const partnerOf = async (tenant: string) =>
@@ -355,6 +356,11 @@ test("a provisioner can hand a new workspace its partner chat account, but never
   assert.deepEqual((await db.owner.q("SELECT qm_tenant_for_partner_chat('acct-1')::text AS tenant"))[0], {
     tenant: first,
   });
+  assert.ok(
+    errors.mock.calls.some((call) =>
+      String(call.arguments[0]).includes(`partner chat account acct-1 already belongs to workspace ${first}`),
+    ),
+  );
   const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [second]);
   assert.deepEqual(row?.settings, {
     brandName: "Chat 82",
