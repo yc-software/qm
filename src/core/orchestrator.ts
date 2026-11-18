@@ -731,7 +731,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             origin: input.origin.kind,
             ...context,
           });
-      const { flaggedScreenedInput, inputUnscreened } = await screenInboundInput({
+      const { flaggedScreenedInput, inputUnscreened, releasedAttachments } = await screenInboundInput({
         deps,
         input,
         actor,
@@ -1837,6 +1837,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           registration: ArtifactRegistration,
           inboxDir: string,
           requestText: string,
+          released?: ReadonlySet<string>,
         ): ReturnType<typeof materializeInbound> =>
           attachments?.length && !strictReadOnly
             ? materializeInbound(
@@ -1846,14 +1847,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 blobTransfer,
                 registration,
                 inboxDir,
-                screenInboundFile(requestText),
+                screenInboundFile(requestText, released),
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
-        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
-          intakeOf(await receiveInbound(message.attachments, registration, inboxDir, message.text), message, inboxDir, {
-            strictReadOnly,
-            enforceScreen,
-          });
+        const takeIn = async (
+          message: IncomingMessage,
+          registration: ArtifactRegistration,
+          inboxDir: string,
+          released?: ReadonlySet<string>,
+        ) =>
+          intakeOf(
+            await receiveInbound(message.attachments, registration, inboxDir, message.text, released),
+            message,
+            inboxDir,
+            { strictReadOnly, enforceScreen },
+          );
         const {
           received: inbound,
           manifest,
@@ -1868,6 +1876,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           fileRegistration,
           turnInboxDir,
+          releasedAttachments,
         );
 
         const importedOverheard: OverheardEntryPayload[] = [];
@@ -1945,6 +1954,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           metas: readonly AttachmentMeta[],
           requestText: string,
           existingDocuments: readonly DocumentInput[] = [],
+          released?: ReadonlySet<string>,
         ) => {
           const loaded = strictReadOnly
             ? { documents: [], notices: [], tokens: 0 }
@@ -1954,9 +1964,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 existingDocuments,
               });
           let unscreened = false;
-          if (enforceScreen) unscreened = await screenDocuments(loaded, requestText);
+          if (enforceScreen) unscreened = await screenDocuments(loaded, requestText, released);
           else
-            void screenDocuments(loaded, requestText).catch(swallowAs("orchestrator: observed document screen", false));
+            void screenDocuments(loaded, requestText, released).catch(
+              swallowAs("orchestrator: observed document screen", false),
+            );
           loaded.notices.push(...loaded.documents.map((document) => documentIncludedNote(document)));
           documentRoom.maxBytes -= loaded.documents.reduce(
             (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
@@ -1977,6 +1989,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...inbound.metas,
           ],
           input.text,
+          [],
+          releasedAttachments,
         );
         const lastUserAt = visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))?.createdAt;
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
