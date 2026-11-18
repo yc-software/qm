@@ -39,12 +39,12 @@ test("a cron shared with a person becomes their paused linked copy until they ed
   assert.equal(forked.action, "weather in Oakland");
   const { owned } = await app.listCronsForViewer("U1");
   assert.deepEqual(
-    owned.find((c) => c.id === source.id)?.copies?.map((c) => [c.owner, Boolean(c.forkedAt), c.deliversTo]),
-    [["U2", true, "web"]],
+    owned.find((c) => c.id === source.id)?.copies?.map((c) => [c.owner, c.status, c.deliversTo]),
+    [["U2", "edited", "web"]],
   );
 });
 
-test("unsharing a cron withdraws a pending copy and detaches an accepted one", async () => {
+test("unsharing a cron detaches each copy and leaves it with its owner", async () => {
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-unshare-")) }));
   const source = await app.createCron({
     ownerScopeId: "personal:U1",
@@ -53,13 +53,13 @@ test("unsharing a cron withdraws a pending copy and detaches an accepted one", a
     schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
     action: "weather in SF",
   });
-  const pending = (await app.shareCron(testTenant, source.id, "U2", "U1")).copy;
+  const paused = (await app.shareCron(testTenant, source.id, "U2", "U1")).copy;
   const accepted = (await app.shareCron(testTenant, source.id, "U3", "U1")).copy;
   await app.updateCron(accepted.id, { enabled: true }, { actorId: "U3" });
 
   await app.unshareCron(source.id, "U2");
   await app.unshareCron(source.id, "U3");
-  assert.equal(await app.getCron(pending.id), null);
+  assert.equal((await app.getCron(paused.id))?.sharedFrom, undefined);
   assert.equal((await app.getCron(accepted.id))?.enabled, true);
   assert.deepEqual(await app.cronCopies(source.id), []);
 });

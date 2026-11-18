@@ -36,10 +36,11 @@ function deliveryRow(
   </div>`;
 }
 
-function copyStatus(copy: NonNullable<CronView["copies"]>[number]): { label: string; tone: string } {
-  if (copy.forkedAt) return { label: "Edited their copy", tone: "" };
-  return copy.enabled ? { label: "On", tone: "on" } : { label: "Pending", tone: "wait" };
-}
+const COPY_STATUS = {
+  on: { label: "On", tone: "on" },
+  paused: { label: "Paused", tone: "" },
+  edited: { label: "Edited their copy", tone: "" },
+};
 
 function copyDestinationLabel(type: string | undefined): string {
   if (type === "web") return "Their own chat";
@@ -64,7 +65,7 @@ export function cronDeliveryList(
   return html`<div class="cron-card cron-delivery-list">
       ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
       ${(c.copies ?? []).map((copy) =>
-        deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), copyStatus(copy)),
+        deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), COPY_STATUS[copy.status]),
       )}
       ${shares.map((g) => deliveryRow(granteeName(g.scope), g.permission === "write" ? "Can view and edit" : "Can view"))}
       ${
