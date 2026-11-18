@@ -74,7 +74,7 @@ export const slackSurfaceScenarios: Scenario[] = [
       const fixture = `fixture-${marker}`;
       const dm = await ctx.dm();
       const seed = await dm.send(seedFixturePrompt(service, fixture));
-      await dm.waitForBotReply(seed, { match: /DONE/ });
+      await dm.waitForBotReply(seed, { match: /^\W*DONE\b/ });
       const ch = await ctx.freshChannel();
       const root = await ch.mention(
         `Using my ${service} credential, run \`${FIXTURE_COMMAND}\` on your computer, requesting access through the keychain if needed, and reply COUNT=<number>.`,
