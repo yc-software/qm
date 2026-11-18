@@ -116,7 +116,8 @@ const templateName = `${runId}_template`;
 
 const started = Date.now();
 await admin.query(`CREATE DATABASE ${templateName}`);
-await seedTestTenant(databaseUrl(templateName));
+const vector = (await admin.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rows.length > 0;
+await seedTestTenant(databaseUrl(templateName), { vector });
 await admin.query(`ALTER DATABASE ${templateName} WITH ALLOW_CONNECTIONS false`);
 await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [templateName]);
 const results = [];

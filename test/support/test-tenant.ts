@@ -41,11 +41,10 @@ async function createAppRole(databaseUrl: string): Promise<void> {
   }
 }
 
-export async function seedTestTenant(databaseUrl: string): Promise<void> {
+export async function seedTestTenant(databaseUrl: string, { vector = false } = {}): Promise<void> {
   await createAppRole(databaseUrl);
   const pool = new pg.Pool({ connectionString: ownerUrl(databaseUrl).toString(), max: 1 });
   try {
-    const vector = (await pool.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rows.length > 0;
     await migrateDatabase(ownerUrl(databaseUrl).toString(), { vector });
     await pool.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
     await pool.query("INSERT INTO tenants(id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [TEST_TENANT]);
