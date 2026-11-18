@@ -77,7 +77,7 @@ import { appEditTurnPolicy } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.ts";
+import { askResolutionEvents } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
@@ -196,7 +196,13 @@ import { appSourceShown } from "./orchestrator/app-source.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
 import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
-import { addConversationBlocks, appendTurnGuidance, finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
+import {
+  addConversationBlocks,
+  appendTurnGuidance,
+  conversationRoster,
+  finishSystemPrompt,
+  otherPeopleShown,
+} from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
@@ -670,12 +676,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
+      const rosterMembers =
+        !external && conversation.kind !== "dm"
+          ? await conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
+              swallowAs("orchestrator: conversation roster", undefined),
+            )
+          : undefined;
+      const shownPeople = otherPeopleShown(actor, conversation, rosterMembers);
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
-          canonicalJson(screenedFields(input, homeChannel?.channelName));
+        canonicalJson(
+          screenedFields(approvalRecord.request, approvalRecord.homeChannel, approvalRecord.people ?? []),
+        ) === canonicalJson(screenedFields(input, homeChannel?.channelName, shownPeople));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
@@ -713,6 +727,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor,
         conversation,
         homeChannelName: homeChannel?.channelName,
+        shownPeople,
         scopeId,
         resolution,
         screenInbound,
@@ -755,6 +770,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               command: "security-screen",
               reason: heldReason,
               homeChannel: homeChannel?.channelName,
+              people: shownPeople,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
@@ -920,8 +936,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       if (persona?.routedBy) turnEvents.push(personaRoutedNote(persona.persona.name, persona.routedBy));
-      let rosterMembers: DirectoryMember[] | undefined;
-      let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
         conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
         rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
@@ -1446,7 +1460,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           automatedTurn,
           childWake,
         });
-        ({ rosterMembers, scopeAskList } = await addConversationBlocks({
+        const scopeAskList = await addConversationBlocks({
           deps,
           actor,
           conversation,
@@ -1457,10 +1471,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           credentialDescriptions,
           openSpeakerKeychain,
           scopeKeychainGrants,
-          directoryIndexFor: (directory) => directoryIndexFor(tenant, directory),
           rosterMembers,
-          scopeAskList,
-        }));
+        });
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
           deps,

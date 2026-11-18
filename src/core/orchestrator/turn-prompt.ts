@@ -1,5 +1,5 @@
 import { samePerson, personKey } from "../../directory/person.ts";
-import type { DirectoryMember, DirectoryStore } from "../../directory/directory-store.ts";
+import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { renderKeychainManifest, type KeychainAsk } from "../../credentials/keychain.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
@@ -130,10 +130,8 @@ export async function addConversationBlocks(turn: {
   credentialDescriptions: CredentialCatalog["credentialDescriptions"];
   openSpeakerKeychain: CredentialCatalog["openSpeakerKeychain"];
   scopeKeychainGrants: () => Promise<Parameters<typeof renderKeychainManifest>[0]["scopeGrants"]>;
-  directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   rosterMembers: DirectoryMember[] | undefined;
-  scopeAskList: KeychainAsk[];
-}): Promise<{ rosterMembers: DirectoryMember[] | undefined; scopeAskList: KeychainAsk[] }> {
+}): Promise<KeychainAsk[]> {
   const {
     deps,
     actor,
@@ -145,31 +143,11 @@ export async function addConversationBlocks(turn: {
     credentialDescriptions,
     openSpeakerKeychain,
     scopeKeychainGrants,
-    directoryIndexFor,
+    rosterMembers,
   } = turn;
-  let { rosterMembers, scopeAskList } = turn;
-  if (!external && conversation.kind !== "dm") {
-    rosterMembers = await (async () => {
-      const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-      const participants = [
-        ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-        ...audienceMembers,
-      ];
-      const index = await directoryIndexFor(deps.directory);
-      const seen = new Set<string>();
-      const resolved: DirectoryMember[] = [];
-      for (const p of participants) {
-        if (seen.has(personKey(p.id))) continue;
-        seen.add(personKey(p.id));
-        const m = index.get(personKey(p.id));
-        if (m) resolved.push(m);
-        else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
-      }
-      return resolved;
-    })().catch(swallowAs("orchestrator: conversation roster", undefined));
-    const rosterBlock = rosterMembers && renderConversationRoster(rosterMembers);
-    if (rosterBlock) turnContextBlocks["Who's in this conversation"] = rosterBlock;
-  }
+  let scopeAskList: KeychainAsk[] = [];
+  const rosterBlock = rosterMembers && renderConversationRoster(rosterMembers);
+  if (rosterBlock) turnContextBlocks["Who's in this conversation"] = rosterBlock;
   if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
     const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
     const members = [
@@ -196,7 +174,43 @@ export async function addConversationBlocks(turn: {
     if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
     scopeAskList = scopeAsks;
   }
-  return { rosterMembers, scopeAskList };
+  return scopeAskList;
+}
+
+export async function conversationRoster(
+  actor: OrchestratorInput["actor"],
+  conversation: OrchestratorInput["conversation"],
+  directoryIndex: () => Promise<Map<string, DirectoryMember>>,
+): Promise<DirectoryMember[]> {
+  const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+  const participants = [
+    ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
+    ...audienceMembers,
+  ];
+  const index = await directoryIndex();
+  const seen = new Set<string>();
+  const resolved: DirectoryMember[] = [];
+  for (const p of participants) {
+    if (seen.has(personKey(p.id))) continue;
+    seen.add(personKey(p.id));
+    const m = index.get(personKey(p.id));
+    if (m) resolved.push(m);
+    else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
+  }
+  return resolved;
+}
+
+export function otherPeopleShown(
+  actor: OrchestratorInput["actor"],
+  conversation: OrchestratorInput["conversation"],
+  rosterMembers: readonly DirectoryMember[] | undefined,
+): string[] {
+  const named = [
+    ...(rosterMembers ?? []).map((m) => ({ id: m.principalId, name: m.displayName })),
+    ...conversation.audience.filter((p) => p.type === "internal").map((p) => ({ id: p.id, name: p.displayName })),
+  ];
+  const names = named.filter(({ id, name }) => name?.trim() && !samePerson(id, actor.id)).map(({ name }) => name!);
+  return [...new Set(names)].toSorted();
 }
 
 export async function finishSystemPrompt(turn: {
