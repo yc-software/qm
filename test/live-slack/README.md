@@ -1,12 +1,11 @@
 # Live Slack E2E (example)
 
-Post-merge live scenarios against example.slack.com. The workflow
-(`.github/workflows/live-e2e.yml`) boots the merged commit as a real instance on the GHA
-runner — core (with `DATABASE_URL` set) + Slack plugin in Socket Mode on a **CI-reserved
-pool app** (`qm dev --ci`) — then `run.ts` drives the catalog in
-`scenarios.ts` posting as a real example **user** (the "QA Human" account), so every
-message takes the exact path a teammate's would: classification, lazy directory push,
-threading, acknowledgments, tool execution, and file delivery.
+Live scenarios against example.slack.com, run by hand. No CI workflow runs this catalog:
+you boot the branch as a real instance (a dev instance on a pool app, or `qm dev --ci`:
+core with `DATABASE_URL` set + Slack plugin in Socket Mode), then `run.ts` drives the
+catalog in `scenarios.ts` posting as a real example **user** (the "QA Human" account), so
+every message takes the exact path a teammate's would: classification, lazy directory push,
+threading, acknowledgments, tool execution, and file delivery. See "Run locally" below.
 
 ## Layout
 
@@ -30,17 +29,25 @@ before evaluating its timing budgets.
 
 ## Run locally
 
-Bring up a dev instance (`/dev-instance up`) or `node cli/bin/qm.ts dev --ci up`, then:
+Export a `CORE_SIGNING_SECRET` of your own, then bring up a dev instance on a pool app
+(`bash scripts/dev-instance.sh up --surface slack`; the instance keeps the secret it is given)
+or `node cli/bin/qm.ts dev --ci up`. Take `CORE_API_URL` from the core port in
+`bash scripts/dev-instance.sh status --json` and `SLACK_BOT_TOKEN` from the claimed slot's
+`poolN.env`, then:
 
 ```sh
 SLACK_QA_USER_TOKEN=xoxp-… SLACK_BOT_TOKEN=xoxb-… \
-CORE_API_URL=http://localhost:8181 CORE_SIGNING_SECRET=… ANTHROPIC_API_KEY=… \
+CORE_API_URL=http://localhost:8083 CORE_SIGNING_SECRET=… \
+MODEL_GATEWAY_URL=… MODEL_GATEWAY_API_KEY=… MODEL_GATEWAY_API_KEY_HEADER=x-api-key \
+MODEL_GATEWAY_MODELS=claude-haiku-5-5=claude-haiku-5-5 \
 LIVE_E2E_FILTER=@smoke node test/live-slack/run.ts
 ```
 
+The judge (`LIVE_E2E_JUDGE_MODEL`) needs a gateway route, or `ANTHROPIC_API_KEY` without one.
+
 `LIVE_E2E_FILTER` takes a name substring, `@tag`, or `all` (`@smoke` = the two-scenario
 subset; `sandbox`-tagged scenarios are auto-skipped unless `SPRITES_TOKEN` is set).
-`LIVE_E2E_SHARD=n/m` splits the selected catalog deterministically for a CI matrix.
+`LIVE_E2E_SHARD=n/m` splits the selected catalog deterministically across parallel runs.
 Set `LIVE_E2E_OBSERVATIONAL=1` to report completed catalog failures (and alert when
 configured) without a nonzero exit; runner, setup, event-pump, and required-alert failures
 remain blocking.
@@ -51,7 +58,7 @@ With an Arga API key the same catalog runs against an **isolated Slack digital-t
 workspace** ([docs.argalabs.com](https://docs.argalabs.com)) instead of a shared test workspace: its own bot,
 QA user, and minted `alice`/`bob`/`carol` actors per run — no shared workspace, no slot
 serialization, no hand-provisioned accounts, and no Slack rate budget shared across shards.
-The `twin-e2e` matrix job in the workflow provisions one twin per shard.
+Each shard (`LIVE_E2E_SHARD`) provisions its own twin.
 
 Mechanics: `arga-provision.ts up` provisions the twin, seeds users/tokens
 (`arga.ts:seedTwinUsers`), pre-creates the reach target channel, and emits the boot env —
@@ -99,24 +106,21 @@ published entrypoint as a host process is enough (the scenarios publish a one-fi
 
 ## Tiers, triggers, quarantine
 
-- **Tiers via tags.** `@core` is the fast high-signal subset run on every push to main;
-  the full catalog (`all`) runs on PR-label + on-demand. `@multiuser` = the multi-user
+- **Tiers via tags.** `@core` is the fast high-signal subset; `all` is the full catalog. `@multiuser` = the multi-user
   channel scenarios; `@sandbox` = needs Fly; `@smoke` = the tiny two-scenario subset.
   Capability tags gate _where_ a scenario can run: `twin` needs a twin backend, and
   `no-twin` is its inverse — a capability the twin cannot serve, skipped on twin runs
   (with the reason) so it can't produce a red that says nothing about the product.
-- **Triggers.** push→main runs `@core`; add the **`live-e2e` label** to a PR to run the
-  full catalog against that branch; `workflow_dispatch` takes a `filter` + a `slot` (1–3)
-  so an on-demand feature-push run doesn't queue behind main's. Slots 2/3 need
-  `LIVE_E2E_SLACK_{BOT,APP}_TOKEN_{2,3}` secrets (extra CI apps); slot 1 uses the existing pair.
+- **Running.** Nothing triggers this catalog automatically. Run it by hand against the
+  branch under review with `LIVE_E2E_FILTER` set to a tier, tag or scenario name.
 - **Quarantine.** tag a known-flaky scenario `quarantine`: it still runs and shows in the
   gallery/summary (with a chip), but never counts toward the pass/fail signal (exit code +
-  `#ci-alerts`) while it's being stabilized. "Don't accept flaky" — fix or quarantine, don't
+  alert) while it's being stabilized. "Don't accept flaky" — fix or quarantine, don't
   let a red scenario erode trust in the suite.
 
-**Rollout state:** CI is required. Catalog failures alert `#ci-alerts` and fail the job; twin
-failures alert through the real CI Slack app. Observational mode is available only for explicit
-local runner invocations; the GitHub workflow does not enable it.
+**Failures:** a failed catalog scenario makes `run.ts` exit non-zero, and posts to
+`SLACK_ALERT_CHANNEL` when that is set (`SLACK_ALERT_REQUIRED=1` makes the alert itself
+mandatory).
 
 **Growing the catalog:** `scripts/mine-slack-scenarios.ts` reads a core Postgres, clusters
 recent _multi-user channel_ sessions by shape, and emits a digest to hand-author new
@@ -125,26 +129,22 @@ top-of-file usage). The multi-user set lives in `scenarios-multiuser.ts`.
 
 ## One-time example setup
 
-1. **CI pool app** — create a Slack app from the same manifest as the local pool apps
-   (`src/slack/README.md`), named "Agent (ci1)", Socket Mode on. Do **not** reuse
-   a local `poolN.env` app: a CI run stealing a slot mid-debug would be miserable.
-   → secrets `LIVE_E2E_SLACK_BOT_TOKEN` (xoxb), `LIVE_E2E_SLACK_APP_TOKEN` (xapp).
+1. **Bot** — a pool app from the same manifest as the other local pool apps
+   (`src/slack/README.md`), Socket Mode on, saved as a `poolN.env` in the pool store; a
+   dev instance claims one. Its bot token is `SLACK_BOT_TOKEN`.
 2. **QA Human** — a real example member account (full member, not guest — guests classify
    differently). Create a second tiny app "QA Driver" with **user** token scopes
    `chat:write, channels:read, channels:write, channels:history, groups:history,
 im:history, im:write, reactions:write, files:read, files:write, users:read` and install
-   it **as that account** → secret `LIVE_E2E_SLACK_QA_USER_TOKEN` (xoxp). (`files:write`
+   it **as that account** → `SLACK_QA_USER_TOKEN` (xoxp). (`files:write`
    lets the QA user upload the selfie in the `photo-identity` scenario; reinstall the app
    if you added it after first install.)
-3. **Channels** — create `#ci-target` (public; invite the ci1 bot _and_ QA Human; repo
-   var `LIVE_E2E_TARGET_CHANNEL` = its channel id) and `#ci-alerts` (invite the ci1
-   bot; repo var `LIVE_E2E_ALERT_CHANNEL` = its id). Failures on main post there.
-4. **Remaining secrets** — `LIVE_E2E_ANTHROPIC_API_KEY`, `LIVE_E2E_CORE_SIGNING_SECRET`
-   (any random string; the runner instance is loopback-only), and the existing
-   `SPRITES_TOKEN` (sandbox turns) and `FLY_API_TOKEN` (the cloudflared self-API tunnel).
+3. **Channels** — optional: a target channel with the bot _and_ QA Human
+   (`LIVE_E2E_TARGET_CHANNEL`), an alert channel with the bot (`SLACK_ALERT_CHANNEL`).
+4. **Instance** — as in "Run locally", plus `SPRITES_TOKEN` for sandbox turns.
 
-Runs are serialized per Slack app by the workflow's concurrency group — that _is_ the
-lease; there is no poolN.env machinery in CI.
+Only one run at a time may use a Slack app. Dev instances get that from the pool lease;
+with `qm dev --ci` it is on you.
 
 ## Fake-human actors (multi-user scenarios)
 
@@ -194,9 +194,9 @@ trusting the LLM judge. Each card shows the driver's messages, the bot's reply, 
 streaming edit history** (the `⚙ Working…` ticker → `▌` cursor → final text, collapsed under
 "N streaming edits"), and a **↗ slack** permalink into the real thread for pixel-true
 inspection. Failures sort to the top with their error and core turn errors inline. This is the
-primary artifact for the on-demand / feature-push use case.
+primary output of a by-hand run.
 
-For deeper debugging, the artifact also has `out/summary.md` (also in the step summary),
+For deeper debugging, `out/` also has `summary.md`,
 `out/results.json` (includes each scenario's timeline), `out/transcripts/*.json` — the failing
 scenario's full session entries **and LLM requests** (ground truth for "what did the agent
 actually see") — and `.ci-instance/{core,slack}.log`. Don't trust the agent's in-channel
