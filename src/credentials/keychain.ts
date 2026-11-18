@@ -1803,6 +1803,10 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
   const hasRefresh = !!rec.refresh?.refreshTokenEnc;
   const refreshFailed = typeof rec.refresh?.refreshFailedAt === "number";
   const tokenExpired = oauthExpired(rec, t, oauthSkew);
+  const refreshError =
+    (tokenExpired && refreshFailed && rec.refresh?.refreshError) ||
+    (rec.check?.ok === false && rec.check.detail) ||
+    undefined;
   return {
     credentialId: rec.id,
     ownerId: rec.ownerId,
@@ -1811,11 +1815,7 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
     ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
     connected: true,
     ...((tokenExpired && (!hasRefresh || refreshFailed)) || rec.check?.ok === false ? { needsReconnect: true } : {}),
-    ...(tokenExpired && refreshFailed && rec.refresh?.refreshError
-      ? { refreshError: rec.refresh.refreshError }
-      : rec.check?.ok === false && rec.check.detail
-        ? { refreshError: rec.check.detail }
-        : {}),
+    ...(refreshError ? { refreshError } : {}),
   };
 }
 
