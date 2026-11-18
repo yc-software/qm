@@ -20,6 +20,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { provisionerSigningKey } from "../src/tenants/self-serve.ts";
 import { APP_HANDLE_MAX } from "../plugins/chassis/src/dns-label.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 
@@ -27,13 +28,14 @@ const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
 
-function start(databaseUrl: string, enabled = true, workspaceProvisionerUrl?: string) {
+function start(databaseUrl: string, workspaceProvisionerUrl?: string, enabled = true) {
   const built = buildApp(
     testConfig({
       databaseUrl,
       dataDir: mkdtempSync(join(tmpdir(), "self-serve-")),
       orgId: "default-org",
-      ...(workspaceProvisionerUrl ? { workspaceProvisionerUrl, signingSecret } : {}),
+      signingSecret,
+      ...(workspaceProvisionerUrl ? { workspaceProvisionerUrl } : {}),
     }),
   );
   const server = createServer(built.app, {
@@ -84,12 +86,36 @@ async function send(base: string, payload: unknown, key = identitySecret) {
   });
 }
 
-async function shared(t: test.TestContext, workspaceProvisionerUrl?: string) {
+function provisioner(t: test.TestContext) {
+  const state = {
+    failing: false,
+    reply: { settings: { modelGatewayKey: "own-key" } } as unknown,
+    calls: [] as Array<{ body: Record<string, unknown>; signed: boolean }>,
+  };
+  const server = createHttpServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      const ts = Number(req.headers["x-timestamp"]);
+      const key = provisionerSigningKey(signingSecret);
+      const signed = req.headers["x-signature"] === signRequest(key, ts, `POST\n${req.url}\n${raw}`);
+      state.calls.push({ body: JSON.parse(raw) as Record<string, unknown>, signed });
+      res.writeHead(state.failing ? 500 : 200, { "content-type": "application/json" });
+      res.end(state.failing ? "{}" : JSON.stringify(state.reply));
+    });
+  });
+  server.listen(0);
+  t.after(() => server.close());
+  return { state, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/provision?x=1` };
+}
+
+async function shared(t: test.TestContext) {
   await bindBootTenant(async () => undefined);
   t.after(() => bindBootTenant(async () => TEST_TENANT));
   const db = await twoTenants();
   t.after(() => db.close());
-  const s = withoutTenant(() => start(db.appDatabaseUrl, true, workspaceProvisionerUrl));
+  const provision = provisioner(t);
+  const s = withoutTenant(() => start(db.appDatabaseUrl, provision.url));
   t.after(s.close);
   const directory = createPostgresDirectoryStore(db.appDatabaseUrl);
   const isAdmin = (tenant: string, subject: string) =>
@@ -97,7 +123,7 @@ async function shared(t: test.TestContext, workspaceProvisionerUrl?: string) {
       const id = trustedPrincipal(issuer, subject);
       return (await s.built.admin.adminStatusOf(token, { id, type: "internal" })).isAdmin;
     });
-  return { db, s, directory, isAdmin };
+  return { db, s, directory, isAdmin, provision };
 }
 
 test("cofounders signing in at once share one new workspace and every one of them is an admin", async (t) => {
@@ -117,7 +143,11 @@ test("cofounders signing in at once share one new workspace and every one of the
   assert.equal(new Set(tenants).size, 1);
   const [tenant] = tenants as [string];
   const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]);
-  assert.deepEqual(row?.settings, { brandName: "Acme Robotics", handle: "acme" });
+  assert.deepEqual(row?.settings, {
+    brandName: "Acme Robotics",
+    handle: "acme",
+    modelGatewayKey: "own-key",
+  });
   for (const subject of founders) assert.equal(await isAdmin(tenant, subject), true, subject);
   await withoutTenant(async () => {
     assert.deepEqual(await directory.tenantsForPrincipal!(trustedPrincipal(issuer, "founder-2")), [
@@ -190,8 +220,10 @@ test("self-serve rejects forged, unrelated, expired and replayed assertions, and
   const payload = claims();
   assert.equal((await withoutTenant(() => send(s.base, payload))).status, 200);
   assert.equal((await withoutTenant(() => send(s.base, payload))).status, 409);
-  const off = withoutTenant(() => start(db.appDatabaseUrl, false));
+  const off = withoutTenant(() => start(db.appDatabaseUrl, undefined, false));
   t.after(off.close);
+  const noProvisioner = withoutTenant(() => start(db.appDatabaseUrl));
+  t.after(noProvisioner.close);
   const offered = async (base: string) => {
     const path = withSourceAuthNonce("/v1/auth/broker/principal-tenants?principal=nobody", signingSecret);
     const body = (await (await fetch(base + path, { headers: signedHeaders(signingSecret, "GET", path) })).json()) as {
@@ -199,17 +231,21 @@ test("self-serve rejects forged, unrelated, expired and replayed assertions, and
     };
     return body.selfServe;
   };
-  assert.deepEqual(await withoutTenant(async () => [await offered(s.base), await offered(off.base)]), [
-    true,
-    undefined,
-  ]);
-  assert.equal(
-    (await withoutTenant(() => send(off.base, claims({ externalOrg: { id: "9", name: "Off" } })))).status,
-    503,
+  assert.deepEqual(
+    await withoutTenant(async () => [
+      await offered(s.base),
+      await offered(off.base),
+      await offered(noProvisioner.base),
+    ]),
+    [true, undefined, undefined],
   );
-  assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenant_external_orgs WHERE org_id = '9'"))[0], {
-    n: 0,
-  });
+  const statusOf = async (base: string, id: string) =>
+    (await withoutTenant(() => send(base, claims({ externalOrg: { id, name: "Off" } })))).status;
+  assert.deepEqual([await statusOf(off.base, "9"), await statusOf(noProvisioner.base, "10")], [503, 403]);
+  assert.deepEqual(
+    (await db.owner.q("SELECT count(*)::int AS n FROM tenant_external_orgs WHERE org_id IN ('9', '10')"))[0],
+    { n: 0 },
+  );
 });
 
 test("a founder removed from the workspace cannot self-serve back in", async (t) => {
@@ -231,34 +267,17 @@ test("a founder removed from the workspace cannot self-serve back in", async (t)
 test("a deployment with a boot tenant never self-serves another workspace", async (t) => {
   const db = await twoTenants();
   t.after(() => db.close());
-  const s = start(db.appDatabaseUrl);
+  const s = start(db.appDatabaseUrl, provisioner(t).url);
   t.after(s.close);
   assert.equal((await send(s.base, claims({ externalOrg: { id: "boot", name: "Boot" } }))).status, 403);
 });
 
 test("a deployment's provisioner sets up each new workspace before anyone can use it, and a failure leaves it switched off", async (t) => {
-  const calls: Array<{ body: Record<string, unknown>; signed: boolean }> = [];
-  let failing = true;
-  const provisioner = createHttpServer((req, res) => {
-    let raw = "";
-    req.on("data", (chunk) => (raw += chunk));
-    req.on("end", () => {
-      const ts = Number(req.headers["x-timestamp"]);
-      const signed = req.headers["x-signature"] === signRequest(signingSecret, ts, `POST\n${req.url}\n${raw}`);
-      calls.push({ body: JSON.parse(raw) as Record<string, unknown>, signed });
-      res.writeHead(failing ? 500 : 200, { "content-type": "application/json" });
-      res.end(failing ? "{}" : JSON.stringify({ settings: { modelGatewayKey: "own-key", orgSlug: "acme" } }));
-    });
-  });
-  provisioner.listen(0);
-  t.after(() => provisioner.close());
-  const url = `http://127.0.0.1:${(provisioner.address() as AddressInfo).port}/provision?x=1`;
-  const { db, s, directory, isAdmin } = await shared(t, url);
+  const { db, s, directory, isAdmin, provision } = await shared(t);
+  provision.state.failing = true;
   const org = { id: "55", name: "Gated Co", handle: "gated" };
-  await assert.rejects(
-    withoutTenant(() => selfServeWorkspace(s.config, { subject: "g1", email: null }, org)),
-    /HTTP 502/,
-  );
+  const signIn = (subject: string) => withoutTenant(() => selfServeWorkspace(s.config, { subject, email: null }, org));
+  await assert.rejects(signIn("g1"), /HTTP 502/);
   const [row] = await db.owner.q("SELECT tenant::text AS tenant FROM tenant_external_orgs WHERE org_id = '55'");
   const tenant = row!.tenant as string;
   const settingsOf = async () =>
@@ -266,22 +285,59 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
   assert.deepEqual(await settingsOf(), { brandName: "Gated Co", handle: "gated", serving: false });
   assert.deepEqual(await withoutTenant(() => directory.tenantsForPrincipal!(trustedPrincipal(issuer, "g1"))), []);
   assert.equal(await isAdmin(tenant, "g1"), false);
-  failing = false;
-  const tenants = await withoutTenant(() =>
-    Promise.all(["g1", "g2"].map((subject) => selfServeWorkspace(s.config, { subject, email: null }, org))),
-  );
-  assert.deepEqual(tenants, [tenant, tenant]);
+  provision.state.failing = false;
+  assert.deepEqual(await Promise.all([signIn("g1"), signIn("g2")]), [tenant, tenant]);
   assert.deepEqual(await settingsOf(), {
     brandName: "Gated Co",
     handle: "gated",
     modelGatewayKey: "own-key",
-    orgSlug: "acme",
   });
-  assert.deepEqual(calls[0], {
-    body: { tenant, brandName: "Gated Co", handle: "gated", issuer, externalOrg: org },
-    signed: true,
-  });
-  await withoutTenant(() => selfServeWorkspace(s.config, { subject: "g3", email: null }, org));
-  assert.ok(calls.length <= 3, "a provisioned workspace is not provisioned again");
+  const { nonce, ...body } = provision.state.calls[0]!.body;
+  assert.equal(typeof nonce, "string");
+  assert.deepEqual(body, { tenant, brandName: "Gated Co", handle: "gated", issuer, externalOrg: org });
+  assert.ok(provision.state.calls.every((call) => call.signed));
+  const calls = provision.state.calls.length;
+  await signIn("g3");
+  assert.equal(provision.state.calls.length, calls, "a provisioned workspace is not provisioned again");
   for (const subject of ["g1", "g2", "g3"]) assert.equal(await isAdmin(tenant, subject), true, subject);
+  await db.owner.q(`UPDATE tenants SET settings = settings || '{"serving":false}' WHERE id = $1`, [tenant]);
+  await assert.rejects(signIn("g4"), /HTTP 503/);
+  assert.equal(provision.state.calls.length, calls, "a workspace an operator switched off is not switched back on");
+  assert.equal(await isAdmin(tenant, "g4"), false);
+});
+
+test("a provisioner reply without the workspace's own model gateway key leaves it switched off", async (t) => {
+  const { s, isAdmin, provision, db } = await shared(t);
+  provision.state.reply = { settings: { brandName: "Renamed" } };
+  const org = { id: "66", name: "No Key Co" };
+  await assert.rejects(
+    withoutTenant(() => selfServeWorkspace(s.config, { subject: "n1", email: null }, org)),
+    /HTTP 502/,
+  );
+  const [row] = await db.owner.q(
+    "SELECT o.provisioned, t.settings FROM tenant_external_orgs o JOIN tenants t ON t.id = o.tenant WHERE o.org_id = '66'",
+  );
+  assert.deepEqual(row, { provisioned: false, settings: { brandName: "No Key Co", serving: false } });
+  assert.equal(
+    await isAdmin(
+      String((await db.owner.q("SELECT tenant FROM tenant_external_orgs WHERE org_id = '66'"))[0]!.tenant),
+      "n1",
+    ),
+    false,
+  );
+});
+
+test("self-serve never creates a deployment's first workspace", async (t) => {
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
+  const db = await twoTenants();
+  t.after(() => db.close());
+  const s = withoutTenant(() => start(db.appDatabaseUrl, provisioner(t).url));
+  t.after(s.close);
+  await db.owner.q("DELETE FROM tenants");
+  assert.equal(
+    (await withoutTenant(() => send(s.base, claims({ externalOrg: { id: "first", name: "First" } })))).status,
+    403,
+  );
+  assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenants"))[0], { n: 0 });
 });

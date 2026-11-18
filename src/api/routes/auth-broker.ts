@@ -1,7 +1,6 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
-import { AdminError } from "../../admin/admin-service.ts";
+import { AdminError, trustedSubjectPrincipal } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
@@ -143,7 +142,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
     shared: multitenant(),
-    ...(multitenant() && trustedAssertionSecret(ctx) ? { selfServe: true } : {}),
+    ...(multitenant() && trustedAssertionSecret(ctx) && ctx.deps.admin?.selfServeAvailable ? { selfServe: true } : {}),
   });
 }
 
@@ -216,7 +215,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   }
   const claims = await trustedAssertion(ctx, "trusted-entry-admin");
   if (!claims || !deps.admin || !deps.replayDedupe) return;
-  const principalId = `oidc:${createHash("sha256").update(claims.issuer).digest("hex")}:${Buffer.from(claims.subject).toString("base64url")}`;
+  const principalId = trustedSubjectPrincipal(claims.issuer, claims.subject);
   if (!(await activePrincipal(deps, principalId))) return sendJson(res, 403, { error: "inactive_principal" });
   if (!(await deps.replayDedupe.claim(`trusted-admin:${claims.jti}`, claims.exp)))
     return sendJson(res, 409, { error: "assertion_already_used" });

@@ -48,6 +48,7 @@ export interface AdminService {
     issuer: string,
     subject: string,
   ): Promise<{ grant: AdminGrant; created: boolean }>;
+  selfServeAvailable: boolean;
   selfServeWorkspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
   provisionSelfServe(
     tenant: Tenant,
@@ -84,14 +85,14 @@ export interface AdminServiceOptions {
   trustedOidcAdminIssuer?: string;
   memberTenants?: (principalId: string) => Promise<readonly string[]>;
   selfServe?: {
-    workspaceFor(issuer: string, org: ExternalOrg, gated: boolean): Promise<ExternalOrgTenant>;
+    workspaceFor(issuer: string, org: ExternalOrg): Promise<ExternalOrgTenant | undefined>;
     provisioned(tenant: string, settings: TenantSettings): Promise<void>;
-    provision?: (request: WorkspaceProvisionRequest) => Promise<TenantSettings>;
+    provision(request: WorkspaceProvisionRequest): Promise<TenantSettings>;
   };
   users: UserStore;
 }
 
-function trustedSubjectPrincipal(issuer: string, subject: string): string {
+export function trustedSubjectPrincipal(issuer: string, subject: string): string {
   if (!subject || subject.length > 255 || Buffer.from(subject).toString("utf8") !== subject)
     throw new AdminError(400, "invalid trusted subject");
   return `oidc:${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(subject).toString("base64url")}`;
@@ -107,6 +108,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
 
   return {
     users: opts.users,
+    selfServeAvailable: opts.selfServe !== undefined,
     resolveActor(header) {
       if (!header) return null;
       const at = header.lastIndexOf("@");
@@ -146,19 +148,22 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       if (!selfServe || bootTenant() !== undefined)
         throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
       trustedSubjectPrincipal(issuer, subject);
-      const { provision } = selfServe;
-      const workspace = await selfServe.workspaceFor(issuer, org, provision !== undefined);
-      if (!workspace.provisioned && provision) {
-        const settings = await provision({
-          tenant: workspace.tenant,
-          brandName: org.name,
-          handle: workspace.handle,
-          issuer,
-          externalOrg: org,
-        }).catch((error: unknown) => {
-          console.error(`[self-serve] provisioning workspace ${workspace.tenant} failed: ${errMessage(error)}`);
-          throw new AdminError(502, "the new workspace could not be set up; try signing in again");
-        });
+      const workspace = await selfServe.workspaceFor(issuer, org);
+      if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
+      if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
+      if (!workspace.provisioned) {
+        const settings = await selfServe
+          .provision({
+            tenant: workspace.tenant,
+            brandName: org.name,
+            handle: workspace.handle,
+            issuer,
+            externalOrg: org,
+          })
+          .catch((error: unknown) => {
+            console.error(`[self-serve] provisioning workspace ${workspace.tenant} failed: ${errMessage(error)}`);
+            throw new AdminError(502, "the new workspace could not be set up; try signing in again");
+          });
         await selfServe.provisioned(workspace.tenant, settings);
       }
       return { tenant: workspace.tenant, created: workspace.created };

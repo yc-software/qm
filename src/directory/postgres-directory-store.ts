@@ -409,7 +409,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       }
     },
 
-    externalOrgTenant: (issuer, org, gated) => selfServeTenant({ q }, issuer, org, gated),
+    externalOrgTenant: (issuer, org) => selfServeTenant({ q }, issuer, org),
     externalOrgProvisioned: (tenant, settings) => markSelfServeProvisioned({ q }, tenant, settings),
 
     async trustedClientFor(tenant) {

@@ -105,7 +105,7 @@ export interface DirectoryStore {
   setAppHandle?(handle: string): Promise<"ok" | "taken">;
   tenantForAppHandle?(handle: string): Promise<string | undefined>;
   trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
-  externalOrgTenant?(issuer: string, org: ExternalOrg, gated: boolean): Promise<ExternalOrgTenant>;
+  externalOrgTenant?(issuer: string, org: ExternalOrg): Promise<ExternalOrgTenant | undefined>;
   externalOrgProvisioned?(tenant: string, settings: TenantSettings): Promise<void>;
 }
 

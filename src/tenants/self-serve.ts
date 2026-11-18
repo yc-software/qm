@@ -1,4 +1,6 @@
+import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { readBoundedText } from "../util/bytes.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { APP_HANDLE_MAX } from "../../plugins/chassis/src/dns-label.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
@@ -18,22 +20,26 @@ export interface ExternalOrgTenant {
   tenant: string;
   created: boolean;
   provisioned: boolean;
+  serving: boolean;
   handle: string | null;
 }
 
-const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, org text, brand text, handle text, gated boolean)
-  RETURNS TABLE(tenant uuid, created boolean, provisioned boolean, tenant_handle text) LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, org text, brand text, handle text)
+  RETURNS TABLE(tenant uuid, created boolean, provisioned boolean, serving boolean, tenant_handle text) LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
   DECLARE found uuid; ready boolean; base text; candidate text; n int := 1;
   BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended('qm-self-serve:' || $1 || chr(10) || $2, 0));
     SELECT o.tenant, o.provisioned INTO found, ready FROM tenant_external_orgs o WHERE o.issuer = $1 AND o.org_id = $2;
     IF found IS NOT NULL THEN
-      RETURN QUERY SELECT found, false, ready, t.settings->>'handle' FROM tenants t WHERE t.id = found;
+      RETURN QUERY SELECT found, false, ready, t.settings->>'serving' IS DISTINCT FROM 'false', t.settings->>'handle'
+        FROM tenants t WHERE t.id = found;
       RETURN;
     END IF;
-    INSERT INTO tenants(settings)
-      VALUES (jsonb_build_object('brandName', $3) || CASE WHEN $5 THEN '{"serving":false}'::jsonb ELSE '{}'::jsonb END)
+    IF NOT EXISTS (SELECT 1 FROM tenants) THEN
+      RETURN;
+    END IF;
+    INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3, 'serving', false))
       RETURNING id INTO found;
     base := left(coalesce($4, ''), ${APP_HANDLE_MAX});
     WHILE base <> '' LOOP
@@ -47,8 +53,8 @@ const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, or
       END IF;
       n := n + 1;
     END LOOP;
-    INSERT INTO tenant_external_orgs(issuer, org_id, tenant, provisioned) VALUES ($1, $2, found, NOT $5);
-    RETURN QUERY SELECT found, true, NOT $5, t.settings->>'handle' FROM tenants t WHERE t.id = found;
+    INSERT INTO tenant_external_orgs(issuer, org_id, tenant, provisioned) VALUES ($1, $2, found, false);
+    RETURN QUERY SELECT found, true, false, false, t.settings->>'handle' FROM tenants t WHERE t.id = found;
   END $f$`;
 
 const provisionedDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_provisioned(tenant uuid, extra jsonb)
@@ -80,6 +86,7 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
 };
 
 const PROVISION_TIMEOUT_MS = 30_000;
+const PROVISION_REPLY_BYTES_MAX = 65_536;
 
 const handleChar = (c: string): boolean => (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
 
@@ -91,18 +98,18 @@ export async function selfServeTenant(
   pg: Pick<PgPool, "q">,
   issuer: string,
   org: ExternalOrg,
-  gated: boolean,
-): Promise<ExternalOrgTenant> {
+): Promise<ExternalOrgTenant | undefined> {
   const rows = await pg.q(
-    "SELECT tenant::text AS tenant, created, provisioned, tenant_handle FROM qm_self_serve_tenant($1, $2, $3, $4, $5)",
-    [issuer, org.id, org.name, handleBase(org.handle), gated],
+    "SELECT tenant::text AS tenant, created, provisioned, serving, tenant_handle FROM qm_self_serve_tenant($1, $2, $3, $4)",
+    [issuer, org.id, org.name, handleBase(org.handle)],
   );
   const row = rows[0];
-  if (typeof row?.tenant !== "string") throw new Error("self-serve tenant was not created");
+  if (row === undefined) return undefined;
   return {
-    tenant: row.tenant,
+    tenant: String(row.tenant),
     created: row.created === true,
     provisioned: row.provisioned === true,
+    serving: row.serving === true,
     handle: typeof row.tenant_handle === "string" ? row.tenant_handle : null,
   };
 }
@@ -115,7 +122,9 @@ export async function markSelfServeProvisioned(
   await pg.q("SELECT qm_self_serve_provisioned($1, $2::jsonb)", [tenant, JSON.stringify(settings)]);
 }
 
-const provisionedSettings = z.object({ settings: tenantSettingsSchema.omit({ serving: true }) });
+const provisionedSettings = z.object({
+  settings: tenantSettingsSchema.omit({ serving: true }).required({ modelGatewayKey: true }),
+});
 
 export interface WorkspaceProvisionRequest {
   tenant: string;
@@ -125,24 +134,32 @@ export interface WorkspaceProvisionRequest {
   externalOrg: ExternalOrg;
 }
 
+export function provisionerSigningKey(coreSigningSecret: string): string {
+  return createHmac("sha256", coreSigningSecret).update("workspace-provisioner").digest("hex");
+}
+
 export async function provisionWorkspace(
   url: string,
-  signingSecret: string,
+  signingKey: string,
   request: WorkspaceProvisionRequest,
 ): Promise<TenantSettings> {
   const target = new URL(url);
-  const body = JSON.stringify(request);
+  const body = JSON.stringify({ ...request, nonce: randomUUID() });
   const res = await fetch(target, {
     method: "POST",
     body,
     redirect: "error",
     signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
-    headers: signedRequestHeaders(signingSecret, "POST", `${target.pathname}${target.search}`, body, {
+    headers: signedRequestHeaders(signingKey, "POST", `${target.pathname}${target.search}`, body, {
       "content-type": "application/json",
     }),
   });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`workspace provisioner returned HTTP ${res.status}: ${text}`);
+  if (!res.ok) throw new Error(`workspace provisioner returned HTTP ${res.status}`);
+  const text = await readBoundedText(
+    res,
+    PROVISION_REPLY_BYTES_MAX,
+    () => new Error(`workspace provisioner reply exceeds ${PROVISION_REPLY_BYTES_MAX} bytes`),
+  );
   const parsed = provisionedSettings.safeParse(JSON.parse(text));
   if (!parsed.success)
     throw new Error(
