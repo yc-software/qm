@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -20,25 +21,25 @@ import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { APP_HANDLE_MAX } from "../plugins/chassis/src/dns-label.ts";
+import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
 
-function start(databaseUrl: string, enabled = true) {
+function start(databaseUrl: string, enabled = true, workspaceProvisionerUrl?: string) {
   const built = buildApp(
     testConfig({
       databaseUrl,
       dataDir: mkdtempSync(join(tmpdir(), "self-serve-")),
       orgId: "default-org",
-      ...(enabled ? { trustedOidcSelfServeIssuer: issuer } : {}),
+      ...(workspaceProvisionerUrl ? { workspaceProvisionerUrl, signingSecret } : {}),
     }),
   );
   const server = createServer(built.app, {
     signingSecret,
     capabilitySecret: "capability-secret".repeat(3),
-    portalIdentitySecret: identitySecret,
-    requireSignedPortalIdentity: true,
+    ...(enabled ? { portalIdentitySecret: identitySecret, requireSignedPortalIdentity: true } : {}),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
     identity: built.identity,
@@ -83,12 +84,12 @@ async function send(base: string, payload: unknown, key = identitySecret) {
   });
 }
 
-async function shared(t: test.TestContext) {
+async function shared(t: test.TestContext, workspaceProvisionerUrl?: string) {
   await bindBootTenant(async () => undefined);
   t.after(() => bindBootTenant(async () => TEST_TENANT));
   const db = await twoTenants();
   t.after(() => db.close());
-  const s = withoutTenant(() => start(db.appDatabaseUrl));
+  const s = withoutTenant(() => start(db.appDatabaseUrl, true, workspaceProvisionerUrl));
   t.after(s.close);
   const directory = createPostgresDirectoryStore(db.appDatabaseUrl);
   const isAdmin = (tenant: string, subject: string) =>
@@ -162,18 +163,18 @@ test("a workspace handle comes from the provider's handle, made valid and unique
   assert.equal(await handleOf(await create("f", long)), `${"y".repeat(APP_HANDLE_MAX - 1)}2`);
   assert.equal(await handleOf(await create("g", "---")), null);
   assert.equal(await handleOf(await create("h")), null);
-  await db.owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ('https://other.test', 'i', $1)", [
-    alpha,
-  ]);
+  await db.owner.q(
+    "INSERT INTO tenant_external_orgs(issuer, org_id, tenant, provisioned) VALUES ('https://other.test', 'i', $1, true)",
+    [alpha],
+  );
   assert.notEqual(await create("i"), alpha);
 });
 
-test("self-serve rejects forged, unrelated, expired and replayed assertions, and is off unless configured", async (t) => {
+test("self-serve rejects forged, unrelated, expired and replayed assertions, and is off without a portal identity secret", async (t) => {
   const { db, s } = await shared(t);
   for (const invalid of [
     { purpose: "trusted-entry-admin" },
     { org: "org:other" },
-    { issuer: "https://other.example.test" },
     { exp: Date.now() - 1 },
     { exp: Date.now() + 120_000 },
     { subject: "" },
@@ -191,9 +192,20 @@ test("self-serve rejects forged, unrelated, expired and replayed assertions, and
   assert.equal((await withoutTenant(() => send(s.base, payload))).status, 409);
   const off = withoutTenant(() => start(db.appDatabaseUrl, false));
   t.after(off.close);
+  const offered = async (base: string) => {
+    const path = withSourceAuthNonce("/v1/auth/broker/principal-tenants?principal=nobody", signingSecret);
+    const body = (await (await fetch(base + path, { headers: signedHeaders(signingSecret, "GET", path) })).json()) as {
+      selfServe?: boolean;
+    };
+    return body.selfServe;
+  };
+  assert.deepEqual(await withoutTenant(async () => [await offered(s.base), await offered(off.base)]), [
+    true,
+    undefined,
+  ]);
   assert.equal(
     (await withoutTenant(() => send(off.base, claims({ externalOrg: { id: "9", name: "Off" } })))).status,
-    403,
+    503,
   );
   assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenant_external_orgs WHERE org_id = '9'"))[0], {
     n: 0,
@@ -222,4 +234,54 @@ test("a deployment with a boot tenant never self-serves another workspace", asyn
   const s = start(db.appDatabaseUrl);
   t.after(s.close);
   assert.equal((await send(s.base, claims({ externalOrg: { id: "boot", name: "Boot" } }))).status, 403);
+});
+
+test("a deployment's provisioner sets up each new workspace before anyone can use it, and a failure leaves it switched off", async (t) => {
+  const calls: Array<{ body: Record<string, unknown>; signed: boolean }> = [];
+  let failing = true;
+  const provisioner = createHttpServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      const ts = Number(req.headers["x-timestamp"]);
+      const signed = req.headers["x-signature"] === signRequest(signingSecret, ts, `POST\n${req.url}\n${raw}`);
+      calls.push({ body: JSON.parse(raw) as Record<string, unknown>, signed });
+      res.writeHead(failing ? 500 : 200, { "content-type": "application/json" });
+      res.end(failing ? "{}" : JSON.stringify({ settings: { modelGatewayKey: "own-key", orgSlug: "acme" } }));
+    });
+  });
+  provisioner.listen(0);
+  t.after(() => provisioner.close());
+  const url = `http://127.0.0.1:${(provisioner.address() as AddressInfo).port}/provision?x=1`;
+  const { db, s, directory, isAdmin } = await shared(t, url);
+  const org = { id: "55", name: "Gated Co", handle: "gated" };
+  await assert.rejects(
+    withoutTenant(() => selfServeWorkspace(s.config, { subject: "g1", email: null }, org)),
+    /HTTP 502/,
+  );
+  const [row] = await db.owner.q("SELECT tenant::text AS tenant FROM tenant_external_orgs WHERE org_id = '55'");
+  const tenant = row!.tenant as string;
+  const settingsOf = async () =>
+    (await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]))[0]?.settings;
+  assert.deepEqual(await settingsOf(), { brandName: "Gated Co", handle: "gated", serving: false });
+  assert.deepEqual(await withoutTenant(() => directory.tenantsForPrincipal!(trustedPrincipal(issuer, "g1"))), []);
+  assert.equal(await isAdmin(tenant, "g1"), false);
+  failing = false;
+  const tenants = await withoutTenant(() =>
+    Promise.all(["g1", "g2"].map((subject) => selfServeWorkspace(s.config, { subject, email: null }, org))),
+  );
+  assert.deepEqual(tenants, [tenant, tenant]);
+  assert.deepEqual(await settingsOf(), {
+    brandName: "Gated Co",
+    handle: "gated",
+    modelGatewayKey: "own-key",
+    orgSlug: "acme",
+  });
+  assert.deepEqual(calls[0], {
+    body: { tenant, brandName: "Gated Co", handle: "gated", issuer, externalOrg: org },
+    signed: true,
+  });
+  await withoutTenant(() => selfServeWorkspace(s.config, { subject: "g3", email: null }, org));
+  assert.ok(calls.length <= 3, "a provisioned workspace is not provisioned again");
+  for (const subject of ["g1", "g2", "g3"]) assert.equal(await isAdmin(tenant, subject), true, subject);
 });

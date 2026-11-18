@@ -143,7 +143,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
     shared: multitenant(),
-    ...(multitenant() && ctx.deps.admin?.selfServeEnabled ? { selfServe: true } : {}),
+    ...(multitenant() && trustedAssertionSecret(ctx) ? { selfServe: true } : {}),
   });
 }
 
@@ -244,10 +244,17 @@ interface TrustedAssertion extends Record<string, unknown> {
   jti: string;
 }
 
+function trustedAssertionSecret(ctx: ApiCtx): string | undefined {
+  const secret = ctx.deps.portalIdentitySecret;
+  return secret && secret.length >= 32 && secret !== ctx.secret && ctx.deps.admin && ctx.deps.replayDedupe
+    ? secret
+    : undefined;
+}
+
 async function trustedAssertion(ctx: ApiCtx, purpose: string): Promise<TrustedAssertion | null> {
-  const { deps, res, body } = ctx;
-  const secret = deps.portalIdentitySecret;
-  if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe) {
+  const { res, body } = ctx;
+  const secret = trustedAssertionSecret(ctx);
+  if (!secret) {
     sendJson(res, 503, { error: "not_configured" });
     return null;
   }

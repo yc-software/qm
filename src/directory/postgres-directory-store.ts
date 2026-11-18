@@ -21,7 +21,7 @@ import {
   PRINCIPAL_USER_TENANTS,
 } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { selfServeTenant, TENANT_EXTERNAL_ORGS } from "../tenants/self-serve.ts";
+import { markSelfServeProvisioned, selfServeTenant, TENANT_EXTERNAL_ORGS } from "../tenants/self-serve.ts";
 import { withTenant } from "../tenants/context.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
@@ -409,7 +409,8 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       }
     },
 
-    externalOrgTenant: (issuer, org) => selfServeTenant({ q }, issuer, org),
+    externalOrgTenant: (issuer, org, gated) => selfServeTenant({ q }, issuer, org, gated),
+    externalOrgProvisioned: (tenant, settings) => markSelfServeProvisioned({ q }, tenant, settings),
 
     async trustedClientFor(tenant) {
       const [row] = await withTenant(tenant, () =>

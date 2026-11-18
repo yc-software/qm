@@ -7,8 +7,10 @@ import { personKey, samePerson } from "../directory/person.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { bootTenant } from "../tenants/boot.ts";
-import type { ExternalOrg } from "../tenants/self-serve.ts";
+import type { ExternalOrg, ExternalOrgTenant, WorkspaceProvisionRequest } from "../tenants/self-serve.ts";
+import type { TenantSettings } from "../tenants/settings.ts";
 import { PrincipalLinkError } from "../identity/principal-links.ts";
+import { errMessage } from "../util/errors.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -46,7 +48,6 @@ export interface AdminService {
     issuer: string,
     subject: string,
   ): Promise<{ grant: AdminGrant; created: boolean }>;
-  selfServeEnabled?: boolean;
   selfServeWorkspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
   provisionSelfServe(
     tenant: Tenant,
@@ -83,8 +84,9 @@ export interface AdminServiceOptions {
   trustedOidcAdminIssuer?: string;
   memberTenants?: (principalId: string) => Promise<readonly string[]>;
   selfServe?: {
-    issuer: string;
-    workspaceFor(org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
+    workspaceFor(issuer: string, org: ExternalOrg, gated: boolean): Promise<ExternalOrgTenant>;
+    provisioned(tenant: string, settings: TenantSettings): Promise<void>;
+    provision?: (request: WorkspaceProvisionRequest) => Promise<TenantSettings>;
   };
   users: UserStore;
 }
@@ -105,7 +107,6 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
 
   return {
     users: opts.users,
-    selfServeEnabled: opts.selfServe !== undefined,
     resolveActor(header) {
       if (!header) return null;
       const at = header.lastIndexOf("@");
@@ -142,15 +143,27 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
     },
     async selfServeWorkspace(issuer, subject, org) {
       const selfServe = opts.selfServe;
-      if (!selfServe || issuer !== selfServe.issuer)
-        throw new AdminError(403, "self-serve workspaces are not enabled for this issuer");
-      if (bootTenant() !== undefined) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
+      if (!selfServe || bootTenant() !== undefined)
+        throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
       trustedSubjectPrincipal(issuer, subject);
-      return selfServe.workspaceFor(org);
+      const { provision } = selfServe;
+      const workspace = await selfServe.workspaceFor(issuer, org, provision !== undefined);
+      if (!workspace.provisioned && provision) {
+        const settings = await provision({
+          tenant: workspace.tenant,
+          brandName: org.name,
+          handle: workspace.handle,
+          issuer,
+          externalOrg: org,
+        }).catch((error: unknown) => {
+          console.error(`[self-serve] provisioning workspace ${workspace.tenant} failed: ${errMessage(error)}`);
+          throw new AdminError(502, "the new workspace could not be set up; try signing in again");
+        });
+        await selfServe.provisioned(workspace.tenant, settings);
+      }
+      return { tenant: workspace.tenant, created: workspace.created };
     },
     async provisionSelfServe(tenant, issuer, subject, email) {
-      if (!opts.selfServe || issuer !== opts.selfServe.issuer)
-        throw new AdminError(403, "self-serve workspaces are not enabled for this issuer");
       const principalId = trustedSubjectPrincipal(issuer, subject);
       const known = await opts.users.resolve(email ? [principalId, email] : [principalId]);
       if ([...known.values()].some((user) => user.offboardedAt !== undefined))

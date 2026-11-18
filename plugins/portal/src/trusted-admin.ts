@@ -4,6 +4,8 @@ import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-clien
 import { isTenantId } from "../../chassis/src/tenant.ts";
 import type { ExternalOrg } from "./tenant-choice.ts";
 
+const SELF_SERVE_TIMEOUT_MS = 45_000;
+
 interface TrustedCoreConfig {
   core: string;
   signingSecret: string;
@@ -17,6 +19,7 @@ async function postAssertion(
   route: string,
   claims: Record<string, unknown>,
   fetchImpl: typeof fetch,
+  timeoutMs = 5_000,
 ): Promise<Response> {
   const assertion = await new CompactSign(
     Buffer.from(
@@ -37,7 +40,7 @@ async function postAssertion(
     method: "POST",
     headers: signedHeaders(config.signingSecret, "POST", path, body),
     body,
-    signal: AbortSignal.timeout(5_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 
@@ -52,6 +55,7 @@ export async function selfServeWorkspace(
     "/v1/auth/broker/self-serve",
     { purpose: "trusted-self-serve", subject: who.subject, email: who.email, externalOrg },
     fetchImpl,
+    SELF_SERVE_TIMEOUT_MS,
   );
   if (!response.ok) throw new Error(`Self-serve workspace failed: HTTP ${response.status} ${await response.text()}`);
   const { tenant } = (await response.json()) as { tenant?: unknown };
