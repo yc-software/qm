@@ -383,11 +383,18 @@ export function startPhase(op: string): Phase | undefined {
   return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
 }
 
-export function traceElapsed(op: string, ms: number): void {
+export function traceElapsed(op: string, ms: number, opts: { name?: string; failed?: boolean } = {}): void {
   if (!client || !tracing || !client.getActiveSpan()) return;
   try {
     const end = Date.now() / 1000;
-    client.startInactiveSpan({ op, name: op, startTime: end - ms / 1000, onlyIfParent: true }).end(end);
+    const span = client.startInactiveSpan({
+      op,
+      name: opts.name ?? op,
+      startTime: end - ms / 1000,
+      onlyIfParent: true,
+    });
+    if (opts.failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
+    span.end(end);
   } catch (error) {
     swallow("tracing", error);
   }
@@ -399,24 +406,10 @@ export function untraced<T>(work: () => T): T {
 
 export async function tracePoolCheckout<T>(checkout: () => Promise<T>): Promise<T> {
   if (!client || !tracing || !client.getActiveSpan()) return checkout();
-  const sdk = client;
   const started = performance.now();
   const record = (failed: boolean): void => {
-    try {
-      const seconds = (performance.now() - started) / 1000;
-      if (!failed && seconds < IDLE_CHECKOUT_SECONDS) return;
-      const end = Date.now() / 1000;
-      const span = sdk.startInactiveSpan({
-        op: "db",
-        name: POOL_CHECKOUT,
-        startTime: end - seconds,
-        onlyIfParent: true,
-      });
-      if (failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
-      span.end(end);
-    } catch (error) {
-      swallow("tracing", error);
-    }
+    const ms = performance.now() - started;
+    if (failed || ms >= IDLE_CHECKOUT_SECONDS * 1000) traceElapsed("db", ms, { name: POOL_CHECKOUT, failed });
   };
   try {
     const checkedOut = await checkout();
