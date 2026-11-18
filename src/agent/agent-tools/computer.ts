@@ -203,6 +203,7 @@ export function computerTools(kit: ToolKit) {
     ...(opts?.sandboxResources ? ["list", "create", ...(opts.botActor ? [] : ["set_default"]), "retire"] : []),
   ];
   const memorySizedBackends = opts?.sandboxResources ? (opts.memorySizedBackends ?? []) : [];
+  const templateBackends = opts?.sandboxResources ? (opts.templateBackends ?? []) : [];
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
@@ -226,12 +227,23 @@ export function computerTools(kit: ToolKit) {
             ),
           }
         : {}),
+      ...(templateBackends.length
+        ? {
+            template: Type.Optional(
+              Type.String({
+                minLength: 1,
+                description: `create: provider template to boot from; ${templateBackends.join(", ")} only. Omit for the default image.`,
+              }),
+            ),
+          }
+        : {}),
       purpose: Type.String({ description: "As for execute." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       const memoryGib = (params as { memory_gib?: number }).memory_gib;
+      const template = (params as { template?: string }).template;
       await recordCall(callId, {
         tool: "sandbox",
         action: params.action,
@@ -240,6 +252,7 @@ export function computerTools(kit: ToolKit) {
         ...(params.backend ? { backend: params.backend } : {}),
         ...(params.name ? { name: params.name } : {}),
         ...(memoryGib !== undefined ? { memory_gib: memoryGib } : {}),
+        ...(template !== undefined ? { template } : {}),
       });
       try {
         if (["list", "create", "set_default", "retire"].includes(params.action)) {
@@ -251,6 +264,7 @@ export function computerTools(kit: ToolKit) {
               name: params.name,
               sandboxId: params.sandbox_id,
               ...(memoryGib !== undefined ? { memoryGb: memoryGib } : {}),
+              ...(template !== undefined ? { template } : {}),
             },
           );
           return recordResult(callId, { tool: "sandbox", action: params.action }, text(JSON.stringify(result)));
@@ -608,7 +622,7 @@ const operationFields: Record<string, Record<string, string[]>> = {
     status: ["sandbox_id"],
     restart: ["sandbox_id", "memory_gib"],
     list: [],
-    create: ["backend", "name", "memory_gib"],
+    create: ["backend", "name", "memory_gib", "template"],
     set_default: ["sandbox_id"],
     retire: ["sandbox_id"],
   },

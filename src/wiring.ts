@@ -1547,6 +1547,9 @@ export function buildApp(
       memorySizedBackends: Object.entries(sandboxBackends)
         .filter(([, backend]) => backend?.profile.sizesMemory)
         .map(([name]) => name),
+      templateBackends: Object.entries(sandboxBackends)
+        .filter(([, backend]) => backend?.profile.takesTemplate)
+        .map(([name]) => name),
       routes: modelRoutes,
       signals: runSignals,
     });

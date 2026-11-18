@@ -112,6 +112,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
   const sessionByName = new Map<string, E2bSession>();
   const pauseFailed = new Set<string>();
   const scopeByName = new Map<string, string>();
+  const templateByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
@@ -207,7 +208,8 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
         return adopt(session, { sandboxId: session.sandboxId, createdAtMs: Date.now(), recoveryError: undefined });
       }
       onStatus?.("Creating the sandbox…");
-      const session = await client.create({ metadata: { name }, autoPause: true });
+      const template = templateByName.get(name);
+      const session = await client.create({ metadata: { name }, autoPause: true, ...(template ? { template } : {}) });
       sessionByName.set(name, session);
       await store.put(scope, {
         sandboxId: session.sandboxId,
@@ -282,6 +284,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     parksOnTeardown: true,
+    takesTemplate: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
@@ -401,6 +404,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       } else {
         name = sandboxScopeName(prefix, scope);
         scopeByName.set(name, scope);
+        if (provOpts?.template) templateByName.set(name, provOpts.template);
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 

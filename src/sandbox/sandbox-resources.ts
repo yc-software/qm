@@ -44,6 +44,7 @@ export interface SandboxResource {
   error?: string;
   jobOnly?: boolean;
   memoryGb?: number;
+  template?: string;
   swarmId?: string;
   personUsed?: true;
 }
@@ -112,6 +113,7 @@ interface SandboxProviderProfile {
   spec?: AgentComputerSpec;
   egressEnforcement?: EgressEnforcement;
   sizesMemory?: boolean;
+  takesTemplate?: boolean;
   actions: string[];
 }
 
@@ -135,7 +137,7 @@ export interface SandboxResources {
     name?: string,
     reservationId?: string,
     jobOnly?: boolean,
-    memoryGb?: number,
+    machine?: { memoryGb?: number; template?: string },
     swarmId?: string,
     personUsed?: boolean,
   ): Promise<SandboxResource>;
@@ -321,6 +323,7 @@ export function createSandboxResources(opts: {
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
         ...(backend.profile.sizesMemory ? { sizesMemory: true } : {}),
+        ...(backend.profile.takesTemplate ? { takesTemplate: true } : {}),
         actions: actionsFor(backend),
       }));
   const checkMemory = (backend: Sandbox, memoryGb: number | undefined): void => {
@@ -454,12 +457,15 @@ export function createSandboxResources(opts: {
         providers: profiles(),
       };
     },
-    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId, personUsed) {
+    async create(actorId, scopeId, backend, name, reservationId, jobOnly, machine, swarmId, personUsed) {
       await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
+      const { memoryGb, template } = machine ?? {};
       checkMemory(opts.backends[backend as SandboxBackendName]!, memoryGb);
+      if (template !== undefined && !opts.backends[backend as SandboxBackendName]!.profile.takesTemplate)
+        throw new Error(`${backend} computers take no template`);
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(
           `background jobs with private credentials need a computer that ${backend} can retire; run the command in the foreground`,
@@ -478,6 +484,7 @@ export function createSandboxResources(opts: {
         state: "provisioning",
         ...(jobOnly ? { jobOnly } : {}),
         ...(memoryGb ? { memoryGb } : {}),
+        ...(template ? { template } : {}),
         ...(swarmId ? { swarmId } : {}),
         ...(personUsed ? { personUsed } : {}),
       };
@@ -502,6 +509,7 @@ export function createSandboxResources(opts: {
           await sandbox.provision(record.backingScopeId, {
             ...(await opts.provisionOptions?.(scopeId)),
             ...(memoryGb ? { memoryGb } : {}),
+            ...(template ? { template } : {}),
           });
           return (await opts.records.update(id, (current) => ({
             ...current,

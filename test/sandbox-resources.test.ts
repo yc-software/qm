@@ -271,7 +271,9 @@ const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) =>
 test("a computer's memory size is stored and reaches every later provision and restart", async () => {
   const sizes: Array<number | undefined> = [];
   const { resources, router } = fixture(sizedBackend(sizes));
-  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, {
+    memoryGb: 6,
+  });
   await resources.setDefault("alice", "personal:alice", computer.id);
   await router.provision("personal:alice");
   await router.restartComputer!("personal:alice");
@@ -279,6 +281,20 @@ test("a computer's memory size is stored and reaches every later provision and r
   await router.provision("personal:alice");
   await resources.restart("alice", computer.id);
   assert.deepEqual(sizes, [6, 6, 6, 8, 8, 8]);
+});
+
+test("a computer's template is stored and reaches every later provision", async () => {
+  const templates: Array<string | undefined> = [];
+  const { resources, router } = fixture((backend) => {
+    backend.profile.takesTemplate = true;
+    const provision = backend.provision.bind(backend);
+    backend.provision = async (id, opts) => (templates.push(opts?.template), provision(id, opts));
+  });
+  const machine = { template: "dev" };
+  const computer = await resources.create("alice", "personal:alice", "local", "d", undefined, undefined, machine);
+  await resources.setDefault("alice", "personal:alice", computer.id);
+  await router.provision("personal:alice");
+  assert.deepEqual([computer.template, ...templates], ["dev", "dev", "dev"]);
 });
 
 test("a resize the backend refuses keeps the computer's old size", async () => {
@@ -290,7 +306,9 @@ test("a resize the backend refuses keeps the computer's old size", async () => {
       throw new Error("memory must not exceed 1Ti");
     };
   });
-  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, {
+    memoryGb: 6,
+  });
   await resources.setDefault("alice", "personal:alice", computer.id);
   await assert.rejects(resources.restart("alice", computer.id, 2000), /must not exceed 1Ti/);
   await router.provision("personal:alice");
@@ -300,8 +318,12 @@ test("a resize the backend refuses keeps the computer's old size", async () => {
 test("a memory size is refused on a backend that takes none", async () => {
   const { resources, records } = fixture();
   await assert.rejects(
-    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 4),
+    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, { memoryGb: 4 }),
     /local computers take no memory size/,
+  );
+  await assert.rejects(
+    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, { template: "dev" }),
+    /local computers take no template/,
   );
   assert.equal(
     (await records.all()).some((record) => record.name === "big"),
