@@ -4,11 +4,9 @@ import { json } from "../../chassis/src/http.ts";
 import {
   openImpersonation,
   readCookie,
-  seal,
-  setCookie,
-  clearCookie,
+  updateImpersonation,
   type SessionClaims,
-  type ImpersonationClaims,
+  type ImpersonationResult,
 } from "./session.ts";
 
 export const DEVELOPMENT_IMPERSONATION_PATH = "/api/development/impersonation";
@@ -27,11 +25,7 @@ export async function developmentImpersonation(input: {
   ttlSeconds: number;
   isAdmin: (session: SessionClaims) => Promise<boolean>;
   canonical: (target: string, session: SessionClaims) => Promise<string | null>;
-  impersonate: (
-    action: "start" | "stop",
-    session: SessionClaims,
-    target: string,
-  ) => Promise<{ ok: boolean; status: number; displayName?: string; message?: string }>;
+  impersonate: (action: "start" | "stop", session: SessionClaims, target: string) => Promise<ImpersonationResult>;
 }): Promise<boolean> {
   const { req, res, url, session } = input;
   const endpoint = url.pathname === DEVELOPMENT_IMPERSONATION_PATH;
@@ -76,27 +70,22 @@ export async function developmentImpersonation(input: {
       if (target) break;
     }
     if (!target) return refuse(400, "invalid_target");
+    const result = await updateImpersonation({
+      actor: session,
+      target: target === session.sub ? null : target,
+      raw,
+      cookieName: name,
+      key: input.key,
+      secure: input.secure,
+      ttlSeconds: input.ttlSeconds,
+      writeCookie: (cookie) => res.appendHeader("set-cookie", cookie),
+      apply: input.impersonate,
+    });
+    if (!result.ok) return refuse(result.status === 403 ? 403 : 400, "impersonation_refused");
     if (target === session.sub) {
-      if (valid) await input.impersonate("stop", session, valid.target);
-      res.appendHeader("set-cookie", clearCookie(name, "/", input.secure));
-      json(res, 200, { enabled: true, actor: session.sub, target: session.sub });
+      json(res, 200, { enabled: true, actor: session.sub, target });
       return true;
     }
-    const result = await input.impersonate("start", session, target);
-    if (!result.ok) return refuse(result.status === 403 ? 403 : 400, "impersonation_refused");
-    const now = Math.floor(Date.now() / 1000);
-    const claims: ImpersonationClaims = {
-      k: "impersonate",
-      actor: session.sub,
-      target,
-      org: session.org,
-      iat: now,
-      exp: now + input.ttlSeconds,
-    };
-    res.appendHeader(
-      "set-cookie",
-      setCookie(name, seal(claims, input.key), { path: "/", maxAge: input.ttlSeconds, secure: input.secure }),
-    );
     json(res, 200, { enabled: true, actor: session.sub, target, displayName: result.displayName ?? target });
     return true;
   }

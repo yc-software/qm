@@ -50,7 +50,6 @@ import {
   deriveKey,
   seal,
   openSession,
-  openImpersonation,
   openTmp,
   setCookie,
   sessionCookieHeaders,
@@ -62,7 +61,7 @@ import {
   safeEqual,
   sanitizeReturnTo,
   type SessionClaims,
-  type ImpersonationClaims,
+  updateImpersonation,
   type TmpClaims,
   sessionLifetime,
 } from "./session.ts";
@@ -936,7 +935,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       (targetCanonical && !(targetCanonical instanceof IdentityRejected) && targetCanonical.id === session.sub)
     )
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
-    const result = await coreImpersonate("start", session.sub, target, session.t);
+    const result = await updateImpersonation({
+      actor: session,
+      target,
+      raw: null,
+      cookieName: "portal_impersonate",
+      key: impersonateKey,
+      secure: SECURE_COOKIES,
+      ttlSeconds: IMPERSONATE_TTL_S,
+      writeCookie: (cookie) => setSession(res, [cookie]),
+      apply: (action, actor, selected) => coreImpersonate(action, actor.sub, selected, actor.t),
+    });
     if (!result.ok) {
       const status = result.status === 403 || result.status === 400 ? result.status : 502;
       return json(res, status, {
@@ -944,31 +953,22 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         message: result.message ?? "core refused impersonation",
       });
     }
-    const now = Math.floor(Date.now() / 1000);
-    const imp: ImpersonationClaims = {
-      k: "impersonate",
-      actor: session.sub,
-      target,
-      org: session.org,
-      iat: now,
-      exp: now + IMPERSONATE_TTL_S,
-    };
-    setSession(res, [
-      setCookie("portal_impersonate", seal(imp, impersonateKey), {
-        path: "/",
-        maxAge: IMPERSONATE_TTL_S,
-        secure: SECURE_COOKIES,
-      }),
-    ]);
     return json(res, 200, { ok: true, target, displayName: result.displayName ?? target });
   }
 
   if (pathname === "/auth/impersonate/stop" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
-    setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
-    const actor = session ?? staleSession;
-    if (actor && imp && imp.actor === actor.sub) await coreImpersonate("stop", actor.sub, imp.target, actor.t);
+    await updateImpersonation({
+      actor: session ?? staleSession,
+      target: null,
+      raw: readCookie(req.headers.cookie, "portal_impersonate"),
+      cookieName: "portal_impersonate",
+      key: impersonateKey,
+      secure: SECURE_COOKIES,
+      ttlSeconds: IMPERSONATE_TTL_S,
+      writeCookie: (cookie) => setSession(res, [cookie]),
+      apply: (action, actor, selected) => coreImpersonate(action, actor.sub, selected, actor.t),
+    });
     if (wantsHtml(req)) {
       res.writeHead(303, { location: "/", "cache-control": "no-store" });
       return void res.end();
