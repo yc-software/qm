@@ -20,7 +20,7 @@ import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
-import { refuseImpersonated, sendJson } from "../http.ts";
+import { PERSON_REQUIRED, refuseImpersonated, sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -85,7 +85,7 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
 export async function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): Promise<boolean> {
   if (await acting.liveHuman()) return true;
   if (ctx.actor?.imp) refuseImpersonated(ctx.res);
-  else sendJson(ctx.res, 403, { error: "human_required", message: "this action requires a live human actor" });
+  else sendJson(ctx.res, 403, { error: "human_required", message: PERSON_REQUIRED });
   return false;
 }
 
