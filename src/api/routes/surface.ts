@@ -1,5 +1,5 @@
 import { inheritRequestSources } from "../private-context.ts";
-import { mergeSourceProvenance, UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
+import { captureProvenance, UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
 import { refuseImpersonated } from "../http.ts";
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
@@ -1093,7 +1093,10 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     botActor: capability?.botActor === true,
     ...(capability?.personalOnly ? { personalOnly: true as const } : {}),
     contextScopeId: capability?.scopeId,
-    ...(ctx.sourceProvenance ? { sourceProvenance: ctx.sourceProvenance } : {}),
+    sourceProvenance: captureProvenance(
+      capability?.scopeId ?? target?.scopeId ?? makeScopeId("personal", principalId),
+      { inheritedFacts: [UNTRACKED_PROVENANCE, ...(ctx.sourceProvenance ? [ctx.sourceProvenance] : [])] },
+    ),
   });
   if (updated === "private_context")
     return sendJson(res, 403, {
@@ -1208,9 +1211,9 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   }
   const created = await app.createOwnedSkill({
     principalId,
-    ...(ctx.sourceProvenance
-      ? { sourceProvenance: mergeSourceProvenance([UNTRACKED_PROVENANCE, ctx.sourceProvenance]) }
-      : {}),
+    sourceProvenance: captureProvenance(capability?.scopeId ?? homeScope ?? makeScopeId("personal", principalId), {
+      inheritedFacts: [UNTRACKED_PROVENANCE, ...(ctx.sourceProvenance ? [ctx.sourceProvenance] : [])],
+    }),
     ...(capability?.personalOnly ? { personalOnly: true as const } : {}),
     ...(homeScope ? { homeScope } : {}),
     name: b.name,

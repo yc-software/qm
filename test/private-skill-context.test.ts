@@ -1,3 +1,5 @@
+import { disclosedMemory } from "../src/memory/disclosure.ts";
+import { recordReplyFiles } from "../src/core/orchestrator/settle.ts";
 import { randomUUID } from "node:crypto";
 import { FILE_ARTIFACT_MIGRATIONS } from "../src/files/postgres-file-artifact-store.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
@@ -103,6 +105,12 @@ test("private document capability and skill privacy survive memory opt-out and a
           copiedId = (saved.body as { skill: { id: string } }).skill.id;
           await input.emit({ kind: "AgentMessage", text: "Saved file procedure" });
           return { reply: "Saved file procedure", modelCalls: 0 };
+        }
+        if (input.input.includes("Attach private file to personal reply")) {
+          const attached = await input.tools.attach([{ file_id: privateFileId }]);
+          assert.equal(attached.ok, true);
+          await input.emit({ kind: "AgentMessage", text: "Attached private file" });
+          return { reply: "Attached private file", modelCalls: 0 };
         }
         if (input.input.includes("Attach private file from shared context")) {
           const attached = await input.tools.attach([{ file_id: privateFileId }]);
@@ -265,6 +273,23 @@ test("private document capability and skill privacy survive memory opt-out and a
   );
   assert.equal((await detail(privateId, protectedOwn)).status, 200);
   assert.equal((await detail(privateId, shared)).status, 404);
+  for (const [path, method, body] of [
+    ["/v1/sessions/" + binding.conversation.sessionId + "/items/0?viewer=" + actorId, "GET", undefined],
+    [
+      "/v1/sessions/" + binding.conversation.sessionId + "/share",
+      "POST",
+      { principalId: actorId, audience: "external" },
+    ],
+  ] as const) {
+    const blocked = await fetch(base + path, {
+      method,
+      headers: { "x-agent-capability": shared, "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    assert.equal(blocked.status, 403);
+    assert.equal(((await blocked.json()) as { message: string }).message, "capability token not valid for this route");
+  }
+
   await built.directory.replaceGroups([{ groupId: "restricted", principalId: actorId }]);
   await built.skills.archive(privateId);
   const late = await built.app.turn({
@@ -398,6 +423,31 @@ test("private document capability and skill privacy survive memory opt-out and a
   assert.equal((await built.skills.get(copiedId))?.personalOnly, true);
   assert.equal((await built.skills.get(copiedId))?.sourceProvenance?.sensitivity, "restricted");
   await built.skills.archive(copiedId);
+  const attached = await built.app.turn({
+    ...normal,
+    conversation: { kind: "dm", threadRef: "web:admin-alice:private-file-reply" },
+    text: "Attach private file to personal reply",
+    skipMemory: true,
+  });
+  assert.equal(attached.status, "ok");
+  assert.ok(attached.sessionId);
+  const attachedHistory = await built.app.getSessionForViewer(attached.sessionId, { actorId });
+  const delivery = attachedHistory?.items.find(
+    (item) => item.kind === "AgentMessage" && item.variant === "files_delivered",
+  );
+  assert.ok(delivery);
+  assert.ok(JSON.stringify(delivery.body.files).includes(privateFileId));
+  assert.ok(!JSON.stringify(delivery.body).includes("blobId"));
+  await recordReplyFiles(
+    built.sessions,
+    { sessionId: attached.sessionId, turnId: delivery.turnId! },
+    attached.attachments ?? [],
+    attachedHistory!.items,
+  );
+  assert.equal(
+    (await built.sessions.getItems(attached.sessionId)).filter((item) => item.variant === "files_delivered").length,
+    1,
+  );
   const attachDenied = await built.app.turn({
     ...normal,
     conversation: { kind: "channel", threadRef: "channel:C1", channelRef: "C1" },
@@ -507,4 +557,95 @@ test("private document capability and skill privacy survive memory opt-out and a
   assert.equal((await built.files.get(createdId))?.sourceProvenance?.sensitivity, "restricted");
   assert.equal((await built.files.get(exportedId))?.personalOnly, undefined);
   assert.equal((await built.files.get(exportedId))?.sourceProvenance?.sourceUnknown, true);
+  const teamScope = "channel:C1";
+  await built.app.upsertDirectory([{ principalId: "bob", displayName: "Bob", type: "internal" }]);
+  await built.directory.replaceChannels(
+    [
+      { channelId: "C1", name: "collaborators", isPrivate: true },
+      { channelId: "C2", name: "editors", isPrivate: true },
+    ],
+    [
+      { channelId: "C1", principalId: actorId },
+      { channelId: "C1", principalId: "bob" },
+      { channelId: "C2", principalId: actorId },
+    ],
+  );
+  const writer = await built.sessions.getOrCreateByThread("shared-origin-writer", "channel", teamScope);
+  const reader = await built.sessions.getOrCreateByThread("shared-origin-reader", "channel", teamScope);
+  const cap = (actor: string, scope: string, sessionId: string) =>
+    mintCapabilityToken(
+      { actorId: actor, scopeId: scope, sessionId, liveActor: true, aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
+      secret,
+    );
+  const writerToken = await cap(actorId, teamScope, writer.id);
+  const readerToken = await cap("bob", teamScope, reader.id);
+  const call = (path: string, capability: string, method = "GET", body?: unknown) =>
+    fetch(base + path, {
+      method,
+      headers: { "x-agent-capability": capability, "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  const made = await call("/v1/skills", writerToken, "POST", {
+    name: "shared-origin",
+    description: "Shared procedure",
+    body: "Use the shared reporting procedure.",
+  });
+  assert.equal(made.status, 201);
+  const sharedSkill = ((await made.json()) as { skill: { id: string } }).skill;
+  assert.ok((await built.skills.get(sharedSkill.id))?.sourceProvenance?.sources.includes(teamScope));
+  await built.files.put({
+    id: "shared-origin-file",
+    ownerScopeId: personal,
+    createdBy: actorId,
+    name: "shared.txt",
+    path: "shared.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("Use the shared reporting procedure."),
+    direction: "out",
+    contextSessionIds: [writer.id],
+    createdInScope: teamScope,
+  });
+  for (const [type, id] of [
+    ["skill", sharedSkill.id],
+    ["file", "shared-origin-file"],
+  ])
+    assert.equal(
+      (await call("/v1/share", writerToken, "POST", { type, id, toScope: teamScope, notify: false })).status,
+      200,
+    );
+  assert.equal((await call("/v1/skills/" + sharedSkill.id, readerToken)).status, 200);
+  assert.equal((await call("/v1/files/shared-origin-file/content", readerToken)).status, 200);
+  const origin = (await built.sessions.get(reader.id))?.sourceProvenance;
+  assert.ok(origin?.sources.includes(teamScope));
+  assert.ok(!origin?.sources.includes(personal));
+  await built.memory.capture(
+    teamScope,
+    ["Use the shared reporting procedure."],
+    Date.now(),
+    { actorId: "bob", context: "conversation" },
+    { mode: "explicit", conversationScopeId: teamScope, sessionId: reader.id },
+  );
+  const sharedView = disclosedMemory(built.memory, {
+    actor: { id: "bob", type: "internal" },
+    targetScope: teamScope,
+    nativeScopes: [teamScope],
+    audience: [
+      { id: actorId, type: "internal" },
+      { id: "bob", type: "internal" },
+    ],
+    open: false,
+    currentScopeMembers: (scope) => built.app.currentScopeMembers(scope),
+    isCurrentSharedScopeMember: (actor, scope) => built.app.isCurrentSharedScopeMember(actor, scope),
+  });
+  assert.ok((await sharedView.facts!(teamScope)).some((fact) => fact.text === "Use the shared reporting procedure."));
+  const editing = await built.sessions.getOrCreateByThread("shared-origin-editor", "channel", "channel:C2");
+  assert.equal(
+    (
+      await call("/v1/skills/" + sharedSkill.id, await cap(actorId, "channel:C2", editing.id), "PUT", {
+        body: "Use the revised shared reporting procedure.",
+      })
+    ).status,
+    200,
+  );
+  assert.ok((await built.skills.get(sharedSkill.id))?.sourceProvenance?.sources.includes("channel:C2"));
 });

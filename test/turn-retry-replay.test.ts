@@ -51,7 +51,10 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(interruptAfterToolResult = false) {
+function buildScenario(
+  interruptAfterToolResult = false,
+  attachment?: { id: string; fileOnly?: boolean; onResume?: string },
+) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
@@ -69,8 +72,27 @@ function buildScenario(interruptAfterToolResult = false) {
         await turn.emit({ kind: "ToolResult", tool: "execute", callId: "c1", text: "a.txt" });
         throw new Error("interrupted after recording a tool result");
       }
-      const reply = "it runs on this conversation's computer";
-      await turn.emit({ kind: "AgentMessage", text: reply });
+      const attachmentId = turn.continueTurn ? attachment?.onResume : attachment?.id;
+      if (attachmentId) {
+        const callId = "attachment-" + turns.length;
+        await turn.emit({
+          kind: "ToolCall",
+          tool: "attach",
+          callId,
+          body: { files: [{ file_id: attachmentId }] },
+        });
+        const attached = await turn.tools.attach([{ file_id: attachmentId }]);
+        assert.ok(attached.ok);
+        await turn.emit({
+          kind: "ToolResult",
+          tool: "attach",
+          callId,
+          body: { ok: true, files: attached.files },
+        });
+      }
+      if (attachment?.onResume && turns.length === 1) throw new Error("interrupted after first attachment");
+      const reply = attachment?.fileOnly ? "" : "it runs on this conversation's computer";
+      if (reply) await turn.emit({ kind: "AgentMessage", text: reply });
       return { reply, modelCalls: 1 };
     },
     async screenSecurity() {
@@ -82,6 +104,7 @@ function buildScenario(interruptAfterToolResult = false) {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const deliveries = createDeliveryStore();
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -89,7 +112,7 @@ function buildScenario(interruptAfterToolResult = false) {
     config: testConfigStore(ORG),
     sessions,
     runs,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files,
     sandbox,
     auditLog,
     agent,
@@ -121,6 +144,7 @@ function buildScenario(interruptAfterToolResult = false) {
   };
   return {
     orchestrator,
+    files,
     sessions,
     runs,
     deliveries,
@@ -526,4 +550,94 @@ test("a retry of a stopped surface-tool turn stays silent, keeps the stop, and p
   assert.equal(retry.stopped, true);
   assert.equal(turns.length, 0);
   assert.deepEqual(await deliveries.pending("slack"), []);
+});
+
+for (const fileOnly of [false, true])
+  test(`reply-file metadata recovers after interruption with file-only=${fileOnly}`, async (t) => {
+    const id = "reply-file-" + fileOnly;
+    const scenario = buildScenario(false, { id, fileOnly });
+    const { files, sessions, runs, orchestrator, input, turns } = scenario;
+    await files.put({
+      id,
+      ownerScopeId: "personal:U1",
+      createdBy: "U1",
+      name: "ready.txt",
+      path: "ready.txt",
+      mimetype: "text/plain",
+      data: Buffer.from("ready"),
+      direction: "out",
+    });
+    const append = sessions.append.bind(sessions);
+    let interrupt = true;
+    t.mock.method(
+      sessions,
+      "append",
+      async (writer: Parameters<typeof sessions.append>[0], item: Parameters<typeof sessions.append>[1]) => {
+        if (interrupt && item.kind === "AgentMessage" && item.variant === "files_delivered") {
+          interrupt = false;
+          throw new Error("interrupted before reply-file metadata");
+        }
+        return append(writer, item);
+      },
+    );
+    const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+    await assert.rejects(
+      orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+      /interrupted before reply-file/,
+    );
+    const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+    assert.equal(retry.status, "ok");
+    assert.deepEqual(
+      retry.attachments?.map((file) => file.artifactId),
+      [id],
+    );
+    assert.equal(turns.length, fileOnly ? 2 : 1);
+    const session = (await sessions.getByThread(conversation.threadRef))!;
+    const history = await sessions.getItems(session.id);
+    assert.equal(history.filter((item) => item.kind === "ToolCall" && item.tool === "attach").length, 1);
+    assert.equal(history.filter((item) => item.variant === "files_delivered").length, 1);
+    const repeated = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 3 }));
+    assert.deepEqual(
+      repeated.attachments?.map((file) => file.artifactId),
+      [id],
+    );
+    assert.equal((await sessions.getItems(session.id)).filter((item) => item.variant === "files_delivered").length, 1);
+  });
+
+test("a resumed reply keeps its prior attachment when it stages another", async () => {
+  const { orchestrator, files, sessions, runs, turns, input } = buildScenario(false, {
+    id: "file-A",
+    onResume: "file-B",
+  });
+  for (const id of ["file-A", "file-B"])
+    await files.put({
+      id,
+      ownerScopeId: "personal:U1",
+      createdBy: "U1",
+      name: id + ".txt",
+      path: id + ".txt",
+      mimetype: "text/plain",
+      data: Buffer.from(id),
+      direction: "out",
+    });
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted after first attachment/,
+  );
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.deepEqual(
+    retry.attachments?.map((file) => file.artifactId),
+    ["file-A", "file-B"],
+  );
+  assert.equal(turns.length, 2);
+  const session = (await sessions.getByThread(conversation.threadRef))!;
+  const history = await sessions.getItems(session.id);
+  assert.equal(history.filter((item) => item.kind === "ToolCall" && item.tool === "attach").length, 2);
+  const delivered = history.filter((item) => item.variant === "files_delivered");
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(
+    (delivered[0]!.body.files as { artifactId: string }[]).map((file) => file.artifactId),
+    ["file-A", "file-B"],
+  );
 });

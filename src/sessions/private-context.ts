@@ -2,6 +2,7 @@ import { personalScope, type ScopeId } from "../types.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import {
+  artifactProvenance,
   mergeSourceProvenance,
   mergeProvenance,
   UNTRACKED_PROVENANCE,
@@ -54,11 +55,7 @@ export async function inheritContextSources(
   }
   if (accepted.length && context.sessionId && context.scopeId) {
     const provenance = mergeProvenance(
-      accepted.map((source) => ({
-        ...(source.sourceProvenance ?? UNTRACKED_PROVENANCE),
-        sources: [...new Set([source.ownerScopeId, ...(source.sourceProvenance?.sources ?? [])])],
-        ...(source.personalOnly ? { personalOnly: true as const } : {}),
-      })),
+      accepted.map((source) => artifactProvenance(source.ownerScopeId, source.sourceProvenance, source.personalOnly)),
       "ordinary",
     );
     const current = context.sourceProvenance;
@@ -92,10 +89,10 @@ export async function inheritSessionContext(
       id: source.id,
       ownerScopeId: source.scopeId,
       personalOnly: source.personalOnly,
-      sourceProvenance: mergeSourceProvenance([
-        UNTRACKED_PROVENANCE,
-        ...(source.sourceProvenance ? [source.sourceProvenance] : []),
-      ]),
+      sourceProvenance: {
+        ...mergeSourceProvenance([UNTRACKED_PROVENANCE, ...(source.sourceProvenance ? [source.sourceProvenance] : [])]),
+        sources: [...new Set([source.scopeId, ...(source.sourceProvenance?.sources ?? [])])],
+      },
     })),
   );
   return new Set([...missing, ...blocked]);

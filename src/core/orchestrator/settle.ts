@@ -1,3 +1,5 @@
+import type { SessionStore, SessionWriter } from "../../sessions/session-store.ts";
+import { isObj } from "../../util/objects.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { AgentTurnResult } from "../../agent/agent.ts";
 import type { MemoryCaptureMetadata, MemoryProvenance } from "../../memory/facts.ts";
@@ -14,6 +16,46 @@ import type { createApprovalLedger } from "./approvals.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 type QuarantineReleaseApproval = Awaited<ReturnType<typeof createApprovalLedger>>["quarantineReleaseApprovals"][number];
+
+export async function recordReplyFiles(
+  sessions: Pick<SessionStore, "append">,
+  writer: SessionWriter,
+  filesToRecord: readonly Pick<
+    NonNullable<TurnResult["attachments"]>[number],
+    "artifactId" | "name" | "mimetype" | "sizeBytes" | "artifactViewerId"
+  >[],
+  previous: readonly Item[],
+): Promise<void> {
+  if (!filesToRecord.length) return;
+  const recorded = new Set(
+    previous.flatMap((item) =>
+      writer.turnId &&
+      item.turnId === writer.turnId &&
+      item.kind === "AgentMessage" &&
+      item.variant === "files_delivered" &&
+      Array.isArray(item.body.files)
+        ? item.body.files.flatMap((file) =>
+            isObj(file) && typeof file.artifactId === "string" ? [file.artifactId] : [],
+          )
+        : [],
+    ),
+  );
+  const files = filesToRecord.flatMap((file) => {
+    if (!file.artifactId || recorded.has(file.artifactId)) return [];
+    recorded.add(file.artifactId);
+    return [
+      {
+        artifactId: file.artifactId,
+        name: file.name,
+        mimetype: file.mimetype,
+        sizeBytes: file.sizeBytes,
+        ...(file.artifactViewerId ? { artifactViewerId: file.artifactViewerId } : {}),
+      },
+    ];
+  });
+  if (files.length)
+    await sessions.append(writer, { kind: "AgentMessage", variant: "files_delivered", body: { files } });
+}
 
 export async function startMemoryCapture(turn: {
   tenant: Tenant;

@@ -402,7 +402,7 @@ export function parseOutboundFiles(
 
 export async function collectNamedOutbound(
   sandbox: Sandbox | undefined,
-  handle: SandboxHandle | (() => Promise<SandboxHandle>),
+  handle: SandboxHandle | (() => Promise<SandboxHandle>) | undefined,
   paths: readonly OutboundFile[],
   transfer: BlobTransferStore,
   register?: ArtifactRegistration,
@@ -437,7 +437,7 @@ export async function collectNamedOutbound(
       let bytes: Uint8Array | undefined;
       let stored: Awaited<ReturnType<OpenStoredFile>> = null;
       if (typeof file === "string") {
-        if (!sandbox) throw new Error("sandbox file access is not available");
+        if (!sandbox || !handle) throw new Error("sandbox file access is not available");
         target ??= typeof handle === "function" ? await handle() : handle;
         bytes = (await sandbox.readFileBytes(target, file)) ?? undefined;
       } else {

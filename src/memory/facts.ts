@@ -32,6 +32,18 @@ export interface MemoryCaptureMetadata {
 
 export const UNTRACKED_PROVENANCE: MemoryProvenance = { sensitivity: "unknown", sources: [], sourceUnknown: true };
 
+export function artifactProvenance(
+  ownerScopeId: ScopeId,
+  provenance?: SourceProvenance,
+  personalOnly?: true,
+): MemoryProvenance {
+  return {
+    ...(provenance ?? UNTRACKED_PROVENANCE),
+    sources: provenance?.sources.length ? [...provenance.sources] : [ownerScopeId],
+    ...(personalOnly ? { personalOnly: true as const } : {}),
+  };
+}
+
 export class MemoryFactsMissing extends Error {
   readonly ids: readonly string[];
   constructor(ids: readonly string[]) {

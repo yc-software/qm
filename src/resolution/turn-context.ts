@@ -15,7 +15,7 @@ import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryRecallContext, MemoryService } from "../memory/memory-service.ts";
-import { UNTRACKED_PROVENANCE, type MemoryProvenance, type MemoryFact } from "../memory/facts.ts";
+import { artifactProvenance, type MemoryProvenance, type MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import { personalScope, type Resolution, type ScopeId, type Principal } from "../types.ts";
@@ -226,15 +226,7 @@ export async function resolveTurnContext(input: ContextInput) {
         )) ?? [];
       const provenance = visible.flatMap((row) =>
         [row.skill, ...row.shadowed].flatMap((skill) =>
-          skill
-            ? [
-                {
-                  ...(skill.sourceProvenance ?? UNTRACKED_PROVENANCE),
-                  sources: [...new Set([skill.scopeId, ...(skill.sourceProvenance?.sources ?? [])])],
-                  ...(skill.personalOnly ? { personalOnly: true as const } : {}),
-                },
-              ]
-            : [],
+          skill ? [artifactProvenance(skill.scopeId, skill.sourceProvenance, skill.personalOnly)] : [],
         ),
       );
       if (provenance.length && (await input.onDisclosure?.(provenance)) === false)

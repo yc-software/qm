@@ -197,8 +197,8 @@ import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import { appSourceShown } from "./orchestrator/app-source.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
-import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
-import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
+import { recordReplyFiles, selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
+import { replayRecordedAnswer, restoreReplyAttachments } from "./orchestrator/turn-replay.ts";
 import {
   addConversationBlocks,
   appendTurnGuidance,
@@ -1164,6 +1164,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sourceSessionId: session.id,
         });
 
+      const writer: SessionWriter = {
+        sessionId: session.id,
+        ...(input.runId ? { turnId: input.runId } : {}),
+        ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
+      };
+      const { mayReadArtifact, openStoredOutbound } = createArtifactAccess({
+        tenant,
+        deps: { ...deps, files },
+        conversation,
+        scopeId,
+        resolution,
+        ownScopeBotWork,
+      });
       const isRetry = (input.attempt ?? 1) > 1;
       const recordedTurnForRun = async (): Promise<{ turn: RecordedTurn | null; items: Item[] } | null> => {
         if (!input.runId || !deps.runs) return null;
@@ -1179,7 +1192,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (recorded && recordedTurn?.answer)
         return replayRecordedAnswer(
           {
-            deps,
+            deps: { ...deps, files },
+            writer,
+            withManagedRosterVersion,
+            openStoredOutbound,
             input,
             conversation,
             session,
@@ -1406,11 +1422,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (input.shutdown?.aborted)
         return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
       const turnStart = Date.now();
-      const writer: SessionWriter = {
-        sessionId: session.id,
-        ...(input.runId ? { turnId: input.runId } : {}),
-        ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
-      };
       if (!ambientTurn) assignSessionTitle();
       const trackRevisions = Boolean(surface?.capabilities.mirrored && deps.surfaceCache);
       const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
@@ -1692,16 +1703,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .then(() => deps.turnStream.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
         };
-        const { mayReadArtifact, provisionOutbound, openStoredOutbound } = createArtifactAccess({
-          tenant,
-          deps: { ...deps, files },
-          conversation,
-          scopeId,
-          resolution,
-          provision,
-          provisionResource,
-          ownScopeBotWork,
-        });
+        const provisionOutbound = (sandboxId?: string) =>
+          sandboxId !== undefined ? provisionResource(sandboxId) : provision();
         const surfaceToolDeps = createSurfaceToolDeps({
           tenant,
           deps,
@@ -2675,7 +2678,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           result,
         );
 
-        const stagedAttachments = attachStaging.staged();
+        let stagedAttachments = attachStaging.staged();
+        if (isRetry)
+          stagedAttachments = await restoreReplyAttachments(
+            { ...deps, files },
+            rawEntries,
+            input.runId,
+            openStoredOutbound,
+            stagedAttachments,
+          );
         const harvestedAck = (() => {
           if (!liveReplies || sessionTurn || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream.firstBlock(input.runId);
@@ -2757,6 +2768,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           issueApproval,
           withManagedRosterVersion,
         });
+
+        if (finalResult.status === "ok" && finalResult.attachments?.length)
+          await withManagedRosterVersion(() =>
+            recordReplyFiles(deps.sessions, writer, finalResult.attachments ?? [], [...rawEntries, ...emittedEntries]),
+          );
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };
