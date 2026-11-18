@@ -731,7 +731,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             origin: input.origin.kind,
             ...context,
           });
-      const { flaggedScreenedInput, inputUnscreened, releasedAttachments } = await screenInboundInput({
+      const { flaggedScreenedInput, inputUnscreened } = await screenInboundInput({
         deps,
         input,
         actor,
@@ -1830,16 +1830,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
         }
-        const fileScreenTurn = {
-          deps,
-          session,
-          securityPolicy,
-          enforceScreen,
-          classifyAs,
-          turnAbort,
-          audit,
-          released: releasedAttachments,
-        };
+        const fileScreenTurn = { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit };
         const screenInboundFile = createInboundFileScreen(fileScreenTurn);
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,

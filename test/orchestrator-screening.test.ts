@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_DOCUMENT_TEXT_CHARS } from "../src/core/documents.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { automationOrigin, freshApp, spyProvisioning, dm, channel, internalActor } from "./support/orchestrator-app.ts";
+import { automationOrigin, freshApp, spyProvisioning, dm, channel } from "./support/orchestrator-app.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { loadConfig } from "../src/config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
@@ -11,7 +11,6 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 test("Auto asks for input approval on suspicious data, skips re-screening on approval, and honors denial", async () => {
   const risky = freshApp();
@@ -776,46 +775,16 @@ for (const [what, change] of [
   });
 }
 
-test("an approved replay of held input goes through when it resends its file notes with details keys in another order", async () => {
+test("held input keeps one approval when held again with keys in another order, and goes through once approved", async () => {
   const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
-  const request = dm("hello", {
-    gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK", id: "1" } },
-    inboundNotes: ["note"],
-  });
-  const first = await built.app.turn(request);
-  const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
-  assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
-});
-
-test("allowing held input once lets in the attachment the screen held it for", async () => {
-  const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
-  const allowOnce = async (text: string, extra: Partial<TurnRequest> = {}) => {
-    const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
-    const request = dm(text, { attachments: [{ name: "notes.txt", mimetype: "text/plain", ...blob }], ...extra });
-    const requestId = (await built.app.turn(request)).pendingApprovals![0]!.requestId;
-    return built.app.turn({ ...request, approval: { requestId, approved: true } });
-  };
-  const withheld = async () => (await built.auditLog.events(tenant)).some((event) => event.status === "withheld");
-  const approved = await allowOnce("summarize the file");
-  assert.ok(JSON.stringify(await built.sessions.listLlmRequests(approved.sessionId!)).includes("inbox/notes.txt"));
-  assert.equal(await withheld(), false);
-  await allowOnce("x".repeat(MAX_DOCUMENT_TEXT_CHARS + 1), { surface: "monitor", origin: { kind: "automation" } });
-  assert.equal(await withheld(), true);
-});
-
-test("held input replayed from its stored request and held again keeps its one approval", async () => {
-  const databaseUrl = testMigratedDatabaseUrl();
-  const first = freshApp({ securityPosture: "auto", databaseUrl }, fixtureScreen());
-  await first.directory.replace([{ principalId: "U2", displayName: "SCREENING_FIXTURE_BLOCK one", type: "internal" }]);
-  const conversation = { ...channel("").conversation, audience: [internalActor, { externalId: "U2" }] };
-  const gatewayContext = { location: "#eng", hostIds: { channel: "C1" } };
-  const requestId = (await first.app.turn(channel("hello", { conversation, gatewayContext }))).pendingApprovals![0]!
-    .requestId;
-  await first.directory.replace([{ principalId: "U2", displayName: "SCREENING_FIXTURE_BLOCK two", type: "internal" }]);
-  const restarted = freshApp({ securityPosture: "auto", databaseUrl }, fixtureScreen());
-  const stored = (await restarted.app.getApproval(requestId))!.request!;
-  const again = await restarted.app.turn({ ...stored, approval: { requestId, approved: true } });
+  const details = { topic: "SCREENING_FIXTURE_BLOCK", id: "1" };
+  const request = dm("hello", { gatewayContext: { details }, inboundNotes: ["note"] });
+  const requestId = (await built.app.turn(request)).pendingApprovals![0]!.requestId;
+  const other = (await built.app.turn(dm("x", { gatewayContext: { details } }))).pendingApprovals![0]!.requestId;
+  const reordered = { ...request, gatewayContext: { details: { id: details.id, topic: details.topic } } };
+  const again = await built.app.turn({ ...reordered, approval: { requestId: other, approved: true } });
   assert.equal(again.pendingApprovals?.[0]?.requestId, requestId);
+  assert.equal((await built.app.turn({ ...request, approval: { requestId, approved: true } })).status, "ok");
 });
 
 for (const failure of ["error", "timeout"] as const) {
