@@ -426,6 +426,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     `INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at) VALUES ($1, $2, $3, $4, ${ts("$5")})`,
     [link.principalId, target, link.evidence, linkedBy, link.createdAt],
   );
+  await q(`SELECT set_config('qm.linked_sign_in', $1, true)`, [link.principalId]);
   await q(REKEY_LINKED_SIGN_INS);
   return toLink((await q(`${LINK_SELECT} WHERE l.alias_id = $1`, [link.principalId]))[0]!);
 }

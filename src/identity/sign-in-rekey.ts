@@ -91,7 +91,8 @@ const DOCUMENTS: Document[] = [
 const MOVES = `SELECT l.tenant_id AS t, l.alias_id AS a, u.primary_alias AS c
   FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
  WHERE l.alias_id <> u.primary_alias
-   AND l.tenant_id = coalesce(nullif(current_setting('qm.tenant_id', true), '')::uuid, l.tenant_id)`;
+   AND l.tenant_id = coalesce(nullif(current_setting('qm.tenant_id', true), '')::uuid, l.tenant_id)
+   AND l.alias_id = coalesce(nullif(current_setting('qm.linked_sign_in', true), ''), l.alias_id)`;
 
 const MOVE: Ids = { tenant: "m.t", alias: "m.a", canonical: "m.c" };
 

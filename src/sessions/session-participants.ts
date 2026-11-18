@@ -13,6 +13,7 @@ import { BOT_VISIBLE, LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, USER_ACTI
 
 const SEES_ITEMS = "COALESCE(s.messages, 0) > 0";
 const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
+const VIEW_COLUMNS = { title: "title", archived: "archived", pinned: "pinned", color: "color", readAt: "read_at" };
 export const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
   `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
           p.read_at AS p_read_at,
@@ -139,40 +140,14 @@ export function createSessionParticipants(
     },
 
     async updateParticipantView(sessionId, principalId, patch): Promise<void> {
-      if (patch.title !== undefined) {
-        await q("UPDATE participants SET title = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.title,
-        ]);
-      }
-      if (patch.archived !== undefined) {
-        await q("UPDATE participants SET archived = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.archived,
-        ]);
-      }
-      if (patch.pinned !== undefined) {
-        await q("UPDATE participants SET pinned = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.pinned,
-        ]);
-      }
-      if (patch.color !== undefined) {
-        await q("UPDATE participants SET color = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.color,
-        ]);
-      }
-      if (patch.readAt !== undefined) {
-        await q("UPDATE participants SET read_at = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.readAt,
-        ]);
+      for (const [key, column] of Object.entries(VIEW_COLUMNS)) {
+        const value = patch[key as keyof typeof VIEW_COLUMNS];
+        if (value !== undefined)
+          await q(`UPDATE participants SET ${column} = $3 WHERE session_id = $1 AND principal_id = $2`, [
+            sessionId,
+            principalId,
+            value,
+          ]);
       }
     },
 
