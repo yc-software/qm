@@ -74,30 +74,31 @@ grants but does not remove existing ones. Company login and Slack integration re
 existing configuration. Deployment CLI secret wiring, account linking, and live
 qualification are pending; this is not a released deployment feature.
 
-Self-serve workspaces are available on a multitenant deployment whenever trusted
-sign-in is configured with a distinct `PORTAL_IDENTITY_SECRET`. Core then reports
-self-serve as available in its sign-in lookups, and the trusted provider may return an
-`orgs` claim in userinfo (or the ID token): an array of
-`{ "id": string, "name": string, "handle"?: string }` naming the organizations the person
-may open a workspace for. When a trusted sign-in finds no workspace for the person and
-carries organizations, portal submits a short-lived, single-use, purpose-bound assertion
-for the chosen organization; with one organization it is chosen automatically, with
-several the workspace picker lists them. Core creates the organization's workspace on
-first use, keyed by issuer and organization id so concurrent sign-ins share one
-workspace, or joins the existing one, then records the person (and links their verified
-email) and grants them organization admin. Every person who joins this way is an admin.
-The name becomes the workspace brand; the handle is used only when it is valid and free,
-and is never part of the key. A person an admin removed from the workspace is refused. A
-deployment with a boot tenant never self-serves.
+Self-serve workspaces are available on a multitenant deployment whose core sets
+`WORKSPACE_PROVISIONER_URL` and whose trusted sign-in is configured with a distinct
+`PORTAL_IDENTITY_SECRET`. Core then reports self-serve as available in its sign-in
+lookups, and the trusted provider may return an `orgs` claim in userinfo (or the ID
+token): an array of `{ "id": string, "name": string, "handle"?: string }` naming the
+organizations the person may open a workspace for. When a trusted sign-in finds no
+workspace for the person and carries organizations, portal submits a short-lived,
+single-use, purpose-bound assertion for the chosen organization; with one organization it
+is chosen automatically, with several the workspace picker lists them. Core creates the
+organization's workspace on first use, keyed by issuer and organization id so concurrent
+sign-ins share one workspace, or joins the existing one, then records the person (and
+links their verified email) and grants them organization admin. Every person who joins
+this way is an admin. The name becomes the workspace brand; the handle is used only when
+it is valid and free, and is never part of the key. A person an admin removed from the
+workspace is refused. Self-serve never creates a deployment's first workspace, never
+reopens a workspace an operator switched off, and never runs on a deployment with a boot
+tenant.
 
-A deployment that sets core's `WORKSPACE_PROVISIONER_URL` sets up each new workspace
-before it serves. Core POSTs `{ tenant, brandName, handle, issuer, externalOrg }` to that
-URL, signed with `CORE_SIGNING_SECRET` like any source-authenticated request, and merges
-the `settings` object of a 200 reply (for example its own `modelGatewayKey`) into the
-workspace's tenant settings. Until a call succeeds the workspace stays switched off and
-sign-in fails; the next sign-in retries, so the provisioner must answer repeated calls for
-a tenant with the same settings. Without a provisioner, a new workspace uses the
-deployment's model gateway key and sandbox credentials.
+A new workspace starts switched off. Core POSTs `{ tenant, brandName, handle, issuer,
+externalOrg, nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
+`HMAC-SHA256(CORE_SIGNING_SECRET, "workspace-provisioner")` (hex), and merges the
+`settings` object of a 200 reply, which must include the workspace's own
+`modelGatewayKey`, into its tenant settings before switching it on. Until a call succeeds
+sign-in fails and the next sign-in retries, so the provisioner must answer repeated calls
+for a tenant with the same settings.
 
 When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a
