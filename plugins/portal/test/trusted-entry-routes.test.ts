@@ -121,6 +121,7 @@ Object.assign(process.env, {
   OIDC_AUTH_ENDPOINT: "https://primary.example.test/authorize",
   OIDC_CLIENT_ID: "primary-client",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
+  AUTH_BROKER_UPSTREAM: "http://127.0.0.1:9",
   PORTAL_TRUSTED_OIDC: JSON.stringify({
     issuer,
     authEndpoint: `${issuer}/authorize`,
@@ -243,7 +244,7 @@ test(
       method: "POST",
       headers: { origin: process.env.PUBLIC_WEB_URL!, cookie: session },
     });
-    assert.equal(logout.status, 200);
+    assert.equal(((await logout.json()) as { redirectTo: string }).redirectTo, "/auth/signed-out");
     assert.ok(logout.headers.getSetCookie().includes(preference));
     const response = await fetch(`${base}/auth/login?returnTo=%2Fsettings%2F`, {
       redirect: "manual",

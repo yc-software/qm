@@ -228,6 +228,9 @@ const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
+const trustedSubjectPrefix = trustedOidc
+  ? `oidc:${createHash("sha256").update(trustedOidc.issuer).digest("hex")}:`
+  : undefined;
 const trustedSignInLabel = trustedOidc ? process.env.PORTAL_TRUSTED_OIDC_LABEL?.trim() || undefined : undefined;
 const trustedAssertions = Boolean(
   trustedOidc &&
@@ -847,7 +850,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
     }
     const signedOutSession = currentSession(req);
-    const redirectTo = !AUTH_BROKER_UPSTREAM && signedOutSession ? "/auth/signed-out" : "/";
+    const trustedSignOut = Boolean(trustedSubjectPrefix && signedOutSession?.sub.startsWith(trustedSubjectPrefix));
+    const redirectTo = signedOutSession && (!AUTH_BROKER_UPSTREAM || trustedSignOut) ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
       ...signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN, STALE_COOKIE_DOMAIN),
@@ -1404,8 +1408,7 @@ async function trustedLogin(
   const pending = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo;
   const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo") ?? pending ?? null, PUBLIC_URL, APPS_DOMAIN);
   const existing = currentSession(req);
-  const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
-  const signedIn = existing && !existing.appOnly && existing.sub.startsWith(trustedPrefix);
+  const signedIn = existing && !existing.appOnly && existing.sub.startsWith(trustedSubjectPrefix!);
   if (signedIn) {
     res.writeHead(302, { location: returnTo, "cache-control": "no-store" });
     return void res.end();
