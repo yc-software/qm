@@ -57,7 +57,7 @@ const provisionedDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_provisioned
   END $f$`;
 
 export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
-  id: "tenancy/self-serve/0001-external-orgs",
+  id: "tenancy/self-serve/0001-external-org-tenants",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `CREATE TABLE IF NOT EXISTS tenant_external_orgs(
