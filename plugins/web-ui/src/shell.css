@@ -4761,36 +4761,6 @@ a.connector-widget:focus-visible {
   width: 20px;
   height: 20px;
 }
-.connector-widget [data-service="gmail"],
-.connection-picker [data-service="gmail"] {
-  color: #d4483b;
-}
-.connector-widget [data-service="googlecalendar"],
-.connection-picker [data-service="googlecalendar"] {
-  color: #4285f4;
-}
-.connector-widget [data-service="googledrive"],
-.connection-picker [data-service="googledrive"],
-.connector-widget [data-service="googlesheets"],
-.connection-picker [data-service="googlesheets"] {
-  color: #34a853;
-}
-.connector-widget [data-service="google"],
-.connection-picker [data-service="google"] {
-  color: #4285f4;
-}
-.connector-widget [data-service="slack"],
-.connection-picker [data-service="slack"] {
-  color: #b74685;
-}
-.connector-widget [data-service="linear"],
-.connection-picker [data-service="linear"] {
-  color: #8278ec;
-}
-.connector-widget [data-service="dropbox"],
-.connection-picker [data-service="dropbox"] {
-  color: #3984ff;
-}
 .connector-widget-text {
   display: flex;
   flex-direction: column;
