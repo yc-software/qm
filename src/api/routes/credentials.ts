@@ -13,7 +13,7 @@ async function brokerCredential(ctx: ApiCtx): Promise<void> {
     const result = await brokerConnectorCall({
       claims: capability!,
       body: body as Record<string, unknown>,
-      loadDeployment: (id) => app.getDeployment(id),
+      loadApp: (id) => app.getApp(id),
       tokens: deps.keychain,
       fetchImpl: deps.brokerFetch ?? realBrokerFetch,
       audit,

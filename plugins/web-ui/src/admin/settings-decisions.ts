@@ -26,6 +26,7 @@ const option = (key: string, o: any, hook: string) => ({
   modelId: o.runtime?.modelId || "",
   effortLevel: o.runtime?.effortLevel || "",
   fastMode: !!o.runtime?.fastMode,
+  persona: o.persona || "",
 });
 function ruleForm(r: any) {
   const hook = r?.hook || state.data.hooks[0]?.id || "";
@@ -70,6 +71,7 @@ function ruleBody(d: any) {
                 },
               }
             : {}),
+          ...(o.action === "use_persona" ? { persona: o.persona } : {}),
         },
       ]),
     ),
@@ -173,6 +175,7 @@ function optionFields(d: any, o: any, i: number) {
             >`
         : ""
     }
+    ${o.action === "use_persona" ? field("Persona id", o.persona, (v) => (o.persona = v)) : ""}
     <button class="btn danger" @click=${() => (d.options.splice(i, 1), redraw())}>Remove option</button>
   </fieldset>`;
 }

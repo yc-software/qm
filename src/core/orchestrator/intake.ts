@@ -69,7 +69,7 @@ export function intakeOf(
 ) {
   return {
     received,
-    manifest: inboundManifest(received.metas, inboxDir, received.unstaged, message.sharer),
+    manifest: inboundManifest(received.metas, inboxDir, received.unstaged, message.sharer, received.shortened),
     issues: inboundIssueList({
       tooMany: received.tooMany,
       unavailable: received.unavailable,
@@ -186,6 +186,7 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
         };
     const by = {
       author,
+      ...(speaker.origin.kind !== "automation" && !speaker.fromSession ? { speakerId: author } : {}),
       ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
     };
     let said =

@@ -8,9 +8,10 @@ import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "./route.ts";
 import type { Tenant } from "../../tenants/context.ts";
-import { headerValue, sendJson } from "../http.ts";
+import { headerValue, refuseWithoutPerson, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -27,6 +28,9 @@ export function exportTokenAccepted(ctx: Pick<BaseCtx, "req" | "res">, token: st
 
 export { isObj } from "../../util/objects.ts";
 
+export const BOT_WORK_PERSON_CREDENTIAL =
+  "this work runs with a Slack bot's restrictions because a bot started it, so it can't ask for a person's credential; ask for it from your own conversation instead";
+
 export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): CapabilityClaims | null {
   if (ctx.capability) return ctx.capability;
   return ctx.actor ? { actorId: ctx.actor.p, scopeId: scopeId("personal", ctx.actor.p), exp: ctx.actor.exp } : null;
@@ -34,6 +38,44 @@ export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): C
 
 export function audit(ctx: Pick<ApiCtx, "deps" | "tenant">, e: Omit<AuditEvent, "at">): void {
   ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e });
+}
+
+export async function runIsActive(ctx: ApiCtx): Promise<boolean> {
+  const cap = ctx.capability;
+  if (!cap) return true;
+  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
+  return (
+    !!run &&
+    run.status === "running" &&
+    !!cap.runLeaseToken &&
+    run.leaseToken === cap.runLeaseToken &&
+    run.attempts === cap.runAttempt &&
+    run.sessionId === cap.threadRef &&
+    samePerson(run.request.actor.id, cap.actorId) &&
+    (run.leaseExpiresAt ?? 0) > Date.now()
+  );
+}
+
+export function refuseInactiveRun(ctx: ApiCtx): void {
+  sendJson(ctx.res, 403, {
+    error: "inactive_run",
+    message:
+      "This call needs the current token of a running turn: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses this access; make the call from a foreground command while the turn is running.",
+  });
+}
+
+export async function activeRun(ctx: ApiCtx): Promise<boolean> {
+  if (await runIsActive(ctx)) return true;
+  refuseInactiveRun(ctx);
+  return false;
+}
+
+export async function livePersonTurn(ctx: ApiCtx): Promise<boolean> {
+  if (ctx.capability && !personAtKeyboard(ctx.capability)) {
+    refuseWithoutPerson(ctx.res);
+    return false;
+  }
+  return activeRun(ctx);
 }
 
 function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {

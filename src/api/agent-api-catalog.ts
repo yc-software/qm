@@ -1,5 +1,6 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
+import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -109,7 +110,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). pinned:true on a channel: entry pins the persona there, so every conversation in that channel wears it and posts under its name and icon; a channel pins one persona at most",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most (owner, on a turn you sent)",
       },
       {
         method: "POST",
@@ -408,85 +409,85 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/apps (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/apps/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/apps/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/apps/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
     routes: [
       {
         method: "GET",
-        path: "/v1/deployments",
+        path: "/v1/apps",
         summary:
-          "list the published apps you can reach across scopes — each row carries your effective permission (read|write) and a ready-to-clone/push gitUrl; find deployment ids here for share / name / display-name / archive / git-url",
+          "list the published apps you can reach across scopes — each row carries your effective permission (read|write) and a ready-to-clone/push gitUrl; find app ids here for share / name / display-name / archive / git-url",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id",
+        path: "/v1/apps/:id",
         summary:
-          "inspect one deployment you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
+          "inspect one app you can reach — status, owner/home scope, effective permission, current and applied versions, version history with commit ids and timestamps, and gitUrl",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/fetch",
+        path: "/v1/apps/:id/fetch",
         summary:
-          "read a deployment's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
+          "read an app's rendered content as the asking person — query path defaults to / and maxBytes defaults to 256KB; returns upstream status, contentType, body, and truncation metadata",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/logs",
+        path: "/v1/apps/:id/logs",
         summary:
-          "recent runtime output (entrypoint stdout+stderr) of a running deployment you can reach — query tailLines (default 200, max 2000); returns {logs} (null when the provider keeps none)",
+          "recent runtime output (entrypoint stdout+stderr) of a running app you can reach — query tailLines (default 200, max 2000); returns {logs} (null when the provider keeps none)",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/git-url",
+        path: "/v1/apps/:id/git-url",
         summary:
-          "get an authed git remote URL for a deployment you can reach (clone its source; push a new version if you have write access) — returns {url, permission}",
+          "get an authed git remote URL for an app you can reach (clone its source; push a new version if you have write access) — returns {url, permission}",
       },
       {
         method: "GET",
-        path: "/v1/deployments/:id/share",
+        path: "/v1/apps/:id/share",
         summary: "inspect access for an app you own (:id is its name or id) — returns {public, grantees}; owner-only",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/share",
+        path: "/v1/apps/:id/share",
         summary:
-          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
+          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only, on a turn you sent, no redeploy',
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/name",
+        path: "/v1/apps/:id/name",
         summary: "rename an app you manage — body {name} (its URL slug; must be unique)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/display-name",
+        path: "/v1/apps/:id/display-name",
         summary: "set an app's human-friendly display name — body {displayName} (empty clears it)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/always-on",
+        path: "/v1/apps/:id/always-on",
         summary:
           "keep an app you manage permanently warm — body {alwaysOn:true} exempts it from idle sleep so visitors never hit a cold start; {alwaysOn:false} returns it to the default sleep-when-idle",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/embed-ancestors",
+        path: "/v1/apps/:id/embed-ancestors",
         summary:
           "let named sites show an app you manage inside their page (iframe) — body {embedAncestors:[https origins, optionally https://*.example.com]}; list every frame between the app and the browser tab; [] forbids embedding again",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/connectors",
+        path: "/v1/apps/:id/connectors",
         summary:
           "publisher only, after they ask: lend an app they published their connected apps — body {connectors:[hosts]}; [] withdraws; broker use is in the publish skill",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/archive",
+        path: "/v1/apps/:id/archive",
         summary: "take down an app you manage (stops it and frees its endpoint; the source is kept)",
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/restore",
+        path: "/v1/apps/:id/restore",
         summary: "restore an archived app you manage by reapplying its current saved version",
       },
     ],
@@ -539,7 +540,19 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/credentials",
         summary:
-          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]) / list participants' registered logins (metadata)",
+          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); replacing a login the user already saved needs their own running turn or a loginTicket / list participants' registered logins (metadata)",
+      },
+      {
+        method: "POST",
+        path: "/v1/keychain/login-tickets",
+        summary:
+          "{service} from the user's own running turn: a one-time loginTicket that lets the save finishing this sign-in replace their existing login once, after the turn ends (the interactive-login skill does this)",
+      },
+      {
+        method: "POST|DELETE",
+        path: "/v1/keychain/credentials/:id/writer",
+        summary:
+          "claim {holder, until} / release ?holder= the single-writer lease on one of the user's own credentials, such as a browser profile; 409 writer_held while another holder's lease runs",
       },
       {
         method: "GET",
@@ -725,7 +738,7 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/crons|deployments|skills?scope=",
+        path: "/v1/admin/crons|apps|skills?scope=",
         summary: "artifacts by owning scope (DM or effective Open sharing)",
       },
       {
@@ -745,7 +758,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/admin/external-users",
         summary:
-          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; they sign in at the portal with that address until expiry; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem and hand the user signInUrl to share. org_admin role is portal-only",
+          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; until expiry they count as members everywhere, including as guests in the org's own Slack, and the invitation email carries a single-use sign-in link; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem; the signInUrl you get is the plain portal address, so once email works, re-invite with resendInvite:true to send a link. org_admin role is portal-only",
       },
       {
         method: "DELETE",
@@ -786,6 +799,7 @@ export function renderAgentApis(
   claims: CapabilityClaims,
   admin: { isAdmin: boolean; role?: string },
   features: { swarmsEnabled: boolean; personasEnabled: boolean },
+  query = "",
 ): AgentApiListing {
   const view: AgentApiView = {
     claims,
@@ -793,7 +807,17 @@ export function renderAgentApis(
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };
-  const visible = [...FAMILIES, WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
+  const terms = searchTerms(query);
+  const visible = [...FAMILIES, WHOAMI_FOR_ALL]
+    .filter((f) => f.when?.(view) ?? true)
+    .filter(
+      (f) =>
+        !terms.length ||
+        matchesSearchTerms(
+          [f.guidance ?? "", ...f.routes.map((r) => `${r.method} ${r.path} ${r.summary}`)].join(" "),
+          terms,
+        ),
+    );
   return {
     actorId: claims.actorId,
     scopeId: claims.scopeId,

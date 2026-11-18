@@ -49,6 +49,7 @@ interface SignInTenant {
 
 export interface DirectoryMeta {
   workspaceUrl: string | null;
+  appIconUrl: string | null;
 }
 
 export type RecipientResolution =
@@ -86,8 +87,8 @@ export interface DirectoryStore {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
-  resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
+  upsertGroup(groupId: string, principalIds: readonly string[], surface: string): Promise<void>;
+  resolveGroupByParticipants(participants: readonly string[], surface: string): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
   groupMemberships(groupIds: readonly string[], principalId: string): Promise<Map<string, ScopeMembershipFacts>>;
@@ -95,7 +96,7 @@ export interface DirectoryStore {
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
   groupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
-  setWorkspaceUrl(url: string): Promise<void>;
+  setWorkspace(meta: DirectoryMeta): Promise<void>;
   meta(): Promise<DirectoryMeta>;
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;

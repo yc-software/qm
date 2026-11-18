@@ -13,6 +13,7 @@ import {
   type RecentMessage,
   encodeTs,
 } from "../src/slack/lib.ts";
+import { renderOverheard, seedPriorTurns, selectOverheardToImport } from "../src/agent/replay.ts";
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -233,10 +234,9 @@ test("resolveMentions rewrites <@U…> to @Name from the map; unknown ids stay r
 });
 
 const baseView = (over: Partial<ConversationView> = {}): ConversationView => ({
-  channel: { name: "eng", kind: "channel", isPrivate: true },
+  channel: { kind: "channel", isPrivate: true },
   messages: [],
   here: { kind: "top-level" },
-  omittedFiles: [],
   nameById: new Map([
     ["U1", "Alice"],
     ["U2", "Bob"],
@@ -250,7 +250,7 @@ test("renderConversationView: header shows the channel and the you-are-here mark
       messages: [{ ts: "1717360800.000003", name: "Alice", text: "ship it", authorId: "U1", isTrigger: true }],
     }),
   );
-  assert.match(header, /You are in #eng \(private\)\./);
+  assert.match(header, /You are in a channel \(private\)\./);
   assert.doesNotMatch(header, /People here|Alice/);
   assert.match(header, /You are replying to a top-level message/);
   assert.equal(priorTurns.length, 0);
@@ -267,7 +267,7 @@ test("renderConversationView: a DM thread renders a 1:1 header + prior turns (se
   const { header, priorTurns } = renderConversationView(
     baseView({
       channel: { kind: "dm" },
-      here: { kind: "thread", youOpenedIt: false, starterName: "Alice" },
+      here: { kind: "thread", youOpenedIt: false },
       messages: [
         { ts: parentTs, name: "Alice", text: "can you summarize the incident?", authorId: "U1", isTrigger: false },
         {
@@ -293,7 +293,7 @@ test("renderConversationView: others → name-tagged user turns, own → assista
   const tsTrigger = "1717360800.000003";
   const { priorTurns, allowedTs } = renderConversationView(
     baseView({
-      here: { kind: "thread", youOpenedIt: false, starterName: "Alice" },
+      here: { kind: "thread", youOpenedIt: false },
       messages: [
         { ts: tsA, name: "Alice", text: "can someone deploy?", authorId: "U1" },
         { ts: tsBot, name: "Bob", text: "on it", authorId: "U2", parentTs: tsA },
@@ -317,7 +317,7 @@ test("renderConversationView: overheard is one un-merged entry per non-trigger m
   const tsTrigger = "1717360800.000005";
   const { overheard } = renderConversationView(
     baseView({
-      here: { kind: "thread", youOpenedIt: false, starterName: "Alice" },
+      here: { kind: "thread", youOpenedIt: false },
       messages: [
         { ts: tsA, name: "Alice", text: "can someone deploy?", authorId: "U1" },
         { ts: tsB, name: "Bob", text: "on it <@U1>", authorId: "U2", parentTs: tsA, files: ["plan.png"] },
@@ -339,13 +339,28 @@ test("renderConversationView: overheard is one un-merged entry per non-trigger m
   assert.equal(overheard[2]!.name, undefined);
 });
 
+test("renderConversationView: another bot's post reaches the model as from=bot, apart from people's posts", () => {
+  const messages: RecentMessage[] = [
+    { ts: "1717360800.000001", name: "Alice", text: "deploy is red", authorId: "U1" },
+    { ts: "1717360800.000002", name: "DeployBot", text: "rollback finished", authorId: "B1", isBot: true },
+  ];
+  const { overheard, priorTurns } = renderConversationView(baseView({ messages }));
+  const imported = selectOverheardToImport(overheard, new Set()).map(renderOverheard).join("");
+  const shown = imported + seedPriorTurns(priorTurns)[0]!.text;
+  assert.match(shown, /from="human" author="Alice"[^<]*red<\/message><[^>]* from="bot" author="DeployBot"/);
+  assert.match(
+    shown,
+    /<message from="human" author="Alice">[^<]*red<\/message>\n<message from="bot" author="DeployBot">/,
+  );
+});
+
 test("renderConversationView: the agent's own reply becomes an assistant turn but is dropped from detection", () => {
   const tsA = "1717360800.000001";
   const tsSelf = "1717360800.000002";
   const tsTrigger = "1717360800.000003";
   const { priorTurns, detectContext } = renderConversationView(
     baseView({
-      here: { kind: "thread", youOpenedIt: false, starterName: "Alice" },
+      here: { kind: "thread", youOpenedIt: false },
       messages: [
         { ts: tsA, name: "Alice", text: "how are you?", authorId: "U1" },
         {
@@ -395,7 +410,7 @@ test("renderConversationView: long messages survive into model turns up to a gen
   const longReply = "Created the HN account. " + "context ".repeat(80) + secret;
   const { priorTurns } = renderConversationView(
     baseView({
-      here: { kind: "thread", youOpenedIt: false, starterName: "Alice" },
+      here: { kind: "thread", youOpenedIt: false },
       messages: [
         { ts: tsSelf, name: "Agent", text: longReply, authorId: "UME", isSelf: true, isBot: true },
         { ts: tsTrigger, name: "Alice", text: "use that login", authorId: "U1", parentTs: tsSelf, isTrigger: true },
@@ -431,7 +446,7 @@ test("renderConversationView: detection preview still clips long human messages 
   const longHuman = "please " + "deploy ".repeat(100);
   const { detectContext } = renderConversationView(
     baseView({
-      here: { kind: "thread", youOpenedIt: false, starterName: "Alice" },
+      here: { kind: "thread", youOpenedIt: false },
       messages: [
         { ts: tsA, name: "Alice", text: longHuman, authorId: "U1" },
         { ts: tsTrigger, name: "Bob", text: "ok", authorId: "U2", parentTs: tsA, isTrigger: true },
@@ -442,7 +457,7 @@ test("renderConversationView: detection preview still clips long human messages 
   assert.ok(detectContext.length < longHuman.length);
 });
 
-test("renderConversationView: a message's files render inline, too-big files are flagged, empty view → empty turns", () => {
+test("renderConversationView: a message's files render inline, empty view → empty turns", () => {
   const tsA = "1717360800.000001";
   const withFiles = renderConversationView(
     baseView({
@@ -450,19 +465,15 @@ test("renderConversationView: a message's files render inline, too-big files are
         { ts: tsA, name: "Alice", text: "see graph", authorId: "U1", files: ["graph.png"] },
         { ts: "1717360800.000002", name: "Bob", text: "looking", authorId: "U2", isTrigger: true },
       ],
-      omittedFiles: [{ name: "dump.sql", reason: "too-big" }],
     }),
   );
   assert.match(withFiles.priorTurns[0]!.text, /\(files: graph\.png\)/);
   assert.doesNotMatch(withFiles.header, /graph\.png/);
-  assert.match(withFiles.header, /Files too big to view this turn: dump\.sql\./);
-  assert.ok(withFiles.header.indexOf("Files too big to view this turn") < withFiles.header.indexOf("You are in #eng"));
 
   const empty = renderConversationView({
     channel: { kind: "channel" },
     messages: [],
     here: { kind: "top-level" },
-    omittedFiles: [],
   });
   assert.equal(empty.priorTurns.length, 0);
   assert.equal(empty.detectContext, "");

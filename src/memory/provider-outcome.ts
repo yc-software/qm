@@ -100,7 +100,7 @@ function deniedFix(provider: string, code: string | undefined): string {
 function failedFix(provider: string, code: string | undefined, docs: string): string {
   if (code === "unreachable") return `Check that ${provider}'s host is up and reachable from QM (${docs}).`;
   if (code === "fact_not_found")
-    return `${provider} forgets only facts on the person's own member page; search memory again for current refs.`;
+    return `${provider} forgets only facts on the person's own member page. If the ref came from an older search, search memory again for its current ref; a fact on another page can be forgotten only by that page's member, or on the brain host with gbrain forget <fact-id>.`;
   return `Check ${provider}'s logs, URL and tool names (${docs}).`;
 }
 
@@ -254,6 +254,13 @@ export function forgetKnown(outcomes: readonly Pick<MemoryProviderOutcome, "outc
   return outcomes.every(({ outcome }) => outcome !== "unknown");
 }
 
+const NOTEBOOK_FORGET_FAILED: MemoryProviderProblem = {
+  code: "memory_provider_failed",
+  provider: "default",
+  detail: "QM's notebook failed to forget this delete's notebook ids, so they're still there.",
+  fix: "Send the delete again with only those ids; QM's log has the notebook's error.",
+};
+
 export async function forgetFacts(
   memory: MemoryService,
   scope: ScopeId,
@@ -262,12 +269,16 @@ export async function forgetFacts(
   context: Pick<MemoryForgetContext, "audienceScopeId">,
   call: string | undefined,
 ): Promise<MemoryForget> {
+  const unique = [...new Set(ids)];
   const idempotencyKey = requestKey("forget", call ?? randomUUID(), scope);
-  const { outcomes, problems } = await withProviders("forget", (report) =>
-    memory.delete!(scope, ids, by, { ...context, idempotencyKey, startedAt: Date.now(), report }),
+  const reported = await withProviders("forget", (report) =>
+    memory.delete!(scope, unique, by, { ...context, idempotencyKey, startedAt: Date.now(), report }),
   );
-  const notebook = ids.length - outcomes.length;
+  const outcomes = reported.outcomes.filter(({ provider }) => provider !== "default");
+  const notebookFailed = outcomes.length < reported.outcomes.length;
+  const notebook = notebookFailed ? 0 : unique.length - outcomes.length;
   const kept = !forgetKnown(outcomes);
   const forgotten = (kept ? 0 : notebook) + outcomes.filter(({ outcome }) => outcome === "committed").length;
+  const problems = notebookFailed ? [...reported.problems, NOTEBOOK_FORGET_FAILED] : reported.problems;
   return { forgotten, notebook, kept, outcomes, problems };
 }

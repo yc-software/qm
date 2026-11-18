@@ -6,7 +6,7 @@ import { AwsApiError } from "../src/sandbox/aws-microvm-api.ts";
 import { testMap } from "./support/test-database.ts";
 import {
   ID,
-  deployment,
+  publishedApp,
   fakeApi,
   fakeDaemon,
   fakeS3,
@@ -20,7 +20,7 @@ import {
 test("apply: launches a MicroVM, writes the snapshot into /app, starts the app, returns a TLS endpoint", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl, execs, writes } = fakeDaemon();
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   const endpoint = await provider(api, fetchImpl).apply(d, version(localSnapshot("index.html", "<h1>hi</h1>")));
 
   assert.equal(counts.run, 1, "one MicroVM launched");
@@ -45,7 +45,7 @@ test("apply: launches a MicroVM, writes the snapshot into /app, starts the app, 
 test("apply: env framework keys are authoritative — PORT/HOME are set by the runtime, published env still applies", async () => {
   const { api } = fakeApi();
   const { fetchImpl, execs } = fakeDaemon();
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await provider(api, fetchImpl).apply(
     d,
     version(localSnapshot("server.js", "x"), { env: { HOME: "/tmp/evil", PORT: "3000", API_KEY: "secret" } }),
@@ -59,7 +59,7 @@ test("apply: env framework keys are authoritative — PORT/HOME are set by the r
 test("reconcile (git bundle): checks the commit out via git, writes home, no file-by-file app writes", async () => {
   const { api } = fakeApi();
   const { fetchImpl, execs, writes } = fakeDaemon();
-  const d = deployment(ID, "mysite");
+  const d = publishedApp(ID, "mysite");
   const endpoint = await provider(api, fetchImpl).reconcile!(
     d,
     version(localSnapshot(".aws/credentials", "[default]"), {
@@ -80,7 +80,7 @@ test("reconcile (git bundle): checks the commit out via git, writes home, no fil
 test("reconcile (relaunch): a missing ephemeral snapshot/home dir is tolerated — app restored from the git bundle, no ENOENT", async () => {
   const { api } = fakeApi();
   const { fetchImpl, execs } = fakeDaemon();
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   const ver = version("/data/deployments/does-not-exist", {
     commit: "a".repeat(40),
     homeDir: "/data/deployments/also-gone",
@@ -98,7 +98,7 @@ test("resolveEndpoint (warm): a running, fresh body is reused — no relaunch �
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   const first = await p.apply(d, version(localSnapshot("a", "1")));
   const runsAfterApply = counts.run;
 
@@ -114,7 +114,7 @@ test("resolveEndpoint (suspended): resumes the body and serves it warm", async (
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const stored = (await store.get(ID))!;
   vms.get(stored.microvmId)!.state = "SUSPENDED";
@@ -129,7 +129,7 @@ test("apply: an idle app stays suspended for its whole lifetime instead of being
   const { api, launches } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const p = provider(api, fetchImpl);
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.equal(launches.length, 1);
   assert.equal(launches[0]!.idlePolicy?.maxIdleDurationSeconds, 900, "still suspends after 15 idle minutes");
   assert.equal(
@@ -143,7 +143,7 @@ test("apply: an explicit suspended-duration setting still wins", async () => {
   const { api, launches } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { suspendedDurationSeconds: 600 });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.equal(launches[0]!.idlePolicy?.suspendedDurationSeconds, 600);
 });
 
@@ -164,7 +164,7 @@ test("rotation: the replacement body is launched before the old one is terminate
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const first = (await store.get(ID))!;
   assert.equal(await p.rotationDue!(d), false);
@@ -185,7 +185,7 @@ test("rotation: a replacement left behind by a crash mid-rotation is terminated 
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const first = (await store.get(ID))!;
   vms.set("mvm-orphan", { state: "RUNNING", endpoint: "mvm-orphan.lambda-microvm.us-west-2.on.aws" });
@@ -203,7 +203,7 @@ test("resolveEndpoint: reaches within the cache window skip the control plane", 
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
 
   const first = await p.resolveEndpoint!(d, version("/unused"));
@@ -221,7 +221,7 @@ test("resolveEndpoint: an app in use is served from cache and re-checked in the 
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const first = await p.resolveEndpoint!(d, version("/unused"));
   const describes = counts.describe;
@@ -243,7 +243,7 @@ test("resolveEndpoint: after the idle window the visit waits for a real check, s
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   await p.resolveEndpoint!(d, version("/unused"));
   const body = (await store.get(ID))!;
@@ -260,7 +260,7 @@ test("park: suspends the app's machine unless it is always-on", async () => {
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const body = (await store.get(ID))!;
   await p.park!({ ...d, alwaysOn: true });
@@ -274,7 +274,7 @@ test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", 
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const describesAfterApply = counts.describe;
 
@@ -296,7 +296,7 @@ test("resolveEndpoint: a control-plane 5xx serves the stored endpoint rather tha
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const stored = (await store.get(ID))!;
   api.tryGetMicrovm = async () => {
@@ -316,7 +316,7 @@ test("resolveEndpoint: a control-plane 429 serves the stored endpoint like a 5xx
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const stored = (await store.get(ID))!;
   api.tryGetMicrovm = async () => {
@@ -333,7 +333,7 @@ test("resolveEndpoint: a resolve racing a body swap neither caches the old endpo
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const first = (await store.get(ID))!;
 
@@ -364,7 +364,7 @@ test("resolveEndpoint: destroy invalidates a hot resolve cache", async () => {
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   assert.ok(await p.resolveEndpoint!(d, version("/unused")), "resolve populates the cache");
 
@@ -378,7 +378,7 @@ test("resolveEndpoint: an app whose process and supervisor are both gone returns
   const appGoneProbe = (cmd: string): boolean => cmd.includes("qm-app.pid") && cmd.includes("exit 99");
   const { fetchImpl, execs } = fakeDaemon({ execCode: (cmd) => (appGoneProbe(cmd) ? 99 : 0) });
   const p = provider(api, fetchImpl);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
 
   assert.equal(await p.resolveEndpoint!(d, version("/unused")), null, "a dead app is not served as a live endpoint");
@@ -392,7 +392,7 @@ test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const stored = (await store.get(ID))!;
   vms.get(stored.microvmId)!.state = "TERMINATED";
@@ -407,7 +407,7 @@ test("resolveEndpoint (near the 8h cap): a stale-but-alive body returns null so 
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
     deploymentId: ID,
@@ -427,7 +427,7 @@ test("apply: an app that never binds its port fails the deploy instead of publis
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (readinessProbe(cmd) ? 1 : 0) });
   const p = provider(api, fetchImpl);
   await assert.rejects(
-    () => p.apply(deployment(ID), version(localSnapshot("index.html", "<h1>hi</h1>"))),
+    () => p.apply(publishedApp(ID), version(localSnapshot("index.html", "<h1>hi</h1>"))),
     /never listened on port 8081/,
     "a silent bind failure surfaces as a failed apply, not a running deployment",
   );
@@ -442,7 +442,7 @@ test("apply: a failed readiness probe reports the entrypoint's own output as the
   });
   const p = provider(api, fetchImpl);
   await assert.rejects(
-    () => p.apply(deployment(ID), version(localSnapshot("index.html", "<h1>hi</h1>"))),
+    () => p.apply(publishedApp(ID), version(localSnapshot("index.html", "<h1>hi</h1>"))),
     (e: Error) => e.message.includes(crash),
     "the app log is the only record of why it died, so the failure carries it",
   );
@@ -455,7 +455,7 @@ test("apply: a port still held by a process the PID file lost fails the deploy �
   const { fetchImpl, execs } = fakeDaemon({ execCode: (cmd) => (appStartScript(cmd) ? 97 : 0) });
   const p = provider(api, fetchImpl);
   await assert.rejects(
-    () => p.apply(deployment(ID), version(localSnapshot("index.html", "<h1>v2</h1>"))),
+    () => p.apply(publishedApp(ID), version(localSnapshot("index.html", "<h1>v2</h1>"))),
     /still held by a process this body cannot account for/,
     "a restart that could not happen must fail, never report success on the old process's reply",
   );
@@ -474,7 +474,7 @@ test("reconcile: a reused body whose port stays held fails the deploy — it nev
     execCode: (cmd, url) => (wedged && appStartScript(cmd) && url.includes("mvm-1") ? 97 : 0),
   });
   const p = provider(api, fetchImpl);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "v1")));
 
   wedged = true;
@@ -490,7 +490,7 @@ test("apply: the readiness gate fails when the launched process dies instead of 
   const { fetchImpl, execs } = fakeDaemon({ execCode: (cmd) => (readinessProbe(cmd) ? 98 : 0) });
   const p = provider(api, fetchImpl);
   await assert.rejects(
-    () => p.apply(deployment(ID), version(localSnapshot("a", "1"))),
+    () => p.apply(publishedApp(ID), version(localSnapshot("a", "1"))),
     /entrypoint exited without binding port 8081/,
   );
   assert.match(
@@ -503,7 +503,7 @@ test("apply: the readiness gate fails when the launched process dies instead of 
 test("apply: a healthy app still publishes — the readiness gate does not fire on a bound port", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const endpoint = await provider(api, fetchImpl).apply(deployment(ID), version(localSnapshot("a", "1")));
+  const endpoint = await provider(api, fetchImpl).apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.equal(endpoint.proxyHeaders?.["X-aws-proxy-port"], "8081");
 });
 
@@ -512,7 +512,7 @@ test("destroy: terminates the body and clears its pointer", async () => {
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   await p.destroy(d);
   assert.equal(counts.terminate, 1, "the body is terminated");
@@ -531,7 +531,7 @@ test("app data: a fresh body hydrates /data from the S3 snapshot before the app 
   const { fetchImpl, execs, writes } = fakeDaemon();
   const { s3, objects } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("TARBYTES")]]));
   const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
 
   assert.ok(
     writes.some((w) => w.path.startsWith("/tmp/qm-data-")),
@@ -564,7 +564,7 @@ test("app data: rotating a body past the 8h window snapshots /data to S3 before 
     createdAtMs: 0,
   });
 
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.equal(counts.terminate, 1, "stale body terminated");
   assert.deepEqual(
     Buffer.from(objects.get(`deploy-data/${ID}.tar`)!).toString(),
@@ -587,7 +587,7 @@ test("app data: an empty /data is never uploaded — a fresh body can't clobber 
     createdAtMs: 0,
   });
 
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.ok(!calls.some((c) => c.startsWith("PutObjectCommand")), "no upload for an empty /data");
 });
 
@@ -599,7 +599,7 @@ test("app data: a warm reach past the snapshot interval snapshots /data and stam
   const { s3, objects } = fakeS3();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, snapshotIntervalMs: 0 });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const before = (await store.get(ID))!.lastSnapshotMs!;
 
@@ -627,7 +627,7 @@ test("app data: a failed rotate snapshot defers the rotation — the stale body 
     createdAtMs: 0,
   });
 
-  const e = await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  const e = await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.equal(vms.get("mvm-old")!.state, "RUNNING", "the stale body is not terminated when its data can't be saved");
   assert.equal(counts.run, 1, "a replacement was launched ahead of the snapshot");
   assert.equal(vms.get("mvm-1")!.state, "TERMINATED", "and discarded instead of leaked");
@@ -639,7 +639,7 @@ test("app data: a failed hydrate terminates the fresh body instead of leaking it
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("tar -xf") ? 1 : 0) });
   const { s3 } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("TAR")]]));
   const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
-  await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /hydrate extract failed/);
+  await assert.rejects(p.apply(publishedApp(ID), version(localSnapshot("a", "1"))), /hydrate extract failed/);
   assert.equal(counts.terminate, 1, "the un-pointered body is terminated, not leaked to the 8h cap");
 });
 
@@ -656,7 +656,7 @@ test("app data: an over-cap /data is skipped loudly, never uploaded or thrown", 
     endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws",
     createdAtMs: 0,
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.ok(!calls.some((c) => c.startsWith("PutObjectCommand")), "no upload for an oversized /data");
 });
 
@@ -666,7 +666,7 @@ test("app data: a deferred rotation serves the stale body from resolveEndpoint i
   const { s3 } = fakeS3();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
     deploymentId: ID,
@@ -700,7 +700,7 @@ test("litestream: shadow-WAL dir is excluded from both snapshot and hydrate", as
     endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws",
     createdAtMs: 0,
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   const snap = execs.find((c) => c.includes("tar -cf"));
   const extract = execs.find((c) => c.includes("tar -xf"));
   assert.ok(snap!.includes("--exclude='./.app.db-litestream'"), "snapshot excludes the shadow dir");
@@ -718,7 +718,7 @@ test("litestream: the start script verifies replica auth and daemon liveness", a
     sts,
     dataRoleArn: "arn:aws:iam::1:role/data",
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   const start = execs.find((c) => c.includes("litestream replicate"))!;
   assert.ok(
     start.includes("litestream snapshots") && start.includes("exit 23"),
@@ -738,7 +738,7 @@ test("litestream: replicators are found by what they are running, so a lost pid 
     sts,
     dataRoleArn: "arn:aws:iam::1:role/data",
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   const start = execs.find((c) => c.includes("litestream replicate"))!;
   assert.ok(start.includes('"$p/cmdline"'), "survivors are discovered by what they are running, not a pid file");
   assert.match(start, /litestream\|\*\/litestream/, "argv[0] identifies a replicator and never the reaping shell");
@@ -767,7 +767,7 @@ test("every script the provider hands the exec daemon parses under the shell tha
     sts,
     dataRoleArn: "arn:aws:iam::1:role/data",
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.ok(execs.length > 0, "the apply emitted scripts to check");
   const shell = spawnSync("/bin/bash", ["-c", "true"]).status === 0 ? "/bin/bash" : "/bin/sh";
   for (const cmd of execs) {
@@ -783,7 +783,7 @@ test("litestream: a failed start un-pointers and terminates the body so reaches 
   const { sts } = fakeSts();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
-  await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /litestream start failed/);
+  await assert.rejects(p.apply(publishedApp(ID), version(localSnapshot("a", "1"))), /litestream start failed/);
   assert.equal(await store.get(ID), null, "pointer cleared");
   assert.equal(counts.terminate, 1, "body terminated");
 });
@@ -800,7 +800,7 @@ test("app data: destroy tears down the runtime but preserves durable data — ar
   const { sts } = fakeSts();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   await p.destroy(d);
   assert.equal(counts.terminate, 1, "runtime torn down");
@@ -815,7 +815,7 @@ test("litestream: apply stages prefix-scoped creds + config, restores before the
   const { sts, assumes } = fakeSts();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
 
   assert.equal(assumes.length, 1);
   assert.equal(assumes[0]!.role, "arn:aws:iam::1:role/data");
@@ -843,7 +843,7 @@ test("litestream: a warm reach with stale creds re-mints and bounces litestream"
   const { sts, assumes } = fakeSts();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   await store.put(ID, { ...(await store.get(ID))!, dataCredsAtMs: 1, lastSnapshotMs: Date.now() });
 
@@ -873,7 +873,7 @@ test("litestream: the tar snapshot excludes app.db so the replica owns the datab
     endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws",
     createdAtMs: 0,
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   const snap = execs.find((c) => c.includes("tar -cf") && c.includes("--exclude"));
   assert.ok(snap, "rotate snapshot ran with exclusions");
   assert.ok(
@@ -893,7 +893,7 @@ test("litestream: hydrate never extracts a legacy tar'd app.db — a stale db wo
     sts,
     dataRoleArn: "arn:aws:iam::1:role/data",
   });
-  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
   const extract = execs.find((c) => c.includes("tar -xf"));
   assert.ok(
     extract!.includes("app.db.tar-fallback"),
@@ -917,7 +917,7 @@ test("litestream: a failed restore aborts materialize instead of starting the ap
     dataRoleArn: "arn:aws:iam::1:role/data",
   });
   await assert.rejects(
-    p.apply(deployment(ID), version(localSnapshot("a", "1"))),
+    p.apply(publishedApp(ID), version(localSnapshot("a", "1"))),
     /litestream start failed \(code 21\)/,
   );
 });
@@ -937,7 +937,7 @@ test("litestream: a reused body on a binary-less image is marked for rotation, n
     createdAtMs: Date.now(),
   });
 
-  await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /binaries missing/);
+  await assert.rejects(p.apply(publishedApp(ID), version(localSnapshot("a", "1"))), /binaries missing/);
   assert.equal(counts.terminate, 0, "the serving body is not terminated");
   const cur = (await store.get(ID))!;
   assert.equal(cur.microvmId, "mvm-live", "pointer intact");
@@ -959,7 +959,7 @@ test("litestream: a reused body's failed refresh (non-24) defers rotation with a
     createdAtMs: Date.now(),
   });
 
-  await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /litestream start failed/);
+  await assert.rejects(p.apply(publishedApp(ID), version(localSnapshot("a", "1"))), /litestream start failed/);
   assert.equal(counts.terminate, 0, "the serving body is not terminated");
   const cur = (await store.get(ID))!;
   assert.ok(cur.rotateNotBeforeMs! > Date.now(), "rotation backed off");
@@ -973,13 +973,13 @@ test("litestream: a reused body's failed refresh (non-24) defers rotation with a
 test("app data: $DATA_DIR is only advertised to the app when persistence is actually wired", async () => {
   const { api } = fakeApi();
   const off = fakeDaemon();
-  await provider(api, off.fetchImpl).apply(deployment(ID), version(localSnapshot("a", "1")));
+  await provider(api, off.fetchImpl).apply(publishedApp(ID), version(localSnapshot("a", "1")));
   assert.ok(!off.execs.some((c) => c.includes("export DATA_DIR")), "no bucket → no $DATA_DIR promise");
 
   const on = fakeDaemon();
   const { s3 } = fakeS3();
   await provider(api, on.fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 }).apply(
-    deployment(ID),
+    publishedApp(ID),
     version(localSnapshot("a", "1")),
   );
   assert.ok(
@@ -991,7 +991,7 @@ test("app data: $DATA_DIR is only advertised to the app when persistence is actu
 test("public subdomain: the URL is bare — reach is decided by core's ingress ACL, never a token", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const d = deployment(ID, "mysite");
+  const d = publishedApp(ID, "mysite");
   const e = await provider(api, fetchImpl).apply(d, version(localSnapshot("a", "1")));
   assert.equal(e.publicUrl, "https://mysite.apps.example.com/");
 });
@@ -1011,7 +1011,7 @@ test("liveEdit: writes changed files into the running app, removes deleted ones,
   const { api, counts } = fakeApi();
   const { fetchImpl, execs, writes } = fakeDaemon();
   const p = provider(api, fetchImpl);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("src/App.jsx", "v1")));
   const startsBefore = execs.filter((c) => c.includes("setsid")).length;
 
@@ -1043,7 +1043,7 @@ test("liveEdit: writes changed files into the running app, removes deleted ones,
 test("liveEdit: reports false when no microVM is running the app", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const edited = await provider(api, fetchImpl).liveEdit!(deployment(ID), version("/unused"), {
+  const edited = await provider(api, fetchImpl).liveEdit!(publishedApp(ID), version("/unused"), {
     files: [{ path: "a.js", data: Buffer.from("x") }],
     deletedPaths: [],
     restart: false,
@@ -1056,7 +1056,7 @@ test("resolveEndpoint: a dead body never drops a pointer that a rotation already
   const { fetchImpl } = fakeDaemon();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
   const old = (await store.get(ID))!;
   const describe = api.tryGetMicrovm.bind(api);

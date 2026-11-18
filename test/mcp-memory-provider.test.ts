@@ -150,6 +150,8 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
 
 test("a brain forget reports each ref done, pending, unknown or failed, and a retry reuses its request id", async (t) => {
   const sent: Array<Record<string, unknown>> = [];
+  let inFlight = 0;
+  let mostInFlight = 0;
   const states: Record<number, string> = {
     1: "committed",
     2: "committed",
@@ -164,6 +166,9 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     },
     async callTool(_tool, args) {
       sent.push(args);
+      mostInFlight = Math.max(mostInFlight, ++inFlight);
+      await sleep(5);
+      inFlight--;
       if (args.id === 2 && sent.filter(({ id }) => id === 2).length === 1) await sleep(300);
       if (args.id === 9) throw new McpCallError("mcp tools/call failed (HTTP 502)", { status: 502 });
       if (args.id === 7) throw new McpCallError("Fact id 7 already expired.", { code: "fact_already_expired" });
@@ -212,6 +217,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     "acme:5 failed fact_not_found",
     "acme:x failed fact_not_found",
   ]);
+  assert.ok(mostInFlight > 1);
   const before = sent.length;
   const late: string[] = [];
   await memory.delete!(

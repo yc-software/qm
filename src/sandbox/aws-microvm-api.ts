@@ -3,8 +3,8 @@ import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { errMessage, execFailure, swallow, withRequestId } from "../util/errors.ts";
-import { randomBytes } from "node:crypto";
 import { shq } from "../util/shell.ts";
+import { tempPathBeside } from "./exec-file-ops.ts";
 
 type CredentialProvider = () => Promise<{
   accessKeyId: string;
@@ -371,7 +371,7 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
 
   async function writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
     if (data.byteLength <= writeChunkBytes) return writeOnce(id, endpoint, absPath, data);
-    const stem = `${absPath}.qm-${randomBytes(6).toString("hex")}`;
+    const stem = tempPathBeside(absPath);
     const parts: string[] = [];
     try {
       for (let offset = 0; offset < data.byteLength; offset += writeChunkBytes) {

@@ -100,7 +100,7 @@ test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agr
   assert.equal(r.status, "ok");
   assert.equal(r.pendingApprovals?.length, 1);
   assert.deepEqual(await settledStates(got, "web:U1:collected", 2), ["working", "idle"]);
-  const row = (await built.app.listSessions("U1")).find((s) => s.id === r.sessionId);
+  const row = (await built.app.listSessions({ actorId: "U1" })).find((s) => s.id === r.sessionId);
   assert.ok(!row?.awaitingInput, "snapshot agrees: a non-blocking offer is not awaiting input");
 });
 
@@ -112,7 +112,7 @@ test("the settle event derives from the durable approvals store, exactly what li
   assert.equal(r.status, "pending_approval");
   const states = await settledStates(got, "web:U1:agree", 2);
   assert.equal(states[states.length - 1], "awaiting_approval");
-  const row = (await built.app.listSessions("U1")).find((s) => s.id === r.sessionId);
+  const row = (await built.app.listSessions({ actorId: "U1" })).find((s) => s.id === r.sessionId);
   assert.equal(row?.awaitingInput, true, "snapshot agrees with the pushed state");
 });
 
@@ -301,7 +301,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
   await built.runs.complete(parentRun.id, leasedParent!.leaseToken!, { status: "ok", reply: "delegated" });
   await new Promise((r) => setTimeout(r, 150));
   assert.deepEqual(statesFor(got, parentThread), ["working", "working"], "the subagent keeps its parent working");
-  const working = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  const working = (await built.app.listSessions({ actorId: "U1" })).find((s) => s.id === parent.sessionId);
   assert.equal(working?.working, true, "the sidebar snapshot shows the parent working too");
 
   const leasedChild = await claimForTest(built, childRun.id);
@@ -311,7 +311,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
     "the last subagent run settles the parent",
   );
   assert.deepEqual(statesFor(got, childThread), ["working", "idle"]);
-  const settled = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  const settled = (await built.app.listSessions({ actorId: "U1" })).find((s) => s.id === parent.sessionId);
   assert.ok(!settled?.working, "the snapshot settles with the push");
 });
 
@@ -356,7 +356,7 @@ test("a parent whose own turn parks on an approval while its subagent runs settl
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
   assert.equal(parked.status, "pending_approval");
   assert.ok(await waitFor(() => statesFor(got, parentThread).includes("awaiting_approval")));
-  const row = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  const row = (await built.app.listSessions({ actorId: "U1" })).find((s) => s.id === parent.sessionId);
   assert.equal(row?.awaitingInput, true);
   assert.ok(!row?.working, "the snapshot ranks the pending approval above subagent work, like the push");
   await built.runs.complete(run.id, leased!.leaseToken!, { status: "ok", reply: "done" });
@@ -391,7 +391,7 @@ test("a subagent idle between its own runs is not working while its own subagent
   assert.ok(await waitFor(() => statesFor(got, midThread).includes("idle")), "the subagent settles with its own run");
   assert.ok(!statesFor(got, rootThread).includes("idle"), "the root stays working while the tree runs");
 
-  const rows = await built.app.listSessions("U1");
+  const rows = await built.app.listSessions({ actorId: "U1" });
   const byId = (id: string) => rows.find((s) => s.id === id);
   assert.ok(!byId(mid.sessionId!)?.working, "the snapshot agrees the idle subagent is not working");
   assert.equal(byId(leaf.sessionId!)?.working, true);

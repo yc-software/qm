@@ -32,6 +32,8 @@ import { routedTo, startMcpTestServer, type McpTestServer } from "./support/mcp-
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { sleep } from "../src/util/async.ts";
 
 const change = {
   actor: "admin-alice",
@@ -384,6 +386,7 @@ function serve(built: ReturnType<typeof buildApp>) {
     auditLog: built.auditLog,
     memory: built.memory,
     memoryRegistry: built.memoryRegistry,
+    runs: built.runs,
     capabilitySecret: TEST_CAPABILITY_SECRET,
   });
   server.listen(0);
@@ -621,6 +624,7 @@ test("an agent reaches every registry route only where the registry may be shown
     config: built.config,
     auditLog: built.auditLog,
     memoryRegistry: built.memoryRegistry,
+    runs: liveRunStore(),
     capabilitySecret: secret,
     signingSecret: secret,
   });
@@ -629,11 +633,9 @@ test("an agent reaches every registry route only where the registry may be shown
   await built.memoryRegistry.update((record) =>
     putBinding(personalBrain()(record), "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
   );
+  const admin = { ...liveRunClaims("admin-alice"), actorId: "admin-alice", aud: CONTROL_PLANE_AUD };
   const capabilityIn = (scopeId: string) =>
-    mintCapabilityToken(
-      { actorId: "admin-alice", scopeId, aud: CONTROL_PLANE_AUD, liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
-      secret,
-    );
+    mintCapabilityToken({ ...admin, scopeId, exp: Date.now() + CAPABILITY_TTL_MS }, secret);
   const call = async (cap: string, method: string, path: string, body: unknown) => {
     const res = await fetch(`http://localhost:${(server.address() as AddressInfo).port}${path}`, {
       method,
@@ -841,6 +843,21 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
   assert.equal((await api.call("DELETE", "/v1/memory", "U1", { ...self, ids: [mint.id] })).status, 200);
   assert.equal((await api.call("DELETE", scoped, admin, BRAIN_REF)).status, 403);
   assert.equal((await api.call("DELETE", "/v1/memory", "U1", { ...self, ...BRAIN_REF })).status, 403);
+  const endedTurn = await mintCapabilityToken(
+    {
+      actorId: "U1",
+      scopeId: ALICE_SCOPE,
+      audienceScopeId: ALICE_SCOPE,
+      liveActor: true,
+      runId: "ended-run",
+      memory: { write: ALICE_SCOPE, read: [ALICE_SCOPE] },
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    TEST_CAPABILITY_SECRET,
+  );
+  const ended = await api.call("DELETE", "/v1/memory/facts", endedTurn, BRAIN_REF, "x-agent-capability");
+  assert.equal(ended.status, 403);
+  assert.match(ended.text, /only while that turn is running/);
 
   assert.deepEqual(
     (await notebook(built)).map((text) => text.replace(/ on \d{4}-\d\d-\d\d\.$/, ".")),
@@ -982,4 +999,70 @@ test("Alice's own turn into a notebook-only subagent leaves her brain alone, and
   const [helper] = await built.sessions.childrenOf(session.id);
   assert.equal(helper?.spawnMeta?.memoryNotebookOnly, true);
   assert.equal(brain.calls.length, before);
+});
+
+test("only Alice's own DM turn forgets a brain fact; her subagent and the turn its report starts are refused", async (t) => {
+  const { brain, built, api, bind } = await boundToBrain(t);
+  await bind();
+  const text = "!memoryforget acme-personal:42";
+  const dm: TurnRequest = {
+    surface: "test",
+    actor: { externalId: "U1" },
+    origin: { kind: "human" },
+    conversation: { kind: "dm", threadRef: "dm:U1:forget" },
+    text,
+  };
+  assert.equal((await built.app.turn(dm)).reply, "forgot 1");
+  const [parent] = await built.runs.list({ threadRef: "dm:U1:forget", limit: 1 });
+  const own = (await built.sessions.getByThread("dm:U1:forget"))!;
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:forget", "dm", ALICE_SCOPE);
+  await built.sessions.setParentSession(child.id, own.id);
+  const { actor, conversation } = parent!.request;
+  await built.sessions.setSpawnMeta(child.id, { actor, conversation, surface: "test" });
+  await built.sessions.addParticipant(child.id, "U1");
+  const enqueue = async (threadRef: string, sessionSenderId: string) =>
+    (
+      await built.runs.enqueue({
+        sessionId: threadRef,
+        maxAttempts: 1,
+        request: {
+          ...parent!.request,
+          conversation: { ...conversation, threadRef },
+          delegatingRunId: parent!.id,
+          sessionSenderId,
+          text,
+        },
+      })
+    ).run.id;
+  const held = (await built.runs.claimById(await enqueue(child.threadRef, own.id), "test-worker", 60_000))!;
+  const token = await mintCapabilityToken(
+    {
+      actorId: "U1",
+      scopeId: ALICE_SCOPE,
+      audienceScopeId: ALICE_SCOPE,
+      liveActor: true,
+      liveAuthor: true,
+      runId: held.id,
+      runAttempt: held.attempts,
+      runLeaseToken: held.leaseToken!,
+      threadRef: child.threadRef,
+      memory: { write: ALICE_SCOPE, read: [ALICE_SCOPE] },
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    TEST_CAPABILITY_SECRET,
+  );
+  const overHttp = await api.call("DELETE", "/v1/memory/facts", token, BRAIN_REF, "x-agent-capability");
+  assert.match(overHttp.text, /Nothing was changed/);
+  await built.runs.complete(held.id, held.leaseToken!, { status: "ok" });
+  built.runtime.start();
+  t.after(() => built.runtime.stop());
+  const replyTo = async (runId: string) => {
+    for (let current = await built.runs.get(runId); ; current = await built.runs.get(runId)) {
+      if (current?.status === "done" || current?.status === "failed") return current.result?.reply;
+      await sleep(25);
+    }
+  };
+  assert.match((await replyTo(await enqueue(child.threadRef, own.id)))!, /Nothing was changed/);
+  assert.match((await replyTo(await enqueue(own.threadRef, child.id)))!, /Nothing was changed/);
+  assert.equal(forgets(brain).length, 1);
 });

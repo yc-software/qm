@@ -657,7 +657,7 @@ test("run control follows current shared membership while public history require
       await built.app.upsertGroups([{ groupId: "G-RUN", principalId: "shared-owner" }]);
     }
     assert.ok(
-      await built.app.getSessionForViewer(session.id, "shared-member"),
+      await built.app.getSessionForViewer(session.id, { actorId: "shared-member" }),
       "history remains readable to a current participant",
     );
     assert.equal(await built.app.getRun(run.id, "shared-member"), null);

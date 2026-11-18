@@ -4,6 +4,7 @@ import type { SessionStore } from "./session-store.ts";
 import { xmlEscape } from "../util/message-tag.ts";
 import { snippet } from "../util/text.ts";
 import { mailOf, pendingWork } from "./subagent-mail.ts";
+import { sessionVisibleTo } from "./session-syscalls.ts";
 
 type RunState = "running" | "pending" | "idle";
 
@@ -31,10 +32,12 @@ export type SubagentActivityDeps = Parameters<typeof pendingWork>[0] & {
 
 export async function visibleChildren(
   deps: { sessions: Pick<SessionStore, "getForParticipant"> },
-  caller: { scopeId: string; request: { actor: { id: string } } },
+  caller: { scopeId: string; request: { actor: { id: string }; botActor?: boolean } },
   children: readonly Session[],
 ): Promise<Session[]> {
-  const inScope = children.filter((child) => child.scopeId === caller.scopeId);
+  const inScope = children.filter(
+    (child) => child.scopeId === caller.scopeId && sessionVisibleTo(caller.request, child),
+  );
   const seen = await Promise.all(
     inScope.map((child) => deps.sessions.getForParticipant(child.id, caller.request.actor.id)),
   );

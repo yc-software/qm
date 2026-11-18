@@ -14,12 +14,13 @@ import {
   changeFailure,
   failedOutcome,
   forgetKnown,
+  MAX_FACTS_PER_WRITE,
   problemLine,
   problemOf,
   strictFailure,
   withEnvelope,
 } from "./provider-outcome.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure } from "../util/errors.ts";
 import { quotedData } from "../util/text.ts";
 import { OutsideAudience } from "../directory/person.ts";
 
@@ -281,31 +282,42 @@ export function createRoutedMemoryService(opts: {
       });
       if (refs.length && !brainActsAsPerson(by, scopeId, context?.audienceScopeId))
         throw new MemoryForgetRefused(
-          "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact; admin, maintenance, self-service, bot, automation and ambient changes reach the notebook only. Nothing was changed.",
+          "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact, and only while that turn is running; a subagent, a turn a subagent's report starts, admin, maintenance, self-service, bot, automation and ambient changes, and a job or script that outlives its turn reach the notebook only. Nothing was changed.",
+        );
+      if (refs.length > MAX_FACTS_PER_WRITE)
+        throw new MemoryForgetRefused(
+          `A delete forgets at most ${MAX_FACTS_PER_WRITE} brain refs; send the rest in another delete. Nothing was changed.`,
         );
       const notebookIds = ids.filter((id) => !parseProviderRef(id));
       const manager = notebookIds.length ? managerFor(scopeId) : undefined;
       if (notebookIds.length && !manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
       if (refs.length && manager?.facts) resolveIds(await manager.facts(scopeId), notebookIds);
-      const settled: MemoryProviderOutcome[] = [];
-      for (const { ref, brain, factId, route, provider } of refs) {
-        const { error } = await attempt(
-          route,
-          scopeId,
-          "forget",
-          {
-            report: (outcome) => {
-              settled.push(outcome);
-              context?.report?.({ ...outcome, ref });
-            },
-          },
-          () => provider.delete!(scopeId, [factId], by, context),
-          settleChange,
-          undefined,
-        );
-        if (error) opts.onError?.(error, brain, "forget");
+      const settled = await Promise.all(
+        refs.map(async ({ ref, brain, factId, route, provider }) => {
+          let outcome: MemoryProviderOutcome | undefined;
+          const { error } = await attempt(
+            route,
+            scopeId,
+            "forget",
+            { report: (reported) => (outcome = reported) },
+            () => provider.delete!(scopeId, [factId], by, context),
+            settleChange,
+            undefined,
+          );
+          if (error) opts.onError?.(error, brain, "forget");
+          return outcome ? [{ ...outcome, ref }] : [];
+        }),
+      ).then((outcomes) => outcomes.flat());
+      for (const outcome of settled) context?.report?.(outcome);
+      if (!manager?.delete || !forgetKnown(settled)) return;
+      const started = Date.now();
+      try {
+        await manager.delete(scopeId, notebookIds, by, context);
+      } catch (error) {
+        if (!refs.length) throw error;
+        reportFailure("memory: notebook forget after brain forgets", error);
+        context?.report?.({ provider: "default", scope: scopeId, outcome: "failed", ms: Date.now() - started });
       }
-      if (manager?.delete && forgetKnown(settled)) await manager.delete(scopeId, notebookIds, by, context);
     },
 
     async metadata() {

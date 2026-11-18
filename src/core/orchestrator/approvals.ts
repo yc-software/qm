@@ -509,7 +509,7 @@ async function approveDecision(
     const label = p.screenedOutput.sourceScopeId ?? scopeId;
     if (
       !conversation.audience.every((principal) =>
-        principalEntitledToScope(principal, label, scopeId, resolution.orgScopeId),
+        principalEntitledToScope(principal, label, scopeId, resolution.orgScopeId, false),
       )
     ) {
       return {

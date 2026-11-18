@@ -101,11 +101,13 @@ test("file roundtrip incl. large binary and missing file goes through the filesy
 
 test("a file write lands on a temp path and is renamed into place, never streamed into the target", async () => {
   const h = await sandbox.provision(scope);
-  await sandbox.writeFile(h, "cfg.txt", "value\n");
-  assert.equal(await sandbox.readFile(h, "cfg.txt"), "value\n");
-  const write = fake.calls.find((c) => c.method === "PUT" && c.path.includes("cfg.txt"));
+  const name = "a".repeat(255);
+  const before = fake.calls.length;
+  await sandbox.writeFile(h, name, "value\n");
+  assert.equal(await sandbox.readFile(h, name), "value\n");
+  const write = fake.calls.slice(before).find((c) => c.method === "PUT" && c.path.includes("/fs/write?"));
   assert.ok(write, "expected a filesystem write");
-  assert.match(write!.path, /cfg\.txt\.part\./, "the payload lands on a temp path");
+  assert.ok(!write!.path.includes(name), "the payload lands on a temp path");
   const writeIdx = fake.calls.indexOf(write!);
   assert.ok(
     fake.calls.slice(writeIdx).some((c) => c.method === "POST" && c.path.endsWith("/fs/rename")),

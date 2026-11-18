@@ -41,7 +41,7 @@ function svc(managedScaleToZero: boolean) {
 
 const future = Date.now() + 1_000_000;
 
-test("unmanaged provider: an idle deployment is reaped (destroyed, stopped, endpoint cleared)", async () => {
+test("unmanaged provider: an idle app is reaped (destroyed, stopped, endpoint cleared)", async () => {
   const { deploy, deployStore } = svc(false);
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -51,7 +51,7 @@ test("unmanaged provider: an idle deployment is reaped (destroyed, stopped, endp
   });
   assert.equal((await deployStore.get(d.id))!.status, "running");
 
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
+  const stopped = await deploy.reapIdleApps(60_000, future);
   assert.equal(stopped, 1);
   assert.equal((await deployStore.get(d.id))!.status, "stopped");
   assert.equal((await deployStore.get(d.id))!.endpoint, null);
@@ -66,14 +66,14 @@ test("managed provider: reap is a no-op — the platform sleeps/wakes it, endpoi
     files: [],
   });
 
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
+  const stopped = await deploy.reapIdleApps(60_000, future);
   assert.equal(stopped, 0);
   assert.equal(destroys, 0);
   assert.equal((await deployStore.get(d.id))!.status, "running");
   assert.deepEqual((await deployStore.get(d.id))!.endpoint, { host: "127.0.0.1", port: 5000 });
 });
 
-test("unmanaged provider: an always-on deployment is never reaped", async () => {
+test("unmanaged provider: an always-on app is never reaped", async () => {
   const { deploy, deployStore } = svc(false);
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -81,9 +81,9 @@ test("unmanaged provider: an always-on deployment is never reaped", async () => 
     entrypoint: "x",
     files: [],
   });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(d.id, true);
 
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
+  const stopped = await deploy.reapIdleApps(60_000, future);
   assert.equal(stopped, 0);
   assert.equal((await deployStore.get(d.id))!.status, "running");
 });

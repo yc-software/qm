@@ -915,7 +915,7 @@ function openPaneTool(panel: IDockviewPanel, tool: SessionTool): void {
     crumb: paneCrumb(panel),
   });
   if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
-  switchView(tool === "apps" ? "deploys" : tool);
+  switchView(tool);
 }
 
 function paneIsWorking(panel: IDockviewPanel): boolean {
@@ -1266,10 +1266,7 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${sessionPersonaChip(paneSession(panel), () => {
-          this.draw();
-          paneContents.get(panel.id)?.conversation?.redraw();
-        })}
+        ${sessionPersonaChip(paneSession(panel))}
         ${
           background
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}

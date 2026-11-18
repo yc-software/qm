@@ -338,7 +338,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       if (runDelivers) return;
-      note = "hit a require_approval command — failed closed (no human at fire/event time)";
+      const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
+      note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }

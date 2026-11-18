@@ -30,5 +30,15 @@ test("the shared failure policy renders quarantine canned, refused reasons verba
   assert.equal(userFacingFailureClause(failed), "something went wrong on my end");
   assert.doesNotMatch(userFacingFailureText(failed), /TypeError|sandbox\.ts/);
 
+  const blocked = { status: "failed", errorCode: "refusal", reason: "Provider finish_reason: content_filter" };
+  assert.equal(
+    userFacingFailureClause(blocked),
+    "the model provider blocked the reply (Provider finish_reason: content_filter)",
+  );
+  assert.equal(
+    userFacingFailureText(blocked),
+    "I couldn't finish that: the model provider blocked the reply (Provider finish_reason: content_filter).",
+  );
+
   assert.equal(userFacingFailureText({ status: "refused" }), GENERIC_FAILURE_TEXT);
 });

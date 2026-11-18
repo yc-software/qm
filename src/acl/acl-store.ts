@@ -145,7 +145,7 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
     const file = (await resolveGrantedFiles([g])).get(g.ref);
     if (!file || file.ownerScopeId !== g.ownerScopeId) {
       throw new Error(
-        "file grants require an enabled Files record ID owned by the granting scope; put the file in Files first using POST /v1/files/uploads, then share its ID",
+        "file grants require an enabled Files record ID owned by the granting scope; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID",
       );
     }
   }

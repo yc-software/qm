@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { DNS_LABEL_MAX, isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 import { gzipSync } from "node:zlib";
-import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
+import type { PublishedApp, AppVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
@@ -377,21 +377,21 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     }
   }
 
-  const appNameFor = (d: Deployment): string => opts.sharedAppName ?? `${opts.appPrefix}-${d.id}`;
-  const endpointFor = async (d: Deployment, port: number): Promise<DeployEndpoint> => ({
+  const appNameFor = (d: PublishedApp): string => opts.sharedAppName ?? `${opts.appPrefix}-${d.id}`;
+  const endpointFor = async (d: PublishedApp, port: number): Promise<DeployEndpoint> => ({
     host: `${appNameFor(d)}.flycast`,
     port,
     ...(opts.privateTransport ? { socksProxyPort: await opts.privateTransport.ensure() } : {}),
   });
-  const volumeNameFor = (d: Deployment): string =>
+  const volumeNameFor = (d: PublishedApp): string =>
     opts.sharedAppName ? `qm_${createHash("sha256").update(d.id).digest("hex").slice(0, 24)}` : "qm_data";
-  const deploymentMachines = async (d: Deployment): Promise<FlyMachine[]> => {
+  const appMachines = async (d: PublishedApp): Promise<FlyMachine[]> => {
     const machines = await api.listMachines(appNameFor(d));
     return opts.sharedAppName
       ? machines.filter((machine) => machine.config?.metadata?.qm_deployment_id === d.id)
       : machines;
   };
-  async function portFor(d: Deployment): Promise<number> {
+  async function portFor(d: PublishedApp): Promise<number> {
     if (!opts.sharedAppName) return APP_PORT;
     const first = createHash("sha256").update(d.id).digest().readUInt32BE(0) % 45536;
     for (let offset = 0; offset < 45536; offset++) {
@@ -401,7 +401,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     throw new Error("Fly shared app has no available deployment ports");
   }
 
-  async function bundleBase64(version: DeploymentVersion): Promise<string> {
+  async function bundleBase64(version: AppVersion): Promise<string> {
     const tree = await readTree(version.snapshotDir, { tolerateMissing: true });
     const encoded = gzipSync(await makeTar(tree)).toString("base64");
     if (encoded.length > MAX_BUNDLE_BASE64_BYTES) {
@@ -413,12 +413,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     return encoded;
   }
 
-  const machineConfig = (
-    d: Deployment,
-    version: DeploymentVersion,
-    bundle: string,
-    port: number,
-  ): FlyMachineConfig => ({
+  const machineConfig = (d: PublishedApp, version: AppVersion, bundle: string, port: number): FlyMachineConfig => ({
     image: opts.baseImage,
     ...(opts.sharedAppName ? { metadata: { qm_deployment_id: d.id } } : {}),
     env: { ...version.env, PORT: String(APP_PORT) },
@@ -468,7 +463,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
   }
 
   async function waitServing(
-    d: Deployment,
+    d: PublishedApp,
     env: Record<string, string> | undefined,
     appName: string,
     machineId: string,
@@ -505,9 +500,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     async resolveEndpoint(d, version) {
       if (!checked.has(d.id)) {
         ensureConfigured();
-        const machines = await deploymentMachines(d).catch(
-          swallowAs<FlyMachine[]>("fly-deploy: list app machines", []),
-        );
+        const machines = await appMachines(d).catch(swallowAs<FlyMachine[]>("fly-deploy: list app machines", []));
         const appName = appNameFor(d);
         const report = appReporter(opts.onError, d, version.env);
         if (
@@ -524,7 +517,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
 
     async logs(d, logOpts): Promise<string | null> {
       ensureConfigured();
-      const machines = await deploymentMachines(d);
+      const machines = await appMachines(d);
       if (machines.length !== 1 || machines[0]!.state !== "started") return null;
       return appLogs(execIn(appNameFor(d), machines[0]!.id), logOpts.tailLines);
     },
@@ -533,7 +526,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       ensureConfigured();
       const appName = appNameFor(d);
       if (!(await api.assertOwnedApp(appName, opts.org))) throw new Error(`fly app ${appName} is missing`);
-      const machines = await deploymentMachines(d);
+      const machines = await appMachines(d);
       if (machines.length !== 1) throw new Error(`fly app ${appName} requires one machine to change always-on`);
       const machine = await api.getMachine(appName, machines[0]!.id);
       if (!machine?.config) throw new Error(`fly app ${appName} has no machine configuration`);
@@ -559,7 +552,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       }
     },
 
-    async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
+    async apply(d: PublishedApp, version: AppVersion): Promise<DeployEndpoint> {
       ensureConfigured();
       const appName = appNameFor(d);
       const bundle = await bundleBase64(version);
@@ -570,7 +563,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
         await api.ensureApp(appName, opts.org);
       }
       await api.ensurePrivateIngress(appName, Boolean(opts.sharedAppName), opts.org);
-      const stale = await deploymentMachines(d);
+      const stale = await appMachines(d);
       const port = await portFor(d);
       if (!opts.dataVolumeSizeGb && (await api.hasVolumes(appName))) {
         throw new Error(
@@ -664,12 +657,12 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       return endpointFor(d, port);
     },
 
-    async destroy(d: Deployment): Promise<void> {
+    async destroy(d: PublishedApp): Promise<void> {
       ensureConfigured();
       const appName = appNameFor(d);
       if (!(await api.assertOwnedApp(appName, opts.org))) return;
       if (opts.dataVolumeSizeGb || (await api.hasVolumes(appName))) {
-        for (const machine of await deploymentMachines(d)) await api.destroyMachine(appName, machine.id);
+        for (const machine of await appMachines(d)) await api.destroyMachine(appName, machine.id);
         return;
       }
       await api.deleteApp(appName);

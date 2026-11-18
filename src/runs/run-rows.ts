@@ -27,6 +27,7 @@ export function rowToRun(r: Record<string, unknown>): Run {
     startedAt: r.started_at === null ? null : Number(r.started_at),
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
     lastStop: r.last_stop != null ? (JSON.parse(r.last_stop as string) as RunStop) : null,
+    ...(r.bot_limited === true ? { botLimited: true as const } : {}),
   };
 }
 

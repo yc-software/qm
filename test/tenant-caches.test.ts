@@ -238,6 +238,9 @@ function mcpStore(servers: Record<string, McpServer[]>): McpServerStore & { list
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    async version() {
+      return "";
+    },
   };
 }
 

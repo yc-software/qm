@@ -109,6 +109,9 @@ export const FORWARD_WEBHOOK_HEADERS = [
   "linear-signature",
   "x-signature",
   "x-delivery-id",
+  "webhook-id",
+  "webhook-timestamp",
+  "webhook-signature",
 ];
 
 export const FORWARD_AGENT_API_HEADERS = [
@@ -122,7 +125,7 @@ export const FORWARD_AGENT_API_HEADERS = [
 
 export const FORWARD_DEPLOYMENT_LAYER_HEADERS = ["content-type", "accept", "x-timestamp", "x-signature"];
 
-export const FORWARD_DEPLOYMENT_GIT_HEADERS = [
+export const FORWARD_APP_GIT_HEADERS = [
   "authorization",
   "content-type",
   "content-length",
@@ -133,7 +136,7 @@ export const FORWARD_DEPLOYMENT_GIT_HEADERS = [
 
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
-export interface DeploymentTarget {
+export interface AppTarget {
   coreBase: string;
   id: string;
   subPath: string;
@@ -144,7 +147,7 @@ export interface DeploymentTarget {
   tenant?: string;
 }
 
-export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: DeploymentTarget): void {
+export function proxyToApp(req: IncomingMessage, res: ServerResponse, t: AppTarget): void {
   const method = req.method ?? "GET";
   const corePath = `/d/${encodeURIComponent(t.id)}${t.subPath}${t.search}`;
   const core = new URL(t.coreBase);

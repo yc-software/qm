@@ -21,12 +21,19 @@ struct WorkspaceProject: Decodable, Identifiable, Hashable {
 }
 
 struct WorkspaceContext: Decodable, Identifiable, Hashable {
+  struct GroupMember: Decodable, Identifiable, Hashable {
+    let principalId: String
+    let displayName: String
+    let avatarUrl: String?
+    var id: String { principalId }
+  }
   let scopeId: String
   let kind: String
   let name: String?
   let isPrivate: Bool?
   let sessionCount: Int
   let project: WorkspaceProject?
+  var groupMembers: [GroupMember]? = nil
   var id: String { scopeId }
   private var scopeKind: ScopeKind? { ScopeKind(scopeId: scopeId) }
   var isPersonal: Bool { scopeKind == .personal }
@@ -62,7 +69,10 @@ final class ProjectsModel {
   let client: APIClient
   let user: String
   var contexts: [WorkspaceContext] = []
-  var conversations: [Conversation] = []
+  var conversations: [String: [Conversation]] = [:]
+  private(set) var nextCursors: [String: String] = [:]
+  private(set) var loadingMore: String?
+  var loaded = false
   var busy = false
   var error: String?
   private let loader = LoadGuard()
@@ -76,16 +86,36 @@ final class ProjectsModel {
   func load() async {
     guard !busy else { return }
     await loader.run {
-      let result: WorkspaceContexts = try await client.fetch("api/contexts")
-      let sessions: ConversationList = try await client.fetch("api/sessions")
-      return (result, sessions)
-    } apply: { result, sessions in
+      try await client.fetch("api/contexts") as WorkspaceContexts
+    } apply: { result in
       contexts = result.contexts
-      conversations = DraftStore.merging(
-        sessions.sessions, account: client.baseURL.absoluteString + user)
+      loaded = true
       error = nil
     } failed: {
       error = $0.localizedDescription
+    }
+  }
+
+  func loadConversations(_ scopeId: String, more: Bool = false) async {
+    let cursor = more ? nextCursors[scopeId] : nil
+    guard !more || (cursor != nil && loadingMore == nil) else { return }
+    if more { loadingMore = scopeId }
+    defer { if more { loadingMore = nil } }
+    do {
+      let page: ConversationList = try await client.fetch(
+        "api/sessions",
+        query: [.init(name: "scope", value: scopeId)]
+          + (cursor.map { [.init(name: "before", value: $0)] } ?? []))
+      let loaded = more ? (conversations[scopeId] ?? []).filter { $0.localOnly != true } : []
+      let known = Set(loaded.map(\.id))
+      conversations[scopeId] = DraftStore.merging(
+        loaded + page.sessions.filter { !known.contains($0.id) },
+        account: client.baseURL.absoluteString + user
+      ).filter { $0.scopeId == scopeId }
+      nextCursors[scopeId] = page.nextCursor
+    } catch is CancellationError {
+    } catch {
+      self.error = error.localizedDescription
     }
   }
 
@@ -102,7 +132,7 @@ final class ProjectsModel {
       let context = WorkspaceContext(
         scopeId: result.project.scopeId, kind: "group", name: result.project.name,
         isPrivate: nil,
-        sessionCount: conversations.filter { $0.scopeId == result.project.scopeId }.count,
+        sessionCount: contexts.first { $0.scopeId == result.project.scopeId }?.sessionCount ?? 0,
         project: result.project)
       if let index = contexts.firstIndex(where: { $0.scopeId == context.scopeId }) {
         contexts[index] = context
@@ -131,7 +161,10 @@ struct ProjectsView: View {
   }
 
   private var visibleContexts: [WorkspaceContext] {
-    model.contexts.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+    model.contexts.filter {
+      ($0.isPersonal || $0.project != nil || $0.sessionCount > 0)
+        && (query.isEmpty || $0.title.localizedCaseInsensitiveContains(query))
+    }
   }
 
   var body: some View {
@@ -168,7 +201,9 @@ struct ProjectsView: View {
           }
         }
       }
-      if visibleContexts.isEmpty && !model.loading && model.error == nil && !query.isEmpty {
+      if model.loading && !model.loaded && model.contexts.isEmpty && model.error == nil {
+        NativeCollectionLoading(label: "Loading projects", symbol: "folder")
+      } else if visibleContexts.isEmpty && model.loaded && model.error == nil && !query.isEmpty {
         ContentUnavailableView {
           Label("No matching projects", systemImage: "magnifyingglass")
         } description: {
@@ -176,7 +211,7 @@ struct ProjectsView: View {
         } actions: {
           Button("Clear search") { query = "" }
         }
-      } else if model.contexts.isEmpty && !model.loading && model.error == nil {
+      } else if model.contexts.isEmpty && model.loaded && model.error == nil {
         ContentUnavailableView(
           "A place for shared work", systemImage: "folder",
           description: Text(
@@ -187,7 +222,11 @@ struct ProjectsView: View {
     }
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .navigationTitle("Projects").navigationBarTitleDisplayMode(.inline).searchable(text: $query)
-    .overlay { if model.loading && model.contexts.isEmpty { ProgressView() } }
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.loaded || !model.contexts.isEmpty || model.error != nil),
+        label: "Refreshing projects")
+    )
     .refreshable { await model.load() }.task { await model.load() }
     .toolbar {
       Button("New project", systemImage: "plus") {
@@ -207,7 +246,7 @@ struct ProjectsView: View {
             Button("Cancel") { creating = false }.disabled(model.busy)
           }
           ToolbarItem(placement: .confirmationAction) {
-            Button(model.busy ? "Creating…" : "Create") {
+            Button {
               Task {
                 if await model.mutate(
                   "api/projects",
@@ -216,6 +255,9 @@ struct ProjectsView: View {
                   creating = false
                 }
               }
+            } label: {
+              NativeActionLabel(
+                title: "Create", busyTitle: "Creating…", busy: model.busy, compact: true)
             }.disabled(
               name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 200
                 || model.busy)
@@ -245,7 +287,16 @@ struct ProjectDetailView: View {
   @State private var slackChannel = ""
   @State private var editingSlack = false
   @State private var unlinkingSlack = false
+  @State private var policy: ChannelPolicyModel?
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+  init(model: ProjectsModel, original: WorkspaceContext, identity: Identity) {
+    self.model = model
+    self.original = original
+    self.identity = identity
+    _policy = State(
+      initialValue: ChannelPolicyModel(client: model.client, scopeId: original.scopeId))
+  }
 
   private var context: WorkspaceContext {
     model.contexts.first { $0.id == original.id } ?? original
@@ -254,8 +305,8 @@ struct ProjectDetailView: View {
   private var owner: Bool { project?.ownerId == identity.user }
 
   private var conversations: [Conversation] {
-    sidebarConversations(model.conversations).filter {
-      $0.scopeId == context.scopeId && $0.archived != true
+    sidebarConversations(model.conversations[context.scopeId] ?? []).filter {
+      $0.archived != true
     }
   }
 
@@ -274,18 +325,27 @@ struct ProjectDetailView: View {
       QMPageHeading(
         title: context.title,
         subtitle:
-          "\(conversations.count) \(conversations.count == 1 ? "conversation" : "conversations") · \(context.isPersonal ? "Your workspace" : "Shared workspace")"
+          "\(context.sessionCount) \(context.sessionCount == 1 ? "conversation" : "conversations") · \(context.isPersonal ? "Your workspace" : "Shared workspace")"
       )
       resourceGrid
       if let error = model.error { Text(error).foregroundStyle(.red) }
       conversationsSection
       if let project { projectSections(project) }
+      if let policy { ChannelPolicySection(model: policy) }
     }
     .disabled(model.busy)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .navigationTitle(context.title).navigationBarTitleDisplayMode(.inline)
+    .modifier(
+      NativeCollectionRefresh(active: model.loading, label: "Refreshing project")
+    )
     .task { await model.load() }
-    .refreshable { await model.load() }
+    .task { await model.loadConversations(context.scopeId) }
+    .task { await policy?.load() }
+    .refreshable {
+      await model.load()
+      await policy?.load()
+    }
     .toolbar { toolbarContent }
     .navigationDestination(item: $selectedResource) { resource in
       resourceDestination(resource)
@@ -373,8 +433,20 @@ struct ProjectDetailView: View {
               conversation: conversation, client: model.client, user: identity.user,
               knownSession: conversation.localOnly != true))
         } label: {
-          NativeConversationRow(conversation: conversation, showsContext: false)
+          NativeConversationRow(conversation: conversation)
         }
+      }
+      if model.nextCursors[context.scopeId] != nil {
+        Button {
+          Task { await model.loadConversations(context.scopeId, more: true) }
+        } label: {
+          NativeActionLabel(
+            title: "Load more", busyTitle: "Loading…",
+            busy: model.loadingMore == context.scopeId
+          )
+          .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .disabled(model.loadingMore != nil)
       }
     }
   }
@@ -403,14 +475,14 @@ struct ProjectDetailView: View {
     Section("Slack channel") {
       if let channel = project.slackChannel {
         Label(channel.channelName, systemImage: "number")
-        if owner { Button("Unlink channel", role: .destructive) { unlinkingSlack = true } }
+        Button("Unlink channel", role: .destructive) { unlinkingSlack = true }
       } else {
         Text("No linked channel").foregroundStyle(.secondary)
-        if owner {
-          Button("Link Slack channel") {
-            slackChannel = ""
-            editingSlack = true
-          }
+        Button {
+          slackChannel = ""
+          editingSlack = true
+        } label: {
+          NativeServiceLabel(title: "Link Slack channel", service: "slack")
         }
       }
     }
@@ -420,11 +492,8 @@ struct ProjectDetailView: View {
   private var toolbarContent: some ToolbarContent {
     ToolbarItemGroup {
       Button("New conversation", systemImage: "square.and.pencil") {
-        let id = UUID().uuidString.lowercased()
-        newConversation = Conversation(
-          id: id, scopeId: context.scopeId,
-          threadRef: "web:\(identity.user):\(id)", surface: "web", channelName: context.title,
-          localOnly: true)
+        newConversation = .draft(
+          user: identity.user, scopeId: context.scopeId, channelName: context.title)
       }
       if owner {
         Button("Rename", systemImage: "pencil") {
@@ -472,6 +541,249 @@ struct ProjectDetailView: View {
   }
 }
 
+enum NativeTriState: String, CaseIterable, Identifiable {
+  case `default`, on, off
+  var id: String { rawValue }
+
+  init(_ value: Bool?) {
+    switch value {
+    case nil: self = .default
+    case true?: self = .on
+    case false?: self = .off
+    }
+  }
+
+  var body: Any {
+    switch self {
+    case .default: NSNull()
+    case .on: true
+    case .off: false
+    }
+  }
+
+  var label: String { rawValue.capitalized }
+}
+
+struct AmbientBotPolicy: Decodable, Hashable {
+  let mode: String
+  let rollupHours: Double?
+
+  var label: String {
+    switch mode {
+    case "ignore": "Ignore"
+    case "rollup": "Batch every \((rollupHours ?? 24).formatted())h"
+    case "action": "Act immediately"
+    case "user": "Treat like a person"
+    default: mode
+    }
+  }
+
+  var body: [String: Any] {
+    var out: [String: Any] = ["mode": mode]
+    if mode == "rollup", let rollupHours { out["rollupHours"] = rollupHours }
+    return out
+  }
+}
+
+struct AmbientBot: Identifiable, Hashable {
+  let name: String
+  let policy: AmbientBotPolicy
+  var id: String { name }
+}
+
+struct AmbientPolicy: Decodable {
+  let orders: String
+  let bots: [String: AmbientBotPolicy]
+  let ambientEnabled: Bool?
+  let updatedAt: Double
+
+  var ledger: [AmbientBot] {
+    bots.map { AmbientBot(name: $0.key, policy: $0.value) }
+      .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+}
+
+struct AmbientPolicyResponse: Decodable { let policy: AmbientPolicy }
+
+struct ChannelHeaderPin: Decodable {
+  let configured: Bool?
+  var `default`: Bool?
+}
+
+@MainActor @Observable
+final class ChannelPolicyModel {
+  let client: APIClient
+  let scopeId: String
+  let supportsHeaderPin: Bool
+  var orders = "" { didSet { if orders != oldValue { justSaved = false } } }
+  var ambient = NativeTriState.default { didSet { if ambient != oldValue { justSaved = false } } }
+  private(set) var bots: [AmbientBot] = []
+  private(set) var saved: AmbientPolicy?
+  private(set) var saving = false
+  private(set) var error: String?
+  private(set) var justSaved = false
+  private(set) var headerPin: ChannelHeaderPin?
+  private(set) var headerPinError: String?
+  private(set) var updatingHeaderPin = false
+  private let loader = LoadGuard()
+  private let pinLoader = LoadGuard()
+
+  init?(client: APIClient, scopeId: String) {
+    guard let kind = ScopeKind(scopeId: scopeId), [.channel, .group].contains(kind) else {
+      return nil
+    }
+    self.client = client
+    self.scopeId = scopeId
+    supportsHeaderPin = kind == .channel
+  }
+
+  var loaded: Bool { saved != nil }
+
+  var dirty: Bool {
+    guard let saved else { return false }
+    return orders != saved.orders || ambient != NativeTriState(saved.ambientEnabled)
+      || bots != saved.ledger
+  }
+
+  var headerPinState: NativeTriState { NativeTriState(headerPin?.configured) }
+  var headerPinDefaultLabel: String { "Default (\(headerPin?.default == true ? "on" : "off"))" }
+
+  private var policyPath: String { "api/contexts/\(scopeId.apiComponent)/ambient-policy" }
+
+  func load() async {
+    async let pin: Void = await loadHeaderPin()
+    if !dirty {
+      await loader.run {
+        try await client.fetch(policyPath) as AmbientPolicyResponse
+      } apply: { response in
+        guard !dirty else { return }
+        apply(response.policy)
+        error = nil
+      } failed: {
+        error = $0.localizedDescription
+      }
+    }
+    await pin
+  }
+
+  private func loadHeaderPin() async {
+    guard supportsHeaderPin, !updatingHeaderPin else { return }
+    await pinLoader.run {
+      try await client.fetch(
+        "api/channel-header-pin", query: [.init(name: "scopeId", value: scopeId)])
+        as ChannelHeaderPin
+    } apply: { pin in
+      headerPin = pin
+      headerPinError = nil
+    } failed: {
+      headerPinError = $0.localizedDescription
+    }
+  }
+
+  private func apply(_ policy: AmbientPolicy) {
+    orders = policy.orders
+    ambient = NativeTriState(policy.ambientEnabled)
+    bots = policy.ledger
+    saved = policy
+  }
+
+  func removeBot(_ bot: AmbientBot) {
+    bots.removeAll { $0.id == bot.id }
+    justSaved = false
+  }
+
+  func save() async {
+    guard !saving, let saved else { return }
+    saving = true
+    error = nil
+    justSaved = false
+    loader.cancel()
+    defer { saving = false }
+    let body: [String: Any] = [
+      "orders": orders,
+      "bots": Dictionary(uniqueKeysWithValues: bots.map { ($0.name, $0.policy.body) }),
+      "ambientEnabled": ambient.body,
+      "baseUpdatedAt": saved.updatedAt,
+    ]
+    do {
+      let result: AmbientPolicyResponse = try await client.fetch(
+        policyPath, body: body, method: "PUT")
+      apply(result.policy)
+      justSaved = true
+    } catch { self.error = error.localizedDescription }
+  }
+
+  func setHeaderPin(_ state: NativeTriState) async {
+    guard !updatingHeaderPin, state != headerPinState else { return }
+    updatingHeaderPin = true
+    headerPinError = nil
+    pinLoader.cancel()
+    defer { updatingHeaderPin = false }
+    do {
+      var updated: ChannelHeaderPin = try await client.fetch(
+        "api/channel-header-pin", body: ["scopeId": scopeId, "on": state.body], method: "PUT")
+      updated.default = updated.default ?? headerPin?.default
+      headerPin = updated
+    } catch { headerPinError = error.localizedDescription }
+  }
+}
+
+struct ChannelPolicySection: View {
+  @Bindable var model: ChannelPolicyModel
+
+  var body: some View {
+    Section("Agent behavior") {
+      Group {
+        Picker("Ambient behavior", selection: $model.ambient) {
+          ForEach(NativeTriState.allCases) { Text($0.label).tag($0) }
+        }
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Standing orders").font(.caption).foregroundStyle(.secondary)
+          TextField("None", text: $model.orders, axis: .vertical).lineLimit(3...10)
+        }
+        ForEach(model.bots) { bot in
+          HStack {
+            VStack(alignment: .leading, spacing: 4) {
+              Text(bot.name)
+              Text(bot.policy.label).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Remove", role: .destructive) { model.removeBot(bot) }
+              .font(.caption).buttonStyle(.borderless)
+          }
+        }
+      }.disabled(!model.loaded || model.saving)
+      if model.loaded || model.error == nil {
+        Button {
+          Task { await model.save() }
+        } label: {
+          NativeActionLabel(title: "Save", busyTitle: "Saving…", busy: model.saving)
+        }.disabled(!model.dirty || model.saving)
+      } else {
+        Button("Try again") { Task { await model.load() } }
+      }
+      if let error = model.error ?? model.headerPinError {
+        Text(error).font(.caption).foregroundStyle(.red)
+      } else {
+        Text(model.justSaved ? "Saved" : model.loaded ? "" : "Loading…")
+          .font(.caption).lineLimit(2, reservesSpace: true).foregroundStyle(.secondary)
+      }
+      if model.supportsHeaderPin {
+        Picker(
+          "Pinned header",
+          selection: Binding(
+            get: { model.headerPinState },
+            set: { state in Task { await model.setHeaderPin(state) } })
+        ) {
+          ForEach(NativeTriState.allCases) { state in
+            Text(state == .default ? model.headerPinDefaultLabel : state.label).tag(state)
+          }
+        }.disabled(model.headerPin == nil || model.updatingHeaderPin)
+      }
+    }
+  }
+}
+
 struct DirectoryPerson: Decodable, Identifiable {
   let principalId: String
   let displayName: String
@@ -489,21 +801,29 @@ struct ProjectMemberPicker: View {
   @State private var searching = false
   @State private var error: String?
   @State private var selected: DirectoryPerson?
+  private var matchingPeople: [DirectoryPerson] {
+    matches.filter { !project.memberIds.contains($0.id) }
+  }
 
   var body: some View {
     NavigationStack {
       QMList {
         if let error = error ?? model.error { Text(error).foregroundStyle(.red) }
-        ForEach(matches.filter { person in !project.memberIds.contains(person.id) }) { person in
+        ForEach(matchingPeople) { person in
           Button {
             selected = person
           } label: {
             Label(person.displayName, systemImage: "person.badge.plus")
           }.disabled(model.busy)
         }
-        if matches.isEmpty && !searching {
-          Text(query.count < 2 ? "Search for a person in your workspace." : "No matching people.")
-            .foregroundStyle(.secondary)
+        if matchingPeople.isEmpty && !searching && error == nil && model.error == nil {
+          Text(
+            query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2
+              ? "Search for a person in your workspace."
+              : matches.isEmpty
+                ? "No matching people." : "Everyone found is already in this project."
+          )
+          .foregroundStyle(.secondary)
         }
       }
       .navigationTitle("Add people")

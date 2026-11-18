@@ -282,7 +282,7 @@ export function workspaceTools(kit: ToolKit) {
     name: "write",
     label: "write",
     description:
-      "Write a workspace file. To share it, upload it with POST /v1/files/uploads, then share the returned ID.",
+      "Write a workspace file. To share it, upload it with the helper from GET /v1/files/upload-client, then share the returned ID.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative path." }),
       data: Type.String({ description: "File contents." }),
@@ -343,7 +343,7 @@ export function workspaceTools(kit: ToolKit) {
           description: "Unique handle (lowercase letters/digits/hyphens) → /d/<name>/.",
         }),
       ),
-      renameFrom: Type.Optional(Type.String({ description: "Existing deployment name to rename to `name`." })),
+      renameFrom: Type.Optional(Type.String({ description: "Existing app name to rename to `name`." })),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description: "Env vars for the version; omit to keep the previous ones, {} clears.",

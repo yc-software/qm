@@ -22,7 +22,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   if (typeof viewer !== "string" || !deps.identity?.isInternal(deps.identity.classify(viewer)))
     return sendJson(res, 403, { error: "forbidden" });
   if (!deps.sessionShares || !deps.sessionShareBytes) return sendJson(res, 503, { error: "sharing_unavailable" });
-  const source = await app.getSessionForViewer(params.id!, viewer);
+  const source = await app.getSessionForViewer(params.id!, { actorId: viewer });
   if (!source) return sendJson(res, 404, { error: "not_found" });
   const deliveries =
     (await deps.deliveries?.listBySourceSession(source.session.id, source.session.threadRef, { limit: 10_000 })) ?? [];
@@ -52,7 +52,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const pending: Array<{ sourceId: string; name: string; mimetype: string; data: Buffer }> = [];
   let totalBytes = 0;
   for (const id of ids) {
-    const file = await app.openFileForViewer(tenantOf(ctx), id, viewer);
+    const file = await app.openFileForViewer(tenantOf(ctx), id, viewer, false);
     if (!file)
       return sendJson(res, 409, {
         error: "attachment_unavailable",

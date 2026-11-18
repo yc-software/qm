@@ -1,7 +1,62 @@
 import { swallowAs } from "../util/errors.ts";
-import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS } from "./lib.ts";
 import { EMOJI_CHAR_BY_NAME } from "./emoji-map.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
+
+export const DEFAULT_ACK_REACTIONS = ["eyes", "mag", "hourglass_flowing_sand", "telescope", "saluting_face"] as const;
+
+export const CURATED_ACK_EMOJI = [
+  "bug",
+  "hammer_and_wrench",
+  "wrench",
+  "gear",
+  "rocket",
+  "package",
+  "robot_face",
+  "test_tube",
+  "computer",
+  "floppy_disk",
+  "bar_chart",
+  "chart_with_upwards_trend",
+  "chart_with_downwards_trend",
+  "lock",
+  "key",
+  "shield",
+  "closed_lock_with_key",
+  "memo",
+  "pencil2",
+  "page_facing_up",
+  "clipboard",
+  "books",
+  "scroll",
+  "bookmark_tabs",
+  "email",
+  "calendar",
+  "speech_balloon",
+  "telephone_receiver",
+  "bell",
+  "brain",
+  "thinking_face",
+  "bulb",
+  "microscope",
+  "sleuth_or_spy",
+  "moneybag",
+  "dollar",
+  "credit_card",
+  "airplane",
+  "world_map",
+  "globe_with_meridians",
+  "compass",
+  "car",
+  "crab",
+  "pirate_flag",
+  "sparkles",
+  "fire",
+  "zap",
+  "sunglasses",
+  "wave",
+  "art",
+  "coffee",
+] as const;
 
 export interface AckEmojiPicker {
   refreshAckEmoji(client: any): void;

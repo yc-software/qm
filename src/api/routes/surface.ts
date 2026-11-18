@@ -38,7 +38,9 @@ import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } fr
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
+import { activeRun, audit, isObj, orgScope, runIsActive } from "./shared.ts";
+import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -255,7 +257,7 @@ async function getSession(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
+  const found = await app.getSessionForViewer(id, { actorId: viewer }, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, found);
 }
@@ -289,7 +291,7 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
+  const found = await app.getSessionForViewer(ctx.params.id!, capability, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
@@ -381,6 +383,7 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
       ...(nameQuery ? { nameQuery } : {}),
     },
     scope ? (scope as ScopeId) : undefined,
+    isOwnScopeBotWork(capability),
   );
   return sendJson(res, 200, page);
 }
@@ -429,7 +432,7 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
   const parsed = parseSessionPatch(b);
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
   const patch = parsed.patch;
-  const session = await app.updateSession(id, principalId, patch);
+  const session = await app.updateSession(id, { actorId: principalId }, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session });
 }
@@ -439,7 +442,7 @@ async function listAgentConversations(ctx: ApiCtx): Promise<void> {
   if (!capability) {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
-  const sessions = await app.listSessions(capability.actorId);
+  const sessions = await app.listSessions(capability);
   return sendJson(res, 200, {
     conversations: sessions.map(agentConversation),
   });
@@ -454,7 +457,7 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
   const parsed = parseSessionPatch(b);
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
   const patch = parsed.patch;
-  const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
+  const session = await app.updateSession(ctx.params.id!, capability, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   audit(ctx, {
     principalId: capability.actorId,
@@ -562,7 +565,7 @@ async function searchSessions(ctx: ApiCtx): Promise<void> {
   const query = url.searchParams.get("q") ?? "";
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
-  return sendJson(res, 200, { hits: await app.searchSessions(principalId, query, limit) });
+  return sendJson(res, 200, { hits: await app.searchSessions({ actorId: principalId }, query, limit) });
 }
 
 async function listContexts(ctx: ApiCtx): Promise<void> {
@@ -584,7 +587,7 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
     files: out.files,
     crons: out.crons,
     webhooks: out.webhooks.map(redactWebhook),
-    deployments: out.deployments,
+    apps: out.apps,
     skills: out.skills,
     manageable: out.manageable,
   });
@@ -693,6 +696,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
         swarmsEnabled: Boolean(await ctx.app.swarms?.authorizes(capability)),
         personasEnabled: Boolean(await ctx.app.personas?.enabledFor(capability.actorId)),
       },
+      ctx.url.searchParams.get("q") ?? "",
     ),
   );
 }
@@ -858,14 +862,21 @@ const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capabi
   return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
-const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
+const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
+  const { res, deps, tenant, body } = ctx;
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
   const { forgotten, outcomes, problems } = await forgetFacts(
     memory,
     write,
     ids,
-    turnAuthority(capability.actorId, capability.memory, personAtKeyboard(capability)),
+    turnAuthority(
+      capability.actorId,
+      capability.memory,
+      personAtKeyboard(capability) &&
+        (await runIsActive(ctx)) &&
+        !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
+    ),
     capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
   );
@@ -888,13 +899,13 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, false)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
   const archivedChecks = await Promise.all(
     (await app.listSkills())
       .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId) })),
+      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId, false) })),
   );
   const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
   const visible = resolved.flatMap((row) => [
@@ -915,7 +926,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
       pack: r.skill.pack,
       assetCount: r.skill.manifest.files?.length ?? 0,
       requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId),
+      editable: await app.canManageSkill(r.skill, principalId, false),
     })),
   );
   return sendJson(res, 200, { skills });
@@ -928,11 +939,14 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const ownScopeBotWork = isOwnScopeBotWork(capability);
   const skill = await app.getSkill(ctx.params.id!);
   if (
     !skill ||
-    (!(await app.canManageSkill(skill, principalId)) &&
-      !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
+    (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork))
+        .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+        .some((visible) => visible.id === skill.id))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
@@ -953,7 +967,7 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
       grantedCapabilities: skill.grantedCapabilities,
       createdAt: skill.createdAt,
       updatedAt: skill.updatedAt,
-      editable: await app.canManageSkill(skill, principalId),
+      editable: await app.canManageSkill(skill, principalId, capability?.botActor === true),
     },
   });
 }
@@ -967,7 +981,10 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const liveActor = ctx.capability ? personAtKeyboard(ctx.capability) : true;
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, { liveActor });
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
+    liveActor,
+    botActor: ctx.capability?.botActor === true,
+  });
   if (restored === "trigger_blocked")
     return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (restored === "exists")
@@ -1008,7 +1025,10 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1039,7 +1059,12 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     principalId = b.principalId;
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
-  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor });
+  const outcome = await app.deleteOwnedSkill({
+    principalId,
+    id,
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1088,6 +1113,12 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
+    });
+  }
+  if (homeScope && !loadsScopeContext(principalId, homeScope, capability?.botActor === true)) {
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "a Slack bot's work cannot add skills to a person's own library",
     });
   }
   if (typeof b.name !== "string" || !b.name.trim()) {
@@ -1156,6 +1187,7 @@ const SHARE_ERROR_STATUS: Record<string, number> = {
   bad_request: 400,
   not_found: 404,
   forbidden: 403,
+  human_consent_required: 403,
   recipient_not_found: 404,
   ambiguous_recipient: 409,
   share_failed: 400,
@@ -1177,6 +1209,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   if (typeof b.type !== "string" || !isArtifactType(b.type)) {
     return sendJson(res, 400, { error: "bad_request", message: `type must be one of: ${ARTIFACT_TYPES.join(", ")}` });
   }
+  if (b.type === "deploy" && !(await activeRun(ctx))) return;
   if (typeof b.id !== "string" || !b.id.trim())
     return sendJson(res, 400, { error: "bad_request", message: "id required" });
   if (
@@ -1400,14 +1433,19 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function getSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
-  if (capability) return sendJson(res, 200, app.getSoul(capability.scopeId));
+  if (capability)
+    return sendJson(
+      res,
+      200,
+      app.getSoul(capability.scopeId, { actorId: capability.actorId, ownScopeBotWork: isOwnScopeBotWork(capability) }),
+    );
   const scopeIdVal = url.searchParams.get("scopeId");
   const principalId = url.searchParams.get("principalId");
   if (!scopeIdVal || !principalId)
     return sendJson(res, 400, { error: "bad_request", message: "scopeId and principalId required" });
   if (!(await app.belongsToScope(principalId, scopeIdVal as ScopeId)))
     return sendJson(res, 403, { error: "forbidden" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId));
+  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId, { actorId: principalId, ownScopeBotWork: false }));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
@@ -1435,12 +1473,10 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     ? capability.botActor !== true
     : parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId));
   try {
-    const version = await app.updateSoul(
-      scopeIdVal,
-      content,
-      actorId,
-      allowSharedScope ? { allowSharedScope: true } : undefined,
-    );
+    const version = await app.updateSoul(scopeIdVal, content, actorId, {
+      ...(allowSharedScope ? { allowSharedScope: true } : {}),
+      botActor: capability?.botActor === true,
+    });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)

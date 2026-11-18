@@ -204,7 +204,7 @@ GET /v1/admin/sessions/<id>?scope=            → a transcript
 GET /v1/admin/sessions/<id>/llm?scope=        → captured provider requests — what the model actually saw (debugging "why did it do X")
 GET /v1/admin/files?scope=                    → document store; read?id= / download?id= for content
 GET /v1/admin/volumes?scope=                  → a scope's computer/backup contents (sizes only)
-GET /v1/admin/crons|deployments|skills?scope= → artifacts by owner
+GET /v1/admin/crons|apps|skills?scope= → artifacts by owner
 ```
 
 ## Observability
@@ -226,8 +226,11 @@ and `source`; session and turn counts add up activity across all of the user's s
 
 ## External users
 
-Outside collaborators, admitted by email with a role and an expiry; they sign in at the
-portal with that address until it lapses. Listed alongside the roster:
+Outside collaborators, admitted by email with a role and an expiry. Until it lapses they
+count as members everywhere, including as guests in the org's Slack (Slack picks up a new
+invitation within about ten minutes). The invitation email
+carries a single-use sign-in link, so they don't need an account the sign-in provider
+accepts; a resend issues a fresh link. Listed alongside the roster:
 
 ```bash
 GET /v1/admin/users                          → externalUsers: [{email, role, expiresAt, invitedBy, status: active|expired}]
@@ -238,8 +241,8 @@ DELETE /v1/admin/external-users/<email>      → revokes access now; the row sta
 Confirm with the admin before inviting or revoking — say who, which role, and until
 when. The invitation email needs Resend configured on core (`RESEND_API_KEY` +
 `AUTH_EMAIL_FROM`); without it the user is still added. When the response has
-`emailSent:false`, tell the admin why (`emailProblem`) and hand them `signInUrl` to pass
-along themselves. The `org_admin` role for externals is portal-only, like every other
+`emailSent:false`, tell the admin why (`emailProblem`); the `signInUrl` you get is the
+plain portal address, so once email works, re-invite with `"resendInvite":true` to send them a sign-in link. The `org_admin` role for externals is portal-only, like every other
 grant change — don't offer it.
 
 ## Admin grants (promote / revoke)

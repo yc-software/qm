@@ -90,11 +90,11 @@ describe("POST /v1/reach with files", () => {
     await new Promise<void>((resolve) => noSandbox.close(() => resolve()));
   });
 
-  const storeFile = async (owner: string, name: string, data: string) => {
+  const storeFile = async (owner: string, name: string, data: string, ownerScopeId = scopeId("personal", owner)) => {
     const id = `file-${owner}-${name}-${Math.random().toString(36).slice(2)}`;
     await built.files.put({
       id,
-      ownerScopeId: scopeId("personal", owner),
+      ownerScopeId,
       createdBy: owner,
       name,
       path: `artifacts/${id}/${name}`,
@@ -250,7 +250,7 @@ describe("POST /v1/reach with files", () => {
     assert.equal(malformed.status, 400);
   });
 
-  it("refuses a Slack bot's turn a swarm computer it may not use, named by sandbox_id or as the default", async () => {
+  it("refuses a Slack bot's turn a swarm computer it may not use, named by sandbox_id or as the default", async (t) => {
     const scope = scopeId("personal", "U-carol");
     const resources = built.sandboxResources.forTurn({
       actorId: "U-carol",
@@ -297,13 +297,21 @@ describe("POST /v1/reach with files", () => {
     assert.equal(person.status, 200);
     assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
     const previousDefault = (await resources.resolve(scope))?.id ?? null;
-    await resources.setDefault("U-carol", scope, worker.id);
+    const provision = built.sandbox.provision.bind(built.sandbox);
+    t.mock
+      .method(built.sandbox, "provision")
+      .mock.mockImplementationOnce((...args) =>
+        resources.setDefault("U-carol", scope, worker.id).then(() => provision(...args)),
+      );
     try {
+      assert.match(((await (await send(true)).json()) as any).message, /plan\.md \(not found\)/);
       const botDefault = await send(true);
       assert.equal(botDefault.status, 403);
       assert.equal(((await botDefault.json()) as any).error, "forbidden");
+      const ownFile = await send(true, undefined, [{ file_id: await storeFile("U-carol", "own.txt", "hers\n") }]);
+      assert.match(((await ownFile.json()) as any).message, /\(not found\)/);
       const botStored = await send(true, undefined, [
-        { file_id: await storeFile("U-carol", "stored.txt", "from Files\n") },
+        { file_id: await storeFile("U-carol", "stored.txt", "from Files\n", scopeId("org", "default-org")) },
       ]);
       assert.equal(botStored.status, 200);
       assert.deepEqual(await readDelivered(((await botStored.json()) as any).deliveryId), ["stored.txt:from Files\n"]);

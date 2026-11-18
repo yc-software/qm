@@ -6,7 +6,7 @@ import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
 
-test("Docker deployments use isolated networks and remove them on destroy", async () => {
+test("Docker apps use isolated networks and remove them on destroy", async () => {
   const calls: string[][] = [];
   const dockerExec: DockerExec = async (args) => {
     calls.push(args);
@@ -44,43 +44,43 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
   assert.ok(calls.some((args) => args.join(" ") === `network rm ${firstName}-net`));
 });
 
-test("a transient docker failure does not report the deployment missing", async () => {
+test("a transient docker failure does not report the app missing", async () => {
   const dockerExec: DockerExec = async () => ({ code: 1, stdout: "", stderr: "daemon unavailable" });
   const store = createDeployStore(testDeployBackings());
-  const deployment = await store.create({
+  const publishedApp = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
     snapshotDir: "/snap/running",
   });
-  await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9200 });
-  const running = (await store.get(deployment.id))!;
+  await store.setEndpoint(publishedApp.id, { host: "127.0.0.1", port: 9200 });
+  const running = (await store.get(publishedApp.id))!;
   const provider = createDockerDeployProvider({ dockerExec });
 
   await assert.rejects(provider.resolveEndpoint!(running, running.versions[0]!), /daemon unavailable/);
 });
 
-test("a deployment is missing unless docker lists a container with exactly its name", async () => {
+test("an app is missing unless docker lists a container with exactly its name", async () => {
   const dockerExec: DockerExec = async (args) => {
     if (args[0] === "ps") return { code: 0, stdout: "agent-deploy-other\tbridge\n", stderr: "" };
     return { code: 1, stdout: "", stderr: "daemon unavailable" };
   };
   const store = createDeployStore(testDeployBackings());
-  const deployment = await store.create({
+  const publishedApp = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
     snapshotDir: "/snap/gone",
   });
-  await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9200 });
-  const running = (await store.get(deployment.id))!;
+  await store.setEndpoint(publishedApp.id, { host: "127.0.0.1", port: 9200 });
+  const running = (await store.get(publishedApp.id))!;
   const provider = createDockerDeployProvider({ dockerExec });
 
   assert.equal(await provider.resolveEndpoint!(running, running.versions[0]!), null);
   assert.equal(await provider.logs!(running, { tailLines: 10 }), null);
 });
 
-test("a deployment network created concurrently is reused, and a create that leaves none fails", async () => {
+test("an app network created concurrently is reused, and a create that leaves none fails", async () => {
   let networkExists = false;
   let createLeavesNetwork = true;
   const dockerExec: DockerExec = async (args) => {
@@ -92,7 +92,7 @@ test("a deployment network created concurrently is reused, and a create that lea
     return { code: 0, stdout: "", stderr: "" };
   };
   const store = createDeployStore(testDeployBackings());
-  const deployment = await store.create({
+  const publishedApp = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
@@ -100,11 +100,11 @@ test("a deployment network created concurrently is reused, and a create that lea
   });
   const provider = createDockerDeployProvider({ dockerExec });
 
-  await assert.doesNotReject(provider.apply(deployment, deployment.versions[0]!));
+  await assert.doesNotReject(provider.apply(publishedApp, publishedApp.versions[0]!));
   networkExists = false;
   createLeavesNetwork = false;
   await assert.rejects(
-    provider.apply(deployment, deployment.versions[0]!),
+    provider.apply(publishedApp, publishedApp.versions[0]!),
     /network create .* failed: .*already exists/,
   );
 });
@@ -176,6 +176,6 @@ test("a Docker app that only answers 5xx fails publish, reports its output and l
     reported.map((e) => e.code),
     ["app_start_failed"],
   );
-  assert.match(reported[0]!.message, new RegExp(`\\(deployment ${d.id}\\)`), "the record names the deployment");
+  assert.match(reported[0]!.message, new RegExp(`\\(deployment ${d.id}\\)`), "the record names the app");
   assert.equal(calls.at(-2)!.join(" "), `rm -f agent-deploy-${d.id.slice(0, 12)}`);
 });

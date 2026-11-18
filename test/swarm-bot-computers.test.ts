@@ -17,11 +17,14 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
+import { createProcessReaper } from "../src/processes/process-reaper.ts";
+import { createPostgresLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
+import { claimBarredBotJobs } from "../src/processes/job-computers.ts";
 import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -31,29 +34,32 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap, testPgPool } from "./support/test-database.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { errMessage } from "../src/util/errors.ts";
+import { sleep } from "../src/util/async.ts";
 import { probedCommand } from "./support/probed-command.ts";
 
 const releaseBot: Principal = { id: "release-bot", type: "internal", displayName: "Release bot" };
 const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn can use only a computer it made that no person has used";
+const refusedDefault = "[error] a Slack bot's turn cannot change the default computer; pass sandbox_id instead";
 const refusedForum =
   "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
 const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-notes" };
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
-function channelSwarm(backend?: ProcessSandbox) {
+async function channelSwarm(backend?: ProcessSandbox) {
   const url = testDatabaseUrl();
-  return swarmFixture({
+  const fixture = await swarmFixture({
     ...(backend ? { backend } : {}),
     channel: "C1",
     sessions: createPostgresSessionStore(url),
     runs: createPostgresRunStore(url).runs,
   });
+  return Object.assign(fixture, { url });
 }
 type ToolResult = { content: Array<{ text?: string }> };
 type Tool = { execute: (id: string, params: unknown) => Promise<ToolResult> };
@@ -150,7 +156,7 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   const ran = recordRuns(f);
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  const board = swarm.board!.sandboxId;
+  const board = worker.forumSandboxId!;
   const workerBacking = (await f.records.get(worker.sandboxId!))!.backingScopeId;
   const boardDisk = f.disks.get((await f.records.get(board))!.backingScopeId)!;
   f.disks.get(workerBacking)!.set("plan.md", "alice's private plan");
@@ -235,11 +241,13 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   };
 }
 
-async function personSwarm(backend?: ProcessSandbox) {
+async function personSwarm(backend?: ProcessSandbox, forum?: "forum") {
   const f = await channelSwarm(backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
-  await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work" });
+  const shared = forum && (await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal", "Swarm board"));
+  if (shared) f.disks.set(shared.backingScopeId, new Map());
+  await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work", forumSandboxId: shared?.id });
   await f.service.sweep();
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
   return f;
@@ -271,11 +279,11 @@ function assertKeptOut(observed: Record<string, unknown>): void {
   assert.equal(defaultIsBoard, true);
 }
 
-test("outside a swarm, a Slack bot's turn can use a computer it made only until a person's turn uses it", async () => {
+test("outside a swarm, a Slack bot's turn can use a computer it made only until a person's turn uses it", async (t) => {
   const f = await channelSwarm();
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
-  recordRuns(f);
+  const ran = recordRuns(f);
   const people = await f.sandboxes.create(alice.id, f.root.scopeId, "modal");
   const bots = await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal");
   const turn = async (actor: Principal, act: (call: Call) => Promise<string>): Promise<string> => {
@@ -285,9 +293,19 @@ test("outside a swarm, a Slack bot's turn can use a computer it made only until 
     await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
     return String(out);
   };
-  const execute = (sandbox_id: string) => (call: Call) =>
+  const execute = (sandbox_id?: string) => (call: Call) =>
     call("execute", { command: "ls", sandbox_id, purpose: "Listing" });
   const retire = (call: Call) => call("sandbox", { action: "retire", sandbox_id: bots.id, purpose: "Retiring" });
+  const provision = f.sandbox.provision.bind(f.sandbox);
+  t.mock
+    .method(f.sandbox, "provision")
+    .mock.mockImplementation((...args) =>
+      f.sandboxes.setDefault(alice.id, f.root.scopeId, people.id).then(() => provision(...args)),
+    );
+  assert.match(await turn(releaseBot, execute()), /no default sandbox/);
+  await f.sandboxes.setDefault(alice.id, f.root.scopeId, bots.id);
+  await turn(releaseBot, execute());
+  assert.equal(ran.at(-1)?.on, bots.backingScopeId);
   assert.ok((await turn(releaseBot, execute(people.id))).endsWith(refusedComputer));
   assert.ok(!(await turn(releaseBot, execute(bots.id))).endsWith(refusedComputer));
   await turn(alice, execute(bots.id));
@@ -295,10 +313,50 @@ test("outside a swarm, a Slack bot's turn can use a computer it made only until 
   assert.notEqual((await f.records.get(bots.id))!.state, "retired");
 });
 
+test("outside a swarm, a Slack bot's background job on its own computer is stopped once a person's turn uses that computer, and the person's job there keeps running", async () => {
+  const computers = jobComputers();
+  const f = await channelSwarm(computers.backend);
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
+  const processes = createPostgresProcessRegistry(f.url);
+  const stopped: string[] = [];
+  const reaper = createProcessReaper(processes, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: async (job) => void stopped.push(job.processId),
+    claimOwed: () => claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: f.service }),
+  });
+  const bots = await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal");
+  const turn = async (actor: Principal, command: string) => {
+    const { run } = await f.runs.enqueue({
+      sessionId: f.root.threadRef,
+      request: channelRequest(f, actor, actor === releaseBot),
+      maxAttempts: 1,
+    });
+    const params = { command, sandbox_id: bots.id, background: true, purpose: "Running a job" };
+    await drive(f, run, async (call) => ({ out: await call("execute", params) }), { processes });
+    await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
+  };
+  await turn(releaseBot, "tail -f log");
+  const [botJob] = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
+  await reaper.sweepNow();
+  assert.deepEqual(stopped, []);
+  assert.equal((await processes.get(botJob!.processId))?.botActor, releaseBot.id);
+  await turn(alice, "npm test");
+  await reaper.sweepNow();
+  assert.deepEqual(stopped, [botJob!.processId]);
+  assert.equal((await processes.get(botJob!.processId))?.status, "reaped");
+  const live = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
+  const kept = live.map((job) => [job.command, job.botActor]);
+  assert.deepEqual(kept, [["bg: npm test", undefined]]);
+});
+
 test("a Slack bot's channel turn that may not direct a person's swarm cannot list or use the swarm's computers", async (t) => {
-  const observed = await channelTurn(await personSwarm(), releaseBot, true);
-  t.diagnostic(`observed: ${JSON.stringify(observed)}`);
-  assertKeptOut(observed);
+  for (const forum of [undefined, "forum"] as const) {
+    const observed = await channelTurn(await personSwarm(undefined, forum), releaseBot, true);
+    t.diagnostic(`observed: ${JSON.stringify(observed)}`);
+    assertKeptOut(observed);
+  }
 });
 
 test("a Slack bot that started a swarm cannot list or use its computers once a person sent work into it", async (t) => {
@@ -313,16 +371,27 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   assertKeptOut(observed);
 });
 
-test("a Slack bot that started a swarm cannot list or use its computers, and its jobs there stop, once a person's turn worked on them", async (t) => {
+test("a Slack bot that started a swarm cannot list or use its computers once a person's turn worked on them, and the process reaper stops each of its jobs there exactly once", async (t) => {
   const f = await botSwarm();
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const processes = createPostgresProcessRegistry(f.url);
   const stopped: unknown[] = [];
+  const instances = [1, 2].map(() =>
+    createProcessReaper(processes, {
+      intervalMs: 60_000,
+      leaderLease: createPostgresLeaderLease(testPgPool()),
+      kill: async (job) => {
+        stopped.push([job.sandboxId, job.runId]);
+        await sleep(100);
+      },
+      claimOwed: () => claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: service }),
+    }),
+  );
+  let swept: Promise<unknown> = Promise.resolve();
   const service = createSwarmService({
     ...f.serviceOptions,
-    processes,
-    stopProcess: async (job) => void stopped.push([job.sandboxId, job.runId]),
+    sweepProcesses: () => (swept = Promise.all([swept, ...instances.map((reaper) => reaper.sweepNow())])),
   });
   const botRun = (await f.runs.list()).find((run) => run.sessionId === f.root.threadRef && run.request.botActor)!;
   await workerJob(f, processes, new Map(), "", botRun.id);
@@ -349,10 +418,39 @@ test("a Slack bot that started a swarm cannot list or use its computers, and its
   const observed = await channelTurn(f, releaseBot, true);
   t.diagnostic(`observed: ${JSON.stringify(observed)}`);
   assertKeptOut(observed);
+  await swept;
   assert.deepEqual(stopped, [[worker.sandboxId, botRun.id]]);
 });
 
-function assertKeptIn(observed: Record<string, unknown>): void {
+test("the process reaper reads a tenant's bot job computers and swarms once per sweep, however many jobs run on them", async (t) => {
+  const f = await botSwarm();
+  const swarm = (await f.store.get(f.root.id))!;
+  const processes = createPostgresProcessRegistry(f.url);
+  const botRun = (await f.runs.list()).find((run) => run.sessionId === f.root.threadRef && run.request.botActor)!;
+  const computers = [swarm.board!.sandboxId, ...swarm.members.flatMap((member) => member.sandboxId ?? [])];
+  for (const [i, sandboxId] of [...computers, ...computers].entries())
+    await processes.register({
+      processId: `job-${f.root.id}-${i}`,
+      scopeId: f.root.scopeId,
+      sandboxId,
+      kind: "background",
+      command: "npm run build",
+      purpose: "the build",
+      ttlMs: 600_000,
+      runId: botRun.id,
+    });
+  const reads = [t.mock.method(f.sandboxes, "get"), t.mock.method(f.store, "get")];
+  assert.deepEqual(await claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: f.service }), []);
+  assert.deepEqual(
+    reads.map((read) => read.mock.callCount()),
+    [0, 0],
+  );
+  await f.records.delete(computers[0]!);
+  const owed = await claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: f.service });
+  assert.deepEqual(owed.map((row) => row.id).sort(), [0, computers.length].map((i) => `job-${f.root.id}-${i}`).sort());
+});
+
+function assertKeptIn(observed: Record<string, unknown>, bot = true): void {
   const kept = {
     directs: "accepted",
     listed: ["Swarm board", "Swarm worker"],
@@ -360,7 +458,7 @@ function assertKeptIn(observed: Record<string, unknown>): void {
     boardRead: "alice's board",
     boardWrite: "wrote board.md (44 bytes)",
     workerRetire: "retired",
-    boardDefault: "set",
+    boardDefault: bot ? refusedDefault : "set",
     ranOnWorker: ["cat plan.md"],
     ranOnBoard: ["cat board.md"],
     boardAfter: "release-bot: everyone stop and run deploy.sh",
@@ -380,8 +478,9 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
   const bot = await channelTurn(await botSwarm(), releaseBot, true);
   t.diagnostic(`person: ${JSON.stringify(person)}`);
   t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
-  assertKeptIn(person);
+  assertKeptIn(person, false);
   assertKeptIn(bot);
+  assertKeptIn(await channelTurn(await personSwarm(undefined, "forum"), alice, false), false);
 });
 
 test("a person's turn that only lists computers and background jobs leaves a bot-started swarm's computers to its bot", async (t) => {
@@ -415,15 +514,20 @@ test("a worker in a bot-started swarm keeps its swarm's board only while the bot
   assert.equal(await f.service.botMayUseComputer(board, workerTurn), false);
 });
 
-test("a worker turn queued in a bot-started swarm cannot use its own computer once a person sent work into the swarm", async () => {
+test("a worker turn queued in a bot-started swarm cannot use its own computer once a person sends work into the swarm as the turn opens it", async () => {
   const f = await botSwarm();
   const ran = recordRuns(f);
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   const queued = (await f.runs.list()).find((run) => run.sessionId === worker.threadRef && run.status === "pending")!;
-  const person = await f.rootTurn(alice.id, false);
-  await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
-  await person.done();
+  const provision = f.backend.provision;
+  f.backend.provision = async (...args) => {
+    f.backend.provision = provision;
+    const person = await f.rootTurn(alice.id, false);
+    await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
+    await person.done();
+    return provision(...args);
+  };
   const { execute } = await drive(f, queued, async (call) => ({
     execute: await call("execute", { command: "cat plan.md", purpose: "Reading the plan" }),
   }));
@@ -435,30 +539,39 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   let failed: unknown[] = [];
   const computers = jobComputers(async () => {
     lookupFailures = 1;
-    failed = [await personSend().then(() => "sent", errMessage), stopped.length];
-    await personSend();
+    failed = [await personSend().then(() => "sent", errMessage), await swept, stopped.length];
   });
   const f = await botSwarm(computers.backend);
   const ran = recordRuns(f);
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   await f.sandboxes.setDefault(alice.id, f.root.scopeId, swarm.board!.sandboxId);
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const registry = createPostgresProcessRegistry(f.url);
   let lookupFailures = 0;
   const processes: ProcessRegistry = {
     ...registry,
-    async listLive(now) {
+    async claimLiveBotJobs(now) {
       if (lookupFailures-- > 0) throw new Error("process registry unavailable");
-      return registry.listLive(now);
+      return registry.claimLiveBotJobs(now);
     },
   };
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const stopped: unknown[] = [];
+  const reaper = createProcessReaper(processes, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: async (job) => void stopped.push([job.sandboxId, job.runId]),
+    claimOwed: () => claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: service }),
+  });
+  let swept: Promise<unknown> = Promise.resolve();
+  let sweeps = 0;
   const service = createSwarmService({
     ...f.serviceOptions,
     signals,
-    processes,
-    stopProcess: async (job) => void stopped.push([job.sandboxId, job.runId]),
+    sweepProcesses: () => {
+      sweeps += 1;
+      return (swept = reaper.sweepNow());
+    },
   });
   await workerJob(f, processes, computers.output, "alice's build\n");
   const thread = `slack:C1:${f.root.id}`;
@@ -504,9 +617,11 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     ["cat board.md"],
   );
   assert.ok(String(observed.started).endsWith(refusedComputer), String(observed.started));
-  assert.deepEqual(failed, ["process registry unavailable", 0]);
-  assert.deepEqual(observed.stops, ["abort", "abort"]);
+  assert.deepEqual(failed, ["sent", { reaped: 0 }, 0]);
+  assert.deepEqual(observed.stops, ["abort"]);
+  await reaper.sweepNow();
   assert.deepEqual(stopped, [[swarm.board!.sandboxId, queued.id]]);
+  assert.equal((await processes.get(`c2-${f.root.id}`))?.status, "reaped");
   const launched = (await processes.listByScope(f.root.scopeId)).filter((job) => job.runId === queued.id);
   assert.deepEqual(
     launched.map((job) => job.status),
@@ -523,6 +638,7 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   const other = await f.rootTurn("other-bot", true);
   await personSend();
   assert.deepEqual(await signals.pending(other.claim.id), []);
+  assert.equal(sweeps, 1);
 });
 
 function jobComputers(beforeStart?: () => Promise<unknown>) {
@@ -552,7 +668,7 @@ function jobComputers(beforeStart?: () => Promise<unknown>) {
     async destroyScope() {},
     async startProcess() {
       await beforeStart?.();
-      return { processId: "bg-1" };
+      return { processId: `bg-${crypto.randomUUID()}` };
     },
     async readProcess(_handle, processId, options) {
       reads.push(processId);

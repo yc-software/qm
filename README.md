@@ -152,9 +152,11 @@ Create an organization-owned deployment repository that depends on `@yc-software
 
 ```bash
 npm exec --yes --package=@yc-software/qm@latest -- \
-  qm init . --org <slug> --target <fly-or-aws>
+  qm init . --org <slug> --target <aws|render|fly>
 npm install
 ```
+
+Render also needs `--repo` and `--branch`; see [`docs/getting-started.md`](./docs/getting-started.md).
 
 Initialization materializes a deployment skill for an agent and walks through
 infrastructure, web sign-in, connector credentials, optional Slack access, deployment,

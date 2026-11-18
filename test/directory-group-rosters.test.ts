@@ -16,8 +16,8 @@ test("group rosters come back in one read with Slack photos, skipping unknown gr
     { principalId: "U_BOB", displayName: "bob", type: "internal", slackId: "U_BOB" },
     { principalId: "U_SAM", displayName: "sam", type: "internal", slackId: "U_SAM" },
   ]);
-  await store.upsertGroup("G1", ["U_ALICE", "U_BOB", "U_SAM"]);
-  await store.upsertGroup("G2", ["U_BOB", "U_SAM"]);
+  await store.upsertGroup("G1", ["U_ALICE", "U_BOB", "U_SAM"], "slack");
+  await store.upsertGroup("G2", ["U_BOB", "U_SAM"], "slack");
 
   const rosters = await store.groupRosters(["G1", "G2", "G_UNKNOWN"]);
 

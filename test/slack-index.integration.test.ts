@@ -230,10 +230,11 @@ mock.module("@slack/web-api", {
 const { slackPluginConfigFromEnv, startSlackPlugin } = await import("../src/slack/index.ts");
 
 class FakeCore implements SlackCoreClient {
-  async decideDeploymentAccess(): Promise<string> {
+  async decideAppAccess(): Promise<string> {
     throw new Error("not used");
   }
   async inboxSlackMessage(): Promise<void> {}
+  invitedExternal = () => false;
   readonly turns: any[] = [];
   readonly ingests: any[][] = [];
   readonly directories: any[] = [];
@@ -326,10 +327,8 @@ class FakeCore implements SlackCoreClient {
     this.directories.push(body);
     return true;
   }
-  holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-    return fn(new Promise<void>(() => {}));
-  }
-  holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
+  async registerGroupRoster(): Promise<void> {}
+  holdDirectorySync<T>(_team: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
     return fn(new Promise<void>(() => {}));
   }
 
@@ -337,13 +336,10 @@ class FakeCore implements SlackCoreClient {
     return fn(new Promise<void>(() => {}));
   }
 
-  async claimDeliveries(): Promise<[]> {
-    return [];
-  }
   async ackDelivery(): Promise<void> {}
   async failDelivery(): Promise<void> {}
   deliverySubscriptions = 0;
-  onDeliveryEnqueued(): () => void {
+  serveDeliveries(): () => void {
     this.deliverySubscriptions++;
     return () => {};
   }

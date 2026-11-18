@@ -1,6 +1,8 @@
 import emojiData from "emoji-datasource/emoji.json" with { type: "json" };
 
-const VS16 = /️/g;
+function withoutVariationSelector(text: string): string {
+  return text.replaceAll("\uFE0F", "");
+}
 
 function unifiedToChar(unified: string): string {
   return String.fromCodePoint(...unified.split("-").map((h) => parseInt(h, 16)));
@@ -11,7 +13,7 @@ function buildMap(): Record<string, string> {
   const map = new Map<string, string>();
   const add = (raw: string | null | undefined, name: string): void => {
     if (!raw) return;
-    const key = unifiedToChar(raw).replace(VS16, "");
+    const key = withoutVariationSelector(unifiedToChar(raw));
     if (key && !map.has(key)) map.set(key, name);
   };
   for (const e of data) {
@@ -22,6 +24,10 @@ function buildMap(): Record<string, string> {
 }
 
 export const EMOJI_NAME_BY_CHAR: Record<string, string> = buildMap();
+
+export function emojiNameOf(char: string): string | undefined {
+  return EMOJI_NAME_BY_CHAR[withoutVariationSelector(char)];
+}
 
 export const EMOJI_CHAR_BY_NAME: Record<string, string> = Object.fromEntries(
   emojiData.flatMap((e) => (e.unified ? e.short_names.map((name) => [name, unifiedToChar(e.unified)]) : [])),

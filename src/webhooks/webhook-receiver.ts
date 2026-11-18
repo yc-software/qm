@@ -7,10 +7,11 @@ import { ownerAuthored } from "../cron/authority.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 
-export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
+export type DeliverResult =
+  { status: 202 } | { status: 200; body: string } | { status: 401; reason?: string } | { status: 404 };
 
 export interface WebhookReceiver {
-  deliver(id: string, req: { headers: VerifierInput["headers"]; rawBody: string }): Promise<DeliverResult>;
+  deliver(id: string, req: Omit<VerifierInput, "secret">): Promise<DeliverResult>;
 }
 
 export interface WebhookReceiverDeps extends TriggerDeps {
@@ -91,10 +92,10 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
 
       const input: VerifierInput = {
         ...(wh.verification.secret ? { secret: wh.verification.secret } : {}),
-        headers: req.headers,
-        rawBody: req.rawBody,
+        ...req,
       };
-      if (!verifier.verify(input)) return { status: 401 };
+      const verdict = verifier.verify(input);
+      if (verdict !== true) return { status: 401, ...(verdict ? { reason: verdict } : {}) };
 
       const parsed = parseBody(req.headers, req.rawBody);
 

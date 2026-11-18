@@ -54,7 +54,7 @@ import type {
   BackgroundJobSummary,
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
-import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
+import { appEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
 import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { LiveEditSaved } from "../deploy/live-edits.ts";
@@ -90,7 +90,7 @@ import type {
   ControlOk,
   ControlErr,
 } from "../api/control-service.ts";
-import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
+import { personAtKeyboard, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
@@ -245,7 +245,7 @@ export interface ToolContext extends SurfaceToolDeps {
   write(path: string, data: string, sandboxId?: string): Promise<void>;
   publish(input: PublishInput): Promise<PublishResult>;
   appFiles?: AppFiles;
-  setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
+  setAppPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
   memorySearch(
     q: string,
@@ -486,7 +486,7 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
-  assertDefaultSandboxUsable?: () => Promise<void>;
+  defaultComputer?: () => Promise<SandboxResource | undefined>;
   boundSandboxId?: string;
   workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
@@ -796,6 +796,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
               if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
+              if (deps.botActor)
+                throw new Error("a Slack bot's turn cannot change the default computer; pass sandbox_id instead");
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
@@ -809,6 +811,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               undefined,
               undefined,
               input.memoryGb,
+              undefined,
+              !deps.botActor,
             );
             await deps.provisionResource(record.id);
             return record;
@@ -836,17 +840,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const access = await accessSandbox(sandboxId);
         return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
-      await deps.assertDefaultSandboxUsable?.();
+      const fallback = (await deps.defaultComputer?.())?.id;
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
-      return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
+      return probe(await deps.sandbox.computerStatus(writableScopeId, fallback), deps.provision);
     },
     async restartComputer(requested?: string, memoryGb?: number): Promise<void> {
-      const sandboxId =
-        requested ??
-        deps.boundSandboxId ??
-        (memoryGb === undefined ? undefined : (await deps.sandboxResources?.resolve(writableScopeId))?.id);
+      const named = requested ?? deps.boundSandboxId;
+      const fallback = named === undefined ? (await deps.defaultComputer?.())?.id : undefined;
+      const sandboxId = named ?? (memoryGb === undefined ? undefined : fallback);
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
@@ -854,11 +857,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return resources.restart(deps.createdBy, sandboxId, memoryGb);
       }
       if (memoryGb !== undefined) throw new Error("a memory size needs a computer from sandbox list");
-      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
-      await deps.sandbox.restartComputer(writableScopeId);
+      await deps.sandbox.restartComputer(writableScopeId, undefined, fallback);
     },
     async execute(
       command: string,
@@ -1074,8 +1076,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const shouldInheritForRename = input.renameFrom !== undefined && input.dir !== undefined;
         const priorName =
           input.renameFrom === undefined || shouldInheritForRename ? (input.renameFrom ?? input.name) : undefined;
-        const prior = priorName ? await deps.deploy.getDeployment(priorName) : null;
-        effectiveEntrypoint = deploymentEntrypoint(prior);
+        const prior = priorName ? await deps.deploy.getApp(priorName) : null;
+        effectiveEntrypoint = appEntrypoint(prior);
         if (!effectiveEntrypoint && input.renameFrom === undefined) {
           throw new Error('publish requires an entrypoint, e.g. "node server.js"');
         }
@@ -1115,7 +1117,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
       });
       const ref = d.name ?? d.id;
-      const grantees = await deps.deploy.deploymentGrantees(d.id);
+      const grantees = await deps.deploy.appGrantees(d.id);
       const audience = audienceFromGrantees(
         grantees.map((g) => g.scope),
         d.createdInScope,
@@ -1139,10 +1141,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       };
     },
 
-    async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, {
+    async setAppPublic(id: string, isPublic: boolean) {
+      const d = await deps.deploy.setAppPublic(id, isPublic, {
         createdBy: deps.createdBy,
         botActor: deps.botActor,
+        personAtKeyboard: personAtKeyboard(deps.controlClaims),
       });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
@@ -1231,7 +1234,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, deps.actAsActor);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, {
+        actAsActor: deps.actAsActor,
+        botActor: deps.botActor,
+      });
     },
 
     async lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string> {
@@ -1248,7 +1254,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, deps.actAsActor);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, {
+        actAsActor: deps.actAsActor,
+        botActor: deps.botActor,
+      });
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {

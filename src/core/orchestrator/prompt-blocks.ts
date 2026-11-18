@@ -130,13 +130,27 @@ export function webSurfaceLabel(botName: string, relayed: boolean): string {
   return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so skills' non-web paths apply, such as an ordinary authorization link`;
 }
 
-export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
-  const gateway = (surface ?? "").trim();
-  const location = ctx?.location?.trim();
-  const details = Object.entries(ctx?.details ?? {})
+function trimmedEntries(record: Record<string, string> | undefined) {
+  const entries = Object.entries(record ?? {})
     .map(([k, v]) => [k.trim(), String(v).trim()] as const)
     .filter(([k, v]) => k && v)
     .sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
+  return [...new Map(entries)];
+}
+
+export function shownPlace(surface: string | undefined, ctx: GatewayContext | undefined, dm: boolean) {
+  const location = ctx?.location?.trim();
+  const details = trimmedEntries(ctx?.details);
+  return {
+    ...(location && !(dm && (surface ?? "").trim()) ? { location } : {}),
+    ...(details.length ? { details: Object.fromEntries(details) } : {}),
+  };
+}
+
+export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
+  const gateway = (surface ?? "").trim();
+  const { location } = shownPlace(surface, ctx, dmWith !== undefined);
+  const details = trimmedEntries({ ...ctx?.hostIds, ...ctx?.details });
   const instructions = ctx?.instructions?.trim();
   if (!gateway && !location && details.length === 0 && !instructions) return "";
 
@@ -315,6 +329,7 @@ const SYSTEM_CONTEXT_ORDER = [
   "Sandboxes",
   "Model access",
   "Crons scheduled here",
+  "Personas",
   "Credentials",
   "Skills",
 ] as const;

@@ -28,7 +28,7 @@ import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
-import { samePerson } from "../directory/person.ts";
+import { canonicalPerson, personIds, samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
@@ -160,6 +160,17 @@ export function createTurnMethods(
         return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
       };
       const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
+      const signIn = req.actor.externalId;
+      if (
+        personIds(signIn).length > 1 &&
+        (req.actor.isBot || (await deps.users?.botSignIns([signIn, canonicalPerson(signIn)]))?.length)
+      )
+        return {
+          status: "refused",
+          refusalKind: "linked_bot",
+          reason:
+            "I can't run this: a sign-in in this principal link is marked as a bot or app, and a bot can't act as a person. An org admin can delete the link (docs/principal-links.md).",
+        };
       if (!deps.identity.isInternal(actor)) {
         return {
           status: "refused",
@@ -335,6 +346,7 @@ export function createTurnMethods(
         desktopClientId: desktopClientForTurn({ ...req, origin }),
         ...(req.clientSurface ? { clientSurface: req.clientSurface } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
+        ...(req.liveReplies ? { liveReplies: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
@@ -454,6 +466,10 @@ export function createTurnMethods(
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
+        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer" && live?.run) {
+          const botTurn = live.run;
+          await withCurrentProjectRoster(() => stopRun(botTurn, false, true));
+        }
         if (live?.run && route.kind !== "turn") {
           const target = live.run;
           const steerTs =
@@ -777,6 +793,10 @@ export function createTurnMethods(
       if (route.kind === "turn") {
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
+        if (route.reason === "bot-turn" && (signal.queuedRunId || request)) {
+          await stopRun(run, false, true);
+          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
+        }
         if (signal.queuedRunId || !request) return { accepted: false, reason: "not_steerable", why: route.reason };
         const own = await methods.turn({
           ...request,

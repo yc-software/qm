@@ -2,13 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, skillRef, parseRef } from "../src/acl/resource-ref.ts";
-import { entitledScopes } from "../src/resolution/context-filter.ts";
+import { entitledScopes as entitledScopesFor } from "../src/resolution/context-filter.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill, type SkillManifest, type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+const entitledScopes = entitledScopesFor(false);
 
 const ORG = scopeId("org", "default-org");
 const JOSH = scopeId("personal", "josh");

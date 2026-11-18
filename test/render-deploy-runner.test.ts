@@ -29,6 +29,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDeployBackings, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
 const sqliteBackupStop = mock.fn(async () => {});
@@ -45,12 +46,12 @@ async function fixture(t: TestContext, appSource?: string, entrypoint = "node ap
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
   const backings = testDeployBackings();
-  const { deployments, drafts } = backings;
+  const { deployments: publishedApps, drafts } = backings;
   const archiveStore = testMap<DeployGitArchive>();
   const credentials = testMap<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
   const deployStore = createDeployStore({
-    deployments,
+    deployments: publishedApps,
     drafts,
     git: { repoRoot: gitDir, archiveStore },
     pg: backings.pg,
@@ -89,7 +90,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     deployStore,
   });
   const readerStore = createDeployStore({
-    deployments,
+    deployments: publishedApps,
     drafts,
     git: { repoRoot: join(root, "reader"), archiveStore },
     pg: backings.pg,
@@ -101,7 +102,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "unused", port: 8080 }),
-      destroy: async (deployment) => artifacts.revoke(deployment.id),
+      destroy: async (publishedApp) => artifacts.revoke(publishedApp.id),
     },
     deployDir: join(root, "deploy"),
     acl,
@@ -110,7 +111,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const app = createApp({
     deploy,
-    deploymentGitPrincipals: artifacts,
+    appGitPrincipals: artifacts,
     acl,
     identity,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
@@ -131,14 +132,6 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     await rm(root, { recursive: true, force: true });
   });
   return { root, base, d, deployStore, deploy, artifacts, credentials, gitDir, app };
-}
-
-async function port() {
-  const server = createHttpServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
 }
 
 async function runUntilReadyThenExit(input: {
@@ -217,8 +210,8 @@ async function startApp(
   );
   await chmod(manifestPath, 0o600);
   await beforeStart?.(manifestPath);
-  const gatewayPort = await port();
-  const appPort = await port();
+  const gatewayPort = await freePort();
+  const appPort = await freePort();
   const running: Promise<number> = runRenderApp({
     manifestPath,
     appDir: join(f.root, "app"),
@@ -243,22 +236,15 @@ async function startApp(
       headers: { "x-qm-render-app-token": renderGatewayToken("a".repeat(43), Date.now() + 60_000) },
       signal: AbortSignal.timeout(5_000),
     });
-  await Promise.race([
-    running.then((code) => {
-      throw new Error(`Runner exited with ${code}`);
-    }),
-    (async () => {
-      const deadline = Date.now() + 30_000;
-      while (Date.now() < deadline) {
-        const response = await request("/__qm_ready").catch(() => null);
-        await response?.body?.cancel();
-        if (response?.status === 204) return;
-        await delay(25);
-      }
-      throw new Error("Runner did not become ready");
-    })(),
-  ]);
-  return { request, running, appPort, appDir: join(f.root, "app") };
+  const deadline = Date.now() + 30_000;
+  while (!finished && Date.now() < deadline) {
+    const response = await request("/__qm_ready").catch(() => null);
+    await response?.body?.cancel();
+    if (response?.status === 204) return { request, running, appPort, appDir: join(f.root, "app") };
+    await delay(25);
+  }
+  if (finished) throw new Error(`Runner exited with ${await running}`);
+  throw new Error("Runner did not become ready");
 }
 
 test(
@@ -270,8 +256,8 @@ test(
     const manifest = { ...(await f.artifacts.prepare(f.d, v1)), readinessNonce: "n".repeat(43) };
     const manifestPath = join(f.root, "artifact.json");
     const appDir = join(f.root, "app");
-    const gatewayPort = await port();
-    const appPort = await port();
+    const gatewayPort = await freePort();
+    const appPort = await freePort();
     await writeFile(manifestPath, JSON.stringify(manifest));
     await chmod(manifestPath, 0o600);
     await f.deployStore.addVersion(f.d.id, {
@@ -338,15 +324,15 @@ test("Render runner credentials deny forgery, cross-app fetches, and Git writes"
   assert.equal((await request(`${manifest.url}/git-receive-pack`, manifest.token, "POST")).status, 403);
   const access = await verifyDeployGitAccess(signingSecret, manifest.token, Date.now() + 10 * 365 * 24 * 60 * 60_000);
   assert.equal(access?.permission, "read");
-  assert.equal(await f.app.authorizesDeploymentGitAccess(f.d.id, access!.principalId!, "write"), false);
-  assert.equal(await f.app.authorizesDeploymentGitAccess(f.d.id, "render-deploy:forged", "read"), false);
+  assert.equal(await f.app.authorizesAppGitAccess(f.d.id, access!.principalId!, "write"), false);
+  assert.equal(await f.app.authorizesAppGitAccess(f.d.id, "render-deploy:forged", "read"), false);
 });
 
 test("Archiving revokes a runner credential and restoration creates a new one", async (t) => {
   const f = await fixture(t);
   const version = f.d.versions[0]!;
   const manifest = await f.artifacts.prepare(f.d, version);
-  await f.deploy.archiveDeployment(f.d.id);
+  await f.deploy.archiveApp(f.d.id);
   assert.equal((await f.deployStore.get(f.d.id))!.status, "archived");
   const url = `${manifest.url}/info/refs?service=git-upload-pack`;
   assert.equal((await fetch(url, { headers: { authorization: `Bearer ${manifest.token}` } })).status, 403);
@@ -396,8 +382,8 @@ test("Render runner reports both app startup and backup shutdown failures", asyn
     runRenderApp({
       manifestPath,
       appDir: join(f.root, "app"),
-      gatewayPort: await port(),
-      appPort: await port(),
+      gatewayPort: await freePort(),
+      appPort: await freePort(),
       env: { ...process.env, QM_RENDER_APP_TOKEN: "a".repeat(43) },
     }),
     (error: unknown) => {

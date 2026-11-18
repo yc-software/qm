@@ -27,7 +27,7 @@ function fixture() {
     key: deriveConnectorKey("composio-test"),
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const app = { getSessionForViewer: async (_id: string, _viewer: string): Promise<unknown> => null };
+  const app = { getSessionForViewer: async (_id: string, _viewer: { actorId: string }): Promise<unknown> => null };
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const replies: unknown[] = [];
   const audits: Array<{ action: string; resource?: string }> = [];
@@ -1091,7 +1091,7 @@ async function slackReplyFixture() {
   const f = fixture();
   await f.own();
   f.app.getSessionForViewer = async (id, viewer) =>
-    id === "session" && viewer === "alice" ? { session: { threadRef: "ch:C123:123.456" } } : null;
+    id === "session" && viewer.actorId === "alice" ? { session: { threadRef: "ch:C123:123.456" } } : null;
   f.deps.slackAccounts = testMap();
   await f.deps.slackAccounts.put("alice", {
     principalId: "alice",
@@ -1131,6 +1131,7 @@ test("Slack replies use only the viewer's verified user connection and server-si
     sessionId: "session",
     ts: "123.789",
     name: "Alice",
+    speakerId: "alice",
   });
   const request = JSON.parse(String(f.calls.at(-1)!.init!.body));
   assert.equal(request.connected_account_id, "ca_alice");
@@ -1261,6 +1262,7 @@ test("native Slack replies use the authenticated user's token and server destina
     sessionId: "session",
     ts: "123.789",
     name: "Alice",
+    speakerId: "alice",
   });
   assert.equal(f.calls.length, 0);
   const sent = f.nativeCalls.at(-1)!;

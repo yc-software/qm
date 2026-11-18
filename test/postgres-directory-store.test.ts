@@ -241,12 +241,12 @@ test(
       { groupId: "G-2", principalId: "U-carol" },
     ]);
 
-    const r = await store.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"]);
+    const r = await store.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"], "slack");
     assert.equal(r.kind, "one");
     if (r.kind === "one") assert.equal(r.groupId, "G-1");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol"])).kind, "one");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-extra"])).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants([])).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol"], "slack")).kind, "one");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-extra"], "slack")).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants([], "slack")).kind, "none");
 
     assert.equal(await store.groupMember("G-1", "U-sam"), true);
     assert.equal(await store.groupMember("G-2", "U-sam"), false);
@@ -272,8 +272,8 @@ test(
 
     await store.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);
     assert.equal(await store.groupMember("G-1", "U-sam"), false);
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"])).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice"])).kind, "one");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"], "slack")).kind, "none");
+    assert.equal((await store.resolveGroupByParticipants(["U-alice"], "slack")).kind, "one");
   },
 );
 
@@ -353,18 +353,23 @@ test("pg directory: concurrent pushes for one org serialize instead of 500ing on
   assert.equal(await stores[0]!.channelMember("C-shared", "U-shared"), true);
 });
 
-test("pg directory: workspace URL survives roster swaps and reads back per org", { skip }, async () => {
+test("pg directory: workspace URL and app icon survive roster swaps and read back per org", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
+  const acme = { workspaceUrl: "https://acme.slack.com", appIconUrl: "https://avatars.slack-edge.com/app_72.png" };
 
-  assert.deepEqual(await store.meta(), { workspaceUrl: null });
-  await store.setWorkspaceUrl("https://acme.slack.com");
-  assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme.slack.com" });
+  assert.deepEqual(await store.meta(), { workspaceUrl: null, appIconUrl: null });
+  await store.setWorkspace(acme);
+  assert.deepEqual(await store.meta(), acme);
 
   await seed(store);
-  assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme.slack.com" });
+  assert.deepEqual(await store.meta(), acme);
 
-  await store.setWorkspaceUrl("https://acme2.slack.com");
-  assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme2.slack.com" });
+  await store.setWorkspace({ workspaceUrl: "https://acme2.slack.com", appIconUrl: null });
+  assert.deepEqual(
+    await store.meta(),
+    { ...acme, workspaceUrl: "https://acme2.slack.com" },
+    "a push without an icon keeps it",
+  );
 });
 
 test("pg directory: a swap stamped older than the stored snapshot is refused", { skip }, async () => {
@@ -389,6 +394,15 @@ test("pg directory: a swap stamped older than the stored snapshot is refused", {
 
   assert.equal(await store.replaceChannels([], undefined, undefined), true, "an unstamped swap keeps last-write-wins");
   assert.equal((await store.listChannels()).length, 0);
+});
+
+test("pg directory: a sync that only learns Slack's bot flag still rewrites the member", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  const app = { principalId: "U-app", displayName: "App", type: "internal" } as const;
+  await store.replace([app]);
+  assert.equal((await store.get("U-app"))?.isBot, undefined, "an unsynced flag stays empty");
+  await store.replace([{ ...app, isBot: true }]);
+  assert.equal((await store.get("U-app"))?.isBot, true);
 });
 
 test("pg directory: a partial roster swap preserves channels whose roster is unknown", { skip }, async () => {

@@ -36,7 +36,7 @@ const APP_PAGE_VIEWS_TABLE: PgMigrationDefinition = {
   ],
 };
 
-export const DEPLOYMENT_TABLES: PgMigrationDefinition[] = [
+export const APP_TABLES: PgMigrationDefinition[] = [
   ACCESS_TABLE,
   APP_PAGE_VIEWS_TABLE,
   ...durableMapTenancy("deployments", {
@@ -101,7 +101,7 @@ export interface AppPageView {
 
 export interface AppPageViewLog {
   record(view: AppPageView): Promise<void>;
-  lastViews(tenant: Tenant, viewer: string, deploymentIds: string[]): Promise<Map<string, number>>;
+  lastViews(tenant: Tenant, viewer: string, appIds: string[]): Promise<Map<string, number>>;
 }
 
 const MAX_PATH = 2048;
@@ -113,7 +113,7 @@ const DROP_REPORT_INTERVAL_MS = 60_000;
 const clip = (value: string | null, max: number): string | null => (value === null ? null : value.slice(0, max));
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
-  const pg = createPgPool(connectionString, DEPLOYMENT_TABLES);
+  const pg = createPgPool(connectionString, APP_TABLES);
   let inFlight = 0;
   let dropped = 0;
   let lastDropReport = 0;
@@ -148,12 +148,12 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
         inFlight--;
       }
     },
-    async lastViews(tenant, viewer, deploymentIds) {
+    async lastViews(tenant, viewer, appIds) {
       const rows = await pg.forTenant(tenant).q(
         `SELECT d.id AS deployment_id, v.at FROM unnest($3::text[]) AS d(id)
            CROSS JOIN LATERAL (SELECT at FROM app_page_views
              WHERE tenant_id = $1 AND viewer = $2 AND deployment_id = d.id ORDER BY at DESC LIMIT 1) v`,
-        [tenant.id, viewer, deploymentIds],
+        [tenant.id, viewer, appIds],
       );
       return new Map(rows.map((r) => [String(r.deployment_id), Number(r.at)]));
     },

@@ -3,6 +3,7 @@ import { reachEnqueue, withThread } from "../../reach/reach.ts";
 import { classifyUser, slackUserTimezone, type SlackIdentityMode, type SlackUser } from "../../slack/identity.ts";
 import type { Destination } from "../../types.ts";
 import type { ExternalAudienceAccess, Surface, SurfaceUser, TurnSurfaceOrigin } from "../contract.ts";
+import { SLACK } from "../registry.ts";
 
 interface SlackNative {
   userFrom(
@@ -61,7 +62,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
     },
   };
   return {
-    kind: "slack",
+    kind: SLACK,
     label: "Slack",
     capabilities: {
       mirrored: true,

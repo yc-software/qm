@@ -148,7 +148,7 @@ test("self spend: your crons are split from the crons others made that you can s
     const bobsGroup = await s.cron("bob", "group:G1");
     t.after(async () => {
       for (const cron of [yours, yoursInChannel, shared, toYou, bobsOwn, bobsPrivate, bobsGroup])
-        await s.built.app.deleteCron(cron.id);
+        await s.built.app.deleteCron(cron.id, { actorId: cron.owner });
     });
     await s.built.app.upsertGroups([
       { groupId: "G1", principalId: "alice" },

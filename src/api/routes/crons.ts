@@ -375,9 +375,9 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
   if (method === "DELETE") {
-    await app.deleteCron(id);
-    const editor = url.searchParams.get("principalId");
-    if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
+    const editor = url.searchParams.get("principalId")!;
+    await app.deleteCron(id, { actorId: editor });
+    await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return sendJson(res, 200, { ok: true });
   }
   return patchCronAsPerson(ctx, cron, body);
@@ -409,8 +409,8 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
   if (!isPersonCronPatch(body))
     return sendJson(res, 400, { error: "bad_request", message: PERSON_CRON_PATCH_BAD_REQUEST });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
-  const editor = url.searchParams.get("principalId");
-  const rewrite = editor && body.task !== undefined ? await cronTaskRewrite(app, cron, editor, true) : {};
+  const editor = url.searchParams.get("principalId")!;
+  const rewrite = body.task !== undefined ? await cronTaskRewrite(app, cron, editor, true) : {};
   const patch: CronPatch = {
     ...rewrite,
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
@@ -421,8 +421,8 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
     ...(body.archived !== undefined ? { archived: body.archived } : {}),
   };
   try {
-    const updated = await app.updateCron(cron.id, patch);
-    if (updated && editor)
+    const updated = await app.updateCron(cron.id, patch, { actorId: editor });
+    if (updated)
       await notifyOwnerOfCronEdit(app, {
         cron: { ...updated, owner: cron.owner },
         editorId: editor,

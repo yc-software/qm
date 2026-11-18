@@ -11,7 +11,7 @@ import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
-import { isWelcomeConversation } from "./welcome-session";
+import { welcomeLayout } from "./welcome-session";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -163,6 +163,7 @@ import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
 import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
@@ -181,8 +182,10 @@ import {
   workingWave,
 } from "./ui";
 import { icon } from "./icons";
+import { animateDetailsToggle } from "./details-motion";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { hasWelcomeScreen } from "./shell-state";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
@@ -208,7 +211,8 @@ import {
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   markWorking,
-  surfaceOf,
+  chatSurfaceOf,
+  repliesAsViewer,
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
@@ -346,6 +350,7 @@ export function createChatSurface(
   };
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
+  let continuedSpeakerRows = new Set<AgentMessage>();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
@@ -355,7 +360,7 @@ export function createChatSurface(
     );
     for (const message of messages) {
       const activity = (message as AssistantWork).work?.activity;
-      if (!activity) continue;
+      if (!activity || isReadOnlySlackView()) continue;
       let steers = steerMessageCache.get(activity);
       if (!steers) {
         steers = activityItems(activity).flatMap((item) => {
@@ -375,6 +380,7 @@ export function createChatSurface(
       }
     }
     updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
+    continuedSpeakerRows = continuedSpeakers(messages.filter((m) => !hiddenMessage(m) && !rendersInsideWork(m)));
   }
 
   function isSideChatSurface(): boolean {
@@ -418,7 +424,7 @@ export function createChatSurface(
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
-    if (!speaker) return nothing;
+    if (!speaker || continuedSpeakerRows.has(message)) return nothing;
     const member = speakerMember(message);
     return html`<div class="speaker-label">
       ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}<span
@@ -525,11 +531,13 @@ export function createChatSurface(
     connectedConnectors.clear();
   }
 
-  function newChat(context?: { scopeId: string; name: string | null }): string {
+  function newChat(
+    context?: { scopeId: string; name: string | null },
+    threadRef = `web:${appState.me?.user ?? "anon"}:${crypto.randomUUID()}`,
+  ): string {
     appState.currentView = "chats";
     renderSidebarTop();
     const user = appState.me?.user ?? "anon";
-    const threadRef = `web:${user}:${crypto.randomUUID()}`;
     const carried = storedDraft(newChatDraftKey(user));
     if (carried) saveDraft(threadRef, carried);
     ctx.composer.resetComposer();
@@ -707,7 +715,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof itemsToMessages>,
   ): boolean {
-    if (ctx.inbox || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
+    if (ctx.inbox || hasWelcomeScreen(appState.me) || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
       !shouldStartProactiveOpener({
         started: proactiveOpenerStarted,
@@ -1314,9 +1322,11 @@ export function createChatSurface(
     resetBackgroundPanel();
     const host = document.createElement("div");
     host.className = "custom-chat readonly-chat";
+    const chatSurface = chatSurfaceOf(s);
     const priorReply = sameSession ? container.querySelector<SlackReply>("qm-slack-reply") : null;
-    const slackReply =
-      surfaceOf(s) === "slack" ? (priorReply ?? (document.createElement("qm-slack-reply") as SlackReply)) : null;
+    const slackReply = repliesAsViewer(s)
+      ? (priorReply ?? (document.createElement("qm-slack-reply") as SlackReply))
+      : null;
     if (slackReply) {
       slackReply.sessionId = s.id;
       slackReply.user = appState.me?.user ?? "";
@@ -1330,10 +1340,10 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack", shownMessages)}
+            ${chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)}
             <div class="readonly-banner">
               ${
-                surfaceOf(s) === "slack"
+                slackReply
                   ? html`Replies are sent to this Slack conversation as
                     you.${
                       sessionSlackUrl(s)
@@ -1346,7 +1356,7 @@ export function createChatSurface(
                           >`
                         : nothing
                     }`
-                  : "This conversation is read-only here."
+                  : `This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}`
               }
             </div>
             ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
@@ -1500,6 +1510,7 @@ export function createChatSurface(
             .me=${appState.me}
             .animateWelcome=${animate}
             .onMoreIdeas=${showWelcomeIdeas}
+            .onIdea=${(prompt: string) => chatState.agent && ctx.composer.fillSuggestedPrompt(prompt, chatState.agent)}
             .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
           ></qm-onboarding-welcome>
@@ -1707,12 +1718,16 @@ export function createChatSurface(
     prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
-    const showWelcome =
-      !ctx.inbox &&
-      !editingApp &&
-      (appState.me?.welcomeCohort
-        ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
-        : isNewUser && !messages.length);
+    const welcome = welcomeLayout({
+      me: appState.me,
+      sessions: sessionsState.list,
+      threadRef: chatState.threadRef,
+      scopeId: chatState.scopeId,
+      isNewUser,
+      empty: !messages.length,
+      draft: Boolean(ctx.composer.state.draft),
+    });
+    const showWelcome = !ctx.inbox && !editingApp && welcome.show;
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
     if (messages.length) {
@@ -1728,7 +1743,7 @@ export function createChatSurface(
       !ctx.inbox &&
       emptyChat &&
       !editingApp &&
-      !(isNewUser && appState.me?.welcomeCohort) &&
+      !welcome.hideSuggestions &&
       !glanceTier &&
       (!ctx.pane || tier === "full") &&
       !chatState.sessionId &&
@@ -1819,7 +1834,8 @@ export function createChatSurface(
             </section>
             <div class="chat-bottom-dock">
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
-              ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
+              ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}
+              ${showWelcome && welcome.hideComposer ? nothing : ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
             </div>
           </div>
@@ -1868,7 +1884,7 @@ export function createChatSurface(
             onClick: () => void forkOriginController.navigate(),
           }
         : null,
-      persona: sessionPersonaChip(currentSession, () => drawActiveChat()),
+      persona: sessionPersonaChip(currentSession),
       onCrumb: crumb && scope ? () => openProjectPage(scope) : null,
       toolCount: scope ? (t) => scopeToolCount(t, scope, () => drawActiveChat()) : null,
       onTool: (tool) => {
@@ -1880,7 +1896,7 @@ export function createChatSurface(
           crumb,
         });
         if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
-        switchView(tool === "apps" ? "deploys" : tool);
+        switchView(tool);
       },
     });
   }
@@ -1952,7 +1968,7 @@ export function createChatSurface(
     index: number,
     isStreaming: boolean,
   ): TemplateResult | typeof nothing {
-    if ((message as { steered?: boolean }).steered) return nothing;
+    if (rendersInsideWork(message)) return nothing;
     const msg = message as AssistantWork & {
       stopReason?: string;
       errorMessage?: string;
@@ -1973,8 +1989,8 @@ export function createChatSurface(
     const speaker = speakerLabelFor(message);
     const speakerLabel =
       message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
-        ? assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)
-        : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
+        ? `${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)}\n${slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl) ?? ""}`
+        : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}\n${continuedSpeakerRows.has(message)}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
     const day = new Date().toDateString();
@@ -2027,10 +2043,9 @@ export function createChatSurface(
     isStreaming = false,
     inline = false,
   ): TemplateResult | typeof nothing {
-    const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
-    if (hidden.opener || hidden.resumeAnchor) return nothing;
+    if (hiddenMessage(message)) return nothing;
     const role = (message as { role?: string }).role;
-    if (!inline && (message as { steered?: boolean }).steered) return nothing;
+    if (!inline && rendersInsideWork(message)) return nothing;
     if (role === "user" || role === "user-with-attachments") {
       const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
       if (mail) {
@@ -2052,7 +2067,6 @@ export function createChatSurface(
       const displayText = excerpt && rawText.startsWith(excerpt) ? rawText.slice(excerpt.length) : rawText;
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
-      const steered = Boolean((message as { steered?: boolean }).steered);
       const speaker = speakerLabelFor(message);
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
@@ -2075,7 +2089,7 @@ export function createChatSurface(
         });
       return html`
         <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${steered ? "steered-row" : ""}"
+          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
@@ -2162,8 +2176,7 @@ export function createChatSurface(
       const showWork =
         (msg as AssistantWork & { approvalDecision?: string }).approvalDecision !== "denied" &&
         shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
-      const steeringOnly =
-        !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
+      const steeringOnly = !showWork && work ? workTimeline(work, text).filter((item) => item.kind === "steer") : [];
       let workView: TemplateResult | typeof nothing =
         work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
       if (showWork) {
@@ -2220,7 +2233,7 @@ export function createChatSurface(
           ${
             labeled
               ? html`<div class="speaker-label">
-                  ${brandMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
+                  ${assistantMark(msg)}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -2378,7 +2391,21 @@ export function createChatSurface(
   }
 
   function isReadOnlySlackView(): boolean {
-    return !chatState.agent && chatState.forkSession !== null && surfaceOf(chatState.forkSession) === "slack";
+    return !chatState.agent && chatState.forkSession?.surface === "slack";
+  }
+
+  function workTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
+    const timeline = messageWorkTimeline(work, finalText);
+    return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
+  }
+
+  function assistantMark(message: AgentMessage): TemplateResult {
+    const icon = slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl);
+    return icon ? avatarTpl({ key: brandName(), name: brandName(), avatarUrl: icon }) : brandMark();
+  }
+
+  function rendersInsideWork(message: AgentMessage): boolean {
+    return Boolean((message as { steered?: boolean }).steered) && !isReadOnlySlackView();
   }
 
   function assistantDisplayText(text: string): string {
@@ -2494,7 +2521,7 @@ export function createChatSurface(
   }
 
   function shouldShowWork(work: WorkBlock | null | undefined, finalText: string): work is WorkBlock {
-    return Boolean(work && (messageWorkTimeline(work, finalText).length || work.pendingApprovals?.length));
+    return Boolean(work && (workTimeline(work, finalText).length || work.pendingApprovals?.length));
   }
 
   let readonlyRedraw: (() => void) | null = null;
@@ -3173,7 +3200,7 @@ export function createChatSurface(
       isStreaming &&
       currentTextPhase(work)?.phase !== "final_answer" &&
       (work.status === "working" || work.status === "thinking");
-    const segments = workTimelineSegments(messageWorkTimeline(work, active ? "" : text));
+    const segments = workTimelineSegments(workTimeline(work, active ? "" : text));
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
@@ -3358,7 +3385,7 @@ export function createChatSurface(
           else openThinking.delete(key);
         }}
       >
-        <summary class="thinking-summary">
+        <summary class="thinking-summary" @click=${animateDetailsToggle}>
           <span class="tool-icon">${icon(Brain, 15)}</span><span class="thinking-title">${thought.title}</span>
           <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
         </summary>
@@ -3375,7 +3402,7 @@ export function createChatSurface(
 
   function retractedRow(reason: string, text: string): TemplateResult {
     return html`<details class="thinking-row retracted-reply">
-      <summary class="thinking-summary">
+      <summary class="thinking-summary" @click=${animateDetailsToggle}>
         <span class="tool-icon">${icon(RotateCcw, 15)}</span><span class="thinking-title">Retracted: ${reason}</span>
         <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
       </summary>
