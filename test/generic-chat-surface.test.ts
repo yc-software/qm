@@ -498,7 +498,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
   );
 });
 
-test("a chat with any member the deployment does not vouch for is neither mirrored nor answered", async () => {
+test("a chat with any member neither the deployment nor the host vouches for is neither mirrored nor answered", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
     const withGuest = event({ body: "!post hi", mentions: true, eventId: "ev-guest", messageId: "1040" });
@@ -518,30 +518,13 @@ test("a chat with any member the deployment does not vouch for is neither mirror
       await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }),
       [],
     );
-  } finally {
-    await genericChat.close();
-  }
-});
-
-test("a person the host flags as a member of the account's workspace is answered without a member-list row, unless deactivated", async () => {
-  const { built, genericChat, deliver } = await genericChatApp();
-  const founder = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
-  const fromFounder = (body: string, eventId: string, messageId: string) => {
-    const base = event({ body, mentions: true, eventId, messageId });
-    return {
-      ...base,
-      chat: { ...base.chat, members: [...base.chat.members, founder] },
-      message: { ...base.message, user: founder },
-    };
-  };
-  try {
-    assert.equal((await deliver(fromFounder("!post hi", "ev-member", "1050"))).body.ignored, undefined);
-    await settle(async () => genericChat.shown().some((m) => m.body === "hi"));
-    assert.ok(genericChat.shown().some((m) => m.body === "hi"));
-
-    await withTenant(TEST_TENANT, () => built.identity.deactivate(founder.email));
-    const deactivated = fromFounder("!post again", "ev-member-off", "1051");
-    assert.equal((await deliver(deactivated)).body.ignored, "unvouched_participants");
+    const vouched = event({ body: "!post hi", mentions: true, eventId: "ev-vouched", messageId: "1042" });
+    vouched.message.user = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
+    vouched.chat.members.push(vouched.message.user);
+    await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev"));
+    assert.equal((await deliver(vouched)).body.ignored, "unvouched_participants");
+    await withTenant(TEST_TENANT, () => built.identity.reactivate("founder@startup.dev"));
+    assert.equal((await deliver({ ...vouched, event_id: "ev-vouched-2" })).body.ignored, undefined);
   } finally {
     await genericChat.close();
   }
