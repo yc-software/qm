@@ -13,6 +13,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 
@@ -349,6 +350,8 @@ test("removing a connection, a saved login or a persona takes a running turn wit
     const access = ["personal:U1", "org:acme"].map((scopeId, i) => ({ scopeId, role: i ? "read" : "owner" }));
     assert.equal(await send("POST", revoke), "200 U1");
     assert.equal(await send("POST", revoke, { keychainMembers: [{ id: "U2", type: "internal" }] }, "U2"), "200 U2");
+    const [revoked] = await srv.built.auditLog.tail(testTenant, { limit: 1, action: "connector.oauth.revoked" });
+    assert.deepEqual([revoked?.principalId, revoked?.scopeLabel], ["U1", "U2"]);
     assert.equal(await send("POST", revoke, {}, "U9"), "400 bad_request");
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U9"), "kept");
     assert.equal(await send("POST", revoke, { triggered: true }), "403 human_consent_required");
