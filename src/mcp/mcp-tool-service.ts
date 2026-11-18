@@ -6,7 +6,7 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
-import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import type { McpServer, McpServerApp, McpServerStore } from "./mcp-server-store.ts";
 import { attestsInAudience, attestedPerson, OutsideAudience, type AttestingTurn } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
@@ -72,6 +72,11 @@ export interface McpToolDescriptor {
   catalog?: true;
 }
 
+export interface McpAppConnection extends McpServerApp {
+  connector: string;
+  connected: boolean;
+}
+
 export interface McpToolService {
   toolDefs(): Promise<McpToolDescriptor[]>;
   toolDefsFor(principalId?: string, audienceScopeId?: ScopeId, turn?: AttestingTurn): Promise<McpToolDescriptor[]>;
@@ -92,6 +97,7 @@ export interface McpToolService {
   ): Promise<boolean>;
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
+  appConnections(principalId: string): Promise<McpAppConnection[]>;
   close(): void;
 }
 
@@ -554,6 +560,33 @@ export function createMcpToolService(opts: {
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
+    },
+    async appConnections(principalId) {
+      const servers = (await opts.servers.list()).filter((server) => server.enabled && server.apps?.length);
+      const perServer = await Promise.all(
+        servers.map(async (server) => {
+          const apps = server.apps ?? [];
+          let listed = new Set<string>();
+          if (apps.some((app) => app.tool)) {
+            try {
+              const client = await callerClient(server, principalId);
+              const { tools } = await client.listTools({
+                headers: headersFor(server, principalId),
+                ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
+              });
+              listed = new Set(tools.map((tool) => tool.name));
+            } catch (e) {
+              record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
+            }
+          }
+          return apps.map((app) => ({
+            ...app,
+            connector: server.id,
+            connected: app.tool !== undefined && listed.has(app.tool),
+          }));
+        }),
+      );
+      return perServer.flat();
     },
     close() {
       closed = true;

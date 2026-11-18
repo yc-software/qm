@@ -386,7 +386,7 @@ export class OnboardingWelcome extends LitElement {
         const result = await response.json();
         if (!response.ok)
           throw new Error(result.message ?? "App connections are unavailable right now. Please try again.");
-        for (const item of result.items as Array<{ id: string; name: string; description: string }>) {
+        for (const item of result.items as Array<Omit<ConnectionService, "popularity">>) {
           if (item.id !== "slack" && !services.some((service) => service.id === item.id))
             services.push({ ...item, popularity: 100000 - services.length });
         }
@@ -414,6 +414,10 @@ export class OnboardingWelcome extends LitElement {
   }
   private async authorize(service: ConnectionService, replaces?: string): Promise<void> {
     if (this.authorizing) return;
+    if (service.connectUrl) {
+      if (!(await openDesktopBrowser(service.connectUrl))) window.open(service.connectUrl, "_blank", "noopener");
+      return;
+    }
     if (this.preview) {
       startPreviewAttempt(this.previewUser(), service, this.pickerState, this.closest(".chat-scroll")?.scrollTop ?? 0);
       return;

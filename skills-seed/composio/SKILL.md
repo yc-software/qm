@@ -48,6 +48,10 @@ Check `connections` before work that depends on an app. If the app is in the cat
 - For other apps in Slack conversations, mint a link with `authorize` (step 3 below) and say you'll pick the task back up when they reply.
 - If the app isn't in the catalog, say so in one sentence and don't show the picker. Look for the provider's official API or MCP server yourself. If it uses API keys, send a secure keychain drop link instead of asking for the key in chat.
 
+## Apps connected somewhere else
+
+Some apps are served by one of the workspace's connectors instead of Composio. In `toolkits` they carry `connectUrl` and `connector`; in `connections` a connected one is listed with `connector` and an empty `id`. Do their work with that connector's tools, never with Composio's. When one isn't connected, give the person its `connectUrl` as a plain link, in any surface, and say you'll continue when they reply. Don't show a connect card or call `authorize` for it: `authorize` refuses it with `409 connect_elsewhere`.
+
 ## Reconnect or disconnect an app
 
 Each account in `connections` lists `missingScopes`: permissions the app's configuration now requests that this connection never got. Providers like X can't upgrade a token in place, so only a fresh consent fixes it.

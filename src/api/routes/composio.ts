@@ -18,8 +18,14 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, activeRun, audit } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
+import type { McpServerApp } from "../../mcp/mcp-server-store.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
+const TOOLKIT_ID = /^[a-z0-9_-]{1,100}$/;
+
+export function isToolkitId(value: unknown): value is string {
+  return typeof value === "string" && TOOLKIT_ID.test(value);
+}
 
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
@@ -182,6 +188,13 @@ export async function request(
   return (await response.json()) as Record<string, unknown>;
 }
 
+export async function externalApps(ctx: ApiCtx): Promise<Array<McpServerApp & { connector: string }>> {
+  const servers = (await ctx.deps.mcpServers?.list()) ?? [];
+  return servers.flatMap((server) =>
+    server.enabled ? (server.apps ?? []).map((app) => ({ ...app, connector: server.id })) : [],
+  );
+}
+
 async function catalog(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
@@ -195,8 +208,7 @@ async function catalog(ctx: ApiCtx): Promise<void> {
     const items = data.items.flatMap((item) => {
       if (
         !item ||
-        typeof item.slug !== "string" ||
-        !/^[a-z0-9_-]{1,100}$/.test(item.slug) ||
+        !isToolkitId(item.slug) ||
         typeof item.name !== "string" ||
         (Array.isArray(item.auth_schemes) && item.auth_schemes.every((scheme: unknown) => scheme === "NO_AUTH"))
       )
@@ -210,8 +222,25 @@ async function catalog(ctx: ApiCtx): Promise<void> {
         },
       ];
     });
+    const external = new Map((await externalApps(ctx)).map((app) => [app.toolkit, app]));
+    const listed = items.map((item) => {
+      const app = external.get(item.id);
+      return app ? { ...item, connectUrl: app.connectUrl, connector: app.connector } : item;
+    });
+    const unlisted = cursor
+      ? []
+      : [...external.values()]
+          .filter((app) => !items.some((item) => item.id === app.toolkit))
+          .map((app) => ({
+            id: app.toolkit,
+            logoUrl: `https://logos.composio.dev/api/${app.toolkit}`,
+            name: app.name,
+            description: "",
+            connectUrl: app.connectUrl,
+            connector: app.connector,
+          }));
     return sendJson(ctx.res, 200, {
-      items,
+      items: [...unlisted, ...listed],
       nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
     });
   } catch {
@@ -284,7 +313,10 @@ async function connections(ctx: ApiCtx): Promise<void> {
   const query = new URLSearchParams({ user_ids: userIds.join(","), statuses: "ACTIVE", limit: "100" });
   if (cursor) query.set("cursor", cursor);
   try {
-    const data = await request(ctx, access.key, `/connected_accounts?${query}`);
+    const [data, external] = await Promise.all([
+      request(ctx, access.key, `/connected_accounts?${query}`),
+      cursor ? [] : (ctx.deps.mcpToolService?.appConnections(access.principal) ?? []),
+    ]);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
     const accounts = data.items.filter((item) => usableAccount(item, userIds));
     const configIds = [
@@ -297,12 +329,17 @@ async function connections(ctx: ApiCtx): Promise<void> {
     const scopes = new Map(
       await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key, id)] as const)),
     );
-    const items = accounts.map((item) => ({
-      id: item.id,
-      toolkit: item.toolkit.slug,
-      userId: item.user_id,
-      missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
-    }));
+    const items = [
+      ...accounts.map((item) => ({
+        id: item.id,
+        toolkit: item.toolkit.slug,
+        userId: item.user_id,
+        missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
+      })),
+      ...external
+        .filter((app) => app.connected)
+        .map((app) => ({ id: "", toolkit: app.toolkit, connector: app.connector, missingScopes: [] })),
+    ];
     ctx.res.setHeader("Cache-Control", "no-store");
     return sendJson(ctx.res, 200, {
       items,
@@ -355,7 +392,7 @@ async function tools(ctx: ApiCtx): Promise<void> {
   const toolkit = ctx.url.searchParams.get("toolkit") ?? "";
   const query = ctx.url.searchParams.get("query") ?? "";
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
-  if (!/^[a-z0-9_-]{1,100}$/.test(toolkit) || query.length > 1000 || cursor.length > 2048)
+  if (!isToolkitId(toolkit) || query.length > 1000 || cursor.length > 2048)
     return sendJson(ctx.res, 400, { error: "invalid_query" });
   const params = new URLSearchParams({ toolkit_slug: toolkit, query, limit: "25", toolkit_versions: "latest" });
   if (cursor) params.set("cursor", cursor);
