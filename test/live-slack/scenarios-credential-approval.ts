@@ -18,7 +18,7 @@ async function waitFor<T>(label: string, fn: () => Promise<T | undefined>, timeo
   throw new Error(`timed out waiting for ${label}`);
 }
 
-export const buttons = (m: SlackMessage): Array<{ action_id: string; value: string; block_id?: string }> => {
+const buttons = (m: SlackMessage): Array<{ action_id: string; value: string; block_id?: string }> => {
   const block = (m.blocks ?? []).find((b) => b.type === "actions") as
     { block_id?: string; elements?: Array<{ action_id: string; value: string }> } | undefined;
   return (block?.elements ?? []).map((e) => ({ ...e, block_id: block?.block_id }));
