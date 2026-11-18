@@ -356,7 +356,10 @@ async function teardown(): Promise<void> {
   for (const p of procs.values()) if (p.child.exitCode === null) p.child.kill("SIGKILL");
   const left = await query<{ id: string; backend: string }>(
     "SELECT id, json->>'backend' AS backend FROM sandbox_resources",
-  ).catch(() => []);
+  ).catch((e: unknown) => {
+    log(`could not list agent sandboxes left on the provider: ${e instanceof Error ? e.message : String(e)}`);
+    return [];
+  });
   for (const s of left) log(`agent sandbox ${s.id} (${s.backend}) outlives this run; delete it on the provider`);
   await db.end();
   const admin = new pg.Client({ connectionString: baseUrl });
