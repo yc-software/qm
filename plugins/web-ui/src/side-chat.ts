@@ -50,7 +50,9 @@ export function createSideChatController(ctx: ConvCtx) {
   let sendOnOpen = false;
   let maximized = false;
   let includeExcerpt = true;
-  const previews = new Map<string, { text: string }>();
+  const previews = new Map<string, { text: string; draft?: boolean }>();
+  const unsent = new Map<string, CoreSession>();
+  const listedIds = new Set<string>();
   let previewFrame: number | null = null;
   let error = "";
   let epoch = 0;
@@ -385,6 +387,12 @@ export function createSideChatController(ctx: ConvCtx) {
       });
   }
 
+  function previewView(id: string) {
+    const preview = previews.get(id);
+    if (preview?.draft) return html`<div class="side-chat-preview draft"><em>Draft</em> ${preview.text}</div>`;
+    return html`<div class="side-chat-preview">${markdown(preview?.text || "Loading…")}</div>`;
+  }
+
   function refreshHighlights() {
     const id = sourceId;
     if (!id) return;
@@ -392,7 +400,16 @@ export function createSideChatController(ctx: ConvCtx) {
       (result) => {
         if (sourceId !== id) return;
         const order = new Map(chats.map((chat, position) => [chat.id, position]));
-        chats = (result.sessions ?? []).toSorted(
+        const listed = result.sessions ?? [];
+        listedIds.clear();
+        for (const chat of listed) {
+          unsent.delete(chat.id);
+          listedIds.add(chat.id);
+        }
+        const kept = [...unsent.values(), ...(active ? [active] : [])].filter(
+          (chat) => !listed.some((row) => row.id === chat.id),
+        );
+        chats = [...listed, ...new Map(kept.map((chat) => [chat.id, chat])).values()].toSorted(
           (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
         );
         redraw();
@@ -414,7 +431,23 @@ export function createSideChatController(ctx: ConvCtx) {
       queueMicrotask(() => release(true));
     }
     if (active) {
-      void loadPreview(active);
+      const leaving = active;
+      const draft = conversation?.composer.state.draft.trim() ?? "";
+      const sent =
+        !conversation ||
+        listedIds.has(leaving.id) ||
+        (conversation.state.agent?.state.messages ?? []).some(
+          (message) => message.role === "user" || message.role === "user-with-attachments",
+        );
+      unsent.delete(leaving.id);
+      if (sent) void loadPreview(leaving);
+      else if (draft) {
+        unsent.set(leaving.id, leaving);
+        previews.set(leaving.id, { text: draft, draft: true });
+      } else {
+        previews.delete(leaving.id);
+        chats = chats.filter((chat) => chat.id !== leaving.id);
+      }
       refreshHighlights();
     }
     pendingQuote = null;
@@ -453,6 +486,8 @@ export function createSideChatController(ctx: ConvCtx) {
     paintHighlights();
     chats = [];
     previews.clear();
+    unsent.clear();
+    listedIds.clear();
     error = "";
     busy = false;
     refreshHighlights();
@@ -869,11 +904,7 @@ export function createSideChatController(ctx: ConvCtx) {
                 ${chat.sideChat!.expanded ? icon(ArrowUpRight, 13) : nothing}
                 ${active?.id !== chat.id ? html`<b class="side-chat-more" aria-hidden="true">…</b>` : nothing}
               </button>
-              ${
-                active?.id === chat.id
-                  ? this.card()
-                  : html` <div class="side-chat-preview">${markdown(previews.get(chat.id)?.text || "Loading…")}</div> `
-              }
+              ${active?.id === chat.id ? this.card() : previewView(chat.id)}
             </div>`,
         )}
         ${pending && !matches.some((chat) => chat.id === active?.id) ? this.card() : nothing}
