@@ -91,7 +91,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   let observer: ResizeObserver | null = null;
   let following = false;
   let frame: number | null = null;
-  let holdFrame: number | null = null;
   let remeasure = true;
   let restContent = 0;
   let condensedContent = 0;
@@ -188,20 +187,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     if (element)
       anchor = { element, text: "", row: rowKey(element), offset: element.getBoundingClientRect().top - viewportTop() };
     else captureAnchor();
-    keepHeld(0);
-  }
-
-  function keepHeld(frames: number): void {
-    if (holdFrame !== null) cancelAnimationFrame(holdFrame);
-    holdFrame = requestAnimationFrame(() => {
-      holdFrame = null;
-      if (!stack || !anchor) return;
-      restoreAnchor();
-      const moving = (stack.getAnimations?.({ subtree: true }) ?? []).some(
-        (animation) => animation.effect?.getComputedTiming().endTime !== Infinity,
-      );
-      if (frames < 2 || moving) keepHeld(frames + 1);
-    });
   }
 
   function distanceToBottom(): number {
@@ -469,8 +454,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     hideScrollbar();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
-    if (holdFrame !== null) cancelAnimationFrame(holdFrame);
-    holdFrame = null;
     observer?.disconnect();
     observer = null;
     scroller?.removeEventListener("qm-content-updating", onContentUpdating);
