@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Pool } from "pg";
 import { run } from "./proc.ts";
 import { sleep } from "./util.ts";
@@ -68,6 +71,50 @@ export interface LocalPostgres {
   url: string;
 }
 
+async function must(cmd: string, args: string[]): Promise<void> {
+  const res = await run(cmd, args, { timeoutMs: 0 });
+  if (res.code !== 0) throw new Error(`${cmd} ${args.join(" ")} failed: ${(res.stderr || res.stdout).trim()}`);
+}
+
+async function ensureNativePostgres(dbName: string, port: string, log: (msg: string) => void): Promise<LocalPostgres> {
+  const bin = "/usr/lib/postgresql/16/bin";
+  if (!existsSync(`${bin}/initdb`) || !existsSync("/usr/share/postgresql/16/extension/vector.control")) {
+    log("no Docker: installing native Postgres 16 + pgvector with apt-get...");
+    await must("sudo", ["apt-get", "update", "-qq"]);
+    await must("sudo", [
+      "env",
+      "DEBIAN_FRONTEND=noninteractive",
+      "apt-get",
+      "install",
+      "-y",
+      "-qq",
+      "postgresql-16",
+      "postgresql-16-pgvector",
+    ]);
+  }
+  const data = join(homedir(), ".local/share/qm-dev/postgres16");
+  if (!existsSync(join(data, "PG_VERSION")))
+    await must(`${bin}/initdb`, ["-D", data, "-U", "postgres", "--auth=trust"]);
+  if ((await run(`${bin}/pg_isready`, ["-h", "127.0.0.1", "-p", port], { timeoutMs: 15_000 })).code !== 0) {
+    await must(`${bin}/pg_ctl`, [
+      "-D",
+      data,
+      "-l",
+      join(data, "server.log"),
+      "-w",
+      "-o",
+      `-h 127.0.0.1 -p ${port} -k ${data}`,
+      "start",
+    ]);
+  }
+  const admin = `postgres://postgres@127.0.0.1:${port}/postgres`;
+  if (!(await pgQuery(admin, "SELECT 1 FROM pg_database WHERE datname = $1", [dbName])).length) {
+    await pgQuery(admin, `CREATE DATABASE ${dbName}`);
+  }
+  log(`durability: using native Postgres 16 in ${data} database ${dbName}`);
+  return { url: `postgres://postgres@127.0.0.1:${port}/${dbName}` };
+}
+
 export async function ensureLocalPostgres(worktree: string, log: (msg: string) => void): Promise<LocalPostgres> {
   const container = process.env.DEV_INSTANCE_POSTGRES_CONTAINER || "qm-dev-postgres";
   const port = process.env.DEV_INSTANCE_POSTGRES_PORT || "55432";
@@ -76,7 +123,10 @@ export async function ensureLocalPostgres(worktree: string, log: (msg: string) =
   const volume = process.env.DEV_INSTANCE_POSTGRES_VOLUME || "qm-dev-postgres-data";
   const dbName = worktreeDbName(worktree);
 
-  if (!(await ensureDockerDaemon(log))) throw new Error("docker daemon unavailable");
+  if (!(await ensureDockerDaemon(log))) {
+    if (!existsSync("/usr/bin/apt-get")) throw new Error("docker daemon unavailable");
+    return await ensureNativePostgres(dbName, port, log);
+  }
   const exists = (
     await docker(["ps", "-a", "--filter", `name=^/${container}$`, "--format", "{{.Names}}"])
   ).stdout.trim();

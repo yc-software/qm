@@ -124,14 +124,13 @@ export async function assembleEnv(opts: {
     openaiKeySource = "the worktree .env";
   }
 
-  if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY) {
-    if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
-    if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
-  } else {
+  if (!env.ANTHROPIC_API_KEY && !env.OPENAI_API_KEY && !env.MODEL_GATEWAY_URL) {
     throw new Error(
-      `ANTHROPIC_API_KEY or OPENAI_API_KEY is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
+      `ANTHROPIC_API_KEY, OPENAI_API_KEY or MODEL_GATEWAY_URL is required: dev instances exercise real LLM calls by default. Export one or add it to ${liveEnvFile}.`,
     );
   }
+  if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
+  if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
 
   for (const key of DEV_SECURITY_SECRET_KEYS) {
     if (!env[key] && wtEnv[key]) env[key] = wtEnv[key];

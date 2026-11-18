@@ -42,6 +42,7 @@ import { sweepSlackTokenOrphans } from "./lib/orphans.ts";
 import { destroyLocalDevSandboxes } from "./lib/sandbox.ts";
 import { bestEffort, errMessage, formatAge, nowEpoch, sleep, swallowAs } from "./lib/util.ts";
 import { runDoctor } from "./commands/doctor.ts";
+import { runSmoke } from "./commands/smoke.ts";
 import type { BootPhaseEvent, BootResult, DevSandboxChoice, LeaseInfo } from "./lib/types.ts";
 import { CHILD_ORDER, EXIT } from "./lib/types.ts";
 import { validOrgId } from "../../cli/src/config.ts";
@@ -84,6 +85,7 @@ const commandOptions: Record<string, readonly string[]> = {
   canary: ["json"],
   logs: ["follow"],
   doctor: ["json", "fix", "no-slack"],
+  smoke: [],
 };
 
 const devServiceNames = [...CHILD_ORDER];
@@ -141,17 +143,25 @@ async function legacyTeardown(lease: LeaseInfo): Promise<void> {
   releaseSlotLock(lease.slot, store);
 }
 
-async function teardownLease(lease: LeaseInfo): Promise<void> {
+async function teardownLease(
+  lease: LeaseInfo,
+  destroySandboxes = false,
+): Promise<{ notes?: string[]; residue?: string[] }> {
   const sock = resolveSocketPath(lease.lockDir);
+  let res: { body: { notes?: string[]; residue?: string[] } } | undefined;
   if (await supervisorReachable(sock)) {
-    await supervisorRequest(sock, "POST", "/shutdown", {}).catch(
+    res = await supervisorRequest(sock, "POST", "/shutdown", { destroySandboxes }).catch(
       swallowAs("dev: supervisor shutdown request", undefined),
     );
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline && existsSync(lease.lockDir)) await sleep(300);
-    if (!existsSync(lease.lockDir)) return;
+    if (!existsSync(lease.lockDir)) return res?.body ?? {};
   }
   await legacyTeardown(lease);
+  if (res) return res.body;
+  return destroySandboxes
+    ? { notes: ["the supervisor did not answer /shutdown, so recorded cloud sandboxes were not cleaned"] }
+    : {};
 }
 
 async function reapStale(): Promise<void> {
@@ -455,8 +465,9 @@ async function cmdDown(): Promise<number> {
   }
   const slot = mine.slot;
   const tokens = mine.meta.slack === "0" ? null : slotTokens(slot, store);
-  await teardownLease(mine);
-  const residue: string[] = [];
+  const sandboxes = await teardownLease(mine, true);
+  for (const note of sandboxes.notes ?? []) out(`sandbox: ${note}`);
+  const residue: string[] = [...(sandboxes.residue ?? [])];
   for (const [name, port] of Object.entries(slotPorts(slot))) {
     if (name === "supervisor" || name === "prodProxy") continue;
     const holders = portHolders(port);
@@ -663,9 +674,11 @@ async function main(): Promise<number> {
         store,
         slack: requestedSurface === undefined ? myLease(repoRoot(), store)?.meta.slack === "1" : withSlack,
       });
+    case "smoke":
+      return await runSmoke(store);
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|do-managed-agents|render|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor|smoke] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|do-managed-agents|render|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }
