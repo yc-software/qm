@@ -258,7 +258,11 @@ async function scenarioTick(): Promise<string> {
   const sent = Date.now();
   signal(a, "SIGUSR2");
   const ticked = await until("tick acknowledgement", () => seen(a, "SIGUSR2 ticked", from), 5_000);
-  await until("a fresh deploy-drain heartbeat", async () => (await heartbeatAt("runtime-qa-1")) > before || undefined, 3_000);
+  await until(
+    "a fresh deploy-drain heartbeat",
+    async () => (await heartbeatAt("runtime-qa-1")) > before || undefined,
+    3_000,
+  );
   return `${ticked.trim()}; drain heartbeat refreshed ${Date.now() - sent} ms after the signal (interval 10 s)`;
 }
 
@@ -384,6 +388,9 @@ try {
   await teardown();
 }
 const failed = checks.filter((c) => !c.ok);
-for (const c of checks) console.log(`${c.ok ? "PASS" : "FAIL"} ${c.scenario} (${Math.round(c.ms / 1000)} s): ${c.detail}`);
-console.log(`runtime-qa: ${checks.length - failed.length}/${checks.length} passed in ${Math.round((Date.now() - started) / 1000)} s; logs in ${evidence}`);
+for (const c of checks)
+  console.log(`${c.ok ? "PASS" : "FAIL"} ${c.scenario} (${Math.round(c.ms / 1000)} s): ${c.detail}`);
+console.log(
+  `runtime-qa: ${checks.length - failed.length}/${checks.length} passed in ${Math.round((Date.now() - started) / 1000)} s; logs in ${evidence}`,
+);
 process.exit(failed.length ? 1 : 0);
