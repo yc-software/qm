@@ -680,6 +680,22 @@ async function delegatedLanes(r: Rig, tasks: string[], botActor = false) {
   return lanes;
 }
 
+test("a subagent bot work opened still writes to its parent once bot work can't see it, as mail for the person's next turn, and is told why it can't read it", async () => {
+  const r = await rig();
+  const [lane] = await delegatedLanes(r, ["work"], true);
+  const wrote = await lane!.api.write({ target: "parent", wake: true, text: "which region?" });
+  const read = await lane!.api.read({ target: "parent" });
+  const [mail] = await r.mailbox.pending(r.room.id);
+  assert.deepEqual(
+    [
+      wrote.ok && wrote.title,
+      !read.ok && read.message.includes("hidden from bot work"),
+      mail?.text.includes("which region?"),
+    ],
+    [r.room.id, true, true],
+  );
+});
+
 test("a return deferred while the parent was busy wakes the parent once a Stop of that conversation alone ends the turn", async () => {
   const r = await rig();
   const deps = { ...r, maxAttempts: 3 };
