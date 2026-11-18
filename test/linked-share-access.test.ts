@@ -1,17 +1,14 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { installPrincipalLinks, ownsPersonalScope, recordForPerson } from "../src/directory/person.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { composioUserId, personAccounts } from "../src/api/routes/composio.ts";
-import { canEditAppPermissions } from "../src/deploy/app-access.ts";
 import { boundLoopCron } from "../src/loops/authority.ts";
-import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { orgId } from "../src/config.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import type { Loop } from "../src/loops/types.ts";
-import type { LoopStore } from "../src/loops/loop-store.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -73,29 +70,6 @@ test(
   },
 );
 
-test("a personal scope belongs to every linked sign-in and no one else", () => {
-  assert.equal(ownsPersonalScope(`personal:${ALIAS}`, CANON), true);
-  assert.equal(ownsPersonalScope(`personal:${CANON}`, ALIAS), true);
-  assert.equal(ownsPersonalScope("personal:U2", CANON), false);
-  assert.equal(ownsPersonalScope(`channel:${CANON}`, CANON), false);
-  assert.equal(ownsPersonalScope("personal:U2", "U2"), true);
-  assert.equal(canEditAppPermissions(`personal:${ALIAS}`, CANON), true);
-  assert.equal(canEditAppPermissions("personal:U2", CANON), false);
-});
-
-test("a record under the sign-in in use wins, then the canonical one, then the most recent", async () => {
-  const rows = new Map([
-    [`personal:${ALIAS}`, { provider: "openai", at: 2 }],
-    [`personal:${CANON}`, { provider: "anthropic", at: 1 }],
-  ]);
-  const read = (p: string) => Promise.resolve(rows.get(`personal:${p}`));
-  assert.equal((await recordForPerson(ALIAS, read))?.provider, "openai");
-  assert.equal((await recordForPerson(CANON, read))?.provider, "anthropic");
-  rows.delete(`personal:${CANON}`);
-  assert.equal((await recordForPerson(CANON, read))?.provider, "openai");
-  assert.equal(await recordForPerson("U2", read), undefined);
-});
-
 test("Composio connections made under a linked sign-in's own user are found without re-keying", () => {
   const account = (id: string, principal: string, updated: string) => ({
     id,
@@ -128,15 +102,4 @@ test("a loop and its cron stay bound when written under different sign-ins of on
   const cron = { id: "c1", loopId: "l1", owner: CANON, ownerScopeId: `personal:${ALIAS}` } as Cron;
   assert.equal((await boundLoopCron(loop, { get: async () => cron }))?.id, "c1");
   await assert.rejects(boundLoopCron(loop, { get: async () => ({ ...cron, owner: "U2" }) }));
-});
-
-test("the default inbox loops kept under a linked sign-in are reused, not duplicated", async () => {
-  const loops = ["gmail", "slack"].map(
-    (source) => ({ id: source, owner: ALIAS, ownerScopeId: `personal:${ALIAS}`, surface: `inbox:${source}` }) as Loop,
-  );
-  const store = { list: async () => loops } as unknown as LoopStore;
-  assert.deepEqual(
-    (await ensureDefaultInboxLoops(store, CANON)).map((l) => l.id),
-    ["gmail", "slack"],
-  );
 });

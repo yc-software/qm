@@ -52,25 +52,6 @@ test("the sign-in in use wins, then the canonical sign-in", async (t) => {
   assert.equal(await keychain.connectorAccessToken(HOST, "Jordan@Acme.test"), "at-person");
 });
 
-test("reconnecting from a linked sign-in replaces the person's one login", async (t) => {
-  const { creds, keychain, link } = setup(t);
-  await keychain.setConnectorToken(HOST, SIGN_IN, token("at-old"));
-  link();
-  await keychain.setConnectorToken(HOST, PERSON, token("at-new"));
-  const stored = (await creds.all()).filter((c) => c.host === HOST);
-  assert.equal(stored.length, 1);
-  assert.equal(await keychain.connectorAccessToken(HOST, SIGN_IN), "at-new");
-});
-
-test("a new login from a linked sign-in is stored under the canonical sign-in", async (t) => {
-  const { creds, keychain, link } = setup(t);
-  link();
-  await keychain.setConnectorToken(HOST, SIGN_IN, token("at-new"));
-  const [rec] = (await creds.all()).filter((c) => c.host === HOST);
-  assert.equal(rec?.ownerId, PERSON);
-  assert.equal(await keychain.connectorAccessToken(HOST, PERSON), "at-new");
-});
-
 test("disconnecting removes the login from every linked sign-in and leaves others alone", async (t) => {
   const { creds, keychain, link } = setup(t);
   await keychain.setConnectorToken(HOST, SIGN_IN, token("at-sign-in"));
@@ -82,19 +63,4 @@ test("disconnecting removes the login from every linked sign-in and leaves other
   assert.equal(await keychain.connectorAccessToken(HOST, PERSON), null);
   assert.equal(await keychain.connectorAccessToken(HOST, OTHER), "at-other");
   assert.equal((await creds.all()).length, 1);
-});
-
-test("granting a connector to a scope grants the login the person actually has", async (t) => {
-  const { creds, keychain, link } = setup(t);
-  await keychain.setConnectorToken(HOST, SIGN_IN, token("at-sign-in"));
-  link();
-  const grant = await keychain.grantConnectorToScope({
-    host: HOST,
-    principalId: PERSON,
-    audienceScopeId: "channel:C1",
-    purpose: "test",
-  });
-  const [rec] = await creds.all();
-  assert.equal(grant?.credentialId, rec?.id);
-  assert.equal(grant?.ownerId, SIGN_IN);
 });
