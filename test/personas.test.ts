@@ -206,9 +206,11 @@ test("skills written into a persona show for everyone with a role on it, and nob
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);
+  await built.app.updateOwnedSkill(skill!.id, ALICE, { body: "Check tests last." }, { liveActor: true });
+  assert.equal(await sees(BOB), true);
 });
 
-test("a persona's page lists its skills and the crons from conversations with it, to people who can see them", async () => {
+test("a persona's page lists its skills and the crons from conversations with it or channels it is pinned in, to people who can see them", async () => {
   const { built, personas, enable, sysprompt } = setup();
   for (const who of [ALICE, BOB]) await enable(who);
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
@@ -216,15 +218,16 @@ test("a persona's page lists its skills and the crons from conversations with it
     await personas.setAccess(ALICE, ada.id, [
       { scopeId: scopeId("personal", ALICE), role: "owner" },
       { scopeId: scopeId("personal", BOB), role: "read" },
+      { scopeId: scopeId("channel", "C_ADA_PIN"), role: "read", pinned: true },
     ]),
   );
   const withAda = await sysprompt(ALICE, { kind: "dm", threadRef: "dm:U_ALICE:with-ada" });
   ok(await personas.assign(ALICE, (await built.sessions.get(withAda.sessionId))!, ada.id));
   const plain = await sysprompt(ALICE, { kind: "dm", threadRef: "dm:U_ALICE:plain" });
-  const cron = (title: string, sessionId: string) =>
+  const cron = (title: string, sessionId: string, ownerScopeId = scopeId("personal", ALICE)) =>
     built.sessions.get(sessionId).then((session) =>
       built.app.createCron({
-        ownerScopeId: scopeId("personal", ALICE),
+        ownerScopeId,
         owner: ALICE,
         createdBy: ALICE,
         title,
@@ -235,6 +238,7 @@ test("a persona's page lists its skills and the crons from conversations with it
     );
   await cron("Ada digest", withAda.sessionId);
   await cron("Unrelated", plain.sessionId);
+  await cron("Pinned channel check", plain.sessionId, scopeId("channel", "C_ADA_PIN"));
   const notes = { name: "notes", description: "d", body: "b" };
   await built.app.createOwnedSkill({ principalId: BOB, homeScope: scopeId("personal", BOB), ...notes });
   await built.app.createOwnedSkill({ principalId: ALICE, homeScope: scopeId("persona", ada.id), ...notes });
@@ -248,7 +252,7 @@ test("a persona's page lists its skills and the crons from conversations with it
       const opens = await Promise.all(persona.skills.map((s) => fetch(`${base}/v1/skills/${s.id}?principalId=${who}`)));
       return [...persona.crons.map((c) => c.title), ...opens.map((o) => o.status)];
     };
-    assert.deepEqual(await cronsFor(ALICE), ["Ada digest", 200]);
+    assert.deepEqual(await cronsFor(ALICE), ["Ada digest", "Pinned channel check", 200]);
     assert.deepEqual(await cronsFor(BOB), [200]);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));

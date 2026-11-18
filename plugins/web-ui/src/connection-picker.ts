@@ -9,6 +9,7 @@ export interface ConnectionService {
   description: string;
   popularity: number;
   logoUrl?: string;
+  connectUrl?: string;
   connected?: boolean;
   stale?: boolean;
 }

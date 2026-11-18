@@ -522,3 +522,16 @@ test("every registered background job records the computer it runs on", async ()
     ["sandbox-1"],
   );
 });
+
+test("only the owner's live turn can send input to or stop a job that saves their sign-in", async () => {
+  const { broker, registry, sandbox } = build();
+  const source = { credentialId: "c1", ownerId: "U1", service: "aws", live: true, fileHashes: {} };
+  const files = { plan: { directory: "/tmp/qm-credentials", credentials: [] }, sources: [source] };
+  const { processId } = await broker.start(handle, "login", "Sign in", undefined, { env: {}, secrets: [], files });
+  const unattended = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20 });
+  await assert.rejects(unattended.write(handle, processId, "x\n"), /only from a person's live turn/);
+  await assert.rejects(unattended.stop(handle, processId), /only from a person's live turn/);
+  const live = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20, livePersonTurn: true });
+  assert.equal((await live.write(handle, processId, "x\n")).bytes, 2);
+  assert.equal((await live.stop(handle, processId)).stopped, true);
+});

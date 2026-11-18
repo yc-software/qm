@@ -1036,3 +1036,16 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops
     },
   );
 });
+
+test("a workspace provisioner needs a strong signing secret and no deployment model credentials", () => {
+  const signed = {
+    WORKSPACE_PROVISIONER_URL: "http://provisioner.test/provision",
+    CORE_SIGNING_SECRET: "s".repeat(48),
+  };
+  assert.equal(loadConfig(signed).workspaceProvisionerUrl, "http://provisioner.test/provision");
+  assert.throws(() => loadConfig({ ...signed, CORE_SIGNING_SECRET: "" }), /requires CORE_SIGNING_SECRET/);
+  assert.throws(
+    () => loadConfig({ ...signed, OPENAI_API_KEY: "sk-x", CODEX_AUTH_CREDENTIAL: "c" }),
+    /cannot be combined with deployment model credentials: OPENAI_API_KEY, CODEX_AUTH_CREDENTIAL/,
+  );
+});

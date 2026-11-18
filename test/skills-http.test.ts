@@ -20,6 +20,7 @@ import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
 import { sleep } from "../src/util/async.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 function start() {
   const built = buildApp(
@@ -530,6 +531,7 @@ async function startSecure() {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     config: built.config,
+    runs: liveRunStore(),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -539,7 +541,7 @@ async function startSecure() {
         actorId,
         scopeId: scope,
         aud: CONTROL_PLANE_AUD,
-        ...(liveActor ? { liveActor: true } : {}),
+        ...(liveActor ? liveRunClaims(actorId) : {}),
         ...(botActor ? { botActor: true } : {}),
         exp: Date.now() + CAPABILITY_TTL_MS,
       },
@@ -1371,6 +1373,8 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
   const SECRET = "skills-turn-cap-secret".repeat(3);
   const mock = createMockAgent();
   const seen: ToolContext[] = [];
+  const save = { action: "save", name: "from-a-turn", description: "d", body: "# b" } as const;
+  let saved = "";
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "skills-turn-")),
@@ -1383,8 +1387,9 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
     {
       agent: {
         ...mock,
-        runTurn: (input) => {
+        runTurn: async (input) => {
           seen.push(input.tools);
+          if (input.tools.selfApi) saved = await skillsTool(input.tools.selfApi)(save);
           return mock.runTurn(input);
         },
       },
@@ -1395,6 +1400,7 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
     signingSecret: SECRET,
     capabilitySecret: SECRET,
     config: built.config,
+    runs: built.runs,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -1423,12 +1429,8 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
       });
     assert.equal((await turn(false)).status, "ok");
     assert.equal((await turn(true)).status, "ok");
-    const [live, readOnly] = seen;
-    assert.equal(readOnly!.selfApi, undefined);
-    assert.match(
-      await skillsTool(live!.selfApi)({ action: "save", name: "from-a-turn", description: "d", body: "# b" }),
-      /^Saved skill from-a-turn/,
-    );
+    assert.equal(seen[1]!.selfApi, undefined);
+    assert.match(saved, /^Saved skill from-a-turn/);
     const sk = (await built.skills.list()).find((s) => s.manifest.name === "from-a-turn");
     assert.equal(sk?.scopeId, scopeId("channel", "C9"));
     assert.equal(sk?.createdBy, "avery");

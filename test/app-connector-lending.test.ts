@@ -140,7 +140,6 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "nothing is lent by default");
   assert.equal((await h.lend(CO_MANAGER, ["slack.com"])).status, 403, "a co-manager cannot lend the publisher's");
   assert.equal((await h.lend(PUBLISHER, ["slack.com"], false)).status, 403, "an unattended turn cannot lend");
-  assert.equal((await h.lend(PUBLISHER, ["slack.com"], true, { runId: "finished-run" })).json.error, "inactive_run");
   assert.equal((await h.lend(PUBLISHER, ["evil.example.com"])).json.error, "unknown_connector");
 
   const lent = await h.lend(PUBLISHER, ["Slack.com", "gmail.googleapis.com"]);

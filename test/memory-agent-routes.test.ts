@@ -17,6 +17,7 @@ import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -25,13 +26,14 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   let base: string;
   let built: BuiltApp;
 
-  const capFor = async (actorId: string, memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] }) =>
+  const capFor = async (actorId: string, memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] }, run = {}) =>
     await mintCapabilityToken(
       {
         actorId,
         scopeId: scopeId("personal", actorId),
         exp: Date.now() + CAPABILITY_TTL_MS,
         ...(memory ? { memory } : {}),
+        ...run,
       },
       SECRET,
     );
@@ -47,6 +49,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       memory: built.memory,
+      runs: liveRunStore(built.runs),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -221,7 +224,8 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   });
 
   it('scope:"org" writes the org notebook when the token carries orgWrite (admin turn)', async () => {
-    const cap = await capFor("A1", { write: scopeId("personal", "A1"), orgWrite: ORG, read: [ORG] });
+    const admin = { write: scopeId("personal", "A1"), orgWrite: ORG, read: [ORG] };
+    const cap = await capFor("A1", admin, liveRunClaims("A1"));
     const res = await post(
       "/v1/memory/facts",
       { facts: ["Quarterly planning moved to Mondays."], scope: "org" },
@@ -242,6 +246,8 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       { "x-agent-capability": cap },
     );
     assert.equal(edited.status, 200);
+    const ended = { "x-agent-capability": await capFor("A1", admin, { ...liveRunClaims("A1"), runId: "ended-run" }) };
+    assert.equal((await send("DELETE", "/v1/memory/facts", { ids: [planning.id], scope: "org" }, ended)).status, 403);
     assert.match(await built.memory.read(ORG), /org notebook curated/);
   });
 
@@ -583,7 +589,7 @@ describe("agent memory routes report provider failures as problem+json", () => {
     assert.equal(written.added, 1);
     assert.deepEqual(
       written.problems.map(({ code }) => code),
-      ["memory_provider_timeout"],
+      ["memory_provider_unknown"],
     );
     assert.match(written.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
     assert.deepEqual(

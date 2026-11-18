@@ -110,6 +110,7 @@ import {
   makeCoreStreamFn,
   makeOpenerStreamFn,
   makeRunResumeStreamFn,
+  type LocatedRun,
   resolveApproval,
   unresolvedApprovals,
   runApprovalTurn,
@@ -183,6 +184,7 @@ import {
 } from "./ui";
 import { icon } from "./icons";
 import { animateDetailsToggle } from "./details-motion";
+import { htmlPreviewCard } from "./html-preview";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { hasWelcomeScreen } from "./shell-state";
@@ -693,6 +695,8 @@ export function createChatSurface(
 
     container.replaceChildren(chatState.host);
     const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
+    const runningSince = !opening && session?.working ? session.workingSince : undefined;
+    if (runningSince !== undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork, runningSince);
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
     if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
@@ -702,7 +706,7 @@ export function createChatSurface(
     }
     ctx.composer.focusComposerEnd();
     ctx.ensureDeliveryStream();
-    if (!opening) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
+    if (!opening && runningSince === undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
     consumeBackgroundPanelRequest();
   }
 
@@ -1154,18 +1158,25 @@ export function createChatSurface(
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
+    runningSince?: number,
   ): Promise<boolean> {
-    let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
-    try {
-      activeRun = await activeRunForThread(threadRef);
-    } catch (error) {
-      reportHandledError("web:resume_active_run", error);
-      return false;
-    }
-    if (agent === chatState.agent && threadRef === chatState.threadRef)
-      ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
-    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) return false;
-    return resumeRun(agent, threadRef, normalStreamFn, onWork, activeRun.runId, activeRun.run);
+    const lookup = activeRunForThread(threadRef).then(
+      (activeRun) => {
+        if (agent === chatState.agent && threadRef === chatState.threadRef)
+          ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
+        return activeRun.runId && activeRun.run && !runIsTerminal(activeRun.run)
+          ? { runId: activeRun.runId, run: activeRun.run }
+          : null;
+      },
+      (error: unknown) => {
+        reportHandledError("web:resume_active_run", error);
+        return null;
+      },
+    );
+    if (runningSince !== undefined)
+      return resumeRun(agent, threadRef, normalStreamFn, onWork, lookup, undefined, undefined, runningSince);
+    const located = await lookup;
+    return located ? resumeRun(agent, threadRef, normalStreamFn, onWork, located.runId, located.run) : false;
   }
 
   async function resumeRun(
@@ -1173,9 +1184,10 @@ export function createChatSurface(
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
-    runId: string,
+    target: string | Promise<LocatedRun | null>,
     initialRun?: RunPoll,
     onStarted?: () => void,
+    runningSince?: number,
   ): Promise<boolean> {
     if (
       agent !== chatState.agent ||
@@ -1183,17 +1195,31 @@ export function createChatSurface(
       agent.state.isStreaming
     )
       return false;
-    await refreshTranscriptFromItems(agent);
-    if (agent !== chatState.agent || agent.state.isStreaming) return false;
-    if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(runId)}`);
-    if (agent !== chatState.agent || agent.state.isStreaming) return false;
-    const { messages: msgs, popped } = continuableMessages(agent.state.messages, initialRun.input);
+    if (typeof target === "string") {
+      await refreshTranscriptFromItems(agent);
+      if (agent !== chatState.agent || agent.state.isStreaming) return false;
+      if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(target)}`);
+      if (agent !== chatState.agent || agent.state.isStreaming) return false;
+    }
+    const { messages: msgs, popped } = continuableMessages(agent.state.messages, initialRun?.input);
     agent.state.messages = msgs;
     const seedText = popped
       .map((m) => messageText(m).trim())
       .filter(Boolean)
       .join("\n\n");
-    agent.streamFn = makeRunResumeStreamFn(runId, initialRun, onWork, runSlot, seedText);
+    const run =
+      typeof target === "string"
+        ? target
+        : target.then((located) => {
+            if (located && agent === chatState.agent)
+              agent.state.messages = continuableMessages(agent.state.messages, located.run.input).messages;
+            return located;
+          });
+    const seed =
+      runningSince === undefined
+        ? undefined
+        : { startedAt: runningSince, activity: popped.flatMap((m) => (m as AssistantWork).work?.activity ?? []) };
+    agent.streamFn = makeRunResumeStreamFn(run, initialRun, onWork, runSlot, seedText, seed);
     try {
       const completion = agent.continue();
       if (agent.state.isStreaming) onStarted?.();
@@ -2089,7 +2115,7 @@ export function createChatSurface(
         });
       return html`
         <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""}"
+          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
@@ -2233,7 +2259,7 @@ export function createChatSurface(
           ${
             labeled
               ? html`<div class="speaker-label">
-                  ${assistantMark(msg)}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
+                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -2397,11 +2423,6 @@ export function createChatSurface(
   function workTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
     const timeline = messageWorkTimeline(work, finalText);
     return isReadOnlySlackView() ? timeline.filter((item) => item.kind !== "steer") : timeline;
-  }
-
-  function assistantMark(message: AgentMessage): TemplateResult {
-    const icon = slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl);
-    return icon ? avatarTpl({ key: brandName(), name: brandName(), avatarUrl: icon }) : brandMark();
   }
 
   function rendersInsideWork(message: AgentMessage): boolean {
@@ -3695,30 +3716,6 @@ export function createChatSurface(
     return /\.html?$/i.test(name ?? "");
   }
 
-  const dismissedHtmlPreviews = new Set<string>();
-
-  function inlineHtmlFrame(name: string, src: string, size?: number, href?: string): TemplateResult {
-    const key = `${chatState.sessionId ?? "new"}:${href ?? src}:${name}`;
-    const chip = fileChip(name, size, href);
-    if (dismissedHtmlPreviews.has(key)) return chip;
-    return html`<span class="file-html-unfurl"
-      ><span class="file-html-header"
-        ><span dir="auto">${name}</span
-        ><button
-          type="button"
-          aria-label="Dismiss ${name} preview"
-          title="Dismiss preview"
-          @click=${() => {
-            dismissedHtmlPreviews.add(key);
-            redrawTranscript();
-          }}
-        >
-          ${icon(X, 14)}
-        </button></span
-      ><iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy"></iframe>${chip}</span
-    >`;
-  }
-
   function imageChip(name: string, size?: number, href?: string): TemplateResult {
     return chipBadge(FileImage, name, size, href, true);
   }
@@ -3821,7 +3818,7 @@ export function createChatSurface(
       if (!src && a.content) {
         src = a.content.startsWith("data:") ? a.content : `data:text/html;base64,${a.content}`;
       }
-      if (src) return inlineHtmlFrame(a.fileName, src, a.size, artifactHref);
+      if (src) return htmlPreviewCard(a.fileName, src, a.size, artifactHref);
     }
     return fileChip(a.fileName, a.size, artifactHref ?? localContentUrl(a), a.mimeType);
   }
@@ -3835,7 +3832,7 @@ export function createChatSurface(
         ><img src=${href} alt=${file.name} loading="lazy"
       /></a>`;
     }
-    if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
+    if (inlineHtmlName(file.name, file.mimetype)) return htmlPreviewCard(file.name, href, file.sizeBytes, href);
     return fileChip(file.name, file.sizeBytes, href, file.mimetype);
   }
 

@@ -6,6 +6,12 @@ export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oaut
 
 export type McpApprovalPolicy = "annotations" | "all" | "none";
 
+export interface McpServerApp {
+  toolkit: string;
+  name: string;
+  connectUrl: string;
+}
+
 export interface McpServer {
   id: string;
   name: string;
@@ -31,6 +37,7 @@ export interface McpServer {
   catalog?: boolean;
   attestActor?: boolean;
   attestAudience?: AttestAudience;
+  apps?: McpServerApp[];
   readOnly: boolean;
   enabled: boolean;
   updatedAt: number;
