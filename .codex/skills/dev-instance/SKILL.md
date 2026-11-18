@@ -192,6 +192,18 @@ have exited and its lease is released. Keep shared Postgres and persistent data 
 If the user asks to keep the instance beyond merge, retain its worktree too. For work
 without a PR, tear down when QA is finished unless the user requested a running demo.
 
+## Which Lines Your Live QA Executed
+
+Export `NODE_V8_COVERAGE=<empty dir>` before `up`; the supervisor passes it to core.
+Run the QA, then `down`: core writes its coverage on exit, so a killed core leaves none.
+From the worktree, `npx -y c8 report --temp-directory <dir> --reporter text --include 'src/**' --exclude '**/*.test.ts'`
+prints executed lines per file. Node strips TypeScript types in place, so line numbers
+match the source without source maps. Every Node process started with the variable writes
+to the same directory, including builds and test harnesses that import `src/`; keep only
+the files that list `src/index.ts` for core alone. For web UI code, rebuild with
+`npx vite build --sourcemap` in `plugins/web-ui` after `up` (core serves the rebuilt
+files) and collect Chromium coverage with Playwright's `page.coverage.startJSCoverage()`.
+
 ## Troubleshooting
 
 **Start with `dev doctor` (or `doctor --json`).** It runs the checks that used to take a
