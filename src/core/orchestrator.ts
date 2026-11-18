@@ -1,4 +1,5 @@
 import { personaPrompt, personaRoutedNote } from "../personas/persona-service.ts";
+import { loadBabysitterConfig } from "../agent/babysitter.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
@@ -2165,6 +2166,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         }).catch(swallowAs("orchestrator: reply check setup", undefined));
         const checkReply = replyCheck?.enforce ? replyCheck.check : undefined;
+        const babysitterConfig =
+          (await deps.featureFlags?.enabled("babysitter", personalScope(actor.id))) === true
+            ? loadBabysitterConfig()
+            : undefined;
+        const babysitter =
+          babysitterConfig && !(babysitterConfig.skipAttended && personConversationTurn) ? babysitterConfig : undefined;
         const runAgentSegment = async (
           agentInput: string,
           extras: {
@@ -2426,6 +2433,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
             ...(checkReply ? { checkReply } : {}),
+            ...(babysitter ? { babysitter } : {}),
             onInterimReply: interimReplyDelivery({
               surfaceName,
               spineTurn: input.surfaceTools === true,

@@ -26,6 +26,11 @@ export const FEATURES = {
     personalOnly: true,
     hint: "After each reply in the web app, predicts the selected people's likely next message and shows it in their empty composer; Tab fills it in. Each suggestion is one extra model call on their conversation. Turning it on applies on their next page load.",
   },
+  babysitter: {
+    label: "Babysitter (experimental)",
+    personalOnly: true,
+    hint: "On unattended turns of the selected people, a separate model call reads the agent's recent work against a rule set and injects a short reminder when it is trending toward a violation.",
+  },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   team_scopes: { label: "Team scopes" },

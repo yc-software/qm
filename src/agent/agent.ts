@@ -139,6 +139,7 @@ export interface AgentTurnInput {
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
   checkReply?(draft: string): Promise<ReplyVerdict | undefined>;
+  babysitter?: import("./babysitter.ts").BabysitterConfig;
   onInterimReply?(text: string): boolean | Promise<boolean>;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
   governGoal?: import("./goal.ts").GoalGovernor;

@@ -98,6 +98,7 @@ import {
 import { errMessage } from "../util/errors.ts";
 import type { TurnSession } from "./turn-session.ts";
 import { recordCapturedRequests, subscribeTurnStream } from "./turn-stream.ts";
+import { BABYSITTER_GATE_PROMPT, BABYSITTER_PROMPT, babysitterInput, babysitterNote } from "./babysitter.ts";
 import { settleTurnGoal, turnResult } from "./turn-settle.ts";
 import { openTurnPrompt, replayApprovedCalls, turnToolRef } from "./turn-open.ts";
 import { applyReasoningMode, applyTurnEffort } from "./turn-effort.ts";
@@ -363,6 +364,18 @@ export function createAgent(opts?: AgentOptions): Agent {
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
+  async function babysitterCall(modelId: string, systemPrompt: string, content: string): Promise<string> {
+    const route = await utilityRoute(modelId);
+    if (!route) throw new Error(`babysitter model ${modelId} is not routable`);
+    const runtime = await buildModelRuntime(route.keys, route.gateway, "judge");
+    const reply = await runtime.completeSimple(
+      route.model,
+      { systemPrompt, messages: [{ role: "user", content, timestamp: Date.now() }] },
+      { reasoning: "minimal" },
+    );
+    if (reply.stopReason === "error") throw providerTurnError(reply);
+    return reply.content.find((block) => block.type === "text")?.text.trim() ?? "";
+  }
   function createTurnTools(ref: ToolContextRef, turn: AgentTurnInput): ToolDefinition[] {
     return createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
@@ -581,6 +594,42 @@ export function createAgent(opts?: AgentOptions): Agent {
         const steps = createStepRecorder(turn, persist);
         activeSteps = steps;
         entry.ref.emit = steps.emit;
+        const sitter = turn.babysitter;
+        let reminders = 0;
+        let sitting = false;
+        const babysit = async (at: string): Promise<string | undefined> => {
+          if (!sitter || reminders >= sitter.maxReminders) return undefined;
+          const input = babysitterInput(
+            sitter.rules,
+            piGoalWork(entry.agentSession.messages.slice(-sitter.traceMessages)),
+          );
+          if (sitter.gate) {
+            const gate = await babysitterCall(sitter.gateModelId, BABYSITTER_GATE_PROMPT, input);
+            console.error(`[babysitter] ${at} gate=${JSON.stringify(gate.slice(0, 20))} session=${turn.session.id}`);
+            if (!/^yes/i.test(gate)) return undefined;
+          }
+          const out = await babysitterCall(sitter.modelId, BABYSITTER_PROMPT, input);
+          console.error(`[babysitter] ${at} verdict=${JSON.stringify(out.slice(0, 200))} session=${turn.session.id}`);
+          if (!out || /^none\b/i.test(out)) return undefined;
+          reminders++;
+          return babysitterNote(out);
+        };
+        const babysitMidTurn = (message: AssistantMessage): void => {
+          if (!sitter || sitter.trigger === "final" || sitting) return;
+          if (!message.content.some((block) => block.type === "toolCall")) return;
+          if (sitter.trigger === "text" && !textFromContent(message.content).trim()) return;
+          sitting = true;
+          void babysit(sitter.trigger)
+            .then(async (note) => {
+              if (!note || !entry.agentSession.isStreaming || toolAbort.signal.aborted) return;
+              await entry.agentSession.steer(note);
+              steerWake.abort();
+            })
+            .catch(swallowAs("pi: babysitter", undefined))
+            .finally(() => {
+              sitting = false;
+            });
+        };
         const onMessageEnd = async (message: unknown): Promise<void> => {
           const role = (message as { role?: string }).role;
           if (role === "assistant") steps.assistant(message as AssistantMessage);
@@ -611,6 +660,8 @@ export function createAgent(opts?: AgentOptions): Agent {
           const e = event as { type?: string; message?: unknown };
           if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
           if (e.type === "message_end") noteDocumentRejection(e.message);
+          if (e.type === "message_end" && (e.message as { role?: string }).role === "assistant")
+            babysitMidTurn(e.message as AssistantMessage);
           return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
         });
         const unsubscribe = subscribeTurnStream({ entry, steps, turn, grindMeter, callUsage });
@@ -938,6 +989,15 @@ export function createAgent(opts?: AgentOptions): Agent {
             if (verdict.action === "retry")
               for (const m of entry.agentSession.agent.state.messages.slice(before - 1, before + 1))
                 retractedMessages.add(m);
+            if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
+          }
+          while (sitter && checkable()) {
+            const note = await babysit("final").catch(swallowAs("pi: babysitter", undefined));
+            if (!note || !checkable()) break;
+            await thinkTail;
+            if (persistError) throw persistError;
+            await turn.onTextBlockStart?.();
+            wallClock = await reprompt(note);
             if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
           }
           if (retractedMessages.size)
