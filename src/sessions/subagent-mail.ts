@@ -8,6 +8,7 @@ import type { Principal, Session, SpawnMeta, StopScope } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
+import { armedWatches, finalWakeMonitorId, type MonitorStore } from "../monitors/monitor-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -83,6 +84,7 @@ export interface SubagentMailDeps {
     "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf" | "setSpawnMeta"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
+  monitors?: Pick<MonitorStore, "ownedBy">;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
@@ -137,8 +139,9 @@ async function delegatingRun(
 }
 
 export async function pendingWork(
-  deps: Pick<SubagentMailDeps, "sessions" | "runs" | "signals" | "mailbox">,
+  deps: Pick<SubagentMailDeps, "sessions" | "runs" | "signals" | "mailbox" | "monitors">,
   session: Session,
+  endedWatchId?: string,
 ): Promise<number> {
   const stopped = async (runId: string | undefined) =>
     !!deps.signals && !!deps.runs.get && !!(await runStopped({ get: deps.runs.get }, deps.signals, runId));
@@ -160,7 +163,10 @@ export async function pendingWork(
       : !(await stopped(resultRunId ?? message.senderRunId ?? message.delegatingRunId));
     if (coming) waiting.add(sender.threadRef);
   }
-  return waiting.size;
+  const watches = deps.monitors
+    ? await armedWatches(deps.monitors, session.scopeId, new Set([session.threadRef]), Date.now())
+    : [];
+  return waiting.size + watches.filter((watch) => watch.id !== endedWatchId).length;
 }
 
 async function parentTurn(
@@ -438,7 +444,10 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
   const shared = (seq: number): boolean => seen.every((seqs) => seqs.has(seq));
   const resultId = `${RESULT_MAIL}${run.id}`;
   const resent = await deps.mailbox.unread(parent.id, resultId);
-  const waiting = result?.stopped || failed || resent ? 0 : await pendingWork(deps, child);
+  const waiting =
+    result?.stopped || failed || resent
+      ? 0
+      : await pendingWork(deps, child, finalWakeMonitorId(run.request.idempotencyKey));
   const { kind, body } = mailOf(run, failed, quotes ? turnText(views[0] ?? [], shared, run) : undefined, waiting);
   const retired =
     (kind === "final_answer" || kind === "no_reply") &&
@@ -562,7 +571,7 @@ export function mailOf(
   const files = result?.attachments?.map((file) => file.name) ?? [];
   const reply = result?.reply?.trim() || (files.length ? `Produced ${files.join(", ")}.` : "");
   if (waiting) {
-    const note = `Still waiting on ${waiting} subagent${waiting === 1 ? "" : "s"}.`;
+    const note = `Still waiting on ${waiting} subagent${waiting === 1 ? "" : "s"} or watched background job${waiting === 1 ? "" : "s"}.`;
     return { kind: "in_progress", body: reply ? `${reply}\n\n${note}` : note };
   }
   if (result?.status === "ok" && reply) return { kind: "final_answer", body: reply };
