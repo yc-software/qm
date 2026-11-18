@@ -105,8 +105,17 @@ test("persona deletes, attaches and detaches are audited with the grants they re
     const res = await fetch(`${base}/api/personas/${id}/credentials`, as(alice, "POST", { credentialId: saved.id }));
     return ((await res.json()) as { credential: { grantId: string } }).credential.grantId;
   };
-  const [kept, dropped] = [await attach(), await attach()];
+  const [first, second, dropped] = [await attach(), await attach(), await attach()];
   assert.equal((await fetch(`${base}/api/personas/${id}/credentials/${dropped}`, as(alice, "DELETE", {}))).status, 200);
+  const keychain = built.keychain!;
+  const revokeGrant = keychain.revokeGrant.bind(keychain);
+  let revokes = 0;
+  const failing = t.mock.method(keychain, "revokeGrant", async (ownerId: string, grantId: string) => {
+    if (++revokes === 2) throw new Error("keychain unavailable");
+    return revokeGrant(ownerId, grantId);
+  });
+  assert.equal((await fetch(`${base}/api/personas/${id}`, as(alice, "DELETE", {}))).status, 500);
+  failing.mock.restore();
   assert.equal((await fetch(`${base}/api/personas/${id}`, as(alice, "DELETE", {}))).status, 200);
   const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "alice")}`;
   const drop = await fetch(
@@ -115,16 +124,18 @@ test("persona deletes, attaches and detaches are audited with the grants they re
   );
   assert.equal(drop.status, 200);
   const rows = async (filter: { scopeLabel: ScopeId }) =>
-    (await built.auditLog.tail(testTenant, { limit: 10, ...filter }))
+    (await built.auditLog.tail(testTenant, { limit: 20, ...filter }))
       .map((e) => [e.action, e.resource, e.principalId, e.impersonatedBy ?? "-"].join(" "))
       .sort();
   assert.deepEqual(
     await rows({ scopeLabel: scopeId("persona", id) }),
     [
       `keychain.revoke ${dropped} alice -`,
-      `keychain.revoke ${kept} alice -`,
+      `keychain.revoke ${first} alice -`,
+      `keychain.revoke ${second} alice -`,
       `persona.credential.attach ${dropped} alice -`,
-      `persona.credential.attach ${kept} alice -`,
+      `persona.credential.attach ${first} alice -`,
+      `persona.credential.attach ${second} alice -`,
       `persona.credential.detach ${dropped} alice -`,
       `persona.delete ${id} alice -`,
     ].sort(),

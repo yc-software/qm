@@ -49,7 +49,7 @@ export interface PersonaService {
   detail(principalId: string, id: string): Promise<PersonaResult<PersonaDetail>>;
   create(principalId: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   update(principalId: string, id: string, input: unknown): Promise<PersonaResult<PersonaView>>;
-  remove(principalId: string, id: string): Promise<PersonaResult<{ revokedGrants: string[] }>>;
+  remove(principalId: string, id: string, onRevoked: (grantId: string) => void): Promise<PersonaResult<true>>;
   versions(
     principalId: string,
     id: string,
@@ -62,7 +62,8 @@ export interface PersonaService {
     principalId: string,
     id: string,
     grantId: string,
-  ): Promise<PersonaResult<{ revokedGrants: string[] }>>;
+    onRevoked: (grantId: string) => void,
+  ): Promise<PersonaResult<true>>;
   assign(
     principalId: string,
     session: Pick<Session, "id" | "scopeId">,
@@ -139,11 +140,12 @@ export function createPersonaService(deps: {
     return fn(persona, held);
   }
 
-  async function revoke(credentials: { ownerId: string; grantId: string }[]): Promise<string[]> {
-    const revoked: string[] = [];
+  async function revoke(
+    credentials: { ownerId: string; grantId: string }[],
+    onRevoked: (grantId: string) => void,
+  ): Promise<void> {
     for (const { ownerId, grantId } of credentials)
-      if (await deps.keychain?.revokeGrant(ownerId, grantId)) revoked.push(grantId);
-    return revoked;
+      if (await deps.keychain?.revokeGrant(ownerId, grantId)) onRevoked(grantId);
   }
 
   async function credentialsOf(id: string) {
@@ -214,10 +216,10 @@ export function createPersonaService(deps: {
         return restored ? { status: "ok", value: { ...restored, role: held } } : { status: "not_found" };
       });
     },
-    remove(principalId, id) {
-      return guarded<{ revokedGrants: string[] }>(principalId, id, "owner", async () => {
-        const revokedGrants = await revoke(await credentialsOf(id));
-        return (await store.remove(id)) ? { status: "ok", value: { revokedGrants } } : { status: "not_found" };
+    remove(principalId, id, onRevoked) {
+      return guarded<true>(principalId, id, "owner", async () => {
+        await revoke(await credentialsOf(id), onRevoked);
+        return (await store.remove(id)) ? { status: "ok", value: true } : { status: "not_found" };
       });
     },
     setAccess(principalId, id, access) {
@@ -274,11 +276,12 @@ export function createPersonaService(deps: {
         return { status: "ok", value: { grantId: grant.id } };
       });
     },
-    detachCredential(principalId, id, grantId) {
-      return guarded<{ revokedGrants: string[] }>(principalId, id, "owner", async () => {
+    detachCredential(principalId, id, grantId, onRevoked) {
+      return guarded<true>(principalId, id, "owner", async () => {
         const credential = (await credentialsOf(id)).find((c) => c.grantId === grantId);
         if (!credential) return { status: "not_found" };
-        return { status: "ok", value: { revokedGrants: await revoke([credential]) } };
+        await revoke([credential], onRevoked);
+        return { status: "ok", value: true };
       });
     },
     async assign(principalId, session, personaId) {
