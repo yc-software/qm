@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { completeDevSecuritySecrets, repoRoot } from "./lib/envctx.ts";
+import { signedHeaders } from "../../plugins/chassis/src/core-client.ts";
 
 interface Proc {
   name: string;
@@ -49,9 +50,10 @@ const dbName = `qm_runtime_qa_${Date.now()}`;
 const dbUrl = withDatabase(baseUrl, dbName);
 const db = new pg.Pool({ connectionString: dbUrl, max: 2 });
 
-function withDatabase(url: string, name: string): string {
+function withDatabase(url: string, name: string, app?: string): string {
   const parsed = new URL(url);
   parsed.pathname = `/${name}`;
+  if (app) parsed.searchParams.set("application_name", app);
   return parsed.toString();
 }
 
@@ -84,6 +86,8 @@ async function query<T = Record<string, unknown>>(sql: string, params: unknown[]
   return (await db.query(sql, params)).rows as T[];
 }
 
+const sharedEnv = baseEnv();
+
 function baseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
@@ -105,7 +109,7 @@ function launch(name: string, entry: string, env: Record<string, string>): Proc 
   const out: WriteStream = createWriteStream(join(evidence, `${name}.log`), { flags: "a" });
   const child = spawn(process.execPath, ["--import", "./scripts/dev/runtime-qa-clock.ts", entry], {
     cwd: root,
-    env: { ...baseEnv(), PGAPPNAME: `runtime-qa-${name}`, ...env },
+    env: { ...sharedEnv, DATABASE_URL: withDatabase(dbUrl, dbName, `runtime-qa-${name}`), ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const proc: Proc = {
@@ -147,26 +151,27 @@ async function startCore(): Promise<string> {
   const proc = launch("core", "src/index.ts", {
     PORT: String(port),
     BACKGROUND_WORK_ENABLED: "false",
-    ALLOW_UNAUTHENTICATED_CORE: "true",
   });
   await until("core to listen", () => seen(proc, `listening on :${port}`), 120_000);
   return `http://127.0.0.1:${port}`;
 }
 
 async function enqueue(core: string, text: string): Promise<string> {
-  const res = await fetch(`${core}/v1/turns?async=1`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      surface: "runtime-qa",
-      actor: { externalId: "runtime-qa-user" },
-      conversation: { kind: "dm", threadRef: `runtime-qa:${randomUUID()}` },
-      text,
-    }),
+  const path = "/v1/turns?async=1";
+  const body = JSON.stringify({
+    surface: "runtime-qa",
+    actor: { externalId: "runtime-qa-user" },
+    conversation: { kind: "dm", threadRef: `runtime-qa:${randomUUID()}` },
+    text,
   });
-  const body = (await res.json()) as { runId?: string };
-  if (res.status !== 202 || !body.runId) throw new Error(`enqueue: HTTP ${res.status} ${JSON.stringify(body)}`);
-  return body.runId;
+  const res = await fetch(`${core}${path}`, {
+    method: "POST",
+    headers: signedHeaders(sharedEnv.CORE_SIGNING_SECRET, "POST", path, body),
+    body,
+  });
+  const queued = (await res.json()) as { runId?: string };
+  if (res.status !== 202 || !queued.runId) throw new Error(`enqueue: HTTP ${res.status} ${JSON.stringify(queued)}`);
+  return queued.runId;
 }
 
 async function runRow(runId: string) {
@@ -260,7 +265,8 @@ async function scenarioTick(): Promise<string> {
 async function scenarioLease(): Promise<string> {
   const key = "cron:scheduler:tick";
   const first = await until(`a holder of ${key}`, () => lockHolder(key), 20_000);
-  const holder = procs.get(first)!;
+  const holder = procs.get(first);
+  if (!holder) throw new Error(`${key} is held by ${first || "an unnamed connection"}, not a QA worker`);
   const killedAt = Date.now();
   signal(holder, "SIGKILL");
   await holder.exited;
