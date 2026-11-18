@@ -17,8 +17,7 @@ test("an HTML attachment previews in a sandboxed frame and stays folded once the
     const frame = card.querySelector("iframe")!;
     assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
     assert.equal(frame.getAttribute("src"), href);
-    assert.equal(card.querySelector(".file-html-name")!.textContent, "report.html");
-    assert.equal(card.querySelector("small")!.textContent, "2 KB");
+    assert.equal(card.querySelector(".file-html-title")!.textContent, "report.html2 KB");
     assert.equal(card.querySelector<HTMLAnchorElement>("a[download]")!.download, "report.html");
     assert.equal(card.open, true);
     card.open = false;

@@ -1,15 +1,18 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ChevronRight, Download, Maximize2, X } from "lucide";
+import "./html-preview.css";
 import { animateDetailsToggle } from "./details-motion";
-import { previewFile } from "./file-open";
 import { icon } from "./icons";
 import { tip } from "./tooltip";
-import { formatBytes } from "./ui";
+import { fileLabel } from "./ui";
 
 const collapsed = new Set<string>();
 
 function setExpanded(layer: HTMLElement, expanded: boolean): void {
+  const slot = layer.parentElement!;
   const apply = (): void => {
+    if (expanded) layer.querySelector("details")!.open = true;
+    slot.style.height = expanded ? `${slot.offsetHeight}px` : "";
     layer.togglePopover(expanded);
     layer.focus();
   };
@@ -62,22 +65,7 @@ export function htmlPreviewCard(name: string, src: string, size?: number, href?:
       >
         <summary class="file-html-bar" @click=${onBarClick}>
           <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
-          <span class="file-html-title">
-            ${
-              href
-                ? html`<a
-                    class="file-html-name"
-                    dir="auto"
-                    href=${href}
-                    target="_blank"
-                    rel="noreferrer"
-                    @click=${(event: MouseEvent) => previewFile(event, name, href)}
-                    >${name}</a
-                  >`
-                : html`<span class="file-html-name" dir="auto">${name}</span>`
-            }
-            ${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}
-          </span>
+          <span class="file-html-title">${fileLabel(name, size)}</span>
           <span class="file-html-actions">
             ${
               href
