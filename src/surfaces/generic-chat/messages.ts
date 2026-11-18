@@ -6,6 +6,7 @@ import {
   GENERIC_CHAT,
   chatContainer,
   findMessage,
+  genericChatAction,
   genericChatMessageId,
   genericChatTs,
   type GenericChatRef,
@@ -63,7 +64,7 @@ export async function postGenericChatMessage(
     ...(where.thread && !message.recipientUserId ? { thread_id: where.thread } : {}),
     body: message.text,
     ...(message.fileIds?.length ? { file_ids: message.fileIds } : {}),
-    ...(message.actions?.length ? { actions: message.actions } : {}),
+    ...(message.actions?.length ? { actions: message.actions.map(genericChatAction) } : {}),
     ...(message.recipientUserId ? { recipient_user_id: message.recipientUserId } : {}),
   });
   if (typeof parsed.message_id !== "string" && typeof parsed.message_id !== "number") return undefined;
@@ -93,7 +94,7 @@ export async function editGenericChatMessage(
     chat_id: where.chat,
     message_id: messageId,
     body: text,
-    ...(actions ? { actions } : {}),
+    ...(actions ? { actions: actions.map(genericChatAction) } : {}),
   });
   await recordChange(deps, where, messageId, { text, editedAt: (deps.now ?? Date.now)() });
 }

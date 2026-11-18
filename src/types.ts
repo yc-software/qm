@@ -239,7 +239,7 @@ export interface Destination {
   editNote?: string;
   webTranscript?:
     | { kind: "reply" }
-    | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
+    | { kind: "slack_reply"; sessionId: string; ts: string; name: string; speakerId: string }
     | { kind: "turn_failure"; notBefore: number; runId?: string };
 }
 
@@ -349,6 +349,7 @@ export interface OverheardMessage {
   ts: string;
   role: "user" | "bot" | "self";
   name?: string;
+  speakerId?: string;
   text: string;
   files?: string[];
   mentions?: Record<string, string>;
@@ -521,7 +522,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only" | "linked_bot";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

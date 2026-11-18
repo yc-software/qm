@@ -13,6 +13,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 
@@ -337,17 +338,20 @@ test("removing a connection, a saved login or a persona takes a running turn wit
       const res = await fetch(`${srv.base}${path}`, {
         method,
         headers: { "content-type": "application/json", "x-agent-capability": cap },
-        body: method === "POST" ? JSON.stringify({ provider: "google", principalId }) : null,
+        body: method === "DELETE" ? null : JSON.stringify({ provider: "google", principalId, access }),
       });
-      const json = (await res.json()) as { error?: string; principalId?: string; deleted?: boolean };
-      return `${res.status} ${json.error ?? json.principalId ?? json.deleted}`;
+      const json = (await res.json()) as { error?: string; principalId?: string; deleted?: boolean; access?: [] };
+      return `${res.status} ${json.error ?? json.principalId ?? json.deleted ?? json.access?.length}`;
     };
     const revoke = "/v1/connectors/oauth/revoke";
     const login = "/v1/keychain/credentials/x";
     const grant = "/v1/keychain/grants/x/revoke";
     const persona = `/v1/personas/${value.id}`;
+    const access = ["personal:U1", "org:acme"].map((scopeId, i) => ({ scopeId, role: i ? "read" : "owner" }));
     assert.equal(await send("POST", revoke), "200 U1");
     assert.equal(await send("POST", revoke, { keychainMembers: [{ id: "U2", type: "internal" }] }, "U2"), "200 U2");
+    const [revoked] = await srv.built.auditLog.tail(testTenant, { limit: 1, action: "connector.oauth.revoked" });
+    assert.deepEqual([revoked?.principalId, revoked?.scopeLabel], ["U1", "U2"]);
     assert.equal(await send("POST", revoke, {}, "U9"), "400 bad_request");
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U9"), "kept");
     assert.equal(await send("POST", revoke, { triggered: true }), "403 human_consent_required");
@@ -360,6 +364,10 @@ test("removing a connection, a saved login or a persona takes a running turn wit
     assert.equal(await send("DELETE", persona, { triggered: true }), "403 human_consent_required");
     assert.equal(await send("DELETE", persona, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("DELETE", `${persona}/credentials/x`, { runId: "finished-run" }), "403 inactive_run");
+    assert.equal(await send("PUT", `${persona}/access`, { triggered: true }), "403 human_consent_required");
+    assert.equal(await send("PUT", `${persona}/access`, { runId: "finished-run" }), "403 inactive_run");
+    assert.equal(JSON.stringify(await srv.built.app.personas!.detail("U1", value.id)).includes("org:acme"), false);
+    assert.equal(await send("PUT", `${persona}/access`), "200 2");
     assert.equal(await send("DELETE", persona), "200 true");
   } finally {
     await srv.close();

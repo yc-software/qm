@@ -110,7 +110,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most (owner, on a turn you sent)",
       },
       {
         method: "POST",
@@ -450,7 +450,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/apps/:id/share",
         summary:
-          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
+          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only, on a turn you sent, no redeploy',
       },
       {
         method: "POST",
@@ -539,7 +539,19 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/credentials",
         summary:
-          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]) / list participants' registered logins (metadata)",
+          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); replacing a login the user already saved needs their own running turn or a loginTicket / list participants' registered logins (metadata)",
+      },
+      {
+        method: "POST",
+        path: "/v1/keychain/login-tickets",
+        summary:
+          "{service} from the user's own running turn: a one-time loginTicket that lets the save finishing this sign-in replace their existing login once, after the turn ends (the interactive-login skill does this)",
+      },
+      {
+        method: "POST|DELETE",
+        path: "/v1/keychain/credentials/:id/writer",
+        summary:
+          "claim {holder, until} / release ?holder= the single-writer lease on one of the user's own credentials, such as a browser profile; 409 writer_held while another holder's lease runs",
       },
       {
         method: "GET",
@@ -745,7 +757,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/admin/external-users",
         summary:
-          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; they sign in at the portal with that address until expiry; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem and hand the user signInUrl to share. org_admin role is portal-only",
+          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; until expiry they count as members everywhere, including as guests in the org's own Slack, and the invitation email carries a single-use sign-in link; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem; the signInUrl you get is the plain portal address, so once email works, re-invite with resendInvite:true to send a link. org_admin role is portal-only",
       },
       {
         method: "DELETE",

@@ -247,8 +247,9 @@ final class NativeConversationDrawerTests: XCTestCase {
     try await action(window)
   }
 
+  // The drawer settles on a spring whose tail outlasts its nominal duration.
   private func settle(_ window: UIWindow) async throws {
-    try await Task.sleep(for: .milliseconds(400))
+    try await Task.sleep(for: .milliseconds(800))
     window.layoutIfNeeded()
   }
 

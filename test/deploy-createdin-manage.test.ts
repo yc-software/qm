@@ -424,7 +424,7 @@ test("bot work that runs as a shared system actor cannot republish, open up or s
       name: "ambient-app",
     });
     await assert.rejects(republish, /not authorized/);
-    await assert.rejects(f.deploy.setAppPublic(own.id, true, asBot), /only the owner/);
+    await assert.rejects(f.deploy.setAppPublic(own.id, true, { ...asBot, personAtKeyboard: true }), /only the owner/);
     await assert.rejects(f.deploy.shareApp(own.id, scopeId("personal", "U2"), "read", asBot), /only the owner/);
     assert.equal((await f.deploy.getApp(own.id))?.currentVersion, own.currentVersion);
     assert.deepEqual(await f.deploy.appGrantees(own.id), []);

@@ -166,6 +166,7 @@ export function assertSwarmOpen(swarm: Swarm): void {
 
 export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
+  getMany(ids: readonly string[]): Promise<Swarm[]>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
   pending(afterId?: string): Promise<PendingSwarm[]>;
@@ -256,6 +257,9 @@ export function createSwarmStore(
     async get(id) {
       const row = await backing.get(id);
       return row ? decode(row) : null;
+    },
+    async getMany(ids) {
+      return (await backing.getMany(ids)).map(decode);
     },
     async create(swarm, fence) {
       const create = (current: SwarmStorage | null) => {

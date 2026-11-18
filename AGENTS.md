@@ -37,9 +37,11 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   env), imported by relative path and never importing core. The bar cuts both ways:
   don't manufacture an abstraction for a pattern with one caller.
 - **Land PRs through the merge queue.** When a PR's checks and reviews pass,
-  `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
-  exact commit that will land, reusing the PR's run when `main` has not moved, and
-  `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
+  `gh pr merge <number>` queues it rather than merging it. The queue runs the tests the
+  PR's changes can reach (`scripts/select-ci.ts`) on the exact commit that will land,
+  reusing the PR's run when `main` has not moved. `main`'s CI/CD reuses the queue's run, and
+  the Full suite workflow runs everything on each `main` push.
+  Never bypass the queue with `--admin`.
 - **Check the plan against the Wall of shame before writing code.** Before building,
   hold what you plan to add against each lens in the
   [Wall of shame](./docs/SPEC.md#wall-of-shame) below and change the plan where it would

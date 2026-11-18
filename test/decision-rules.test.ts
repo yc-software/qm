@@ -676,3 +676,22 @@ test("the reply check is armed only when a turn_end rule is active, enforces onl
   );
   assert.equal(guidanceReads, 4, "guidance is not read when no rule is active");
 });
+
+test("persona rules name a persona on use_persona and fall back to keep", () => {
+  const persona = injection({
+    id: "to-ada",
+    hook: "persona",
+    onError: "keep",
+    options: {
+      keep: { description: "Not for Ada", action: "keep" },
+      ada: { description: "For Ada", action: "use_persona", persona: "ada-1" },
+    },
+  });
+  assert.deepEqual(parse(persona), { rule: persona });
+  const unnamed = {
+    ...persona,
+    options: { ...persona.options, ada: { description: "For Ada", action: "use_persona" } },
+  };
+  assert.match(err(parse(unnamed)), /persona is required with use_persona/);
+  assert.match(err(parse({ ...persona, onError: "ada" })), /onError must name a keep option/);
+});

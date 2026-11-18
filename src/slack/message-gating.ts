@@ -3,14 +3,21 @@ import { LRUCache } from "lru-cache";
 
 export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
 
+export function isOwnSlackMessage(
+  message: { user?: string; bot_id?: string },
+  botUserId: string,
+  ownBotId = "",
+): boolean {
+  return Boolean((botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId));
+}
+
 export function isOwnStatusCard(
   message: { user?: string; bot_id?: string; blocks?: unknown[] },
   botUserId: string,
   ownBotId = "",
 ): boolean {
-  const own = (botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId);
   return Boolean(
-    own &&
+    isOwnSlackMessage(message, botUserId, ownBotId) &&
     Array.isArray(message.blocks) &&
     message.blocks.some((block) =>
       (isObj(block) && block.type === "plan" && Array.isArray(block.tasks) ? block.tasks : [block]).some(
@@ -30,17 +37,12 @@ export function threadHasBotStake(
   ownBotId = "",
 ): boolean {
   if (!botUserId && !ownBotId) return false;
-  return messages.some((m) => {
-    const user = m.user ? String(m.user) : "";
-    const bot = m.bot_id ? String(m.bot_id) : "";
-    const text = m.text ? String(m.text) : "";
-    return Boolean(
+  return messages.some(
+    (m) =>
       m.mentionsSelf ||
-      (botUserId && user === botUserId) ||
-      (ownBotId && bot === ownBotId) ||
-      (botUserId && mentionsBot(text, botUserId)),
-    );
-  });
+      isOwnSlackMessage(m, botUserId, ownBotId) ||
+      mentionsBot(m.text ? String(m.text) : "", botUserId),
+  );
 }
 
 export function isBotAuthored(m: { bot_id?: string; bot_profile?: unknown; subtype?: string }): boolean {
@@ -52,8 +54,7 @@ export function shouldProcessMessage(
   botUserId: string,
   ownBotId = "",
 ): boolean {
-  if (botUserId && m.user === botUserId) return false;
-  if (ownBotId && m.bot_id === ownBotId) return false;
+  if (isOwnSlackMessage(m, botUserId, ownBotId)) return false;
   if (m.subtype && m.subtype !== "file_share" && m.subtype !== "thread_broadcast" && m.subtype !== "bot_message")
     return false;
   return true;

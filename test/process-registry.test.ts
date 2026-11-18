@@ -9,6 +9,7 @@ import {
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { Principal } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 function backends(): Array<{ name: string; make: () => ProcessRegistry }> {
   return [{ name: "memory", make: () => createPostgresProcessRegistry(testDatabaseUrl()) }];
@@ -251,11 +252,13 @@ test("a running job whose run was a bot's turn is claimed as that bot's job, whi
   await job("bot-job", { id: "release-bot", type: "internal" }, true);
   await job("person-job", { id: "alice", type: "internal" }, false);
   const unreadable = await job("unreadable-job", { id: "release-bot", type: "internal" }, true);
+  await runs.markBotLimited(testTenant, await job("limited-job", { id: "alice", type: "internal" }, false));
   const raw = new pg.Pool({ connectionString: url, max: 1 });
   await raw.query("UPDATE runs SET request = $2 WHERE id = $1", [unreadable, '{"text":"\\u0000"}']);
   await raw.end();
   const claimed = (await registry.claimLiveBotJobs()).map((row) => row.id);
-  assert.deepEqual(claimed, ["bot-job"]);
+  assert.deepEqual(claimed.sort(), ["bot-job", "limited-job"]);
   assert.equal((await registry.get("bot-job"))?.botActor, "release-bot");
+  assert.equal((await registry.get("limited-job"))?.botActor, "alice");
   assert.equal((await registry.get("person-job"))?.botActor, undefined);
 });

@@ -7,12 +7,38 @@ import type { ClaimedRow } from "../tenants/claim.ts";
 import { APP_TABLES, NAME_INDEX } from "./page-views.ts";
 import { tenantAppHandle } from "../tenants/settings.ts";
 import { appHostLabel } from "../tenants/app-handle.ts";
+import { msOf } from "../sessions/items.ts";
 import {
   createDeployGitStore,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
+
+export const WITHDRAW_LOANS_MIGRATION = {
+  id: "durable-map/deployments/0040-withdraw-loans",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('deployments') IS NULL OR to_regclass('audit_log') IS NULL THEN
+        RETURN;
+      END IF;
+      WITH cleared AS (
+        UPDATE deployments d SET json = d.json - 'connectors'
+          FROM deployments o
+         WHERE o.tenant_id = d.tenant_id AND o.id = d.id AND d.json ? 'connectors'
+           AND d.json ->> 'ownerScopeId' IS DISTINCT FROM 'personal:' || (d.json ->> 'createdBy')
+        RETURNING d.tenant_id, d.id, d.json ->> 'ownerScopeId' AS scope, o.json -> 'connectors' AS hosts
+      ), versions AS (
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'deployments' AND EXISTS (SELECT 1 FROM cleared)
+      )
+      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
+      SELECT tenant_id, ${msOf("now()")}, 'system:migration', 'deploy_connectors', 'deployment:' || id, scope,
+             'withdrawn: the app is outside its publisher''s library; was ' || hosts::text
+        FROM cleared;
+    END $$`,
+  ],
+};
 
 export interface AppVersion {
   version: number;
