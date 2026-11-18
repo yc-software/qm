@@ -498,7 +498,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
   );
 });
 
-test("a chat with any member neither the deployment nor the host vouches for is neither mirrored nor answered", async () => {
+test("a chat with any member neither the deployment nor the host vouches for, or that an admin deactivated, is neither mirrored nor answered", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
     const withGuest = event({ body: "!post hi", mentions: true, eventId: "ev-guest", messageId: "1040" });
@@ -519,11 +519,13 @@ test("a chat with any member neither the deployment nor the host vouches for is 
       [],
     );
     const vouched = event({ body: "!post hi", mentions: true, eventId: "ev-vouched", messageId: "1042" });
-    vouched.message.user = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
-    vouched.chat.members.push(vouched.message.user);
+    const founder = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
+    vouched.message.user = founder;
+    vouched.chat.members.push(founder);
     await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev"));
     assert.equal((await deliver(vouched)).body.ignored, "unvouched_participants");
     await withTenant(TEST_TENANT, () => built.identity.reactivate("founder@startup.dev"));
+    await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev", "directory-sync"));
     assert.equal((await deliver({ ...vouched, event_id: "ev-vouched-2" })).body.ignored, undefined);
   } finally {
     await genericChat.close();
