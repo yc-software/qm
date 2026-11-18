@@ -519,7 +519,8 @@ test("a chat with any member neither the deployment nor the host vouches for, or
       [],
     );
     const vouched = event({ body: "!post hi", mentions: true, eventId: "ev-vouched", messageId: "1042" });
-    vouched.message.user = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
+    const founder = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
+    vouched.message.user = founder;
     vouched.chat.members.push(vouched.message.user);
     assert.equal((await deliver(vouched)).body.ignored, undefined);
     await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev"));
