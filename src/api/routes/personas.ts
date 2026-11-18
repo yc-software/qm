@@ -62,18 +62,19 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
     .filter((skill) => skill.scopeId === home)
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const crons = await personaCrons(ctx, principalId, result.value.id);
+  const pinned = new Set(result.value.access.filter((grant) => grant.pinned).map((grant) => grant.scopeId));
+  const crons = await personaCrons(ctx, principalId, result.value.id, pinned);
   respond(ctx, { status: "ok", value: { ...result.value, access, skills, crons } }, "persona");
 }
 
-async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string) {
+async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string, pinned: Set<string>) {
   const { owned, visible } = await ctx.app.listCronsForViewer(principalId);
   const crons = [...new Map([...owned, ...visible].map((c) => [c.id, c])).values()].filter((c) => !c.archived);
   const refsOf = (c: Cron) => [...new Set([c.destination?.target, c.sessionRef])].filter((ref) => ref !== undefined);
   const personaThreads =
     (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
   return crons
-    .filter((c) => refsOf(c).some((ref) => personaThreads.has(ref)))
+    .filter((c) => pinned.has(c.ownerScopeId) || refsOf(c).some((ref) => personaThreads.has(ref)))
     .map(({ id, title, action, message, schedule, enabled }) => ({ id, title, action, message, schedule, enabled }));
 }
 
