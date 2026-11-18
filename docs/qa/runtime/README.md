@@ -30,6 +30,8 @@ lists them at the end so you can delete them there.
 | `sigterm` | Same turn, but SIGTERM instead.                                                                                                                 | The node logs the signal, hands the run back and exits; the other node reclaims it before the lease would expire and finishes it. |
 | `deploy`  | Starts a `src/runs/worker-main.ts` worker with a newer build id and forces a tick on the old nodes.                                             | The old nodes log that a newer build is live and stop claiming; a new turn runs on the new worker.                                |
 
+Before each scenario the script restarts any node an earlier scenario killed.
+
 ## Forcing a sweep now
 
 Every process the script starts loads `scripts/dev/runtime-qa-clock.ts` with

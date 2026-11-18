@@ -153,6 +153,11 @@ function alive(proc: Proc): boolean {
   return proc.child.exitCode === null && proc.child.signalCode === null;
 }
 
+async function ensureNodes(): Promise<void> {
+  const down = ["qm-a", "qm-b"].filter((name) => !procs.get(name) || !alive(procs.get(name)!));
+  await Promise.all(down.map(startNode));
+}
+
 async function enqueue(text: string): Promise<string> {
   const node = [...procs.values()].find((p) => p.port && alive(p));
   if (!node) throw new Error("no QM node is running to accept a turn");
@@ -224,6 +229,7 @@ async function check(scenario: string, body: () => Promise<string>): Promise<voi
   const t0 = Date.now();
   log(`${scenario}: start`);
   try {
+    await ensureNodes();
     const detail = await body();
     checks.push({ scenario, ok: true, detail, ms: Date.now() - t0 });
     log(`${scenario}: PASS ${detail}`);
@@ -282,9 +288,7 @@ async function scenarioLease(): Promise<string> {
     },
     15_000,
   );
-  const handoverMs = Date.now() - killedAt;
-  await startNode(first);
-  return `${key} moved ${first} -> ${next} ${handoverMs} ms after SIGKILL; ${first} restarted`;
+  return `${key} moved ${first} -> ${next} ${Date.now() - killedAt} ms after SIGKILL`;
 }
 
 async function sleepingRun(): Promise<{ runId: string; worker: Proc }> {
@@ -308,7 +312,6 @@ async function scenarioCrash(): Promise<string> {
   if (reclaimer.name !== survivor.name) throw new Error(`${runId} reclaimed by ${reclaimer.name}`);
   const status = await finished(runId);
   const row = (await runRow(runId))!;
-  await startNode(worker.name);
   if (status !== "done") throw new Error(`${runId} ended ${status} after handover`);
   return `${runId}: ${worker.name} SIGKILLed mid-command, forced reaper tick requeued it, ${survivor.name} resumed it to done (attempts=${row.attempts})`;
 }
@@ -326,7 +329,6 @@ async function scenarioSigterm(): Promise<string> {
   const reclaimer = await until(`${survivor.name} to claim ${runId}`, () => claimant(runId, from), LEASE_TTL_MS);
   const reclaimMs = Date.now() - sentAt;
   const status = await finished(runId);
-  await startNode(worker.name);
   if (status !== "done") throw new Error(`${runId} ended ${status} after hand-back`);
   return `${runId}: ${worker.name} exited ${code} ${exitMs} ms after SIGTERM (last_stop=${handed.last_stop}), ${reclaimer.name} reclaimed in ${reclaimMs} ms without the reaper and finished it`;
 }
@@ -374,7 +376,7 @@ async function main(): Promise<void> {
   await admin.query(`CREATE DATABASE ${dbName}`);
   await admin.end();
   log(`database ${dbName}; logs in ${evidence}`);
-  await Promise.all([startNode("qm-a"), startNode("qm-b")]);
+  await ensureNodes();
   log(`booted two QM nodes in ${Date.now() - started} ms`);
   const runs: Record<Scenario, () => Promise<string>> = {
     tick: scenarioTick,
