@@ -13,6 +13,7 @@ import {
 import { DROP_SESSION_LEASES, SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
+import { TENANT_EXTERNAL_ORGS } from "../src/tenants/self-serve.ts";
 import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { ownerUrl } from "./support/test-tenant.ts";
 
@@ -154,7 +155,11 @@ test("an open transaction refuses work for a different tenant until it has ended
 });
 
 const preTenancy = (m: PgMigrationDefinition) =>
-  !TENANCY.includes(m) && m !== TENANT_BACKFILL && m !== DROP_SESSION_LEASES && !/-tenant|claim/.test(m.id);
+  !TENANCY.includes(m) &&
+  m !== TENANT_BACKFILL &&
+  m !== DROP_SESSION_LEASES &&
+  m !== TENANT_EXTERNAL_ORGS &&
+  !/-tenant|claim/.test(m.id);
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
