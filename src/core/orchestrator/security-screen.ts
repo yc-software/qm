@@ -432,9 +432,10 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       if (canScreenText && screenPayloads)
         verdict = await screenChunks(
           screenPayloads,
-          (chunk) => {
-            classified += 1;
-            return classify(chunk);
+          async (chunk) => {
+            const chunkVerdict = await classify(chunk);
+            if (cleanVerdict(chunkVerdict) || chunkVerdict?.decision === "strict") classified += 1;
+            return chunkVerdict;
           },
           { batch: 4 },
         );
@@ -713,7 +714,7 @@ export function createInboundFileScreen(turn: Parameters<typeof createDocumentSc
     securityPolicy.screening === "off"
       ? undefined
       : async ({ content, name, mimetype, bytes }) => {
-          if (released.has(contentKey(bytes))) return { decision: "auto" };
+          if (released.size && released.has(contentKey(bytes))) return { decision: "auto" };
           const payload = JSON.stringify({ name, mimetype, content });
           let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
           if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
@@ -750,7 +751,7 @@ export function createDocumentScreen(turn: {
     let documentsUnscreened = false;
     if (securityPolicy.screening !== "off") {
       for (const document of documentInputs.documents.slice()) {
-        if (released.has(contentKey(Buffer.from(document.dataBase64, "base64")))) continue;
+        if (released.size && released.has(contentKey(Buffer.from(document.dataBase64, "base64")))) continue;
         documentsUnscreened ||= !isTextDocument(document);
         if (!(deps.securityScreener || deps.agent.screenSecurity)) {
           documentsUnscreened = true;

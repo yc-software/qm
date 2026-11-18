@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_DOCUMENT_TEXT_CHARS } from "../src/core/documents.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -705,6 +705,7 @@ function fixtureScreen(): SecurityScreener {
   return {
     provider: "fixture-screen",
     async classify(input) {
+      if (input.payload.includes("SCREENING_FIXTURE_FAIL")) throw new Error("fixture screen unavailable");
       return {
         score: 1,
         threshold: 0.5,
@@ -796,24 +797,24 @@ test("allowing held input lets in only the attachments the hold's screen classif
     const requestId = (await built.app.turn(request)).pendingApprovals![0]!.requestId;
     return async () => {
       const turn = await built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
-      return JSON.stringify(await built.sessions.listLlmRequests(turn.sessionId!));
+      const requests = await built.sessions.listLlmRequests(turn.sessionId!);
+      return JSON.stringify(requests.findLast((rec) => rec.model === "mock"));
     };
   };
-  const text = "y".repeat(MAX_DOCUMENT_TEXT_CHARS + 1);
-  const overheard = [{ ts: "1700000000.000100", role: "user" as const, name: "Pat", speakerId: "U9", text }];
+  const said = (ts: string, text: string) => [{ ts, role: "user" as const, name: "Pat", speakerId: "U9", text }];
+  const flagged = said("1700000000.000300", "SCREENING_FIXTURE_BLOCK " + "y".repeat(17_000));
+  const failed = await hold(channel("summarize", { ...(await file("SCREENING_FIXTURE_FAIL")), overheard: flagged }));
+  assert.match(await failed(), /NOT security-screened/);
+  const overheard = said("1700000000.000100", "y".repeat(MAX_DOCUMENT_TEXT_CHARS + 1));
   const tooLong = await hold(channel("summarize", { ...(await file("long.txt")), overheard }));
-  await (
-    await hold(channel("thanks", { overheard }))
-  )();
+  await hold(channel("thanks", { overheard })).then((allow) => allow());
   assert.doesNotMatch(await tooLong(), /inbox\/long\.txt/);
-  const partial = [{ ...overheard[0]!, ts: "1700000000.000200", text: "y".repeat(40_000) }];
+  const partial = said("1700000000.000200", "y".repeat(40_000));
   const partly = await hold(channel("summarize", { ...(await file("partly.txt")), overheard: partial }));
   assert.doesNotMatch(await partly(), /inbox\/partly\.txt/);
-  const open = built.blobTransfer.open;
-  built.blobTransfer.open = async () => {
-    built.blobTransfer.open = open;
+  mock.method(built.blobTransfer, "open").mock.mockImplementationOnce(async () => {
     throw new Error("blob store unavailable");
-  };
+  });
   const unopened = await hold(dm("summarize", await file("SCREENING_FIXTURE_BLOCK.txt")));
   assert.doesNotMatch(await unopened(), /inbox\/SCREENING_FIXTURE_BLOCK\.txt/);
   for (const scope of ["once", "session", "always"] as const) {
