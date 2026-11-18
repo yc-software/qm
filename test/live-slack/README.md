@@ -184,14 +184,12 @@ npm run gallery:shots:login   # one-time: sign into the QA workspace in the wind
 npm run gallery:shots         # headless sweep → out/shots/*.png, folds them into gallery.html
 ```
 
-`LIVE_E2E_BROWSER_STATE` overrides the login file (default `~/.cache/live-slack-browser-state.json`),
-`LIVE_E2E_PLAYWRIGHT_DIR` where `playwright` is installed (default the current directory),
-`LIVE_E2E_SHOTS_CONCURRENCY` the parallel captures (default 4).
+`LIVE_E2E_BROWSER_STATE` overrides the login file (default `~/.cache/live-slack-browser-state.json`).
+A `playwright` installed elsewhere is found through `NODE_PATH`.
 
 ## Slack-surface scenarios (`@slack-surface`)
 
-Real-Slack checks the twin can't stand in for: a group DM (`group-dm-*`), the acknowledgement
-(reaction or ack message) before a slow turn's answer (`channel-turn-ack`), the react tool (`react-tool-on-request`), a
+Real-Slack checks the twin can't stand in for: a group DM (`group-dm-*`), the react tool (`react-tool-on-request`), a
 one-shot cron delivering into the DM (`cron-fires-into-dm`), and an approval card approved by
 a real click in Slack's web client (`keychain-approval-real-click`).
 

@@ -3,10 +3,9 @@ import path from "node:path";
 import { BROWSER_STATE, CLIENT_URL, launchFirefox, SHOTS_DIR, slackPage, threadUrl, VIEWPORT } from "./browser.ts";
 import { renderGallery, type ShotIndex } from "./gallery.ts";
 import type { ScenarioResult, TimelinePost } from "./harness.ts";
-import { sleep } from "./slack.ts";
 
 const OUT_DIR = path.dirname(SHOTS_DIR);
-const CONCURRENCY = Number(process.env.LIVE_E2E_SHOTS_CONCURRENCY) || 4;
+const CONCURRENCY = 4;
 
 interface ResultsFile {
   runId: string;
@@ -62,15 +61,10 @@ async function login(): Promise<void> {
     const context = await browser.newContext({ viewport: VIEWPORT });
     const page = await context.newPage();
     await page.goto(CLIENT_URL);
-    for (const deadline = Date.now() + 5 * 60_000; Date.now() < deadline; await sleep(3000)) {
-      if (!/\/client\/[TE][A-Z0-9]+/.test(page.url())) continue;
-      await mkdir(path.dirname(BROWSER_STATE), { recursive: true });
-      await context.storageState({ path: BROWSER_STATE });
-      console.log(`✅ Slack session saved to ${BROWSER_STATE}; sweeps reuse it headless.`);
-      return;
-    }
-    console.error("Timed out waiting for a Slack login.");
-    process.exitCode = 1;
+    await page.waitForURL(/\/client\/[TE][A-Z0-9]+/, { timeout: 5 * 60_000 });
+    await mkdir(path.dirname(BROWSER_STATE), { recursive: true });
+    await context.storageState({ path: BROWSER_STATE });
+    console.log(`✅ Slack session saved to ${BROWSER_STATE}; sweeps reuse it headless.`);
   } finally {
     await browser.close();
   }

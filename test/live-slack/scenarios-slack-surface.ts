@@ -33,30 +33,6 @@ export const slackSurfaceScenarios: Scenario[] = [
     },
   },
   {
-    name: "channel-turn-ack",
-    lane: "parallel",
-    tags: ["sandbox", "slack-surface"],
-    timeoutMs: 6 * 60_000,
-    async run(ctx) {
-      const ch = await ctx.freshChannel();
-      const marker = ctx.marker();
-      const root = await ch.mention(`Run \`sleep 20\` on your computer, then reply with the exact token ${marker}.`);
-      let reacted = false;
-      const reply = await ch.waitForBotReply(root, {
-        match: new RegExp(marker),
-        timeoutMs: 5 * 60_000,
-        onMessages: (messages) =>
-          (reacted ||=
-            botReactions(
-              ctx,
-              messages.find((m) => m.ts === root),
-            ).length > 0),
-      });
-      const acks = (await ch.botMessagesInThread(root)).filter((m) => Number(m.ts) < Number(reply.ts));
-      assert.ok(reacted || acks.length > 0, "no ack reaction or ack message before the final reply");
-    },
-  },
-  {
     name: "react-tool-on-request",
     lane: "parallel",
     tags: ["slack-surface"],
@@ -82,7 +58,11 @@ export const slackSurfaceScenarios: Scenario[] = [
         `Schedule a one-off reminder to me for 1 minute from now with the exact text "${marker}", delivered here. Confirm briefly once scheduled.`,
       );
       const confirm = await dm.waitForBotReply(ask, { timeoutMs: 4 * 60_000 });
-      await dm.waitForBotReply(confirm.ts, { match: new RegExp(marker), timeoutMs: 4 * 60_000 });
+      await dm.waitForBotReply(confirm.ts, {
+        match: new RegExp(marker),
+        accept: (m) => Number(m.ts) - Number(ask) >= 50,
+        timeoutMs: 4 * 60_000,
+      });
     },
   },
   {

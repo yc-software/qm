@@ -13,8 +13,7 @@ export function threadUrl(teamId: string, channelId: string, rootTs: string): st
 }
 
 export function launchFirefox(headless = true): Promise<any> {
-  const from = createRequire(path.join(process.env.LIVE_E2E_PLAYWRIGHT_DIR ?? process.cwd(), "package.json"));
-  return from("playwright").firefox.launch({ headless });
+  return createRequire(import.meta.url)("playwright").firefox.launch({ headless });
 }
 
 export async function slackPage(browser: any): Promise<any> {
