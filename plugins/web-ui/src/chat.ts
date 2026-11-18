@@ -173,7 +173,6 @@ import {
   avatarTpl,
   brandMark,
   brandName,
-  browserRenderableImage,
   chipBadge,
   copyText,
   formatBytes,
@@ -185,6 +184,7 @@ import {
 import { icon } from "./icons";
 import { animateDetailsToggle } from "./details-motion";
 import { htmlPreviewCard } from "./html-preview";
+import { audioPlayer, frameSrc, mediaFeed, mediaKind, openMediaViewer, type MediaItem } from "./media";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { hasWelcomeScreen } from "./shell-state";
@@ -2133,7 +2133,7 @@ export function createChatSurface(
           text: `${messageText(message)}${edited || deleted ? ` (${deleted ? "deleted" : "edited"})` : ""}`,
           index,
           entrySeqs: messageEntrySeqs(message).join(" "),
-          before: html`${speakerLabelTpl(speaker, message)}${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}`,
+          before: html`${speakerLabelTpl(speaker, message)}${attachmentGallery(attachments, userVisual, (attachment) => userAttachmentBadge(attachment, attachments))}`,
           after: sendFailure
             ? html`<div class="send-failure">
                 <span>${sendFailure}</span
@@ -2151,7 +2151,7 @@ export function createChatSurface(
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
           ${speakerLabelTpl(speaker, message)}
-          ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
+          ${attachmentGallery(attachments, userVisual, (attachment) => userAttachmentBadge(attachment, attachments))}
           <div
             class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
@@ -2558,7 +2558,16 @@ export function createChatSurface(
 
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
     if (!files?.length) return nothing;
-    return html`<div class="message-files">${files.map((f) => deliveredFileBadge(f))}</div>`;
+    const media: MediaItem[] = [];
+    const rest: TemplateResult[] = [];
+    for (const file of files) {
+      const item = deliveredMedia(file);
+      if (!item) rest.push(deliveredFileBadge(file));
+      else if (item.kind === "audio") rest.push(audioPlayer(item));
+      else media.push(item);
+    }
+    return html`${media.length ? html`<div class="message-media">${mediaFeed(media)}</div>` : nothing}
+    ${rest.length ? html`<div class="message-files">${rest}</div>` : nothing}`;
   }
 
   function syncWorkTicker(): void {
@@ -3849,30 +3858,72 @@ export function createChatSurface(
     document.addEventListener("scroll", unpeekAttachment, true);
   }
 
-  function userAttachmentBadge(a: UserAttachmentView): TemplateResult {
+  function userMedia(a: UserAttachmentView): MediaItem | null {
+    const kind = mediaKind(a.fileName, a.mimeType);
+    if (!kind) return null;
+    const download = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
+    const inline =
+      kind === "image" && a.content
+        ? a.content.startsWith("data:")
+          ? a.content
+          : `data:${a.mimeType};base64,${a.content}`
+        : undefined;
+    const src = download ?? localContentUrl(a) ?? inline;
+    if (!src) return null;
+    return {
+      kind,
+      name: a.fileName,
+      src,
+      ...(download ? { download } : {}),
+      ...(typeof a.size === "number" ? { size: a.size } : {}),
+    };
+  }
+
+  function userVisual(a: UserAttachmentView): boolean {
+    const kind = userMedia(a)?.kind;
+    return kind === "image" || kind === "video";
+  }
+
+  function openUserMedia(event: MouseEvent, all: readonly UserAttachmentView[], current: UserAttachmentView): void {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    unpeekAttachment();
+    const visual = all.filter(userVisual);
+    const thumbs = (event.currentTarget as HTMLElement).parentElement!.querySelectorAll(".file-image > :is(img, video)");
+    openMediaViewer(
+      visual.map((a) => userMedia(a)!),
+      visual.indexOf(current),
+      { originOf: (index) => thumbs[index] ?? null },
+    );
+  }
+
+  function userAttachmentBadge(a: UserAttachmentView, all: readonly UserAttachmentView[] = [a]): TemplateResult {
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
-    if (a.mimeType?.startsWith("image/")) {
-      const dataUrl =
-        a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
-      const href = artifactHref ?? localContentUrl(a) ?? dataUrl;
-      if (href && browserRenderableImage(a.mimeType)) {
-        return html`<a
-          class="file-image"
-          href=${href}
-          target="_blank"
-          rel="noreferrer"
-          ${tip(a.fileName)}
-          @mouseenter=${peekAttachment}
-          @mouseleave=${unpeekAttachment}
-          @focus=${peekAttachment}
-          @blur=${unpeekAttachment}
-          ><img src=${href} alt=${a.fileName} loading="lazy" /><span class="file-image-name" dir="auto"
-            >${a.fileName}</span
-          >${typeof a.size === "number" ? html`<small class="file-image-size">${formatBytes(a.size)}</small>` : nothing}</a
-        >`;
-      }
-      return chipBadge(FileImage, a.fileName, a.size, href || undefined, true);
+    const media = userMedia(a);
+    if (media?.kind === "audio") return audioPlayer(media);
+    if (media) {
+      return html`<a
+        class="file-image"
+        href=${media.src}
+        target="_blank"
+        rel="noreferrer"
+        ${tip(a.fileName)}
+        @click=${(event: MouseEvent) => openUserMedia(event, all, a)}
+        @mouseenter=${peekAttachment}
+        @mouseleave=${unpeekAttachment}
+        @focus=${peekAttachment}
+        @blur=${unpeekAttachment}
+        >${
+          media.kind === "video"
+            ? html`<video src=${frameSrc(media.src)} preload="metadata" muted playsinline tabindex="-1"></video
+                ><span class="file-video-play">${icon(Play, 14)}</span>`
+            : html`<img src=${media.src} alt=${a.fileName} loading="lazy" />`
+        }<span class="file-image-name" dir="auto">${a.fileName}</span
+        >${typeof a.size === "number" ? html`<small class="file-image-size">${formatBytes(a.size)}</small>` : nothing}</a
+      >`;
     }
+    if (a.mimeType?.startsWith("image/"))
+      return chipBadge(FileImage, a.fileName, a.size, artifactHref ?? localContentUrl(a), true);
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;
       if (!src && a.content) {
@@ -3883,15 +3934,23 @@ export function createChatSurface(
     return fileChip(a.fileName, a.size, artifactHref ?? localContentUrl(a), a.mimeType);
   }
 
+  function deliveredMedia(file: DeliveredFile): MediaItem | null {
+    const kind = file.artifactId ? mediaKind(file.name, file.mimetype) : null;
+    if (!kind) return null;
+    const src = fileContentUrl(file.artifactId!, file.name);
+    return {
+      kind,
+      name: file.name,
+      src,
+      download: src,
+      ...(typeof file.sizeBytes === "number" ? { size: file.sizeBytes } : {}),
+    };
+  }
+
   function deliveredFileBadge(file: DeliveredFile): TemplateResult {
     if (!file.artifactId) return fileChip(file.name, file.sizeBytes);
     const href = fileContentUrl(file.artifactId, file.name);
-    if (file.mimetype?.startsWith("image/")) {
-      if (!browserRenderableImage(file.mimetype)) return imageChip(file.name, file.sizeBytes, href);
-      return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" ${tip(file.name)}
-        ><img src=${href} alt=${file.name} loading="lazy"
-      /></a>`;
-    }
+    if (file.mimetype?.startsWith("image/")) return imageChip(file.name, file.sizeBytes, href);
     if (inlineHtmlName(file.name, file.mimetype)) return htmlPreviewCard(file.name, href, file.sizeBytes, href);
     return fileChip(file.name, file.sizeBytes, href, file.mimetype);
   }
