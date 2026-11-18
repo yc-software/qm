@@ -18,21 +18,21 @@ export function createAppFiles(deps: {
   context?: () => PrivateContext;
 }): AppFiles {
   const { deploy, app } = deps;
-  const caller = { actorId: deps.actorId, botActor: deps.botActor };
-  const canManage = () => deploy.canManageApp(app, caller, deps.actingScopeId);
+  const caller = () => deps.context?.() ?? { actorId: deps.actorId, botActor: deps.botActor };
+  const canManage = () => deploy.canManageApp(app, caller(), deps.actingScopeId);
   const assertMayEdit = async (): Promise<void> => {
     if (!(await canManage()))
       throw new Error(`you need write access to the app ${JSON.stringify(app)} to read or change its files`);
   };
   const source: AppFiles["source"] = async (paths, commit) => {
-    const saved = await deploy.source(app, paths, commit);
-    if (!saved) throw new Error(`${app} has no saved source; publish it again first`);
-    return saved;
+    const reader = await deploy.sourceReader(app, caller(), deps.actingScopeId);
+    if (!reader) throw new Error(`${app} has no readable source in this conversation`);
+    return reader.source(paths, commit);
   };
   return {
     app,
     async sourceReader() {
-      return (await deploy.sourceReader(app, caller, deps.actingScopeId)) ?? undefined;
+      return (await deploy.sourceReader(app, caller(), deps.actingScopeId)) ?? undefined;
     },
     async source(paths, commit) {
       await assertMayEdit();

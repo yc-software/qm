@@ -1,3 +1,15 @@
+import { createServer as createHttpServer } from "node:http";
+import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createServer } from "../src/api/server.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { verifyDeployGitAccess, mintDeployGitAccess } from "../src/deploy/access-token.ts";
+import type { AddressInfo } from "node:net";
+import { createApp } from "../src/api/app.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { createIdentityService } from "../src/identity/identity-service.ts";
+import { testMap } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -11,17 +23,21 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createAppFiles } from "../src/tools/app-files.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testDeployBackings } from "./support/test-database.ts";
 
-async function fixture() {
+async function fixture(options: { port?: number; logs?: () => Promise<string> } = {}) {
   const ownerScopeId = scopeId("personal", "alice");
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const backings = testDeployBackings();
+  const databaseUrl = backings.databaseUrl;
+  const lock = createPostgresAdvisoryLock(backings.pg);
+  const sessions = createPostgresSessionStore(databaseUrl);
   const session = await sessions.getOrCreateByThread("private-app", "dm", ownerScopeId);
-  const deployStore = createDeployStore(testDeployBackings());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const deployStore = createDeployStore(backings);
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
   let applied = 0;
   const deps = {
     ...singleProcessDeps(),
+    advisoryLock: lock,
     sessions,
     deployStore,
     acl,
@@ -29,19 +45,33 @@ async function fixture() {
       profile: { managedScaleToZero: false },
       apply: async () => {
         applied++;
-        return { host: "127.0.0.1", port: 5000 };
+        return { host: "127.0.0.1", port: options.port ?? 5000 };
       },
       destroy: async () => {},
+      ...(options.logs ? { logs: options.logs } : {}),
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "private-app-")),
   };
+  const service = () => createDeployService(deps);
+  const directory = createPostgresDirectoryStore(databaseUrl);
+  const app = createApp({
+    deploy: service(),
+    acl,
+    sessions,
+    directory,
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+  } as unknown as Parameters<typeof createApp>[0]);
   return {
+    app,
+    databaseUrl,
+    directory,
+    lock,
     ownerScopeId,
     sessions,
     session,
     deployStore,
-    service: () => createDeployService(deps),
+    service,
     context: () => ({ actorId: "alice", scopeId: ownerScopeId, sessionId: session.id }),
     input: {
       ownerScopeId,
@@ -61,7 +91,7 @@ test("private app creation persists provenance and cannot widen its audience", a
     sourceUnknown: true,
     personalOnly: true,
   });
-  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const app = await f.service().deployOrUpdate({ ...f.input, name: "private-app", context: f.context() });
   const recovered = (await f.service().getApp(app.id))!;
   assert.equal(recovered.personalOnly, true);
   assert.deepEqual(recovered.sourceProvenance, {
@@ -93,7 +123,12 @@ test("private app creation persists provenance and cannot widen its audience", a
     Buffer.from((await f.service().source(app.id, ["server.js"]))!.files[0]!.data).toString(),
     "personal revision",
   );
-  assert.equal(f.applied(), 2);
+  await f
+    .service()
+    .deployOrUpdate({ ...f.input, name: "private-renamed", renameFrom: "private-app", context: f.context() });
+  await f.service().deployOrUpdate({ ...f.input, name: "private-renamed", rollbackTo: 1, context: f.context() });
+  assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
+  assert.equal(f.applied(), 4);
 });
 
 test("a late private read cannot overwrite an app already shared with another person", async () => {
@@ -164,4 +199,308 @@ test("source edits recheck privacy after preparation and private publish cannot 
   );
   assert.equal(Buffer.from((await service.source(app.id, ["server.js"]))!.files[0]!.data).toString(), "original");
   assert.equal(f.applied(), 1);
+});
+
+test("an owner's shared conversation cannot list, fetch, log or clone their private app", async () => {
+  const f = await fixture();
+  await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
+  const d = await f.service().deploy({ ...f.input, context: f.context() });
+  const session = await f.sessions.getOrCreateByThread("shared-app-reader", "channel", "channel:team");
+  const caller = { actorId: "alice", scopeId: session.scopeId, sessionId: session.id };
+  assert.deepEqual(await f.app.listAppsForViewer(testTenant, caller), []);
+  assert.equal(await f.app.appGitPermissionFor(d.id, caller), null);
+  assert.equal(
+    await f.app.appGitUrlFor(d.id, caller, { secret: "private-app-secret", baseUrl: "http://core.test" }),
+    null,
+  );
+  assert.equal((await f.app.reachApp(d.id, caller)).status, "denied");
+  assert.equal((await f.app.reachApp(d.id, caller, { bypassAcl: true })).status, "denied");
+  assert.equal((await f.app.appLogsFor(d.id, caller, { tailLines: 10 })).status, "denied");
+  const files = createAppFiles({
+    deploy: f.service(),
+    app: d.id,
+    actorId: "alice",
+    actingScopeId: session.scopeId,
+    context: () => caller,
+  });
+  assert.equal(await files.sourceReader(), undefined);
+  await assert.rejects(files.source(["server.js"]), /write access/);
+  assert.notEqual((await f.sessions.get(session.id))!.personalOnly, true);
+});
+
+test("reading a private app in another personal conversation persists its privacy and provenance", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: true,
+    personalOnly: true,
+  });
+  const d = await f.service().deploy({ ...f.input, context: f.context() });
+  const session = await f.sessions.getOrCreateByThread("personal-app-reader", "dm", f.ownerScopeId);
+  const caller = { actorId: "alice", scopeId: f.ownerScopeId, sessionId: session.id };
+  assert.deepEqual(
+    (await f.app.listAppsForViewer(testTenant, caller)).map((app) => app.id),
+    [d.id],
+  );
+  const persisted = (await f.sessions.get(session.id))!;
+  assert.equal(persisted.personalOnly, true);
+  assert.ok(persisted.sourceProvenance?.sources.includes("group:restricted"));
+  assert.equal(persisted.sourceProvenance?.sourceUnknown, true);
+  assert.equal(persisted.sourceProvenance?.sensitivity, "restricted");
+  const files = createAppFiles({
+    deploy: f.service(),
+    app: d.id,
+    actorId: "alice",
+    actingScopeId: f.ownerScopeId,
+    context: () => caller,
+  });
+  assert.equal(Buffer.from((await files.source(["server.js"])).files[0]!.data).toString(), "original");
+  assert.equal((await f.app.reachApp(d.id, { actorId: "bob" })).status, "denied");
+});
+
+test("Git credentials recheck a conversation's audience after a previously ordinary app becomes private", async () => {
+  const f = await fixture();
+  const d = await f.service().deploy({ ...f.input, name: "git-context" });
+  const shared = await f.sessions.getOrCreateByThread("shared-git-origin", "channel", "channel:team");
+  const context = { actorId: "alice", scopeId: shared.scopeId, sessionId: shared.id };
+  const secret = "git-private-context-test-secret-0123456789";
+  const link = await f.app.appGitUrlFor(d.id, context, { secret, baseUrl: "http://core.test" });
+  assert.ok(link);
+  const files = createAppFiles({
+    deploy: f.service(),
+    app: d.id,
+    actorId: "alice",
+    actingScopeId: shared.scopeId,
+    context: () => context,
+  });
+  const capturedReader = await files.sourceReader();
+  assert.ok(capturedReader);
+  const token = decodeURIComponent(new URL(link.url).password);
+  const access = await verifyDeployGitAccess(secret, token);
+  assert.deepEqual(access?.context, { scopeId: shared.scopeId, sessionId: shared.id });
+  const server = createServer(f.app, {
+    signingSecret: secret,
+    replayDedupe: createPostgresReplayDedupe(f.databaseUrl),
+  });
+  server.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const request = (token: string, service = "git-upload-pack") =>
+    fetch(`${base}/v1/apps/${d.id}/git/info/refs?service=${service}`, {
+      headers: { authorization: "Basic " + Buffer.from("app:" + token).toString("base64") },
+    });
+  try {
+    assert.equal((await request(token)).status, 200);
+    await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
+    await f.service().redeploy(d.id, {
+      ...f.input,
+      context: f.context(),
+      files: [{ path: "server.js", data: "private Git content" }],
+    });
+    assert.equal((await request(token)).status, 403);
+    const updated = (await f.service().getApp(d.id))!;
+    const privateCommit = updated.versions.find((version) => version.version === updated.currentVersion)!.commit;
+    await assert.rejects(capturedReader.source(["server.js"], privateCommit), /source access is no longer available/);
+    const unbound = await mintDeployGitAccess(secret, {
+      deploymentId: d.id,
+      principalId: "alice",
+      permission: "read",
+      exp: Date.now() + 60_000,
+    });
+    assert.equal((await request(unbound)).status, 403);
+    const own = await f.app.appGitUrlFor(d.id, f.context(), { secret, baseUrl: base });
+    assert.ok(own);
+    assert.equal((await request(decodeURIComponent(new URL(own.url).password))).status, 200);
+    assert.equal((await f.sessions.get(shared.id))!.personalOnly, undefined);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test("a Git push cannot use stale personal context to change an app already shared with another user", async () => {
+  const f = await fixture();
+  const service = f.service();
+  const d = await service.deploy({ ...f.input });
+  await service.shareApp(d.id, "personal:bob", "read", { createdBy: "alice" }, { notify: false });
+  const context = f.context();
+  await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
+  let accepted = false;
+  await assert.rejects(
+    f.app.runAppGitPush(d.id, context, async () => {
+      accepted = true;
+      return { result: "pushed", ok: true };
+    }),
+    /cannot update a shared app/,
+  );
+  assert.equal(accepted, false);
+  assert.equal(Buffer.from((await service.source(d.id, ["server.js"]))!.files[0]!.data).toString(), "original");
+});
+
+test("a failed source-edit callback inherits the private app before any source is returned", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: true,
+    personalOnly: true,
+  });
+  const d = await f.service().deploy({ ...f.input, context: f.context() });
+  const reader = await f.sessions.getOrCreateByThread("edit-private-source", "dm", f.ownerScopeId);
+  await assert.rejects(
+    f.service().editSource(d.id, { actorId: "alice", scopeId: f.ownerScopeId, sessionId: reader.id }, async (read) => {
+      assert.equal(Buffer.from((await read(["server.js"])).files[0]!.data).toString(), "original");
+      const context = (await f.sessions.get(reader.id))!;
+      assert.equal(context.personalOnly, true);
+      assert.equal(context.sourceProvenance?.sensitivity, "restricted");
+      assert.ok(context.sourceProvenance?.sources.includes("group:restricted"));
+      throw new Error("edit preparation failed");
+    }),
+    /edit preparation failed/,
+  );
+  assert.equal((await f.sessions.get(reader.id))!.personalOnly, true);
+  assert.equal((await f.service().getApp(d.id))!.currentVersion, 1);
+});
+
+test("log retrieval excludes a concurrent private redeploy until its authorized response is captured", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let output = "ordinary log";
+  const f = await fixture({
+    logs: async () => {
+      entered.resolve();
+      await release.promise;
+      return output;
+    },
+  });
+  const service = f.service();
+  const d = await service.deploy(f.input);
+  const reader = await f.sessions.getOrCreateByThread("shared-log-reader", "channel", "channel:team");
+  const reading = f.app.appLogsFor(
+    d.id,
+    { actorId: "alice", scopeId: reader.scopeId, sessionId: reader.id },
+    { tailLines: 10 },
+  );
+  await entered.promise;
+  await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
+  try {
+    await f.lock.tryWithLock(`deploy:${d.id}`, async () => {
+      await service.redeploy(d.id, { ...f.input, context: f.context() });
+      output = "private log";
+    });
+  } finally {
+    release.resolve();
+  }
+  assert.deepEqual(await reading, { status: "ok", logs: "ordinary log" });
+  await service.redeploy(d.id, { ...f.input, context: f.context() });
+  assert.equal(
+    (
+      await f.app.appLogsFor(
+        d.id,
+        { actorId: "alice", scopeId: reader.scopeId, sessionId: reader.id },
+        { tailLines: 10 },
+      )
+    ).status,
+    "denied",
+  );
+});
+
+test("an agent preview withholds content when the app becomes private while the response is in flight", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const upstream = createHttpServer(async (_req, res) => {
+    entered.resolve();
+    await release.promise;
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("private preview content");
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, resolve));
+  const f = await fixture({ port: (upstream.address() as AddressInfo).port });
+  const d = await f.service().deploy({ ...f.input, name: "preview-alias" });
+  await f.directory.replaceChannels(
+    [{ channelId: "team", name: "team", isPrivate: true }],
+    [{ channelId: "team", principalId: "alice" }],
+  );
+  const reader = await f.sessions.getOrCreateByThread("preview-shared-reader", "channel", "channel:team");
+  const secret = "preview-private-context-secret-0123456789";
+  const server = createServer(f.app, {
+    signingSecret: secret,
+    replayDedupe: createPostgresReplayDedupe(f.databaseUrl),
+  });
+  server.listen(0);
+  try {
+    const token = await mintCapabilityToken(
+      {
+        actorId: "alice",
+        scopeId: reader.scopeId,
+        sessionId: reader.id,
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + 60_000,
+      },
+      secret,
+    );
+    const response = fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/apps/${d.name}/fetch`, {
+      headers: { "x-agent-capability": token },
+    });
+    await Promise.race([
+      entered.promise,
+      response.then(async (early) => {
+        throw new Error(`Preview did not reach upstream: ${early.status} ${await early.clone().text()}`);
+      }),
+    ]);
+    await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
+    await f.service().redeploy(d.id, { ...f.input, context: f.context() });
+    await f.service().renameApp(d.id, "private-preview-renamed", f.context());
+    await f.service().deploy({ ...f.input, name: "preview-alias" });
+    release.resolve();
+    const result = await response;
+    assert.equal(result.status, 404);
+    assert.deepEqual(await result.json(), { error: "not_found" });
+    assert.equal((await f.sessions.get(reader.id))!.personalOnly, undefined);
+  } finally {
+    release.resolve();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
+test("private management responses taint a fresh personal session before a subsequent shared write", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: true,
+    personalOnly: true,
+  });
+  const d = await f.service().deploy({ ...f.input, context: f.context(), env: { PRIVATE_NOTE: "private metadata" } });
+  const shared = await f.service().deploy({ ...f.input, name: "shared-management-target" });
+  await f.service().shareApp(shared.id, "personal:bob", "read", { createdBy: "alice" }, { notify: false });
+  const reader = await f.sessions.getOrCreateByThread("private-management-reader", "dm", f.ownerScopeId);
+  const context = { actorId: "alice", scopeId: f.ownerScopeId, sessionId: reader.id };
+  const secret = "management-private-context-secret-0123456789";
+  const server = createServer(f.app, {
+    signingSecret: secret,
+    replayDedupe: createPostgresReplayDedupe(f.databaseUrl),
+  });
+  server.listen(0);
+  try {
+    const token = await mintCapabilityToken({ ...context, aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 }, secret);
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/apps/${d.id}/name`, {
+      method: "POST",
+      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      body: JSON.stringify({ name: "private-managed" }),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(
+      ((await response.json()) as { app: { versions: Array<{ env: { PRIVATE_NOTE: string } }> } }).app.versions[0]!.env
+        .PRIVATE_NOTE,
+      "private metadata",
+    );
+    const persisted = (await f.sessions.get(reader.id))!;
+    assert.equal(persisted.personalOnly, true);
+    assert.equal(persisted.sourceProvenance?.sensitivity, "restricted");
+    assert.ok(persisted.sourceProvenance?.sources.includes("group:restricted"));
+    await assert.rejects(f.service().redeploy(shared.id, { ...f.input, context }), /cannot update a shared app/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

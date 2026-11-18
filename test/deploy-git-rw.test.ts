@@ -75,6 +75,7 @@ async function gitUrl(base: string, appId: string, permission: "read" | "write")
     deploymentId: appId,
     permission,
     principalId: "U1",
+    context: {},
     exp: Date.now() + 60_000,
   });
   const url = new URL(`/v1/apps/${encodeURIComponent(appId)}/git`, base);

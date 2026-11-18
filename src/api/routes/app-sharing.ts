@@ -1,3 +1,4 @@
+import { requestPrivateContext, inheritRequestSources } from "../private-context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { canEditAppPermissions } from "../../deploy/app-access.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
@@ -22,7 +23,10 @@ async function setAppConnectors(ctx: ApiCtx): Promise<void> {
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
   try {
-    const publishedApp = await app.setAppConnectors(params.id!, connectors, { createdBy: principalId });
+    const publishedApp = await app.setAppConnectors(params.id!, connectors, {
+      createdBy: principalId,
+      context: requestPrivateContext(ctx, principalId),
+    });
     return sendJson(res, 200, { app: appView(publishedApp) });
   } catch (e) {
     return sendShareFailure(res, e);
@@ -54,6 +58,8 @@ export async function getAppShares(ctx: ApiCtx): Promise<void> {
   if (!publishedApp) return sendJson(res, 404, { error: "not_found" });
   if (!canEditAppPermissions(publishedApp.ownerScopeId, principalId))
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
+  if ((await inheritRequestSources(ctx, [publishedApp], principalId)).has(publishedApp.id))
+    return sendJson(res, 404, { error: "not_found" });
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, publishedApp.ownerScopeId);
   return sendJson(res, 200, {
     public: publishedApp.public === true && externalSharing,

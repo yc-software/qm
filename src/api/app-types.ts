@@ -1,3 +1,4 @@
+import type { PrivateContext } from "../sessions/private-context.ts";
 import type { ManagedGroupDirectory } from "../resolution/scope-membership.ts";
 import type { PersonaHandover } from "../personas/persona-handover.ts";
 import type { Tenant } from "../tenants/context.ts";
@@ -632,16 +633,13 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<PublishedApp>;
   listApps(): Promise<PublishedApp[]>;
   getApp(idOrName: string): Promise<PublishedApp | null>;
-  listAppsForViewer(tenant: Tenant, viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<ViewerApp[]>;
+  listAppsForViewer(tenant: Tenant, viewer: PrivateContext): Promise<ViewerApp[]>;
   effectiveAppPermission(d: PublishedApp, principalId: string): Promise<Permission | null>;
-  appGitPermissionFor(
-    idOrName: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null>;
+  appGitPermissionFor(idOrName: string, viewer: PrivateContext): Promise<"read" | "write" | null>;
   appGitPermissionsFor(
     tenant: Tenant,
     publishedApps: readonly PublishedApp[],
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: PrivateContext,
   ): Promise<Array<"read" | "write" | null>>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
@@ -696,30 +694,30 @@ export interface App {
     personalOnly?: true;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackApp(id: string, version: number, actor?: string): Promise<void>;
-  archiveApp(id: string): Promise<void>;
-  restoreApp(id: string, actorId?: string): Promise<PublishedApp>;
-  canManageApp(
-    idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-    actingScopeId?: ScopeId,
-  ): Promise<boolean>;
-  renameApp(id: string, name: string): Promise<PublishedApp>;
-  setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
-  setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
-  setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
+  archiveApp(id: string, context?: PrivateContext): Promise<void>;
+  restoreApp(id: string, actorId?: string, context?: PrivateContext): Promise<PublishedApp>;
+  canManageApp(idOrName: string, caller: PrivateContext, actingScopeId?: ScopeId): Promise<boolean>;
+  renameApp(id: string, name: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppDisplayName(id: string, displayName: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppAlwaysOn(id: string, alwaysOn: boolean, context?: PrivateContext): Promise<PublishedApp>;
+  setAppEmbedAncestors(id: string, embedAncestors: string[], context?: PrivateContext): Promise<PublishedApp>;
   setAppPublic(
     idOrName: string,
     isPublic: boolean,
     actor: AppActor & { personAtKeyboard: boolean },
   ): Promise<PublishedApp>;
-  setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
+  setAppConnectors(
+    idOrName: string,
+    connectors: string[],
+    actor: { createdBy: string; context?: PrivateContext },
+  ): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
   appLiveEdit(id: string): Promise<{ draft: AppDraft | null } | null>;
-  reachApp(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
+  reachApp(id: string, principalId: string | PrivateContext, opts?: ReachOptions): Promise<Reach>;
   appLogsFor(
     id: string,
-    principalId: string,
+    principalId: string | PrivateContext,
     opts: { tailLines: number },
   ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }>;
   shareApp(
@@ -741,17 +739,23 @@ export interface App {
   appGrantees(idOrName: string): Promise<AppGrantee[]>;
   appUrl(publishedApp: PublishedApp): string | undefined;
   appGitRepoPath(id: string): Promise<string | null>;
+  runAppGitRead<T>(id: string, runUploadPack: () => Promise<T>): Promise<T>;
   runAppGitPush<T>(
     id: string,
-    actor: string | undefined,
+    actor: string | PrivateContext | undefined,
     runReceivePack: () => Promise<{ result: T; ok: boolean }>,
   ): Promise<T>;
   appGitUrlFor(
     idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: PrivateContext,
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<AppGitUrl | null>;
-  authorizesAppGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
+  authorizesAppGitAccess(
+    id: string,
+    principalId: string,
+    permission: "read" | "write",
+    context?: import("../deploy/access-token.ts").DeployGitContext,
+  ): Promise<boolean>;
   reapIdleApps(ttlMs: number, now?: number): Promise<number>;
   listEnvironments(): Promise<{ environment: Environment; attachments: EnvironmentAttachment[] }[]>;
   createEnvironment(input: { scopeId: ScopeId; name: string; actorId: string }): Promise<Environment>;

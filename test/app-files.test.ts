@@ -1,3 +1,4 @@
+import type { SessionStore } from "../src/sessions/session-store.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -39,7 +40,7 @@ const OWNER = "U1";
 const INDEX = '<link rel="stylesheet" href="styles.css">\n<h1 class="title">Notes</h1>\n';
 const STYLES = ".title { color: black; }\n.card { color: black; }\n";
 
-function harness(opts: { liveEdits?: boolean } = {}) {
+function harness(opts: { liveEdits?: boolean; sessions?: SessionStore } = {}) {
   const writes: Array<{ files: Record<string, string>; deletedPaths: string[] }> = [];
   const placed: Array<string | undefined> = [];
   const audited: Array<{ principalId: string; action: string }> = [];
@@ -69,6 +70,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
   const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
+    ...(opts.sessions ? { sessions: opts.sessions } : {}),
     deployStore,
     provider,
     auditLog: { record: (_tenant, event) => void audited.push(event), events: async () => [], tail: async () => [] },
@@ -357,7 +359,8 @@ const SOURCE = {
 const RED = ".title { color: red; }\n";
 
 test("an app edit chat is shown the app's small text files once, then only the files that changed", async () => {
-  const h = harness();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const h = harness({ sessions });
   await h.publish("notes", SOURCE);
   const read: string[] = [];
   const { filesIn } = h.deployStore;
@@ -371,7 +374,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService("default-org", config, acl),
     config,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as unknown as Sandbox,
     auditLog: createPostgresAuditLog(testDatabaseUrl()),

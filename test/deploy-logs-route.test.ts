@@ -35,10 +35,10 @@ describe("deployment logs route", () => {
   before(async () => {
     const app = {
       authorizesCapabilityScope: async () => true,
-      appLogsFor: async (id: string, viewer: string, opts: { tailLines: number }) => {
+      appLogsFor: async (id: string, viewer: { actorId: string }, opts: { tailLines: number }) => {
         lastTail = opts.tailLines;
         if (id === "missing") return { status: "not_found" as const };
-        if (viewer !== "U1") return { status: "denied" as const };
+        if (viewer.actorId !== "U1") return { status: "denied" as const };
         if (id === "silent") return { status: "ok" as const, logs: null };
         return { status: "ok" as const, logs: "line1\nline2\n" };
       },

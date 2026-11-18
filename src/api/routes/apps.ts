@@ -1,3 +1,4 @@
+import { requestPrivateContext } from "../private-context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createPersonNames } from "../../identity/person-names.ts";
 import { appPathTenant, appGitTenant } from "./app-paths.ts";
@@ -33,6 +34,7 @@ import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../de
 import { appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
+import { DeployAccessError } from "../../deploy/deploy-service.ts";
 import { appSubdomainUrlOf } from "../../deploy/deploy-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
@@ -168,7 +170,7 @@ async function proxyAdminApp(ctx: BaseCtx): Promise<void> {
     resource: publishedApp.id,
     scopeLabel: publishedApp.ownerScopeId,
   });
-  const reach = await app.reachApp(parts.id, "", { bypassAcl: true });
+  const reach = await app.reachApp(parts.id, actor.id, { bypassAcl: true });
   return proxyReach(ctx, reach, parts.subPath, undefined, { sandbox: true });
 }
 
@@ -1237,11 +1239,11 @@ async function serveAppGit(ctx: BaseCtx): Promise<void> {
       return sendJson(ctx.res, 403, { error: "forbidden", message: "app git token is read-only" });
     if (
       access.principalId &&
-      !(await ctx.app.authorizesAppGitAccess(parts.id, access.principalId, access.permission))
+      !(await ctx.app.authorizesAppGitAccess(parts.id, access.principalId, access.permission, access.context))
     ) {
       return sendJson(ctx.res, 403, { error: "forbidden", message: "app git access has been revoked" });
     }
-    if (isPush && !access.principalId) {
+    if (isPush && (!access.principalId || access.context === undefined)) {
       return sendJson(ctx.res, 403, { error: "forbidden", message: "app git write access has been revoked" });
     }
   }
@@ -1259,28 +1261,53 @@ async function serveAppGit(ctx: BaseCtx): Promise<void> {
         body,
       });
     const result = isPush
-      ? await ctx.app.runAppGitPush(parts.id, access?.principalId, async () => {
-          if (access?.principalId && !(await ctx.app.authorizesAppGitAccess(parts.id, access.principalId, "write"))) {
-            const body = Buffer.from(
-              JSON.stringify({ error: "forbidden", message: "app git write access has been revoked" }),
-            );
+      ? await ctx.app.runAppGitPush(
+          parts.id,
+          access?.principalId ? { ...access.context, actorId: access.principalId } : undefined,
+          async () => {
+            if (
+              access?.principalId &&
+              !(await ctx.app.authorizesAppGitAccess(parts.id, access.principalId, "write", access.context))
+            ) {
+              const body = Buffer.from(
+                JSON.stringify({ error: "forbidden", message: "app git write access has been revoked" }),
+              );
+              return {
+                result: {
+                  status: 403,
+                  headers: { "content-type": "application/json", "content-length": String(body.length) },
+                  body,
+                },
+                ok: false,
+              };
+            }
+            const r = await runBackend();
+            return { result: r, ok: r.status >= 200 && r.status < 300 };
+          },
+        )
+      : await ctx.app.runAppGitRead(parts.id, async () => {
+          if (!access?.principalId && (await ctx.app.getApp(parts.id))?.personalOnly)
             return {
-              result: {
-                status: 403,
-                headers: { "content-type": "application/json", "content-length": String(body.length) },
-                body,
-              },
-              ok: false,
+              status: 403,
+              headers: { "content-type": "application/json" },
+              body: Buffer.from(JSON.stringify({ error: "forbidden" })),
             };
-          }
-          const r = await runBackend();
-          return { result: r, ok: r.status >= 200 && r.status < 300 };
-        })
-      : await runBackend();
+          if (
+            access?.principalId &&
+            !(await ctx.app.authorizesAppGitAccess(parts.id, access.principalId, access.permission, access.context))
+          )
+            return {
+              status: 403,
+              headers: { "content-type": "application/json" },
+              body: Buffer.from(JSON.stringify({ error: "forbidden", message: "App git access has been revoked." })),
+            };
+          return runBackend();
+        });
     ctx.res.writeHead(result.status, result.headers);
     ctx.res.end(result.body);
   } catch (e) {
     console.error("[deploy-git] request failed:", errMessage(e));
+    if (e instanceof DeployAccessError) return sendJson(ctx.res, 403, { error: "forbidden", message: e.message });
     return sendJson(ctx.res, 500, { error: "git_failed", message: "app git request failed" });
   }
 }
@@ -1373,7 +1400,7 @@ async function appLogs(ctx: ApiCtx): Promise<void> {
       message: `tailLines must be an integer from 1 to ${LOGS_MAX_TAIL_LINES}`,
     });
   }
-  const result = await app.appLogsFor(params.id!, viewer, { tailLines });
+  const result = await app.appLogsFor(params.id!, capability ?? { actorId: viewer }, { tailLines });
   if (result.status !== "ok") return sendJson(res, 404, { error: "not_found" });
   if (result.logs === null) return sendJson(res, 200, { logs: null, message: "no logs available for this app" });
   return sendJson(res, 200, { logs: result.logs });
@@ -1393,10 +1420,12 @@ async function fetchApp(ctx: ApiCtx): Promise<void> {
       message: `maxBytes must be an integer from 1 to ${AGENT_FETCH_MAX_BYTES}`,
     });
   }
-  const reach = await app.reachApp(params.id!, viewer);
+  const reach = await app.reachApp(params.id!, capability ?? { actorId: viewer });
   if (reach.status !== "ok") return sendJson(res, 404, { error: "not_found" });
   try {
     const response = await fetchAppResponse(reach, path, maxBytes);
+    const confirmed = await app.reachApp(reach.id, capability ?? { actorId: viewer });
+    if (confirmed.status !== "ok") return sendJson(res, 404, { error: "not_found" });
     const rawContentType = response.headers["content-type"];
     const contentType = typeof rawContentType === "string" ? rawContentType : "application/octet-stream";
     if (textContentType(contentType)) {
@@ -1414,7 +1443,8 @@ async function fetchApp(ctx: ApiCtx): Promise<void> {
       encoding: "base64",
       truncated: response.truncated,
     });
-  } catch {
+  } catch (error) {
+    console.error("[apps] preview fetch failed:", errMessage(error));
     return sendJson(res, 502, { error: "upstream_unreachable" });
   }
 }
@@ -1485,6 +1515,11 @@ async function redeployApp(ctx: ApiCtx): Promise<void> {
   }
 }
 
+function appContext(ctx: ApiCtx) {
+  const actorId = ctx.capability?.actorId ?? ctx.actor?.p;
+  return actorId ? requestPrivateContext(ctx, actorId) : undefined;
+}
+
 async function callerMayManageApp(ctx: ApiCtx, id: string): Promise<boolean> {
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
   return principalId
@@ -1499,7 +1534,7 @@ export async function archiveApp(ctx: ApiCtx): Promise<void> {
   if (!(await callerMayManageApp(ctx, id)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can archive it" });
   try {
-    await app.archiveApp(id);
+    await app.archiveApp(id, appContext(ctx));
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "archive_failed", message: errMessage(e) });
@@ -1515,7 +1550,7 @@ export async function restoreApp(ctx: ApiCtx): Promise<void> {
   try {
     return sendJson(res, 200, {
       app: {
-        ...appView(await app.restoreApp(id, capability?.actorId ?? ctx.actor?.p)),
+        ...appView(await app.restoreApp(id, capability?.actorId ?? ctx.actor?.p, appContext(ctx))),
         permission: "write",
       },
     });
@@ -1534,7 +1569,7 @@ export async function renameApp(ctx: ApiCtx): Promise<void> {
   if (typeof b.name !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
   try {
-    return sendJson(res, 200, { app: await app.renameApp(id, b.name) });
+    return sendJson(res, 200, { app: await app.renameApp(id, b.name, appContext(ctx)) });
   } catch (e) {
     return sendJson(res, 400, { error: "rename_failed", message: errMessage(e) });
   }
@@ -1550,7 +1585,7 @@ export async function setAppDisplayName(ctx: ApiCtx): Promise<void> {
   if (typeof b.displayName !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "displayName (string) required" });
   try {
-    return sendJson(res, 200, { app: await app.setAppDisplayName(id, b.displayName) });
+    return sendJson(res, 200, { app: await app.setAppDisplayName(id, b.displayName, appContext(ctx)) });
   } catch (e) {
     return sendJson(res, 400, { error: "display_name_failed", message: errMessage(e) });
   }
@@ -1566,7 +1601,7 @@ async function setAppEmbedAncestors(ctx: ApiCtx): Promise<void> {
   if (!ancestors)
     return sendJson(res, 400, { error: "bad_request", message: `embedAncestors (${EMBED_ANCESTORS_HINT}) required` });
   try {
-    return sendJson(res, 200, { app: appView(await app.setAppEmbedAncestors(id, ancestors)) });
+    return sendJson(res, 200, { app: appView(await app.setAppEmbedAncestors(id, ancestors, appContext(ctx))) });
   } catch (e) {
     return sendJson(res, 400, { error: "embed_ancestors_failed", message: errMessage(e) });
   }
@@ -1582,7 +1617,7 @@ async function setAppAlwaysOn(ctx: ApiCtx): Promise<void> {
   if (typeof b.alwaysOn !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "alwaysOn (boolean) required" });
   try {
-    return sendJson(res, 200, { app: appView(await app.setAppAlwaysOn(id, b.alwaysOn)) });
+    return sendJson(res, 200, { app: appView(await app.setAppAlwaysOn(id, b.alwaysOn, appContext(ctx))) });
   } catch (e) {
     return sendJson(res, 400, { error: "always_on_failed", message: errMessage(e) });
   }
@@ -1597,7 +1632,10 @@ async function visibleAppsExport(ctx: BaseCtx): Promise<void> {
   if (!requested) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const principalId = canonicalPerson(requested);
   const live = (await app.listApps()).filter((d) => d.status !== "archived");
-  const permissions = await app.appGitPermissionsFor(tenantOf(ctx), live, { actorId: principalId });
+  const permissions = await app.appGitPermissionsFor(tenantOf(ctx), live, {
+    actorId: principalId,
+    audienceScopeId: orgScope(deps),
+  });
   const visible = live.flatMap((publishedApp, i) => {
     const permission = permissions[i];
     return permission ? [{ publishedApp, view: appView(publishedApp), permission }] : [];

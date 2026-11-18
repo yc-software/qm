@@ -69,8 +69,10 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { scopeId: scope, crons });
   }
   if (resource === "apps") {
-    const publishedApps = (await app.listApps())
-      .filter((d) => orgWide || d.ownerScopeId === scope)
+    const appRows = (await app.listApps()).filter((d) => orgWide || d.ownerScopeId === scope);
+    const blocked = await inheritRequestSources(ctx, appRows, actor.id);
+    const publishedApps = appRows
+      .filter((d) => !blocked.has(d.id))
       .map((d) => ({
         id: d.id,
         ownerScopeId: d.ownerScopeId,
