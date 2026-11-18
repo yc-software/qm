@@ -410,14 +410,13 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
   let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean } | undefined;
   let inputUnscreened = false;
   let releasedAttachments = new Set<string>();
-  let flaggedAttachments = new Set<string>();
   if (replaysHeldInput && enforceScreen) {
     const { screenPayloads, hasUnscreenableAttachment, screenedAttachments } = await buildInboundScreen({
       ...turn,
       screenInbound: true,
     });
     inputUnscreened = !screenPayloads || hasUnscreenableAttachment;
-    releasedAttachments = screenedAttachments;
+    if (screenPayloads) releasedAttachments = screenedAttachments;
   } else if (screenInbound && !enforceScreen) {
     void buildInboundScreen(turn)
       .then(({ screenPayloads }) =>
@@ -427,8 +426,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       )
       .catch(swallowAs("orchestrator: observed inbound screen", undefined));
   } else if (screenInbound) {
-    const { hasUnscreenableAttachment, externalPromptData, screenPayloads, screenedAttachments } =
-      await buildInboundScreen(turn);
+    const { hasUnscreenableAttachment, externalPromptData, screenPayloads } = await buildInboundScreen(turn);
     if (!screenPayloads || screenPayloads.length || hasUnscreenableAttachment) {
       const canScreenText = !!screenPayloads?.length && (!!deps.securityScreener || !!deps.agent.screenSecurity);
       let verdict = screenPayloads ? undefined : oversizeVerdict();
@@ -448,7 +446,6 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
           sources,
           onceOnly: verdict.unscreened === true,
         };
-        flaggedAttachments = screenedAttachments;
         audit(flaggedAudit(input.surface ?? "unknown", "pending_approval", flaggedScreenedInput.reason, sources));
       } else if (unscreenableCause || verdict?.unscreened) {
         inputUnscreened = true;
@@ -475,7 +472,6 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
         detail: JSON.stringify({ scope: grant.scope, reason: flaggedScreenedInput.reason }),
       });
       flaggedScreenedInput = undefined;
-      releasedAttachments = flaggedAttachments;
       break;
     }
   }

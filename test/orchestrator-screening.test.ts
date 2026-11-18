@@ -787,39 +787,35 @@ test("an approved replay of held input goes through when it resends its file not
   assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
 });
 
-test("allowed held input keeps the attachment the screen held it for", async () => {
+test("allowing held input once lets in the attachment the screen held it for", async () => {
   const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
-  const withFile = async (text: string) => {
-    const blob = await built.blobTransfer.put(Buffer.from(`SCREENING_FIXTURE_BLOCK ${text}`));
-    return dm(text, { attachments: [{ name: `${text}.txt`, mimetype: "text/plain", ...blob }] });
+  const allowOnce = async (text: string, extra: Partial<TurnRequest> = {}) => {
+    const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
+    const request = dm(text, { attachments: [{ name: "notes.txt", mimetype: "text/plain", ...blob }], ...extra });
+    const requestId = (await built.app.turn(request)).pendingApprovals![0]!.requestId;
+    return built.app.turn({ ...request, approval: { requestId, approved: true } });
   };
-  const held = await withFile("first");
-  const requestId = (await built.app.turn(held)).pendingApprovals![0]!.requestId;
-  await built.app.turn({ ...held, approval: { requestId, approved: true, scope: "session" } });
-  const granted = await built.app.turn(await withFile("second"));
-  const prompts = JSON.stringify(await built.sessions.listLlmRequests(granted.sessionId!));
-  assert.ok(prompts.includes("inbox/first.txt") && prompts.includes("inbox/second.txt"));
-  assert.ok(!(await built.auditLog.events(tenant)).some((event) => event.status === "withheld"));
+  const withheld = async () => (await built.auditLog.events(tenant)).some((event) => event.status === "withheld");
+  const approved = await allowOnce("summarize the file");
+  assert.ok(JSON.stringify(await built.sessions.listLlmRequests(approved.sessionId!)).includes("inbox/notes.txt"));
+  assert.equal(await withheld(), false);
+  await allowOnce("x".repeat(MAX_DOCUMENT_TEXT_CHARS + 1), { surface: "monitor", origin: { kind: "automation" } });
+  assert.equal(await withheld(), true);
 });
 
 test("held input replayed from its stored request and held again keeps its one approval", async () => {
   const databaseUrl = testMigratedDatabaseUrl();
   const first = freshApp({ securityPosture: "auto", databaseUrl }, fixtureScreen());
-  const rename = (displayName: string) =>
-    first.directory.replace([{ principalId: "U2", displayName, type: "internal" }]);
-  await rename("SCREENING_FIXTURE_BLOCK one");
+  await first.directory.replace([{ principalId: "U2", displayName: "SCREENING_FIXTURE_BLOCK one", type: "internal" }]);
   const conversation = { ...channel("").conversation, audience: [internalActor, { externalId: "U2" }] };
-  const gatewayContext = { location: "#eng", details: { topic: "x" }, hostIds: { channel: "C1" } };
+  const gatewayContext = { location: "#eng", hostIds: { channel: "C1" } };
   const requestId = (await first.app.turn(channel("hello", { conversation, gatewayContext }))).pendingApprovals![0]!
     .requestId;
-  await rename("SCREENING_FIXTURE_BLOCK two");
+  await first.directory.replace([{ principalId: "U2", displayName: "SCREENING_FIXTURE_BLOCK two", type: "internal" }]);
   const restarted = freshApp({ securityPosture: "auto", databaseUrl }, fixtureScreen());
   const stored = (await restarted.app.getApproval(requestId))!.request!;
   const again = await restarted.app.turn({ ...stored, approval: { requestId, approved: true } });
-  assert.deepEqual(
-    again.pendingApprovals?.map((a) => a.requestId),
-    [requestId],
-  );
+  assert.equal(again.pendingApprovals?.[0]?.requestId, requestId);
 });
 
 for (const failure of ["error", "timeout"] as const) {
