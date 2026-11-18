@@ -2751,10 +2751,6 @@ qm-markdown .tok-in {
   border-radius: 8px;
   object-fit: contain;
 }
-.user-row:not(.stuck) > .attachment-gallery:has(.file-html-slot),
-.user-row:not(.stuck) > .attachment-gallery > .attachment-documents:has(.file-html-slot) {
-  width: min(100%, 620px);
-}
 .chip-open {
   display: inline-flex;
   align-items: center;
@@ -11787,7 +11783,9 @@ h3.ambient-field-label {
 .playground-header,
 .playground-title,
 .playground-actions,
-.playground-actions a {
+.playground-actions a,
+.file-html-actions,
+.file-html-actions > * {
   display: flex;
   align-items: center;
 }
@@ -11807,10 +11805,12 @@ h3.ambient-field-label {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.playground-actions {
+.playground-actions,
+.file-html-actions {
   gap: 4px;
 }
-.playground-actions a {
+.playground-actions a,
+.file-html-actions > * {
   gap: 4px;
   padding: 5px 7px;
   border-radius: 6px;
@@ -11818,7 +11818,8 @@ h3.ambient-field-label {
   font-size: 12px;
   text-decoration: none;
 }
-.playground-actions a:hover {
+.playground-actions a:hover,
+.file-html-actions > :hover {
   color: var(--foreground);
   background: var(--muted);
 }

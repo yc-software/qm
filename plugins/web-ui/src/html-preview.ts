@@ -2,8 +2,8 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ChevronRight, Download, Maximize2, X } from "lucide";
 import "./html-preview.css";
 import { animateDetailsToggle } from "./details-motion";
+import { trapDialogFocus } from "./dialog-focus";
 import { icon } from "./icons";
-import { tip } from "./tooltip";
 import { fileLabel } from "./ui";
 
 const collapsed = new Set<string>();
@@ -45,10 +45,12 @@ function onScrimClick(event: MouseEvent): void {
 
 function onLayerKeydown(event: KeyboardEvent): void {
   const layer = layerOf(event);
-  if (event.key !== "Escape" || !layer.matches(":popover-open")) return;
-  event.preventDefault();
-  event.stopPropagation();
-  setExpanded(layer, false);
+  if (layer.matches(":popover-open")) trapDialogFocus(event, () => setExpanded(layer, false));
+}
+
+function onToggleClick(event: Event): void {
+  const layer = layerOf(event);
+  setExpanded(layer, !layer.matches(":popover-open"));
 }
 
 export function htmlPreviewCard(name: string, src: string, size?: number, href?: string): TemplateResult {
@@ -67,39 +69,14 @@ export function htmlPreviewCard(name: string, src: string, size?: number, href?:
           <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
           <span class="file-html-title">${fileLabel(name, size)}</span>
           <span class="file-html-actions">
-            ${
-              href
-                ? html`<a
-                    class="icon-btn subtle compact"
-                    href=${href}
-                    download=${name}
-                    aria-label="Download ${name}"
-                    ${tip("Download")}
-                    >${icon(Download, 15)}</a
-                  >`
-                : nothing
-            }
-            <button
-              type="button"
-              class="icon-btn subtle compact file-html-expand"
-              aria-label="Expand ${name}"
-              ${tip("Expand")}
-              @click=${(event: Event) => setExpanded(layerOf(event), true)}
-            >
-              ${icon(Maximize2, 15)}
-            </button>
-            <button
-              type="button"
-              class="icon-btn subtle compact file-html-close"
-              aria-label="Close expanded ${name}"
-              ${tip("Close · Esc")}
-              @click=${(event: Event) => setExpanded(layerOf(event), false)}
-            >
-              ${icon(X, 16)}
+            ${href ? html`<a href=${href} download=${name}>${icon(Download, 14)} Download</a>` : nothing}
+            <button type="button" @click=${onToggleClick}>
+              <span class="file-html-expand">${icon(Maximize2, 14)} Expand</span>
+              <span class="file-html-close">${icon(X, 14)} Close</span>
             </button>
           </span>
         </summary>
-        <iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy"></iframe>
+        <iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy" tabindex="0"></iframe>
       </details>
     </div>
   </div>`;

@@ -1,7 +1,11 @@
 .file-html-slot {
-  --file-html-bar: 38px;
+  --file-html-bar: 40px;
   width: 100%;
   border-radius: 12px;
+}
+.user-row:not(.stuck) .file-html-slot {
+  width: 620px;
+  max-width: 100%;
 }
 .file-html-slot:has(> :popover-open) {
   background: var(--muted);
@@ -28,7 +32,7 @@
   gap: 8px;
   box-sizing: border-box;
   height: var(--file-html-bar);
-  padding-inline: 10px 5px;
+  padding-inline: 10px 6px;
   list-style: none;
   cursor: default;
   color: var(--muted-foreground);
@@ -58,10 +62,17 @@
   flex: none;
   font-size: inherit;
 }
+@media (max-width: 620px) {
+  .file-html-title > small {
+    display: none;
+  }
+}
 .file-html-actions {
-  display: flex;
   flex: none;
   margin-inline-start: auto;
+}
+.file-html-actions > button {
+  cursor: pointer;
 }
 .file-html-card > iframe {
   display: block;
@@ -70,7 +81,11 @@
   border: 0;
   background: #fff;
 }
-.file-html-actions > .file-html-close,
+.file-html-expand,
+.file-html-layer:popover-open .file-html-close {
+  display: contents;
+}
+.file-html-close,
 .file-html-layer:popover-open .file-html-expand,
 .file-html-layer:popover-open .activity-chevron,
 .message-stack .user-row.stuck .file-html-card .activity-chevron,
@@ -79,9 +94,6 @@
 }
 .message-stack .user-row.stuck .file-html-layer:not(:popover-open) .file-html-bar {
   border-bottom: 0;
-}
-.file-html-layer:popover-open .file-html-close {
-  display: inline-flex;
 }
 .file-html-layer:popover-open iframe {
   position: absolute;
