@@ -2751,49 +2751,124 @@ qm-markdown .tok-in {
   border-radius: 8px;
   object-fit: contain;
 }
-.file-html-unfurl {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.file-html-slot {
+  --file-html-bar: 38px;
+  --file-html-frame: clamp(240px, 56cqh, 480px);
   width: 100%;
-  padding-left: 12px;
-  border-left: 4px solid var(--border);
+  border-radius: 12px;
 }
-.file-html-header {
+.file-html-slot:has(> :popover-open) {
+  height: calc(var(--file-html-bar) + var(--file-html-frame) + 2px);
+  background: var(--muted);
+}
+.user-row > .attachment-gallery:has(.file-html-slot) {
+  width: min(100%, 620px);
+}
+.file-html-card {
+  position: static;
+  inset: auto;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  overflow: clip;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: inherit;
+}
+.file-html-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  min-height: 24px;
+  gap: 8px;
+  box-sizing: border-box;
+  height: var(--file-html-bar);
+  padding-inline: 12px 5px;
+  list-style: none;
+  cursor: default;
   color: var(--muted-foreground);
+  font-size: 13px;
+}
+.file-html-bar::-webkit-details-marker {
+  display: none;
+}
+.file-html-card[open] > .file-html-bar {
+  border-bottom: 1px solid var(--border);
+}
+.file-html-bar > .icon {
+  flex: none;
+}
+.file-html-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+  font-weight: 500;
+  text-decoration: none;
+}
+a.file-html-name:hover {
+  text-decoration: underline;
+}
+.file-html-bar > small {
+  flex: none;
   font-size: 12px;
-  font-weight: 600;
 }
-.file-html-header button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
+.file-html-actions {
+  display: flex;
+  flex: none;
+  margin-inline-start: auto;
+}
+.file-html-actions > .icon-btn:hover {
   background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-.file-html-header button:hover {
-  background: var(--muted);
   color: var(--foreground);
 }
-.file-html-unfurl iframe {
+.file-html-card > iframe {
+  display: block;
   width: 100%;
-  height: 360px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  height: var(--file-html-frame);
+  border: 0;
   background: #fff;
 }
-.file-html-unfurl .file-chip {
-  align-self: flex-start;
+.file-html-shrink,
+.file-html-card:popover-open .file-html-expand,
+.file-html-card:popover-open .activity-chevron,
+.message-stack .user-row.stuck .file-html-card:not(:popover-open) > iframe,
+.message-stack .user-row.stuck .file-html-card .activity-chevron {
+  display: none;
+}
+.message-stack .user-row.stuck .file-html-card:not(:popover-open) > .file-html-bar {
+  border-bottom: 0;
+}
+.file-html-card:popover-open {
+  position: fixed;
+  inset: var(--dialog-pad-top) var(--dialog-pad-right) var(--dialog-pad-bottom) var(--dialog-pad-left);
+  width: auto;
+  height: auto;
+  box-shadow: 0 32px 96px -16px rgb(0 0 0 / 0.55);
+}
+.file-html-card:popover-open .file-html-shrink {
+  display: inline-flex;
+}
+.file-html-card:popover-open > iframe {
+  position: absolute;
+  inset-block-start: var(--file-html-bar);
+  height: calc(100% - var(--file-html-bar));
+}
+::view-transition-group(file-html-card) {
+  overflow: clip;
+  border-radius: 12px;
+  animation-duration: 320ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+::view-transition-old(file-html-card),
+::view-transition-new(file-html-card) {
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  animation-duration: 320ms;
 }
 .chip-open {
   display: inline-flex;
@@ -3140,17 +3215,21 @@ qm-markdown .tok-in {
   flex: 0 0 auto;
 }
 .thinking-row[open] > .thinking-summary > .icon:last-child,
-.thinking-row[open] > .thinking-summary > .activity-chevron {
+.thinking-row[open] > .thinking-summary > .activity-chevron,
+.file-html-card[open] > .file-html-bar > .activity-chevron {
   transform: rotate(90deg);
 }
-.thinking-row > .thinking-summary > .activity-chevron {
+.thinking-row > .thinking-summary > .activity-chevron,
+.file-html-card > .file-html-bar > .activity-chevron {
   transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
 }
-.thinking-row[data-closing] > .thinking-summary > .activity-chevron {
+.thinking-row[data-closing] > .thinking-summary > .activity-chevron,
+.file-html-card[data-closing] > .file-html-bar > .activity-chevron {
   transform: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .thinking-row > .thinking-summary > .activity-chevron {
+  .thinking-row > .thinking-summary > .activity-chevron,
+  .file-html-card > .file-html-bar > .activity-chevron {
     transition: none;
   }
 }
@@ -6612,7 +6691,8 @@ a.file-card:hover {
   color: var(--destructive);
 }
 .project-dialog-backdrop,
-.project-dialog {
+.project-dialog,
+.file-html-card {
   --dialog-pad-top: max(20px, env(safe-area-inset-top));
   --dialog-pad-right: max(20px, env(safe-area-inset-right));
   --dialog-pad-bottom: max(20px, env(safe-area-inset-bottom));
@@ -6629,7 +6709,8 @@ a.file-card:hover {
   box-sizing: border-box;
   background: color-mix(in srgb, var(--scrim) 28%, transparent);
 }
-.project-dialog::backdrop {
+.project-dialog::backdrop,
+.file-html-card::backdrop {
   background: color-mix(in srgb, var(--scrim) 28%, transparent);
 }
 .project-dialog {
