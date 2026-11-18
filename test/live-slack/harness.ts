@@ -46,6 +46,7 @@ export interface Env {
   teamId: string;
   judge: JudgeEndpoint;
   targetChannel?: string;
+  groupDmMember?: string;
   sandbox: boolean;
   actors: Map<string, Actor>;
   twin?: import("./arga.ts").TwinAdmin;
@@ -98,8 +99,7 @@ export function isLiveStatusText(text: string): boolean {
   return false;
 }
 
-const POLL_MS = 2500;
-const STABLE_MS = 5000;
+const POLL_MS = 1000;
 
 export interface WaitOpts {
   timeoutMs?: number;
@@ -119,7 +119,6 @@ async function waitForFinalBotMessage(
 ): Promise<SlackMessage> {
   const timeoutMs = opts.timeoutMs ?? 240_000;
   const deadline = Date.now() + timeoutMs;
-  const seen = new Map<string, { text: string; firstSeen: number }>();
   let lastSeen = "";
   while (Date.now() < deadline) {
     const messages = await fetchMessages();
@@ -131,20 +130,15 @@ async function waitForFinalBotMessage(
         lastSeen = text;
         opts.onFrame?.(text);
       }
-      const prev = seen.get(m.ts);
-      if (!prev || prev.text !== text) {
-        seen.set(m.ts, { text, firstSeen: Date.now() });
-        opts.record?.(m.ts, text);
-      }
+      opts.record?.(m.ts, text);
     }
-    for (const m of fromBot) {
-      const text = m.text ?? "";
-      if (isLiveStatusText(text)) continue;
-      if (opts.match && !opts.match.test(text)) continue;
-      if (opts.accept && !opts.accept(m)) continue;
-      const entry = seen.get(m.ts);
-      if (entry && entry.text === text && Date.now() - entry.firstSeen >= STABLE_MS) return m;
-    }
+    const final = fromBot.find(
+      (m) =>
+        !isLiveStatusText(m.text ?? "") &&
+        (!opts.match || opts.match.test(m.text ?? "")) &&
+        (!opts.accept || opts.accept(m)),
+    );
+    if (final) return final;
     await sleep(POLL_MS);
   }
   throw new Error(
@@ -376,6 +370,11 @@ export class Ctx {
       this.dmChannel = new DmHandle(this, id);
     }
     return this.dmChannel;
+  }
+
+  async groupDm(): Promise<ChannelHandle> {
+    if (!this.env.groupDmMember) throw new Error("LIVE_E2E_GROUP_DM_MEMBER is not set");
+    return new ChannelHandle(this, await this.env.qa.openDm(this.env.botUserId, this.env.groupDmMember), "group-dm");
   }
 
   get dmChannelId(): string | null {

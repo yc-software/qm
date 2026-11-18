@@ -61,16 +61,9 @@ test("file waits fail at the deadline when only acknowledgements or another user
   await rejected;
 });
 
-test("ordinary reply waits retain their existing stable-text behavior", async (t) => {
-  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 100_000 });
+test("ordinary reply waits accept the first finished reply at once", async () => {
   const dm = dmWithHistory(async () => [acknowledgement]);
-  const result = dm.waitForBotReply("1", { timeoutMs: 10_000 });
-  await setImmediate();
-  for (let i = 0; i < 2; i++) {
-    t.mock.timers.tick(2500);
-    await setImmediate();
-  }
-  assert.deepEqual(await result, acknowledgement);
+  assert.deepEqual(await dm.waitForBotReply("1", { timeoutMs: 10_000 }), acknowledgement);
 });
 
 for (const evidence of ["none", "attachment", "slack-link", "markdown-link", "url"] as const) {

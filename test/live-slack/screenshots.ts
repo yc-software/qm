@@ -1,16 +1,12 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
-import { Cdp } from "./cdp.ts";
+import { BROWSER_STATE, CLIENT_URL, launchFirefox, SHOTS_DIR, slackPage, threadUrl, VIEWPORT } from "./browser.ts";
 import { renderGallery, type ShotIndex } from "./gallery.ts";
 import type { ScenarioResult, TimelinePost } from "./harness.ts";
 import { sleep } from "./slack.ts";
 
-const OUT_DIR = path.join(import.meta.dirname, "out");
-const SHOTS_DIR = path.join(OUT_DIR, "shots");
-const PROFILE = process.env.LIVE_E2E_SHOTS_PROFILE ?? path.join(os.homedir(), ".cache", "live-slack-shots-chrome");
-const PORT = Number(process.env.LIVE_E2E_SHOTS_PORT) || 9333;
-const CLIENT_URL = "https://app.slack.com/client";
+const OUT_DIR = path.dirname(SHOTS_DIR);
+const CONCURRENCY = Number(process.env.LIVE_E2E_SHOTS_CONCURRENCY) || 4;
 
 interface ResultsFile {
   runId: string;
@@ -51,10 +47,6 @@ function collectTargets(results: ScenarioResult[]): ThreadTarget[] {
   return targets;
 }
 
-function deepLink(teamId: string, t: ThreadTarget): string {
-  return `${CLIENT_URL}/${teamId}/${t.channelId}/thread/${t.channelId}-${t.rootTs}`;
-}
-
 function shotKey(t: ThreadTarget): string {
   return `${t.channelId}:${t.rootTs}`;
 }
@@ -64,23 +56,36 @@ function shotFile(t: ThreadTarget): string {
 }
 
 async function login(): Promise<void> {
-  await mkdir(PROFILE, { recursive: true });
-  console.log("Opening Chrome — sign into example.slack.com in the window. Waiting for a live session…");
-  const cdp = await Cdp.launch({ port: PORT, userDataDir: PROFILE, headed: true });
+  console.log("Opening Firefox — sign into your Slack workspace in the window. Waiting for a live session…");
+  const browser = await launchFirefox(false);
   try {
-    const deadline = Date.now() + 5 * 60_000;
-    while (Date.now() < deadline) {
-      if (await cdp.isSlackLoggedIn(CLIENT_URL).catch(() => false)) {
-        console.log("✅ Slack session captured. You can close nothing — the sweep will reuse this profile headless.");
-        return;
-      }
-      await sleep(3000);
+    const context = await browser.newContext({ viewport: VIEWPORT });
+    const page = await context.newPage();
+    await page.goto(CLIENT_URL);
+    for (const deadline = Date.now() + 5 * 60_000; Date.now() < deadline; await sleep(3000)) {
+      if (!/\/client\/[TE][A-Z0-9]+/.test(page.url())) continue;
+      await mkdir(path.dirname(BROWSER_STATE), { recursive: true });
+      await context.storageState({ path: BROWSER_STATE });
+      console.log(`✅ Slack session saved to ${BROWSER_STATE}; sweeps reuse it headless.`);
+      return;
     }
     console.error("Timed out waiting for a Slack login.");
     process.exitCode = 1;
   } finally {
-    await cdp.close();
+    await browser.close();
   }
+}
+
+async function capture(page: any, teamId: string, t: ThreadTarget): Promise<boolean> {
+  await page.goto(threadUrl(teamId, t.channelId, t.rootTs), { waitUntil: "domcontentloaded", timeout: 60_000 });
+  const content = t.needle ? page.getByText(t.needle).first() : page.locator('[data-qa="message_container"]').first();
+  const ready = await content.waitFor({ timeout: 25_000 }).then(
+    () => true,
+    () => false,
+  );
+  if (/signin/.test(page.url())) throw new Error("Slack browser login expired — run: npm run gallery:shots:login");
+  await page.screenshot({ path: path.join(SHOTS_DIR, shotFile(t)) });
+  return ready;
 }
 
 async function sweep(): Promise<void> {
@@ -91,42 +96,36 @@ async function sweep(): Promise<void> {
     return;
   }
   const { runId, teamId, results } = JSON.parse(raw) as ResultsFile;
-  const targets = collectTargets(results);
-  if (!targets.length) {
+  const queue = collectTargets(results);
+  const total = queue.length;
+  if (!total) {
     console.log("no threads to screenshot in this run");
     return;
   }
   await mkdir(SHOTS_DIR, { recursive: true });
-  const cdp = await Cdp.launch({ port: PORT, userDataDir: PROFILE, headed: false });
+  console.log(`📸 screenshotting ${total} threads (team ${teamId})…`);
+  const browser = await launchFirefox();
   const shots: ShotIndex = {};
   try {
-    if (!(await cdp.isSlackLoggedIn(CLIENT_URL).catch(() => false))) {
-      console.error(
-        "dedicated Chrome profile is not signed into Slack — run: node test/live-slack/screenshots.ts --login",
-      );
-      process.exitCode = 1;
-      return;
-    }
-    console.log(`📸 screenshotting ${targets.length} threads (team ${teamId})…`);
-    for (const t of targets) {
-      try {
-        const { data, ready } = await cdp.capture(deepLink(teamId, t), { needle: t.needle, readyMs: 25_000 });
-        const file = shotFile(t);
-        await writeFile(path.join(SHOTS_DIR, file), Buffer.from(data, "base64"));
-        shots[shotKey(t)] = `shots/${file}`;
-        console.log(
-          `  ${ready ? "✅" : "⚠️ "} ${t.scenario} ${t.channelId}${ready ? "" : " (content needle not seen — capture may be early)"}`,
-        );
-      } catch (err) {
-        console.error(`  ❌ ${t.scenario} ${t.channelId}: ${err instanceof Error ? err.message : String(err)}`);
+    const workers = Array.from({ length: CONCURRENCY }, async () => {
+      const page = await slackPage(browser);
+      for (let t = queue.shift(); t; t = queue.shift()) {
+        try {
+          const ready = await capture(page, teamId, t);
+          shots[shotKey(t)] = `shots/${shotFile(t)}`;
+          console.log(`  ${ready ? "✅" : "⚠️ "} ${t.scenario} ${t.channelId}${ready ? "" : " (content not seen)"}`);
+        } catch (err) {
+          console.error(`  ❌ ${t.scenario} ${t.channelId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-    }
+    });
+    await Promise.all(workers);
   } finally {
-    await cdp.close();
+    await browser.close();
   }
   await writeFile(path.join(OUT_DIR, "gallery.html"), renderGallery(runId, results, shots));
   console.log(
-    `gallery updated with ${Object.keys(shots).length}/${targets.length} screenshots: ${path.join(OUT_DIR, "gallery.html")}`,
+    `gallery updated with ${Object.keys(shots).length}/${total} screenshots: ${path.join(OUT_DIR, "gallery.html")}`,
   );
 }
 

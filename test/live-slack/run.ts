@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile, appendFile } from "node:fs/promises";
 import path from "node:path";
 import { SlackClient } from "./slack.ts";
@@ -15,6 +16,7 @@ import {
   type ScenarioResult,
 } from "./harness.ts";
 import { renderGallery } from "./gallery.ts";
+import { BROWSER_STATE } from "./browser.ts";
 import { scenarios } from "./scenarios.ts";
 import { sandboxProviderScenarios, selectSandboxProviderScenarios } from "./scenarios-sandbox-providers.ts";
 import { startEventPump, TwinAdmin } from "./arga.ts";
@@ -58,6 +60,7 @@ async function buildEnv(): Promise<Env> {
     teamId: qaAuth.teamId,
     judge: judgeEndpoint(process.env, process.env.LIVE_E2E_JUDGE_MODEL ?? "claude-haiku-5-5"),
     ...(process.env.LIVE_E2E_TARGET_CHANNEL ? { targetChannel: process.env.LIVE_E2E_TARGET_CHANNEL } : {}),
+    ...(process.env.LIVE_E2E_GROUP_DM_MEMBER ? { groupDmMember: process.env.LIVE_E2E_GROUP_DM_MEMBER } : {}),
     sandbox:
       process.env.LIVE_E2E_SANDBOX_AVAILABLE === "1" ||
       Boolean(process.env.SPRITES_TOKEN) ||
@@ -158,6 +161,20 @@ async function resolveActors(): Promise<Map<string, Actor>> {
   return actors;
 }
 
+const SKIP_RULES: Array<[tag: string, unavailable: (env: Env) => boolean, reason: string]> = [
+  ["sandbox", (env) => !env.sandbox, "sandbox unavailable"],
+  ["needs-target-channel", (env) => !env.targetChannel, "LIVE_E2E_TARGET_CHANNEL not set"],
+  ["twin", (env) => !env.twin, "not a twin-backed run (needs ARGA_TWIN_ADMIN_URL)"],
+  [
+    "apps-gateway",
+    () => !(process.env.DEPLOY_APPS_DOMAIN && process.env.DEPLOY_APPS_SESSION_SECRET),
+    "instance has no apps gateway (needs DEPLOY_APPS_DOMAIN + DEPLOY_APPS_SESSION_SECRET)",
+  ],
+  ["no-twin", (env) => Boolean(env.twin), "twin backend can't serve this capability (see the scenario's note)"],
+  ["group-dm", (env) => !env.groupDmMember, "LIVE_E2E_GROUP_DM_MEMBER not set"],
+  ["browser", () => !existsSync(BROWSER_STATE), `no Slack browser login at ${BROWSER_STATE}`],
+];
+
 function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioResult[] } {
   const raw = process.env.LIVE_E2E_FILTER;
   const filter = raw === "all" ? undefined : raw;
@@ -170,65 +187,12 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
       if (!byTag && !s.name.includes(filter) && !s.tags?.includes("provider-execution")) continue;
     }
     const tags = s.tags ?? [];
-    if (tags.includes("sandbox") && !env.sandbox) {
-      skipped.push({
-        name: s.name,
-        status: "skip",
-        attempts: 0,
-        durationMs: 0,
-        skipReason: "sandbox unavailable",
-      });
-      continue;
-    }
-    if (tags.includes("needs-target-channel") && !env.targetChannel) {
-      skipped.push({
-        name: s.name,
-        status: "skip",
-        attempts: 0,
-        durationMs: 0,
-        skipReason: "LIVE_E2E_TARGET_CHANNEL not set",
-      });
-      continue;
-    }
-    if (tags.includes("twin") && !env.twin) {
-      skipped.push({
-        name: s.name,
-        status: "skip",
-        attempts: 0,
-        durationMs: 0,
-        skipReason: "not a twin-backed run (needs ARGA_TWIN_ADMIN_URL)",
-      });
-      continue;
-    }
-    if (tags.includes("apps-gateway") && !(process.env.DEPLOY_APPS_DOMAIN && process.env.DEPLOY_APPS_SESSION_SECRET)) {
-      skipped.push({
-        name: s.name,
-        status: "skip",
-        attempts: 0,
-        durationMs: 0,
-        skipReason: "instance has no apps gateway (needs DEPLOY_APPS_DOMAIN + DEPLOY_APPS_SESSION_SECRET)",
-      });
-      continue;
-    }
-    if (tags.includes("no-twin") && env.twin) {
-      skipped.push({
-        name: s.name,
-        status: "skip",
-        attempts: 0,
-        durationMs: 0,
-        skipReason: "twin backend can't serve this capability (see the scenario's note)",
-      });
-      continue;
-    }
     const missing = (s.actors ?? []).map((a) => a.toLowerCase()).filter((a) => !env.actors.has(a));
-    if (missing.length) {
-      skipped.push({
-        name: s.name,
-        status: "skip",
-        attempts: 0,
-        durationMs: 0,
-        skipReason: `actors not available: ${missing.join(", ")}`,
-      });
+    const skipReason =
+      SKIP_RULES.find(([tag, unavailable]) => tags.includes(tag) && unavailable(env))?.[2] ??
+      (missing.length ? `actors not available: ${missing.join(", ")}` : undefined);
+    if (skipReason) {
+      skipped.push({ name: s.name, status: "skip", attempts: 0, durationMs: 0, skipReason });
       continue;
     }
     selected.push(s);
