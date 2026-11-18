@@ -4,7 +4,7 @@ import { readBoundedText } from "../util/bytes.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { APP_HANDLE_MAX } from "../../plugins/chassis/src/dns-label.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { tenantSettingsSchema, type TenantSettings } from "./settings.ts";
+import { tenantSettingsSchema } from "./settings.ts";
 
 export const externalOrgSchema = z
   .object({
@@ -25,47 +25,39 @@ export interface ExternalOrgTenant {
 }
 
 const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, org text, brand text, handle text)
-  RETURNS TABLE(tenant uuid, created boolean, provisioned boolean, serving boolean, tenant_handle text) LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  RETURNS TABLE(tenant uuid, created boolean, provisioned boolean, serving boolean, tenant_handle text)
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE found uuid; ready boolean; base text; candidate text; n int := 1;
+  DECLARE found uuid; fresh boolean := false;
   BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended('qm-self-serve:' || $1 || chr(10) || $2, 0));
-    SELECT o.tenant, o.provisioned INTO found, ready FROM tenant_external_orgs o WHERE o.issuer = $1 AND o.org_id = $2;
-    IF found IS NOT NULL THEN
-      RETURN QUERY SELECT found, false, ready, t.settings->>'serving' IS DISTINCT FROM 'false', t.settings->>'handle'
-        FROM tenants t WHERE t.id = found;
-      RETURN;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM tenants) THEN
-      RETURN;
-    END IF;
-    INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3, 'serving', false))
-      RETURNING id INTO found;
-    base := left(coalesce($4, ''), ${APP_HANDLE_MAX});
-    WHILE base <> '' LOOP
-      candidate := CASE WHEN n = 1 THEN base ELSE left(base, ${APP_HANDLE_MAX} - length(n::text)) || n END;
-      IF qm_tenant_handle(jsonb_build_object('handle', candidate)) IS NOT DISTINCT FROM candidate THEN
+    SELECT o.tenant INTO found FROM tenant_external_orgs o WHERE o.issuer = $1 AND o.org_id = $2;
+    IF found IS NULL THEN
+      IF NOT EXISTS (SELECT 1 FROM tenants) THEN
+        RETURN;
+      END IF;
+      INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3, 'serving', false))
+        RETURNING id INTO found;
+      IF $4 <> '' AND qm_tenant_handle(jsonb_build_object('handle', $4)) IS NOT DISTINCT FROM $4 THEN
         BEGIN
-          UPDATE tenants SET settings = settings || jsonb_build_object('handle', candidate) WHERE id = found;
-          EXIT;
+          UPDATE tenants SET settings = settings || jsonb_build_object('handle', $4) WHERE id = found;
         EXCEPTION WHEN unique_violation THEN NULL;
         END;
       END IF;
-      n := n + 1;
-    END LOOP;
-    INSERT INTO tenant_external_orgs(issuer, org_id, tenant, provisioned) VALUES ($1, $2, found, false);
-    RETURN QUERY SELECT found, true, false, false, t.settings->>'handle' FROM tenants t WHERE t.id = found;
+      INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, $2, found);
+      fresh := true;
+    END IF;
+    RETURN QUERY SELECT found, fresh, t.settings ? 'modelGatewayKey', t.settings->>'serving' IS DISTINCT FROM 'false', t.settings->>'handle'
+      FROM tenants t WHERE t.id = found;
   END $f$`;
 
-const provisionedDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_provisioned(tenant uuid, extra jsonb)
-  RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+const provisionedDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_provisioned(tenant uuid, key text)
+  RETURNS void LANGUAGE sql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  BEGIN
-    UPDATE tenant_external_orgs o SET provisioned = true WHERE o.tenant = $1 AND NOT o.provisioned;
-    IF FOUND THEN
-      UPDATE tenants t SET settings = (t.settings || $2) - 'serving' WHERE t.id = $1;
-    END IF;
-  END $f$`;
+    UPDATE tenants t SET settings = (t.settings || jsonb_build_object('modelGatewayKey', $2)) - 'serving'
+    WHERE t.id = $1 AND NOT t.settings ? 'modelGatewayKey'
+      AND EXISTS (SELECT 1 FROM tenant_external_orgs o WHERE o.tenant = $1)
+  $f$`;
 
 export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
   id: "tenancy/self-serve/0001-external-orgs",
@@ -75,13 +67,13 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
       issuer TEXT NOT NULL,
       org_id TEXT NOT NULL,
       tenant UUID NOT NULL UNIQUE REFERENCES tenants(id),
-      provisioned BOOLEAN NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (issuer, org_id)
     )`,
     `ALTER TABLE tenant_external_orgs ENABLE ROW LEVEL SECURITY`,
     `DO $self_serve$ BEGIN EXECUTE format($sql$${definer}$sql$, current_schema()); END $self_serve$`,
     `DO $self_serve$ BEGIN EXECUTE format($sql$${provisionedDefiner}$sql$, current_schema()); END $self_serve$`,
+    `REVOKE ALL ON FUNCTION qm_self_serve_tenant(text, text, text, text), qm_self_serve_provisioned(uuid, text) FROM PUBLIC`,
   ],
 };
 
@@ -91,7 +83,7 @@ const PROVISION_REPLY_BYTES_MAX = 65_536;
 const handleChar = (c: string): boolean => (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
 
 function handleBase(handle: string | undefined): string {
-  return [...(handle ?? "").toLowerCase()].filter(handleChar).join("");
+  return [...(handle ?? "").toLowerCase()].filter(handleChar).join("").slice(0, APP_HANDLE_MAX);
 }
 
 export async function selfServeTenant(
@@ -117,13 +109,13 @@ export async function selfServeTenant(
 export async function markSelfServeProvisioned(
   pg: Pick<PgPool, "q">,
   tenant: string,
-  settings: TenantSettings,
+  modelGatewayKey: string,
 ): Promise<void> {
-  await pg.q("SELECT qm_self_serve_provisioned($1, $2::jsonb)", [tenant, JSON.stringify(settings)]);
+  await pg.q("SELECT qm_self_serve_provisioned($1, $2)", [tenant, modelGatewayKey]);
 }
 
 const provisionedSettings = z.object({
-  settings: tenantSettingsSchema.omit({ serving: true }).required({ modelGatewayKey: true }),
+  settings: tenantSettingsSchema.pick({ modelGatewayKey: true }).required(),
 });
 
 export interface WorkspaceProvisionRequest {
@@ -142,7 +134,7 @@ export async function provisionWorkspace(
   url: string,
   signingKey: string,
   request: WorkspaceProvisionRequest,
-): Promise<TenantSettings> {
+): Promise<string> {
   const target = new URL(url);
   const body = JSON.stringify({ ...request, nonce: randomUUID() });
   const res = await fetch(target, {
@@ -165,5 +157,5 @@ export async function provisionWorkspace(
     throw new Error(
       `workspace provisioner returned invalid settings: ${parsed.error.issues[0]?.message ?? "rejected"}`,
     );
-  return parsed.data.settings;
+  return parsed.data.settings.modelGatewayKey;
 }

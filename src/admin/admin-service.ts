@@ -8,7 +8,6 @@ import type { UserStore } from "../identity/user-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { bootTenant } from "../tenants/boot.ts";
 import type { ExternalOrg, ExternalOrgTenant, WorkspaceProvisionRequest } from "../tenants/self-serve.ts";
-import type { TenantSettings } from "../tenants/settings.ts";
 import { PrincipalLinkError } from "../identity/principal-links.ts";
 import { errMessage } from "../util/errors.ts";
 
@@ -86,8 +85,8 @@ export interface AdminServiceOptions {
   memberTenants?: (principalId: string) => Promise<readonly string[]>;
   selfServe?: {
     workspaceFor(issuer: string, org: ExternalOrg): Promise<ExternalOrgTenant | undefined>;
-    provisioned(tenant: string, settings: TenantSettings): Promise<void>;
-    provision(request: WorkspaceProvisionRequest): Promise<TenantSettings>;
+    provisioned(tenant: string, modelGatewayKey: string): Promise<void>;
+    provision(request: WorkspaceProvisionRequest): Promise<string>;
   };
   users: UserStore;
 }
@@ -152,7 +151,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
       if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
       if (!workspace.provisioned) {
-        const settings = await selfServe
+        const key = await selfServe
           .provision({
             tenant: workspace.tenant,
             brandName: org.name,
@@ -164,7 +163,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
             console.error(`[self-serve] provisioning workspace ${workspace.tenant} failed: ${errMessage(error)}`);
             throw new AdminError(502, "the new workspace could not be set up; try signing in again");
           });
-        await selfServe.provisioned(workspace.tenant, settings);
+        await selfServe.provisioned(workspace.tenant, key);
       }
       return { tenant: workspace.tenant, created: workspace.created };
     },

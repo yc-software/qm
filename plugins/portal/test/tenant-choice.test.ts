@@ -389,19 +389,18 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
     assert.match(page, /Pick the one to open a workspace for\.[\s\S]*Acme[\s\S]*Beta Labs/);
     assert.equal(selfServed.length, 1, "nothing is created until the founder picks");
     const cookie = cookieFrom(several, "portal_tenant_choice")!;
+    const offered = [...page.matchAll(/name="tenant" value="(org:[^"]+)"/g)].map((m) => m[1]!);
+    assert.equal(offered.length, 2);
     assert.equal((await choose(cookie, alpha)).status, 400, "a workspace id is not one of the offered companies");
-    assert.equal((await choose(cookie, "org:99")).status, 400);
-    const chosen = await choose(cookie, "org:43");
+    assert.equal((await choose(cookie, "org:43")).status, 400, "an organization id alone is not an offer");
+    const chosen = await choose(cookie, offered[1]!);
     assert.equal(chosen.status, 302);
     assert.deepEqual([sessionOf(chosen)?.sub, sessionOf(chosen)?.t], [principal, beta]);
     assert.deepEqual(selfServed.at(-1)!.externalOrg, { id: "43", name: "Beta Labs" });
-    const searched = await fetch(`${base}/auth/tenant?q=beta`, { headers: { cookie } });
-    assert.match(await searched.text(), /Beta Labs/);
 
     orgs = Array.from({ length: 40 }, (_, i) => ({ id: `${i}`, name: `Company ${i} ${"x".repeat(200)}` }));
     const many = await trustedCallback("founder@acme.test");
-    const kept = (await many.text()).match(/name="tenant" value="org:/g)?.length ?? 0;
-    assert.ok(kept > 1 && kept < 40, `${kept} organizations offered`);
+    assert.equal((await many.text()).match(/name="tenant" value="org:/g)?.length, 40, "every organization is offered");
     assert.ok(cookieFrom(many, "portal_tenant_choice")!.length <= 4096);
 
     tenants = [{ id: beta, brandName: "Beta Labs" }];

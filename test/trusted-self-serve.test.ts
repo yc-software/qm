@@ -170,7 +170,7 @@ test("cofounders signing in at once share one new workspace and every one of the
   assert.deepEqual(await db.app.q("SELECT * FROM tenant_external_orgs"), [], "the app login cannot read the mapping");
 });
 
-test("a workspace handle comes from the provider's handle, made valid and unique, and never blocks sign-in", async (t) => {
+test("a workspace takes the provider's handle only when it is valid and free, and a handle never blocks sign-in", async (t) => {
   const { db, s } = await shared(t);
   const [alpha] = db.tenants;
   await db.owner.q(`UPDATE tenants SET settings = '{"handle":"acmeai"}' WHERE id = $1`, [alpha]);
@@ -184,19 +184,15 @@ test("a workspace handle comes from the provider's handle, made valid and unique
     );
   const handleOf = async (tenant: string) =>
     (await db.owner.q("SELECT settings->>'handle' AS h FROM tenants WHERE id = $1", [tenant]))[0]?.h ?? null;
-  assert.equal(await handleOf(await create("a", "acme-ai")), "acmeai2");
-  assert.equal(await handleOf(await create("b", "Acme AI!")), "acmeai3");
-  assert.equal(await handleOf(await create("c", "admin")), "admin2");
-  assert.equal(await handleOf(await create("d", "x")), "x2");
-  const long = "y".repeat(APP_HANDLE_MAX + 5);
-  assert.equal(await handleOf(await create("e", long)), "y".repeat(APP_HANDLE_MAX));
-  assert.equal(await handleOf(await create("f", long)), `${"y".repeat(APP_HANDLE_MAX - 1)}2`);
-  assert.equal(await handleOf(await create("g", "---")), null);
-  assert.equal(await handleOf(await create("h")), null);
-  await db.owner.q(
-    "INSERT INTO tenant_external_orgs(issuer, org_id, tenant, provisioned) VALUES ('https://other.test', 'i', $1, true)",
-    [alpha],
-  );
+  assert.equal(await handleOf(await create("a", "Beta-Labs!")), "betalabs");
+  assert.equal(await handleOf(await create("b", "acme-ai")), null);
+  assert.equal(await handleOf(await create("c", "admin")), null);
+  assert.equal(await handleOf(await create("d", "y".repeat(APP_HANDLE_MAX + 5))), "y".repeat(APP_HANDLE_MAX));
+  assert.equal(await handleOf(await create("e", "---")), null);
+  assert.equal(await handleOf(await create("f")), null);
+  await db.owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ('https://other.test', 'i', $1)", [
+    alpha,
+  ]);
   assert.notEqual(await create("i"), alpha);
 });
 
@@ -315,9 +311,9 @@ test("a provisioner reply without the workspace's own model gateway key leaves i
     /HTTP 502/,
   );
   const [row] = await db.owner.q(
-    "SELECT o.provisioned, t.settings FROM tenant_external_orgs o JOIN tenants t ON t.id = o.tenant WHERE o.org_id = '66'",
+    "SELECT t.settings FROM tenant_external_orgs o JOIN tenants t ON t.id = o.tenant WHERE o.org_id = '66'",
   );
-  assert.deepEqual(row, { provisioned: false, settings: { brandName: "No Key Co", serving: false } });
+  assert.deepEqual(row, { settings: { brandName: "No Key Co", serving: false } });
   assert.equal(
     await isAdmin(
       String((await db.owner.q("SELECT tenant FROM tenant_external_orgs WHERE org_id = '66'"))[0]!.tenant),

@@ -48,7 +48,7 @@ interface ChoiceClaims {
   trusted?: TrustedSignIn;
   returnTo: string;
   email?: string | null;
-  selfServe?: { subject: string; orgs: ExternalOrg[] };
+  selfServe?: { subject: string };
   exp: number;
 }
 
@@ -205,14 +205,10 @@ function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly stri
 }
 
 const ORG_OPTION = "org:";
-const BROWSER_COOKIE_BYTES_MAX = 4096;
-
-const orgOptions = (orgs: readonly ExternalOrg[]): SignInTenant[] =>
-  orgs.map(({ id, name }) => ({ id: `${ORG_OPTION}${id}`, brandName: name }));
 
 function workspacePicker(
   tenants: readonly SignInTenant[],
-  o: { recent?: readonly string[]; query?: string } = {},
+  o: { recent?: readonly string[]; query?: string; orgs?: boolean } = {},
 ): { actions: string; script: boolean } {
   const ordered = orderWorkspaces(tenants, o.recent ?? []);
   const button = (t: SignInTenant, hidden = false): string =>
@@ -220,7 +216,8 @@ function workspacePicker(
       `${workspaceLabel(t)} ${t.handle ?? ""}`.trim().toLowerCase(),
     )}"><input type="hidden" name="tenant" value="${escapeHtml(t.id)}">` +
     `<button class="btn ghost workspace" type="submit">${escapeHtml(workspaceLabel(t))}</button></form>`;
-  if (ordered.length <= PICKER_BUTTONS_MAX) return { actions: ordered.map((t) => button(t)).join(""), script: false };
+  if (o.orgs || ordered.length <= PICKER_BUTTONS_MAX)
+    return { actions: ordered.map((t) => button(t)).join(""), script: false };
   const query = (o.query ?? "").trim().toLowerCase();
   const matches = (t: SignInTenant): boolean =>
     !query || `${workspaceLabel(t)} ${t.handle ?? ""}`.toLowerCase().includes(query);
@@ -314,7 +311,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
           ? "Your account belongs to more than one company. Pick the one to open a workspace for."
           : "Your account belongs to more than one workspace. Pick the one to sign in to.",
         actions: picker.script ? `${picker.actions}<script>${PICKER_SCRIPT}</script>` : picker.actions,
-        help: "To switch later, sign out and sign in again.",
+        help: o.orgs ? "" : "To switch later, sign out and sign in again.",
       }),
       picker.script ? PICKER_SCRIPT_HASH : undefined,
     );
@@ -329,22 +326,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     email: string | null | undefined,
   ): void {
     const exp = Math.floor(Date.now() / 1000) + deps.ttlS;
-    const sealed = (offered: Who) =>
-      seal({ k: "choice", ...offered, returnTo, ...(email !== undefined ? { email } : {}), exp }, deps.key);
-    let cookie = sealed(who);
-    if (who.selfServe) {
-      const orgs = [...who.selfServe.orgs];
-      while (orgs.length > 1 && `portal_tenant_choice=${cookie}`.length > BROWSER_COOKIE_BYTES_MAX) {
-        orgs.pop();
-        cookie = sealed({ ...who, selfServe: { ...who.selfServe, orgs } });
-      }
-      const dropped = who.selfServe.orgs.slice(orgs.length).map(({ id }) => id);
-      if (dropped.length)
-        console.warn(
-          `[portal] organizations ${dropped.join(", ")} not offered: the choice cookie would exceed ${BROWSER_COOKIE_BYTES_MAX} bytes`,
-        );
-      tenants = orgOptions(orgs);
-    }
+    const cookie = seal({ k: "choice", ...who, returnTo, ...(email !== undefined ? { email } : {}), exp }, deps.key);
     res.setHeader("set-cookie", [
       clearCookie("portal_oidc_tmp", "/auth", deps.secureCookies),
       setCookie("portal_tenant_choice", cookie, {
@@ -412,8 +394,20 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
         const tenant = await deps.selfServe({ subject: identity.subject, email: identity.email }, orgs[0]!);
         return finish(res, { trusted: who }, identity.returnTo, tenant);
       }
-      const selfServe = { subject: identity.subject, orgs };
-      return offerChoice(req, res, { trusted: who, selfServe }, identity.returnTo, orgOptions(orgs), identity.email);
+      const { subject } = identity;
+      const exp = Math.floor(Date.now() / 1000) + deps.ttlS;
+      const options = orgs.map((org) => ({
+        id: `${ORG_OPTION}${seal({ k: "org", subject, org, exp }, deps.key)}`,
+        brandName: org.name,
+      }));
+      return offerChoice(
+        req,
+        res,
+        { trusted: who, selfServe: { subject } },
+        identity.returnTo,
+        options,
+        identity.email,
+      );
     }
     if (found.shared && !found.tenants.length)
       return deps.sendHtml(res, 403, pin === undefined ? deps.noWorkspaceHtml(identity.email) : noAccessHtml());
@@ -432,9 +426,19 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     if (!choice || (!choice.signIn && !choice.trusted)) return expired(res);
     let tenant = picked;
     if (choice.selfServe && choice.trusted) {
-      const org = choice.selfServe.orgs.find(({ id }) => `${ORG_OPTION}${id}` === picked);
-      if (!org || !deps.selfServe) return expired(res);
-      tenant = await deps.selfServe({ subject: choice.selfServe.subject, email: choice.email ?? null }, org);
+      const offered = picked.startsWith(ORG_OPTION) ? open(picked.slice(ORG_OPTION.length), deps.key) : null;
+      if (
+        offered?.k !== "org" ||
+        offered.subject !== choice.selfServe.subject ||
+        typeof offered.exp !== "number" ||
+        Date.now() >= offered.exp * 1000 ||
+        !deps.selfServe
+      )
+        return expired(res);
+      tenant = await deps.selfServe(
+        { subject: choice.selfServe.subject, email: choice.email ?? null },
+        offered.org as ExternalOrg,
+      );
     } else {
       if (!isTenantId(tenant)) return expired(res);
       const { tenants } = await lookupTenants(choice);
@@ -455,7 +459,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
     if (!choice || (!choice.signIn && !choice.trusted)) return expired(res);
     const query = url.searchParams.get("q") ?? "";
-    if (choice.selfServe) return pickerPage(res, orgOptions(choice.selfServe.orgs), { recent: [], query, orgs: true });
+    if (choice.selfServe) return expired(res);
     const { tenants } = await lookupTenants(choice);
     pickerPage(res, tenants, { recent: readRecent(req.headers.cookie), query });
   }
