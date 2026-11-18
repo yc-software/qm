@@ -72,6 +72,22 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     });
   };
 
+  async function inheritContextFrom(sessionId: string, sourceSessionId: string): Promise<void> {
+    const source = (
+      await q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE id = $1", [sourceSessionId])
+    )[0];
+    if (!source) throw new Error("The source conversation no longer exists");
+    if (source.personal_only || source.context_provenance)
+      await recordContextProvenance(sessionId, source.scope_id as ScopeId, {
+        ...((source.context_provenance as SourceProvenance) ?? {
+          sensitivity: "ordinary",
+          sources: [],
+          sourceUnknown: false,
+        }),
+        ...(source.personal_only ? { personalOnly: true as const } : {}),
+      });
+  }
+
   async function getMany({
     ids,
     threadRefs,
@@ -221,16 +237,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async updateForkProvenance(sessionId, provenance): Promise<void> {
-      const source = await q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE id = $1", [
-        provenance.forkedFrom.sessionId,
-      ]);
-      if (source[0]?.personal_only === true) await markPersonalOnly(sessionId, source[0].scope_id as ScopeId);
-      if (source[0]?.context_provenance)
-        await recordContextProvenance(
-          sessionId,
-          source[0].scope_id as ScopeId,
-          source[0].context_provenance as SourceProvenance,
-        );
       await q(
         "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4, side_chat = $5 WHERE id = $1",
         [
@@ -244,22 +250,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async setParentSession(sessionId, parentSessionId): Promise<void> {
-      if (parentSessionId) {
-        const source = await q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE id = $1", [
-          parentSessionId,
-        ]);
-        if (source[0]?.personal_only === true) await markPersonalOnly(sessionId, source[0].scope_id as ScopeId);
-        if (source[0]?.context_provenance)
-          await recordContextProvenance(
-            sessionId,
-            source[0].scope_id as ScopeId,
-            source[0].context_provenance as SourceProvenance,
-          );
-      }
+      if (parentSessionId) await inheritContextFrom(sessionId, parentSessionId);
       await q("UPDATE sessions SET parent_session_id = $2 WHERE id = $1", [sessionId, parentSessionId]);
     },
     markPersonalOnly,
     recordContextProvenance,
+    inheritContextFrom,
 
     async setSpawnMeta(sessionId, meta): Promise<void> {
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);

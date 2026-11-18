@@ -640,6 +640,27 @@ export const SESSION_MIGRATIONS = [
       "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_provenance JSONB",
     ],
   },
+  {
+    id: "sessions/store/0065-private-documents",
+    statements: [
+      "SET LOCAL lock_timeout = '5s'",
+      `DO $$ BEGIN
+        IF to_regclass('document_conversations') IS NULL THEN RETURN; END IF;
+        WITH RECURSIVE private_sessions(tenant_id,id,scope_id) AS (
+          SELECT s.tenant_id,s.id,s.scope_id FROM sessions s
+          JOIN document_conversations d ON d.tenant_id=s.tenant_id
+            AND d.id=encode(sha256(convert_to('["session",' || to_json(s.id)::text || ']', 'UTF8')), 'hex')
+          WHERE d.json->>'kind'='session' AND d.json->>'mode'='private'
+            AND s.scope_id='personal:' || (d.json->>'principalId')
+          UNION
+          SELECT s.tenant_id,s.id,s.scope_id FROM sessions s JOIN private_sessions p
+            ON s.tenant_id=p.tenant_id AND s.scope_id=p.scope_id
+            AND (s.parent_session_id=p.id OR s.forked_from_session_id=p.id)
+        ) UPDATE sessions s SET personal_only=true FROM private_sessions p
+          WHERE s.tenant_id=p.tenant_id AND s.id=p.id;
+      END $$`,
+    ],
+  },
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

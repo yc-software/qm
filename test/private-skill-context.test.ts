@@ -1,5 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
+import pg from "pg";
+import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
@@ -344,4 +346,28 @@ test("private document capability and skill privacy survive memory opt-out and a
   assert.equal((await built.sessions.get(child.id))?.personalOnly, true);
   const sharedChild = await built.sessions.getOrCreateByThread("shared-child", "channel", "channel:C1");
   await assert.rejects(built.sessions.setParentSession(sharedChild.id, forked.session.id), /owner does not match/);
+  const legacyFork = await built.sessions.getOrCreateByThread("legacy-private-fork", "dm", personal);
+  await built.sessions.updateForkProvenance(legacyFork.id, {
+    forkedFrom: { sessionId: binding.conversation.sessionId },
+    forkBoundarySeq: 0,
+  });
+  const legacyChild = await built.sessions.getOrCreateByThread("legacy-private-child", "dm", personal);
+  await built.sessions.setParentSession(legacyChild.id, legacyFork.id);
+  const legacyIds = [binding.conversation.sessionId, legacyFork.id, legacyChild.id];
+  const sql = new pg.Client({ connectionString: config.databaseUrl });
+  await sql.connect();
+  try {
+    await sql.query("UPDATE sessions SET personal_only=false WHERE id=ANY($1::text[])", [legacyIds]);
+    for (const statement of SESSION_MIGRATIONS.find(
+      (migration) => migration.id === "sessions/store/0065-private-documents",
+    )!.statements)
+      await sql.query(statement);
+  } finally {
+    await sql.end();
+  }
+  assert.ok(
+    (await built.sessions.getMany({ ids: legacyIds, threadRefs: [] })).every((session) => session.personalOnly),
+  );
+  assert.equal((await built.sessions.get(sharedChild.id))?.personalOnly, undefined);
+  await assert.rejects(built.sessions.inheritContextFrom(child.id, "missing-source"), /no longer exists/);
 });

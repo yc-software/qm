@@ -1132,8 +1132,6 @@ export function createSessionMethods(
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
       if (!source) return null;
-      const document = await deps.documentConversations?.knowledgeForSession(source.id, principalId);
-      if (document?.mode === "private") await deps.sessions.markPersonalOnly(source.id, source.scopeId);
       const parsed = parseScopeId(source.scopeId);
       const fork = async (projectMembers?: readonly string[]) => {
         const visible = (await transcripts.forViewer(sessionId, principalId)).items;
@@ -1152,10 +1150,7 @@ export function createSessionMethods(
           source.channelName,
           "web",
         );
-        const currentSource = await deps.sessions.get(sessionId);
-        if (currentSource?.personalOnly) await deps.sessions.markPersonalOnly(forked.id, currentSource.scopeId);
-        if (currentSource?.sourceProvenance)
-          await deps.sessions.recordContextProvenance(forked.id, forked.scopeId, currentSource.sourceProvenance);
+        await deps.sessions.inheritContextFrom(forked.id, sessionId);
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
           copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),

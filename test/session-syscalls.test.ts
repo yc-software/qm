@@ -64,6 +64,7 @@ interface Rig {
 async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   liveReplies?: true;
+  audienceScopeId?: ScopeId;
 }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
@@ -98,6 +99,7 @@ async function rig(opts?: {
   await sessions.updateTitle(room.id, "dm with alex");
   await sessions.addParticipant(room.id, actor.id);
   const binding = (session: Session) => ({
+    ...(opts?.audienceScopeId ? { audienceScopeId: opts.audienceScopeId } : {}),
     session,
     scopeId: scope,
     request: {
@@ -3688,4 +3690,29 @@ test("mail preserves private source restrictions and refuses another owner's rec
   const other = await sessions.getOrCreateByThread("foreign-mail-recipient", "dm", "personal:U2");
   await assert.rejects(mailbox.send({ ...message, id: randomUUID(), recipientId: other.id }), /owner does not match/);
   assert.deepEqual(await mailbox.pending(other.id), []);
+});
+
+test("blocked private senders do not hide a later readable message", async () => {
+  const { sessions, mailbox, room, syscallsFor } = await rig({ audienceScopeId: "channel:C1" });
+  for (let index = 0; index < 5; index++) {
+    const sender = await sessions.getOrCreateByThread("sender-" + index, "dm", scope);
+    await sessions.addParticipant(sender.id, actor.id);
+    await mailbox.send({
+      id: randomUUID(),
+      senderId: sender.id,
+      recipientId: room.id,
+      actor,
+      audience: [actor],
+      text: "message-" + index,
+      createdAt: index,
+    });
+    if (index < 4) await sessions.markPersonalOnly(sender.id, scope);
+  }
+  const syscalls = syscallsFor(room);
+  assert.ok(syscalls.receive);
+  const received = await syscalls.receive();
+  assert.deepEqual(
+    received.map((message) => message.text),
+    ["message-4"],
+  );
 });

@@ -850,14 +850,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   );
                   if (!readable.every(Boolean)) continue;
                 }
-                if ((await inheritPrivateContexts([sender.id])).has(sender.id)) continue;
                 visible.push(message);
-                if (visible.length >= 4) break;
               } catch {
                 continue;
               }
             }
-            if (visible.length || Date.now() >= deadline || signal?.aborted) return visible;
+            const blocked = await inheritPrivateContexts([...new Set(visible.map((message) => message.senderId))]);
+            const accepted = visible.filter((message) => !blocked.has(message.senderId)).slice(0, 4);
+            if (accepted.length || Date.now() >= deadline || signal?.aborted) return accepted;
             await sleep(Math.min(250, deadline - Date.now()));
           } while (Date.now() <= deadline);
           return [];

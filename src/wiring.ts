@@ -2459,7 +2459,6 @@ export function buildApp(
     advisoryLock,
   };
   const app = createApp({
-    documentConversations,
     errors,
     settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,

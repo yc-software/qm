@@ -760,7 +760,6 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
-  documentConversations?: Pick<import("../documents/conversations.ts").DocumentConversations, "knowledgeForSession">;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;

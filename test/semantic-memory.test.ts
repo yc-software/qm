@@ -251,14 +251,27 @@ test("recall drops index matches for facts changed after the notebook was loaded
   assert.equal(await recall(memory, "personal:a", { query: "verify" }), "- (2026-10-01) browser preference");
 });
 
-test("semantic recall records selected private facts from an undisclosed snapshot", async () => {
-  const { base, memory } = await fixture();
+test("semantic recall records selected private facts without reloading an authorized snapshot", async () => {
+  const { base, index, embedder } = await fixture();
   await base.capture("personal:a", ["browser preference"], AT, undefined, {
     mode: "explicit",
     personalOnly: true,
     sensitivity: "restricted",
     inheritedFacts: [{ sensitivity: "restricted", sources: ["personal:a"], sourceUnknown: false }],
   });
+  let reads = 0;
+  const facts = base.facts!.bind(base);
+  const memory = createSemanticMemoryService(
+    {
+      ...base,
+      facts: async (scope) => {
+        reads++;
+        return facts(scope);
+      },
+    },
+    async () => embedder,
+    index,
+  );
   const shown: string[] = [];
   const view = disclosedMemory(memory, {
     actor: { id: "a", type: "internal" },
@@ -278,4 +291,5 @@ test("semantic recall records selected private facts from an undisclosed snapsho
     /browser preference/,
   );
   assert.deepEqual(shown, ["personal:a"]);
+  assert.equal(reads, 1);
 });

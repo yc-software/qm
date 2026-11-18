@@ -405,6 +405,7 @@ export interface SessionStore {
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
+  inheritContextFrom(sessionId: string, sourceSessionId: string): Promise<void>;
   markPersonalOnly(sessionId: string, ownerScopeId: ScopeId): Promise<void>;
   recordContextProvenance(
     sessionId: string,
