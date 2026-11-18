@@ -193,7 +193,7 @@ test("a replayed magic link is refused", async (t) => {
   assert.equal(replay.status, 400);
   const stale = await replay.text();
   assert.match(stale, /no longer works/);
-  assert.match(stale, /href="https:\/\/agent\.example\.test\/auth\/login"/);
+  assert.match(stale, /href="https:\/\/agent\.example\.test\/auth\/login\?provider=primary"/);
 });
 
 test("a replayed authorization code is refused", async (t) => {
@@ -215,7 +215,7 @@ test("an expired magic link is refused", async (t) => {
   h.now.ms += (h.cfg.linkTtlS + 60) * 1000;
   const late = await openLink(h, link);
   assert.equal(late.status, 400);
-  assert.match(await late.text(), /href="https:\/\/agent\.example\.test\/auth\/login"/);
+  assert.match(await late.text(), /href="https:\/\/agent\.example\.test\/auth\/login\?provider=primary"/);
   assert.equal(
     h.claims.calls.some((ids) => ids[0]?.startsWith("link:")),
     false,
@@ -777,14 +777,12 @@ test("trusted sign-in is available throughout the email flow only when configure
   }
 });
 
-test("trusted sign-in remains available when email is unavailable", async () => {
+test("sign-in goes straight to the trusted provider when email is unavailable", async () => {
   const h = await startHarness({ trustedSignInLabel: "Company SSO", env: { RESEND_API_KEY: undefined } });
   try {
-    const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
-    assert.equal(response.status, 200);
-    const html = await response.text();
-    assert.match(html, /href="\/auth\/trusted\/login"/);
-    assert.doesNotMatch(html, /Email delivery isn't configured|<form/);
+    const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`, { redirect: "manual" });
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get("location"), "/auth/trusted/login");
   } finally {
     await h.close();
   }
