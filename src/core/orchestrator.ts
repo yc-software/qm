@@ -175,6 +175,7 @@ import {
   environmentNote,
   renderGatewayContext,
   renderSandboxProviders,
+  rosterShown,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
   webSurfaceLabel,
@@ -201,7 +202,7 @@ import {
   appendTurnGuidance,
   conversationRoster,
   finishSystemPrompt,
-  otherPeopleShown,
+  shownNames,
 } from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
@@ -682,7 +683,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               swallowAs("orchestrator: conversation roster", undefined),
             )
           : undefined;
-      const shownPeople = otherPeopleShown(actor, conversation, rosterMembers);
+      const shownPeople = rosterShown(rosterMembers ?? [])
+        .filter((m) => !samePerson(m.principalId, actor.id))
+        .map((m) => m.displayName);
+      const peopleNames = shownNames(actor, rosterMembers);
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
@@ -936,9 +940,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       if (persona?.routedBy) turnEvents.push(personaRoutedNote(persona.persona.name, persona.routedBy));
-      const nameOf = (id: string): string | undefined =>
-        conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
-        rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
+      const nameOf = (id: string): string | undefined => peopleNames.get(personKey(id));
       if (input.privateSessionMessage)
         turnEvents.push(
           "This is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.",
@@ -1472,6 +1474,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           openSpeakerKeychain,
           scopeKeychainGrants,
           rosterMembers,
+          peopleNames,
         });
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({

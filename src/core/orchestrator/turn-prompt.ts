@@ -12,6 +12,7 @@ import type { mintTurnCapabilities } from "./capability-tokens.ts";
 import type { CredentialCatalog } from "./credential-catalog.ts";
 import {
   renderConversationRoster,
+  rosterShown,
   renderStandingObligations,
   renderSystemContext,
   type SystemContextBlocks,
@@ -131,6 +132,7 @@ export async function addConversationBlocks(turn: {
   openSpeakerKeychain: CredentialCatalog["openSpeakerKeychain"];
   scopeKeychainGrants: () => Promise<Parameters<typeof renderKeychainManifest>[0]["scopeGrants"]>;
   rosterMembers: DirectoryMember[] | undefined;
+  peopleNames: ReadonlyMap<string, string>;
 }): Promise<KeychainAsk[]> {
   const {
     deps,
@@ -144,6 +146,7 @@ export async function addConversationBlocks(turn: {
     openSpeakerKeychain,
     scopeKeychainGrants,
     rosterMembers,
+    peopleNames,
   } = turn;
   let scopeAskList: KeychainAsk[] = [];
   const rosterBlock = rosterMembers && renderConversationRoster(rosterMembers);
@@ -153,7 +156,10 @@ export async function addConversationBlocks(turn: {
     const members = [
       ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
       ...audienceMembers,
-    ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
+    ].map((p) => {
+      const displayName = peopleNames.get(personKey(p.id));
+      return { id: p.id, ...(displayName ? { displayName } : {}) };
+    });
     const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
       !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
       !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
@@ -200,17 +206,13 @@ export async function conversationRoster(
   return resolved;
 }
 
-export function otherPeopleShown(
+export function shownNames(
   actor: OrchestratorInput["actor"],
-  conversation: OrchestratorInput["conversation"],
   rosterMembers: readonly DirectoryMember[] | undefined,
-): string[] {
-  const named = [
-    ...(rosterMembers ?? []).map((m) => ({ id: m.principalId, name: m.displayName })),
-    ...conversation.audience.filter((p) => p.type === "internal").map((p) => ({ id: p.id, name: p.displayName })),
-  ];
-  const names = named.filter(({ id, name }) => name?.trim() && !samePerson(id, actor.id)).map(({ name }) => name!);
-  return [...new Set(names)].toSorted();
+): Map<string, string> {
+  const names = new Map(rosterShown(rosterMembers ?? []).map((m) => [personKey(m.principalId), m.displayName]));
+  if (actor.displayName?.trim()) names.set(personKey(actor.id), actor.displayName);
+  return names;
 }
 
 export async function finishSystemPrompt(turn: {

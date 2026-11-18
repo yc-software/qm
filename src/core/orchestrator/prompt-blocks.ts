@@ -10,8 +10,10 @@ import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
 
+const memberIds = (m: { principalId: string; slackId?: string }): string =>
+  [m.principalId, m.slackId].filter(Boolean).join(", ");
 const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
-  `${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`;
+  `${m.displayName} (${memberIds(m)})`;
 
 export function renderSandboxProviders(
   names: readonly string[],
@@ -48,11 +50,20 @@ export function membershipEvent(
   const { previous } = retainedSnapshot(history, rosterOf);
   if (!previous) return { text: "", record: { roster, sessionId } };
   const absentFrom = (list: RosterSnapshot["roster"], id: string) => !list.some((o) => o.id === id);
+  const listed = new Set(rosterShown(current).map((m) => m.principalId));
   const joined = current
     .filter((m) => absentFrom(previous.roster, m.principalId))
     .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
-    .map(memberLabel);
-  const left = previous.roster.filter((m) => absentFrom(roster, m.id)).map((m) => m.name);
+    .map((m) => (listed.has(m.principalId) ? memberLabel(m) : memberIds(m)));
+  const listedBefore = new Set(
+    previous.roster
+      .toSorted((a, b) => a.id.localeCompare(b.id))
+      .slice(0, ROSTER_CAP)
+      .map((m) => m.id),
+  );
+  const left = previous.roster
+    .filter((m) => absentFrom(roster, m.id))
+    .map((m) => (listedBefore.has(m.id) ? m.name : m.id));
   const parts = [
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",
@@ -301,9 +312,12 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
 }
 
 const ROSTER_CAP = 20;
+export const rosterShown = <T extends { principalId: string }>(members: readonly T[]): T[] =>
+  members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
+
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
-  const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
+  const shown = rosterShown(members);
   const lines = shown.map((m) => `- ${memberLabel(m)}`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (
