@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { desktopClientForTurn, introducesUser } from "../src/core/turn-origin.ts";
+import { desktopClientForTurn, introducesUser, runStarter } from "../src/core/turn-origin.ts";
 
 test("desktop execution requires a human web turn with a live desktop binding", () => {
   const human = { origin: { kind: "human" as const }, surface: "web", desktopClientId: "desktop-turn" };
@@ -31,4 +31,11 @@ test("only a person's own message introduces them to the roster", () => {
     false,
     "someone from another Slack workspace is not one of ours",
   );
+});
+
+test("a run says whether a person, a subagent call or a session wake started it", () => {
+  assert.equal(runStarter({ origin: { kind: "human" } }), "person");
+  assert.equal(runStarter({ origin: { kind: "human" }, sessionSenderId: "s1", delegatingRunId: "r1" }), "subagent");
+  assert.equal(runStarter({ origin: { kind: "human" }, sessionSenderId: "child" }), "wake");
+  assert.equal(runStarter({ origin: { kind: "automation" } }), undefined);
 });

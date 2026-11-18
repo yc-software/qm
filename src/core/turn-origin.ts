@@ -13,6 +13,14 @@ export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "dele
   return !!input.sessionSenderId || !!input.delegatingRunId;
 }
 
+export function runStarter(
+  input: Pick<TurnRequest, "origin" | "sessionSenderId" | "delegatingRunId">,
+): "person" | "subagent" | "wake" | undefined {
+  if (input.delegatingRunId) return "subagent";
+  if (input.sessionSenderId) return "wake";
+  return input.origin && (isPersonAuthored(input.origin.kind) || spokenByPerson(input.origin)) ? "person" : undefined;
+}
+
 export function midTurnSessionMessage(message: string, fromParent: boolean): string {
   const sender = fromParent ? "your parent session" : "another session";
   return `A message from ${sender} arrived while you were working. Address it as you continue this turn; it is not a new task.\n${message}`;
