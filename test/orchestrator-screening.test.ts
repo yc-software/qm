@@ -787,35 +787,32 @@ test("an approved replay of held input goes through when it resends its file not
   assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
 });
 
-test("allowing held input once lets in the attachment the screen held it for", async () => {
+test("allowed held input keeps the attachment the screen held it for", async () => {
   const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
-  const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
-  const file = { name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId };
-  const request = dm("summarize the file", { attachments: [file] });
-  const approval = { requestId: (await built.app.turn(request)).pendingApprovals![0]!.requestId, approved: true };
-  const approved = await built.app.turn({ ...request, approval });
-  const message = (await built.sessions.getItems(approved.sessionId!)).find((item) => item.kind === "UserMessage");
-  assert.deepEqual(
-    (message?.body.attachments as Array<{ name: string }> | undefined)?.map((f) => f.name),
-    ["notes.txt"],
-  );
+  const withFile = async (text: string) => {
+    const blob = await built.blobTransfer.put(Buffer.from(`SCREENING_FIXTURE_BLOCK ${text}`));
+    return dm(text, { attachments: [{ name: `${text}.txt`, mimetype: "text/plain", ...blob }] });
+  };
+  const held = await withFile("first");
+  const requestId = (await built.app.turn(held)).pendingApprovals![0]!.requestId;
+  await built.app.turn({ ...held, approval: { requestId, approved: true, scope: "session" } });
+  const granted = await built.app.turn(await withFile("second"));
+  const prompts = JSON.stringify(await built.sessions.listLlmRequests(granted.sessionId!));
+  assert.ok(prompts.includes("inbox/first.txt") && prompts.includes("inbox/second.txt"));
+  assert.ok(!(await built.auditLog.events(tenant)).some((event) => event.status === "withheld"));
 });
 
 test("held input replayed from its stored request and held again keeps its one approval", async () => {
   const databaseUrl = testMigratedDatabaseUrl();
   const first = freshApp({ securityPosture: "auto", databaseUrl }, fixtureScreen());
-  await first.directory.replace([{ principalId: "U2", displayName: "SCREENING_FIXTURE_BLOCK one", type: "internal" }]);
-  const request = channel("hello", {
-    gatewayContext: { location: "#eng", details: { topic: "x" }, hostIds: { channel: "C1" } },
-    conversation: {
-      kind: "channel",
-      threadRef: "ch:C1:t1",
-      channelRef: "C1",
-      audience: [internalActor, { externalId: "U2" }],
-    },
-  });
-  const requestId = (await first.app.turn(request)).pendingApprovals![0]!.requestId;
-  await first.directory.replace([{ principalId: "U2", displayName: "SCREENING_FIXTURE_BLOCK two", type: "internal" }]);
+  const rename = (displayName: string) =>
+    first.directory.replace([{ principalId: "U2", displayName, type: "internal" }]);
+  await rename("SCREENING_FIXTURE_BLOCK one");
+  const conversation = { ...channel("").conversation, audience: [internalActor, { externalId: "U2" }] };
+  const gatewayContext = { location: "#eng", details: { topic: "x" }, hostIds: { channel: "C1" } };
+  const requestId = (await first.app.turn(channel("hello", { conversation, gatewayContext }))).pendingApprovals![0]!
+    .requestId;
+  await rename("SCREENING_FIXTURE_BLOCK two");
   const restarted = freshApp({ securityPosture: "auto", databaseUrl }, fixtureScreen());
   const stored = (await restarted.app.getApproval(requestId))!.request!;
   const again = await restarted.app.turn({ ...stored, approval: { requestId, approved: true } });
