@@ -630,7 +630,7 @@ function cronSummaryLine(c: CronView): TemplateResult {
   const lastMark =
     last?.status === "failed" || last?.status === "refused"
       ? html` <span class="cron-mark bad">failed</span>`
-      : last?.status === "completed"
+      : last && (last.status === "completed" || last.status === undefined)
         ? html` <span class="cron-mark ok" aria-label="succeeded">✓</span>`
         : nothing;
   const parts: TemplateResult[] = [html`<strong>${describeSchedule(c.schedule)}</strong>${tz ? ` ${tz}` : ""}`];
