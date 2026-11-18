@@ -2165,6 +2165,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         }).catch(swallowAs("orchestrator: reply check setup", undefined));
         const checkReply = replyCheck?.enforce ? replyCheck.check : undefined;
+        const babysit = (await deps.featureFlags?.enabled("babysitter", personalScope(actor.id))) === true;
         const runAgentSegment = async (
           agentInput: string,
           extras: {
@@ -2426,6 +2427,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
             ...(checkReply ? { checkReply } : {}),
+            ...(babysit ? { babysit } : {}),
             onInterimReply: interimReplyDelivery({
               surfaceName,
               spineTurn: input.surfaceTools === true,

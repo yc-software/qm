@@ -169,6 +169,7 @@ export interface Config extends SandboxSettings, DeploySettings {
     token: string;
   };
   surfaceDebugFooter: boolean;
+  babysitterMode: BabysitterMode;
 }
 
 export function configuredModel(config: Config): string | undefined {
@@ -203,6 +204,9 @@ export function companySubscriptionAuth(config: Config): ModelProvider | undefin
 }
 
 const DEFAULT_ORG_ID = "default-org";
+
+export const BABYSITTER_MODES = ["gated", "every_step", "all_text", "turn_end"] as const;
+export type BabysitterMode = (typeof BABYSITTER_MODES)[number];
 
 export function orgId(): string {
   return process.env.ORG_ID ?? DEFAULT_ORG_ID;
@@ -680,6 +684,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
     securityScreenTimeoutMs,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
+    babysitterMode: choiceEnvStrict("BABYSITTER_MODE", env.BABYSITTER_MODE, BABYSITTER_MODES),
     ...sandbox,
     ...deploy,
   };

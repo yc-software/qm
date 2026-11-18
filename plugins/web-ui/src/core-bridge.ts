@@ -2422,6 +2422,15 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         else original.edited = true;
       }
       out.push({ ...revision, timestamp: e.createdAt } as unknown as AgentMessage);
+    } else if (e.kind === "Wake" && e.body.kind === "babysitter" && typeof e.body.text === "string") {
+      spillHeldPosts();
+      flushWork("", e.createdAt);
+      out.push({
+        role: "system-note",
+        note: "notice",
+        content: e.body.text,
+        timestamp: e.createdAt,
+      } as unknown as AgentMessage);
     } else if (e.kind === "Error" && e.text && e.errorCode === "steer_withheld") {
       spillHeldPosts();
       flushWork("", e.createdAt);
