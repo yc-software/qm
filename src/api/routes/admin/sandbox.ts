@@ -46,7 +46,7 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
       typeof input.name === "string" ? input.name : undefined,
       undefined,
       undefined,
-      typeof input.template === "string" ? { template: input.template } : undefined,
+      undefined,
       undefined,
       true,
     );
