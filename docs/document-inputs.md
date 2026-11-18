@@ -18,7 +18,7 @@ Text fallback handles UTF-8 text/code, CSV, TSV, PDF, DOCX, XLSX, PPTX, ODT, ODS
 
 At most ten documents and 8 MB of original bytes are included per turn, newest attachments first. Extraction runs in cancellable workers with a ten-second deadline, memory and decompression limits. Each extraction is capped at 200,000 characters and combined fallback input at 100,000 characters. Pi routes further constrain text to the remaining model context. Binary provider inputs remain subject to provider page and token limits.
 
-Authorization and integrity checks run on every turn. Document content is untrusted data; the external-data security policy applies when enabled. Unscreenable visuals remain marked unscreened. The stored item log does not duplicate the injected document bytes or extracted text; authorized documents are rehydrated from their artifact references.
+Authorization and integrity checks run on every turn. Document content is untrusted data; the external-data security policy applies when enabled. When screening is enforced, a document or file too long for the security screen to read in full is withheld rather than passed through unscreened, and its notice gives that reason. Unscreenable visuals remain marked unscreened. The stored item log does not duplicate the injected document bytes or extracted text; authorized documents are rehydrated from their artifact references.
 
 ## QA
 

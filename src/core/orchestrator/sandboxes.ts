@@ -10,8 +10,10 @@ import {
   assertBotMayUseComputer,
   botMayUseComputers,
   createTurnSandboxAccess,
+  defaultComputer,
   preferredBackend,
   type SandboxAccessPlan,
+  type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -86,6 +88,7 @@ interface TurnPool {
   isolation: ChildIsolation | undefined;
   boundSandboxId: string | undefined;
   assertDefaultUsable: (sandboxId?: string) => Promise<void>;
+  turnDefault: () => Promise<SandboxResource | undefined>;
   turnAccess: ProvisionOptions;
   scratchKey: () => string;
   holdResource: (handle: SandboxHandle) => Promise<void>;
@@ -215,6 +218,7 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
     isolation,
     boundSandboxId,
     assertDefaultUsable,
+    turnDefault,
     turnAccess,
     holdResource,
     notePersonUse,
@@ -222,10 +226,6 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
     prepareTurnFiles,
     finishProcess,
   } = t;
-  if (input.surfaceOrigin?.audience === "external") {
-    const resource = await deps.sandboxResources?.resolve(memoryScopeId);
-    if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
-  }
   if (isolation?.sandboxId)
     await ensureChildSandbox(deps.sandboxResources, {
       id: isolation.sandboxId,
@@ -233,10 +233,15 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
       actorId: actor.id,
       scopeId: resolution.writableScopeId,
       backendScopeId: memoryScopeId,
+      personUsed: !input.botActor,
     });
-  await assertDefaultUsable();
+  if (boundSandboxId) await assertDefaultUsable();
+  const resource = boundSandboxId ? undefined : await turnDefault();
+  if (input.surfaceOrigin?.audience === "external" && resource && resource.ownerScopeId !== scopeId)
+    throw new Error("External Slack requires its own sandbox.");
+  const sandboxId = boundSandboxId ?? resource?.id;
   const handle = await deps.sandbox.provision(resolution.writableScopeId, {
-    ...(boundSandboxId ? { sandboxId: boundSandboxId } : {}),
+    ...(sandboxId ? { sandboxId } : {}),
     ...turnAccess,
   });
   slot.handles.push(handle);
@@ -359,6 +364,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     : undefined;
   const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
     assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
+  const turnDefault = () => defaultComputer(deps.sandboxResources, resolution.writableScopeId, botMayUse);
   const personUsed = new Map<string, Promise<void>>();
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
     const sandboxId = handle.resourceId ?? boundSandboxId;
@@ -398,8 +404,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     });
   };
   const holdResource = async (handle: SandboxHandle): Promise<void> => {
-    if (handle.resourceId && deps.runs && input.runId)
-      await deps.sandboxResources?.hold(handle.resourceId, input.runId);
+    if (!handle.resourceId) return;
+    if (deps.runs && input.runId) await deps.sandboxResources?.hold(handle.resourceId, input.runId);
+    await assertDefaultUsable(handle.resourceId);
   };
   const finishProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
     finishProcessCredentials(
@@ -430,7 +437,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;
     const backend = await preferredBackend(resources, memoryScopeId);
-    const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
+    const resource = await resources.create(
+      actor.id,
+      memoryScopeId,
+      backend,
+      "background job",
+      undefined,
+      true,
+      undefined,
+      undefined,
+      !input.botActor,
+    );
     return provisionResource(await jobComputerPlan(resource));
   };
   const provisionJobSandbox = async (id: string): Promise<SandboxHandle> => {
@@ -466,6 +483,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     isolation,
     boundSandboxId,
     assertDefaultUsable,
+    turnDefault,
     turnAccess,
     scratchKey,
     holdResource,
@@ -481,6 +499,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   return {
     boundSandboxId,
     assertDefaultUsable,
+    turnDefault,
     workdir: isolation?.workdir,
     provision,
     provisionScratch,

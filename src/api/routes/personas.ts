@@ -1,11 +1,12 @@
 import { sendJson } from "../http.ts";
 import { swallowAs } from "../../util/errors.ts";
-import { isObj } from "./shared.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
+import { isObj, livePersonTurn } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
+import { sessionVisibleTo } from "../../sessions/session-rows.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -57,8 +58,9 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
     result.value.access.map(async (grant) => ({ ...grant, label: await granteeLabel(ctx, grant.scopeId) })),
   );
   const home = `persona:${result.value.id}`;
-  const skills = (await ctx.app.listVisibleSkills(principalId))
-    .flatMap((row) => (row.skill?.scopeId === home ? [row.skill] : []))
+  const skills = (await ctx.app.listVisibleSkills(principalId, isOwnScopeBotWork(ctx.capability)))
+    .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+    .filter((skill) => skill.scopeId === home)
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const crons = await personaCrons(ctx, principalId, result.value.id);
@@ -106,7 +108,7 @@ async function updatePersona(ctx: ApiCtx): Promise<void> {
 async function deletePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId) return;
+  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
   respond(ctx, await personas.remove(principalId, ctx.params.id!), "deleted");
 }
 
@@ -151,18 +153,9 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId) return;
+  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
   const access = isObj(ctx.body) ? ctx.body.access : undefined;
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
-}
-
-function liveOwnerTurn(ctx: ApiCtx): boolean {
-  if (!ctx.capability || personAtKeyboard(ctx.capability)) return true;
-  sendJson(ctx.res, 403, {
-    error: "forbidden",
-    message: "credentials can only be attached or detached on a turn the owner sent themself",
-  });
-  return false;
 }
 
 async function keychainResult<T>(ctx: ApiCtx, fn: () => Promise<PersonaResult<T>>, key: string): Promise<void> {
@@ -177,7 +170,7 @@ async function keychainResult<T>(ctx: ApiCtx, fn: () => Promise<PersonaResult<T>
 async function attachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !liveOwnerTurn(ctx)) return;
+  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
   const credentialId = isObj(ctx.body) ? ctx.body.credentialId : undefined;
   await keychainResult(ctx, () => personas.attachCredential(principalId, ctx.params.id!, credentialId), "credential");
 }
@@ -185,7 +178,7 @@ async function attachCredential(ctx: ApiCtx): Promise<void> {
 async function detachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !liveOwnerTurn(ctx)) return;
+  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
   await keychainResult(
     ctx,
     () => personas.detachCredential(principalId, ctx.params.id!, ctx.params.grantId!),
@@ -200,7 +193,12 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
   const sessionId = ctx.params.id!;
   if (ctx.capability && ctx.capability.sessionId !== sessionId)
     return sendJson(ctx.res, 403, { error: "forbidden", message: "an agent can only set its own session's persona" });
-  const viewed = await ctx.app.getSessionForViewer(sessionId, principalId, { tailTurns: 1 });
+  const viewed = await ctx.app.getSessionForViewer(sessionId, ctx.capability ?? { actorId: principalId }, {
+    tailTurns: 1,
+  });
+  const stored = !viewed && ctx.capability?.botActor ? await ctx.deps.sessions?.get(sessionId) : null;
+  if (stored && !sessionVisibleTo(ctx.capability!, stored))
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "this conversation is no longer accessible" });
   if (!viewed) return sendJson(ctx.res, 404, { error: "not_found" });
   const personaId = isObj(ctx.body) ? ctx.body.personaId : undefined;
   if (personaId !== null && (typeof personaId !== "string" || !personaId))
@@ -217,7 +215,7 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", browser: true, auth: "either", handle: createPersona },
     { method: "PATCH", path: "/v1/personas/:id", browser: true, auth: "either", handle: updatePersona },
-    { method: "DELETE", path: "/v1/personas/:id", browser: true, auth: "either", handle: deletePersona },
+    { method: "DELETE", path: "/v1/personas/:id", browser: "self", auth: "either", handle: deletePersona },
     {
       method: "POST",
       path: "/v1/personas/:id/versions/:version/restore",
@@ -226,11 +224,11 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
       handle: restorePersonaVersion,
     },
     { method: "PUT", path: "/v1/personas/:id/access", browser: true, auth: "either", handle: setPersonaAccess },
-    { method: "POST", path: "/v1/personas/:id/credentials", browser: true, auth: "either", handle: attachCredential },
+    { method: "POST", path: "/v1/personas/:id/credentials", browser: "self", auth: "either", handle: attachCredential },
     {
       method: "DELETE",
       path: "/v1/personas/:id/credentials/:grantId",
-      browser: true,
+      browser: "self",
       auth: "either",
       handle: detachCredential,
     },

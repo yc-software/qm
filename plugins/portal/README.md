@@ -201,6 +201,9 @@ external user: the callback asks core over the signed core client
 (`GET /v1/auth/broker/email-allowed`) and accepts an active invitation, `hd` notwithstanding.
 An address the env rules permit never triggers the lookup; core unreachable means not allowed.
 Deployments keyed on `sub` never consult it, so external users cannot sign in there.
+The invitation email also carries a single-use `/auth/invite` link that signs the invited
+address in without the provider, for people the provider itself turns away (Slack, for
+example, won't let a workspace guest authorize an app).
 
 ### Google Workspace SSO with the email principal
 

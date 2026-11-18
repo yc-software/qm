@@ -1,7 +1,7 @@
 import { createPgPool, type PgMigrationDefinition, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
+import { claimFunction, claimRows, servingTenant, type ClaimedRow } from "../tenants/claim.ts";
 
 type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
 
@@ -86,6 +86,22 @@ export const FILE_UPLOAD_MIGRATIONS: PgMigrationDefinition[] = [
              RETURNING file_uploads.tenant_id, file_uploads.id`,
       ),
       claimFunction("claim_file_upload", "text", "SELECT tenant_id, id FROM file_uploads WHERE id = $1"),
+    ],
+  },
+  {
+    id: "files/uploads/0005-serving-claim-expired",
+    statements: [
+      claimFunction(
+        "claim_expired_file_uploads",
+        "bigint",
+        `WITH due AS (
+             SELECT tenant_id, id FROM file_uploads
+             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')${servingTenant("tenant_id")}
+             ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
+           ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
+             WHERE file_uploads.tenant_id=due.tenant_id AND file_uploads.id=due.id
+             RETURNING file_uploads.tenant_id, file_uploads.id`,
+      ),
     ],
   },
 ];

@@ -3,13 +3,14 @@ import test from "node:test";
 import { createAclStore, type GrantPersistence } from "../src/acl/acl-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { type FileArtifactRef } from "../src/files/file-artifact-store.ts";
-import { entitledScopes } from "../src/resolution/context-filter.ts";
+import { entitledScopes as entitledScopesFor } from "../src/resolution/context-filter.ts";
 import type { Grant, Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+const entitledScopes = entitledScopesFor(false);
 
 const owner = "personal:alice";
 const recipient = "personal:bob";
@@ -50,7 +51,7 @@ test("file grants require a real, enabled Files ID owned by the granting scope",
   for (const ref of ["reports/report.md", "report.md", "artifacts/F1/report.md", "missing"]) {
     await assert.rejects(
       acl.grant(tenant, { ...grant, ref }),
-      /put the file in Files first using POST \/v1\/files\/uploads/,
+      /put the file in Files first with the helper from GET \/v1\/files\/upload-client/,
     );
   }
   await assert.rejects(

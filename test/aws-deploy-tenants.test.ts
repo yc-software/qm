@@ -6,7 +6,7 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import {
   ID,
-  deployment,
+  publishedApp,
   fakeApi,
   fakeDaemon,
   fakeS3,
@@ -36,8 +36,8 @@ test("app data on a shared host: each tenant reads only its own snapshot, never 
   const store = tenantMap<StoredDeployBody>();
   const pa = provider(api, a.fetchImpl, store, { dataBucket: "bkt", s3 });
   const pb = provider(api, b.fetchImpl, store, { dataBucket: "bkt", s3 });
-  await withTenant(A, () => pa.apply(deployment(ID), version(localSnapshot("a", "1"))));
-  await withTenant(B, () => pb.apply(deployment(ID), version(localSnapshot("a", "1"))));
+  await withTenant(A, () => pa.apply(publishedApp(ID), version(localSnapshot("a", "1"))));
+  await withTenant(B, () => pb.apply(publishedApp(ID), version(localSnapshot("a", "1"))));
   assert.equal(hydrated(a.writes), true, "tenant A restores its own data");
   assert.equal(hydrated(b.writes), false, "tenant B sees neither A's data nor the shared key");
 });
@@ -59,7 +59,7 @@ test("app data on a shared host: snapshots land under the tenant's own key", asy
         endpoint: `mvm-${tenant}.lambda-microvm.us-west-2.on.aws`,
         createdAtMs: 0,
       });
-      await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+      await p.apply(publishedApp(ID), version(localSnapshot("a", "1")));
     });
   }
   assert.deepEqual([...objects.keys()].sort(), [`deploy-data/${A}/${ID}.tar`, `deploy-data/${B}/${ID}.tar`].sort());
@@ -72,7 +72,7 @@ test("app data on a shared host: no bound tenant means no data access", async ()
   const { fetchImpl } = fakeDaemon();
   const { s3, calls } = fakeS3();
   const p = provider(api, fetchImpl, undefined, { dataBucket: "bkt", s3 });
-  await withoutTenant(() => assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1")))));
+  await withoutTenant(() => assert.rejects(p.apply(publishedApp(ID), version(localSnapshot("a", "1")))));
   assert.deepEqual(calls, []);
 });
 
@@ -81,7 +81,7 @@ test("endpoints on a shared host: one tenant's cached app endpoint never answers
   const { fetchImpl } = fakeDaemon();
   const store = tenantMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
+  const d = publishedApp(ID);
   const first = await withTenant(A, () => p.apply(d, version(localSnapshot("a", "1"))));
   await withTenant(A, () => p.resolveEndpoint!(d, version("/unused")));
   const second = await withTenant(B, () => p.apply(d, version(localSnapshot("a", "1"))));

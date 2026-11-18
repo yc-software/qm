@@ -70,6 +70,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     groupIds?: unknown;
     groupRosterIds?: unknown;
     workspaceUrl?: unknown;
+    appIconUrl?: unknown;
     membersSyncedAt?: unknown;
     channelsSyncedAt?: unknown;
     partialChannels?: unknown;
@@ -101,7 +102,11 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     });
   }
   const workspaceUrl = typeof b.workspaceUrl === "string" ? trimTrailingSlashes(b.workspaceUrl) : "";
-  if (/^https:\/\/[^\s/]+$/.test(workspaceUrl)) await app.setDirectoryWorkspaceUrl(workspaceUrl);
+  if (/^https:\/\/[^\s/]+$/.test(workspaceUrl))
+    await app.setDirectoryWorkspace({
+      workspaceUrl,
+      appIconUrl: typeof b.appIconUrl === "string" ? b.appIconUrl : null,
+    });
   let memberCount: number | undefined;
   if (Array.isArray(b.members)) {
     const members = b.members
@@ -115,7 +120,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
         ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
-        ...(m.isBot === true ? { isBot: true } : {}),
+        ...(typeof m.isBot === "boolean" ? { isBot: m.isBot } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;

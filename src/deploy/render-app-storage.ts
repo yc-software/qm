@@ -61,7 +61,7 @@ export function createRenderAppStorage(opts: {
   api?: RenderApi;
   pollIntervalMs?: number;
   timeoutMs?: number;
-}): { ensure(deploymentId: string, repair?: boolean): Promise<Record<string, string>> } {
+}): { ensure(appId: string, repair?: boolean): Promise<Record<string, string>> } {
   const endpoint = new URL(opts.endpoint);
   if (
     !opts.minioServiceId ||
@@ -130,18 +130,17 @@ printf 'QM app storage enable applied\\n'
   }
 
   return {
-    async ensure(deploymentId, repair = false) {
-      if (!uuidSchema.lowercase().safeParse(deploymentId).success)
-        throw new Error("Render app storage requires a deployment UUID");
-      let record = await opts.store.get(deploymentId);
+    async ensure(appId, repair = false) {
+      if (!uuidSchema.lowercase().safeParse(appId).success) throw new Error("Render app storage requires an app UUID");
+      let record = await opts.store.get(appId);
       if (!record)
-        record = await opts.store.putIfAbsent(deploymentId, {
-          deploymentId,
+        record = await opts.store.putIfAbsent(appId, {
+          deploymentId: appId,
           accessKey: randomBytes(10).toString("hex").toUpperCase(),
           secretKeyEnc: encryptSecret(randomBytes(30).toString("base64url"), key),
           enabled: false,
         });
-      if (record.deploymentId !== deploymentId) throw new Error("Render app storage identity does not match");
+      if (record.deploymentId !== appId) throw new Error("Render app storage identity does not match");
       if (repair || !record.enabled) await provision(record);
       return {
         AWS_ACCESS_KEY_ID: record.accessKey,
@@ -151,7 +150,7 @@ printf 'QM app storage enable applied\\n'
         AWS_REQUEST_CHECKSUM_CALCULATION: "WHEN_REQUIRED",
         S3_FORCE_PATH_STYLE: "true",
         S3_BUCKET: opts.bucket,
-        S3_PREFIX: prefixFor(deploymentId),
+        S3_PREFIX: prefixFor(appId),
       };
     },
   };

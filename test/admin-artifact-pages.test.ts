@@ -68,16 +68,16 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
     assert.equal(skills.skills[0].status, "draft");
     assert.equal(skills.skills[0].lastUsedAt, 777, "rows carry lastUsedAt for the recency sort");
 
-    const deployments = await json(
-      await fetch(`${s.base}/v1/admin/deployments?scope=personal:U1`, { headers: ALICE_ADMIN }),
+    const publishedApps = await json(
+      await fetch(`${s.base}/v1/admin/apps?scope=personal:U1`, { headers: ALICE_ADMIN }),
     );
     assert.deepEqual(
-      deployments,
-      { scopeId: "personal:U1", deployments: [] },
-      "a scope with no deployments answers an honest empty list",
+      publishedApps,
+      { scopeId: "personal:U1", apps: [] },
+      "a scope with no apps answers an honest empty list",
     );
 
-    for (const kind of ["crons", "deployments", "skills"]) {
+    for (const kind of ["crons", "apps", "skills"]) {
       assert.equal(
         (await fetch(`${s.base}/v1/admin/${kind}`, { headers: ALICE_ADMIN })).status,
         400,

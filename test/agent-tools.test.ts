@@ -64,7 +64,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         url: `/d/${input.name ?? "dep-1"}/`,
       };
     },
-    async setDeploymentPublic(id, isPublic) {
+    async setAppPublic(id, isPublic) {
       return { id, name: id, public: isPublic };
     },
     async createPlayground(input) {
@@ -179,6 +179,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
           createdAt: 0,
           schedule: { everyMs: 3_600_000 },
           title: "Gmail digest",
+          botActor: true,
         },
       };
     },
@@ -492,6 +493,13 @@ test("sandbox advertises available management actions and retires migrate", asyn
     "restart",
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
+  const botSandbox = createAgentTools(ref, { sandboxResources: true, botActor: true }).find(
+    (t) => t.name === "sandbox",
+  )!;
+  assert.match(
+    textOut(await call(botSandbox, { action: "set_default", sandbox_id: "sb-1", purpose: "p" })),
+    /unknown action `set_default` \(use one of status, restart, list, create, retire\)/,
+  );
   assert.match(
     textOut(await call(disabled, { action: "create", backend: "e2b", purpose: "p" })),
     /invalid sandbox arguments/,
@@ -2047,7 +2055,8 @@ test("cron note rejects arguments exceeding the advertised cap before dispatch",
 
 test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async () => {
   assert.match(textOut(await call(tool("cron"), { action: "list" })), /cron-1/);
-  assert.match(textOut(await call(tool("cron"), { action: "get", id: "cron-1" })), /Gmail digest/);
+  const got = textOut(await call(tool("cron"), { action: "get", id: "cron-1" }));
+  assert.ok(got.includes("Gmail digest") && got.includes("authority: none"), got);
   assert.match(textOut(await call(tool("cron"), { action: "runs", id: "cron-1", limit: 1 })), /checked inbox/);
   assert.match(
     textOut(await call(tool("cron"), { action: "patch", id: "cron-1", title: "renamed" })),
@@ -3745,7 +3754,7 @@ test("resource actions preserve sharing targets and file contents", async () => 
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
     },
-    async setDeploymentPublic(id: string, isPublic: boolean) {
+    async setAppPublic(id: string, isPublic: boolean) {
       publicChanges.push({ id, isPublic });
       return { id, name: id, public: isPublic };
     },
@@ -3760,7 +3769,7 @@ test("resource actions preserve sharing targets and file contents", async () => 
   const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
   assert.ok(Check(files.parameters, pathShare));
   const rejected = await call(files, pathShare);
-  assert.match(textOut(rejected), /upload a sandbox path with POST \/v1\/files\/uploads first/);
+  assert.match(textOut(rejected), /upload a sandbox path with the helper from GET \/v1\/files\/upload-client first/);
   assert.deepEqual(writes, [["notes", "", undefined]]);
   const invalidAppShare = { action: "share", id: "app", toScope: "org", unknown: true };
   const apps = tools.find((tool) => tool.name === "apps")!;

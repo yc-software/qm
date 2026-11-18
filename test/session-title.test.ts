@@ -190,9 +190,9 @@ test("a per-participant rename overrides the LLM title, and clearing it reveals 
   const llm = (await app.getSession(sid))?.session.title;
   assert.ok(llm, "first turn sets the global LLM title");
 
-  const renamed = await app.updateSession(sid, "U1", { title: "Staging DB" });
+  const renamed = await app.updateSession(sid, { actorId: "U1" }, { title: "Staging DB" });
   assert.equal(renamed?.title, "Staging DB");
-  const cleared = await app.updateSession(sid, "U1", { title: null });
+  const cleared = await app.updateSession(sid, { actorId: "U1" }, { title: null });
   assert.equal(cleared?.title, llm);
 });
 

@@ -127,12 +127,12 @@ test("a failed transcript write converges on retry: one entry", async () => {
   let failNextAppend = true;
   const flaky = {
     ...sessions,
-    appendMany: async (...args: Parameters<SessionStore["appendMany"]>) => {
+    appendDelivery: async (...args: Parameters<SessionStore["appendDelivery"]>) => {
       if (failNextAppend) {
         failNextAppend = false;
         throw new Error("transient append failure");
       }
-      return sessions.appendMany(...args);
+      return sessions.appendDelivery(...args);
     },
   };
   const inner = createDeliveryStore();
@@ -431,6 +431,8 @@ test("a delivery marks the web conversation unread for its participant", async (
   assert.equal((await sessions.getForParticipant(session.id, "alice@example.com"))!.unread, true);
 });
 
+const sentAsAlice = { ts: "123.789", name: "Alice", speakerId: "alice@example.com" };
+
 test("Slack send receipts survive a restart, retry a busy session, and collapse against the Slack event", async () => {
   const { sessions, inner, deliveries, runs } = wired();
   const session = await webSession(sessions, "dm:D123");
@@ -438,7 +440,7 @@ test("Slack send receipts survive a restart, retry a busy session, and collapse 
   const input = {
     destination: {
       ...webDestination("dm:D123"),
-      webTranscript: { kind: "slack_reply" as const, sessionId: session.id, ts: "123.789", name: "Alice" },
+      webTranscript: { kind: "slack_reply" as const, sessionId: session.id, ...sentAsAlice },
     },
     text: "Sent as Alice",
     idempotencyKey: "slack-reply:session:D123:123.789",
@@ -468,15 +470,30 @@ test("Slack send receipts survive a restart, retry a busy session, and collapse 
   assert.equal(visible[0]!.body.slackReplyReceipt, undefined);
 });
 
-test("Slack send receipts are recorded immediately without a listener and skip an already recorded event", async () => {
-  const { sessions, deliveries } = wired();
+test("concurrent Slack receipt writers record one item and preserve distinct equal messages", async () => {
+  const { sessions, inner, runs } = wired();
   const session = await webSession(sessions, "dm:D123");
-  const destination: Destination = {
-    ...webDestination("dm:D123"),
-    webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "123.789", name: "Alice" },
-  };
-  await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-1" });
-  assert.equal((await sessions.getItems(session.id)).length, 1);
-  await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-2" });
-  assert.equal((await sessions.getItems(session.id)).length, 1);
+  const writers = Array.from({ length: 4 }, () => withWebTranscriptDeliveries(inner, sessions, runs));
+  for (const ts of ["123.100", "123.200"]) {
+    await Promise.all(
+      writers.map((writer) =>
+        writer.enqueue({
+          destination: {
+            ...webDestination("dm:D123"),
+            webTranscript: { kind: "slack_reply", sessionId: session.id, ...sentAsAlice, ts },
+          },
+          text: "App test!",
+          idempotencyKey: `slack-reply:${session.id}:D123:${ts}`,
+        }),
+      ),
+    );
+  }
+  const items = await sessions.getItems(session.id);
+  assert.deepEqual(
+    items.map((item) => [item.kind, item.text, item.externalId, item.body.speakerId]),
+    [
+      ["UserMessage", "App test!", "123.100", "alice@example.com"],
+      ["UserMessage", "App test!", "123.200", "alice@example.com"],
+    ],
+  );
 });

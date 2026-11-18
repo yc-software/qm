@@ -44,12 +44,9 @@ struct BrowseView: View {
   let client: APIClient
 
   var body: some View {
-    QMList {
-      QMPageHeading(
-        title: "Your workspace", subtitle: "Conversations, context, and the tools behind your work."
-      )
+    List {
       ForEach(["Your work", "Automations", "Tools and settings"], id: \.self) { section in
-        Section(section) {
+        Section {
           ForEach(WorkspaceDestination.available(to: identity).filter { $0.section == section }) {
             destination in
             NavigationLink {
@@ -83,15 +80,32 @@ struct BrowseView: View {
                 VoiceView(client: client)
               }
             } label: {
-              Label(destination.title, systemImage: destination.icon).padding(.vertical, 10)
+              HStack(spacing: 12) {
+                Image(systemName: destination.icon).frame(width: 24)
+                Text(destination.title)
+              }
+              .font(.body)
             }
+            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
             .listRowBackground(QMTheme.paper)
+            .listRowSeparatorTint(QMTheme.border)
           }
+        } header: {
+          Text(section).font(.subheadline).foregroundStyle(.secondary).textCase(nil)
         }
       }
     }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden).background(QMTheme.paper)
-    .navigationTitle("Browse").navigationBarTitleDisplayMode(.inline)
+    .listStyle(.insetGrouped)
+    .listSectionSpacing(24)
+    .scrollContentBackground(.hidden)
+    .background(background)
+    .foregroundStyle(QMTheme.ink)
+    .toolbarBackground(background, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
+    .navigationTitle("Your Workspace").navigationBarTitleDisplayMode(.inline)
+  }
+
+  private var background: Color {
+    NativeThemeStore.shared.active?.surface.color ?? Color(uiColor: .systemGroupedBackground)
   }
 }

@@ -47,24 +47,13 @@ final class QueuedSteerProtocol: URLProtocol, @unchecked Sendable {
     let rejected = request.url!.host!.hasPrefix("rejected-")
     let replayed = request.url!.host!.hasPrefix("replayed-")
     let lost = request.url!.host!.hasPrefix("lost-")
+    let started = request.url!.host!.hasPrefix("started-")
     var status = 200
     var body = "{}"
     if request.url!.path == "/api/runs/active/signal" {
       XCTAssertEqual(request.httpMethod, "POST")
-      var data = request.httpBody
-      if data == nil, let stream = request.httpBodyStream {
-        stream.open()
-        defer { stream.close() }
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        var collected = Data()
-        while stream.hasBytesAvailable {
-          let count = stream.read(&buffer, maxLength: buffer.count)
-          if count <= 0 { break }
-          collected.append(buffer, count: count)
-        }
-        data = collected
-      }
-      let payload = try! JSONSerialization.jsonObject(with: data!) as! [String: String]
+      let payload =
+        try! JSONSerialization.jsonObject(with: request.bodyData) as! [String: String]
       XCTAssertEqual(
         payload,
         [
@@ -75,13 +64,15 @@ final class QueuedSteerProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
         return
       }
-      status = rejected || replayed ? 409 : 200
+      status = rejected || replayed || started ? 409 : 200
       body =
         rejected
         ? #"{"accepted":false,"reason":"queued_changed"}"#
         : replayed
           ? #"{"accepted":false,"reason":"terminal","replayed":true}"#
-          : #"{"accepted":true}"#
+          : started
+            ? #"{"accepted":false,"reason":"queued_started"}"#
+            : #"{"accepted":true}"#
     } else if request.url!.path == "/api/runs/active" {
       let host = request.url!.host!
       let count = Self.activeRequests.withLock { requests in
@@ -109,6 +100,52 @@ final class QueuedSteerProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor
 final class QueuedSteerTests: XCTestCase {
+  func testEmptyQueueDoesNotShowAnUnrelatedConnectionError() async throws {
+    let model = try model(outcome: "flaky")
+    model.inputs = []
+    await model.refresh()
+    XCTAssertTrue(model.inputs.isEmpty)
+    XCTAssertNil(model.error)
+    await model.refresh()
+    XCTAssertEqual(model.activeRunID, "active")
+    XCTAssertNil(model.error)
+  }
+
+  func testExplicitRefreshStaysPendingUntilCompletionOrStop() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ForegroundSyncProtocol.self]
+    let client = APIClient(
+      baseURL: URL(string: "https://\(UUID().uuidString).example")!, configuration: configuration)
+    try client.saveSession("test")
+    defer { client.signOut() }
+    let model = QueuedInputsModel(
+      client: client, threadRef: "web:test:chat", scopeID: "personal:test", onSnapshot: { _ in })
+    let key = client.url(
+      "api/runs/active", query: [.init(name: "threadRef", value: "web:test:chat")]
+    )
+    .absoluteString
+    ForegroundSyncProtocol.held.withLock { $0[key] = 1 }
+    model.retryRefresh()
+    XCTAssertTrue(model.retrying)
+    model.retryRefresh()
+    for _ in 0..<100 {
+      if ForegroundSyncProtocol.counts.withLock({ $0[key] == 1 }) { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(ForegroundSyncProtocol.counts.withLock { $0[key] }, 1)
+    XCTAssertTrue(model.retrying)
+    model.stop()
+    XCTAssertFalse(model.retrying)
+    model.retryRefresh()
+    for _ in 0..<100 {
+      if !model.retrying { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertFalse(model.retrying)
+    XCTAssertNil(model.error)
+    XCTAssertEqual(ForegroundSyncProtocol.counts.withLock { $0[key] }, 2)
+  }
+
   func model(outcome: String = "accepted") throws -> QueuedInputsModel {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [QueuedSteerProtocol.self]
@@ -153,6 +190,18 @@ final class QueuedSteerTests: XCTestCase {
     XCTAssertTrue(model.inputs.isEmpty)
     XCTAssertNil(model.error)
     XCTAssertEqual(model.edit?.text, "Keep my unsaved edit")
+    XCTAssertEqual(model.steering, [input])
+  }
+
+  func testSteeringMessageClearsWhenItsRunEndsWithoutRecordingIt() async throws {
+    let model = try model()
+    model.steer(model.inputs[0])
+    try await settle(model)
+    XCTAssertEqual(model.steering.count, 1)
+    model.apply(.init(runId: "active", queued: []))
+    XCTAssertEqual(model.steering.count, 1)
+    model.apply(.init(runId: nil, queued: []))
+    XCTAssertTrue(model.steering.isEmpty)
   }
 
   func testUnconfirmedSteerKeepsQueueAndReportsUncertainty() async throws {
@@ -165,6 +214,15 @@ final class QueuedSteerTests: XCTestCase {
 
   func testTerminalReplayIsConfirmedAndQueueReconciles() async throws {
     let model = try model(outcome: "replayed")
+    model.steer(model.inputs[0])
+    try await settle(model)
+    XCTAssertTrue(model.inputs.isEmpty)
+    XCTAssertNil(model.error)
+    XCTAssertTrue(model.steering.isEmpty)
+  }
+
+  func testStartedQueuedMessageIsConfirmedAndQueueReconciles() async throws {
+    let model = try model(outcome: "started")
     model.steer(model.inputs[0])
     try await settle(model)
     XCTAssertTrue(model.inputs.isEmpty)

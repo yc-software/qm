@@ -4,8 +4,8 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import { errMessage, swallow } from "../util/errors.ts";
-import { claimThenBind } from "../tenants/claim.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -57,12 +57,14 @@ export interface ProcessReaper {
   start(): void;
   stop(): Promise<void>;
   sweep(): Promise<{ reaped: number }>;
+  sweepNow(): Promise<{ reaped: number } | null>;
 }
 
 export interface ProcessReaperOptions {
   intervalMs: number;
   kill?: (rec: ProcessRecord) => Promise<void>;
   onReaped?: (rec: ProcessRecord) => Promise<void>;
+  claimOwed?: () => Promise<readonly ClaimedRow[]>;
   afterSweep?: () => Promise<void>;
   leaderLease: LeaderLease;
 }
@@ -72,7 +74,13 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
   async function sweep(): Promise<{ reaped: number }> {
     let reaped = 0;
     await claimThenBind(
-      () => registry.claimExpired(),
+      async () =>
+        (
+          await Promise.all([
+            registry.claimExpired(),
+            opts.claimOwed?.().catch(swallowAs("process reaper: claim owed stops", [])) ?? [],
+          ])
+        ).flat(),
       async (id) => {
         const rec = await registry.get(id);
         if (rec?.status !== "running") return;
@@ -97,10 +105,12 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
     return { reaped };
   }
 
-  const sweeper = createSweeper(() => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, sweep), opts.intervalMs);
+  const sweepNow = () => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, sweep);
+  const sweeper = createSweeper(sweepNow, opts.intervalMs);
   return {
     start: () => sweeper.start(),
     stop: () => sweeper.stop(),
     sweep,
+    sweepNow,
   };
 }

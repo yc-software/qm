@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { createTurnFlow } from "../src/slack/turn-flow.ts";
+import { createTurnFlow } from "../src/surfaces/turn-flow.ts";
 import { createDeliveryTracker, deliverWithRetry } from "../src/slack/delivery.ts";
 
 function fakeCore(pending: Map<string, { text: string }>, events: string[]) {
@@ -32,7 +32,7 @@ function fakeCore(pending: Map<string, { text: string }>, events: string[]) {
 test("deferDeliveryAck: recovery delivery stays pending until the caller settles it", async () => {
   const events: string[] = [];
   const pending = new Map<string, { text: string }>();
-  const bridge = createTurnFlow(fakeCore(pending, events));
+  const bridge = createTurnFlow(fakeCore(pending, events), "slack");
 
   const result = await bridge.callCore({ text: "hi" } as any, { deferDeliveryAck: true });
   assert.equal(result.status, "ok");
@@ -51,7 +51,7 @@ test("deferDeliveryAck: recovery delivery stays pending until the caller settles
 test("without deferDeliveryAck an ok run still acks its recovery delivery", async () => {
   const events: string[] = [];
   const pending = new Map<string, { text: string }>();
-  const bridge = createTurnFlow(fakeCore(pending, events));
+  const bridge = createTurnFlow(fakeCore(pending, events), "slack");
   await bridge.callCore({ text: "hi" } as any);
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(events, ["ack"]);
@@ -98,7 +98,7 @@ test("failed and refused turns keep recovery pending until their notice is deliv
     const pending = new Map<string, { text: string }>();
     const core = fakeCore(pending, events);
     core.waitRun = async () => ({ status, reason: "test failure" });
-    const flow = createTurnFlow(core);
+    const flow = createTurnFlow(core, "slack");
     await flow.callCore({ text: "hi" } as any, { deferDeliveryAck: true });
     assert.deepEqual(events, []);
     assert.ok(pending.has("run:r1"));

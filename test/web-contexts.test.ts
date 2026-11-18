@@ -101,7 +101,7 @@ test("web turns into a shared scope are membership-checked; sessions then count 
     const c2 = alice.find((c) => c.scopeId === "channel:C2")!;
     assert.equal(c2.sessionCount, 1);
     assert.ok((c2.lastActivityAt ?? 0) > 0);
-    const aliceSessions = await s.built.app.listSessions("alice");
+    const aliceSessions = await s.built.app.listSessions({ actorId: "alice" });
     const expected = Math.max(
       ...aliceSessions.filter((x) => x.scopeId === "channel:C2").map((x) => x.lastActivityAt ?? x.createdAt),
     );
@@ -212,12 +212,12 @@ test("a web turn can't pair an authorized scope claim with a thread living elsew
   }
 });
 
-test("directory push stores the workspace URL; /v1/directory/meta serves it", async () => {
+test("directory push stores the workspace URL and app icon; /v1/directory/meta serves them", async () => {
   const s = start();
   try {
     const before = await fetch(`${s.base}/v1/directory/meta`);
     assert.equal(before.status, 200);
-    assert.deepEqual(await before.json(), { workspaceUrl: null });
+    assert.deepEqual(await before.json(), { workspaceUrl: null, appIconUrl: null });
 
     const push = await fetch(`${s.base}/v1/directory`, {
       method: "POST",
@@ -225,12 +225,15 @@ test("directory push stores the workspace URL; /v1/directory/meta serves it", as
       body: JSON.stringify({
         members: [{ principalId: "alice", displayName: "Alice", type: "internal" }],
         workspaceUrl: "https://acme.slack.com/",
+        appIconUrl: "https://avatars.slack-edge.com/app_72.png",
       }),
     });
     assert.equal(push.status, 200);
 
-    const after = (await (await fetch(`${s.base}/v1/directory/meta`)).json()) as { workspaceUrl: string | null };
-    assert.equal(after.workspaceUrl, "https://acme.slack.com", "stored normalized, trailing slash dropped");
+    assert.deepEqual(await (await fetch(`${s.base}/v1/directory/meta`)).json(), {
+      workspaceUrl: "https://acme.slack.com",
+      appIconUrl: "https://avatars.slack-edge.com/app_72.png",
+    });
   } finally {
     await s.close();
   }

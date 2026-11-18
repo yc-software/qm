@@ -55,7 +55,7 @@ for (const mode of ["retry", "handoff"] as const) {
         assert.match(turn.input, /Runtime switched/);
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
-      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
+      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible", author: "U2", speakerId: "U2" });
     };
     try {
       if (mode === "retry") {
@@ -70,6 +70,7 @@ for (const mode of ["retry", "handoff"] as const) {
       if (mode !== "retry") assert.equal(isHidden(users[1]!), true);
       assert.equal(users.length, steerAt + 1);
       assert.equal(users[steerAt]!.text, "Change of plan");
+      assert.equal(users[steerAt]!.body.speakerId, "U2");
       assert.notEqual(isHidden(users[steerAt]!), true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
       const liveSteer = activity.flatMap((entry) =>

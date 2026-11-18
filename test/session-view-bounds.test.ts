@@ -11,6 +11,8 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 
+const asU1 = { actorId: "U1" };
+
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-view-bounds-"));
   return buildApp(testConfig({ dataDir }));
@@ -27,11 +29,11 @@ test("a tailTurns view is bounded yet reports the same earlierItems as the full 
   try {
     for (let i = 0; i < 45; i++) await app.turn(dm(`question number ${i}`, "web:U1:bounds"));
     const sid = (await app.turn(dm("final question", "web:U1:bounds"))).sessionId!;
-    const full = (await app.getSessionForViewer(sid, "U1"))!;
-    const expected = windowedTranscript((await app.getSessionForViewer(sid, "U1", { tailTurns: 9999 }))!.items, {
+    const full = (await app.getSessionForViewer(sid, asU1))!;
+    const expected = windowedTranscript((await app.getSessionForViewer(sid, asU1, { tailTurns: 9999 }))!.items, {
       tailTurns: 2,
     });
-    const bounded = (await app.getSessionForViewer(sid, "U1", { tailTurns: 2 }))!;
+    const bounded = (await app.getSessionForViewer(sid, asU1, { tailTurns: 2 }))!;
     assert.deepEqual(
       bounded.items.map((e) => [e.seq, e.kind]),
       expected.items.map((e) => [e.seq, e.kind]),
@@ -75,10 +77,10 @@ test("transcripts retain tool detail and exact bounded counts", async () => {
   built.runtime.start();
   try {
     const { session, narration } = await toolHeavySession(built.sessions, 30);
-    const full = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 9999 }))!;
+    const full = (await built.app.getSessionForViewer(session.id, asU1, { tailTurns: 9999 }))!;
     assert.deepEqual(full.items, await built.sessions.getItems(session.id));
     assert.equal(full.items.length, 150);
-    const bounded = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 1 }))!;
+    const bounded = (await built.app.getSessionForViewer(session.id, asU1, { tailTurns: 1 }))!;
     assert.deepEqual(bounded.items, full.items.slice(-5));
     assert.equal(bounded.earlierItems, 145);
     const pinned = await built.app.pinConversationItem("web:U1:tool-pins", "U1", { entrySeq: narration.seq });
@@ -100,12 +102,12 @@ test("earlier pages bound entry reads, widen for dense turns, and match full-rea
       return canonical(id, opts);
     };
     for (const beforeSeq of [1, 50, 251, 499, 900]) {
-      const full = (await built.app.getSessionForViewer(session.id, "U1"))!;
+      const full = (await built.app.getSessionForViewer(session.id, asU1))!;
       calls.length = 0;
       const window = { beforeSeq, tailTurns: 2 };
       const expected = windowedTranscript(full.items, window);
       for (const page of [
-        await built.app.getSessionForViewer(session.id, "U1", window),
+        await built.app.getSessionForViewer(session.id, asU1, window),
         await built.app.getSession(session.id, window),
       ]) {
         assert.deepEqual(page!.items, expected.items);
@@ -150,7 +152,7 @@ test("incremental transcript reads bound entry storage and preserve windows and 
       { limit: undefined, beforeSeq: undefined, sinceSeq: 490, transcript: true },
       { seqs: [narration.seq] },
     ]);
-    const viewerPage = (await built.app.getSessionForViewer(session.id, "U1", { sinceSeq: 490 }))!;
+    const viewerPage = (await built.app.getSessionForViewer(session.id, asU1, { sinceSeq: 490 }))!;
     assert.deepEqual(viewerPage.items, page.items);
     assert.equal(viewerPage.earlierItems, 490);
     await built.sessions.addParticipant(session.id, "late");
@@ -165,7 +167,7 @@ test("incremental transcript reads bound entry storage and preserve windows and 
       const read = (window?: { sinceSeq?: number; beforeSeq?: number }) =>
         viewer === undefined
           ? built.app.getSession(session.id, window)
-          : built.app.getSessionForViewer(session.id, viewer, window);
+          : built.app.getSessionForViewer(session.id, { actorId: viewer }, window);
       const full = await read();
       for (const window of [
         { sinceSeq: 490 },

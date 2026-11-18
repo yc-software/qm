@@ -145,7 +145,11 @@ export async function runLoopFire(
     recordFailure(summary, "intake", error);
   }
 
-  await effects.triage?.(loop);
+  try {
+    await effects.triage?.(loop);
+  } catch (error) {
+    recordFailure(summary, "triage", error);
+  }
 
   const queued = workOrder(loop, await stores.items.queued(loop.id), await stores.items.byLoop(loop.id)).slice(
     0,
@@ -186,6 +190,7 @@ export async function runLoopFire(
         let autoShippedCount = 0;
         let autoOutputCount = 0;
         let openedOutputs = 0;
+        let shipStarted = false;
         try {
           const { runId } = await effects.work({
             loop,
@@ -261,6 +266,7 @@ export async function runLoopFire(
             if (decideShip(loop, outputCandidate(output), grants).outcome !== "auto") continue;
             const currentLoop = effects.authorizeAutoShip ? await effects.authorizeAutoShip(output) : loop;
             if (!currentLoop) continue;
+            shipStarted = true;
             const shipped = await effects.ship({ loop: currentLoop, output });
             if (shipped?.state === "shipped") {
               autoShippedCount += 1;
@@ -274,12 +280,14 @@ export async function runLoopFire(
             summary.ready.push(item.id);
           }
         } catch (error) {
-          if (autoShippedCount === 0) openedOutputs = 0;
+          if (!shipStarted) openedOutputs = 0;
           const reason = error instanceof Error ? error.message : String(error);
           recordFailure(summary, item.sourceKey, error);
-          if (autoShippedCount > 0) {
-            const partialReason = `partial auto-ship: ${autoShippedCount} of ${autoOutputCount} actions completed before failure — needs human review`;
-            await stores.items.park(item.id, partialReason);
+          if (shipStarted) {
+            await stores.items.park(
+              item.id,
+              `auto-ship stopped with ${autoShippedCount} of ${autoOutputCount} actions shipped: ${reason} — needs human review`,
+            );
             summary.parked.push(item.id);
             continue;
           }

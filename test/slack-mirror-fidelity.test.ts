@@ -183,7 +183,8 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
       readHistory,
     });
     const page = await readHistory({ conversations: { history: async () => ({ messages: [raw] }) } }, "C");
-    shaped.push(await serializer.shapeRecentMessages({}, page.raw, "", new Map([["U1", "New name"]])));
+    const people = { names: new Map([["U1", "New name"]]), principals: new Map<string, string>() };
+    shaped.push(await serializer.shapeRecentMessages({}, page.raw, "", people));
   }
   assert.deepEqual(shaped[1], shaped[0]);
   assert.equal(shaped[1]![0]!.text, "Hi <@U1> and <@U2> & welcome");
@@ -264,26 +265,11 @@ for (const postgres of [false, true]) {
             { audience: [] },
           );
           views.push(result.view);
-          const current = await serializer.serializeSlackConversation(
-            client,
-            {
-              kind: "channel",
-              channel: container,
-              threadTs: "1000",
-              ts: "1001",
-              rawText: "question",
-              userId: "U1",
-              files: raw.files,
-            },
-            { audience: [] },
-          );
-          assert.deepEqual(current.view.omittedFiles, [{ name: "Large report", reason: "too-big" }]);
         }
         assert.deepEqual(views[1]!.messages, views[0]!.messages);
         assert.equal(views[1]!.messages[0]!.authorId, "BOTHER");
         assert.equal(views[1]!.messages[0]!.name, "Report bot");
         assert.deepEqual(views[1]!.messages[0]!.files, ["Large report"]);
-        assert.deepEqual(views[1]!.omittedFiles, []);
         await cache.ingest([{ container, ts: "1000", deleted: true }]);
         await cache.ingest([{ ...event, botId: "BWRONG", editedAt: 30 }]);
         assert.equal((await cache.readMessages(container, { includeDeleted: true }))[0]!.botId, "BOTHER");

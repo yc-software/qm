@@ -2,6 +2,8 @@ import "./support/auto-fake-sprites.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { randomUUID } from "node:crypto";
+import { withTenant } from "../src/tenants/context.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
@@ -137,6 +139,11 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.ok(modelOfferedInWebui(MODEL_ID));
   assert.equal(modelSupported(MODEL_ID), true);
   assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
+  withTenant(randomUUID(), () => {
+    assert.equal(modelSupported(MODEL_ID), false);
+    setModelOverlays([]);
+  });
+  assert.equal(modelSupported(MODEL_ID), true);
   await writer.upsert(
     { ...spec, contextWindow: 600_000, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
     "editor",
@@ -196,7 +203,7 @@ test("OpenRouter failure rebuilds local choices", async () => {
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
-  const config = testConfig({ openaiApiKey: "local-test-key" });
+  const config = testConfig({ openaiApiKey: "local-test-key", modelProvider: "openai" });
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
@@ -241,7 +248,9 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     const body = (await response.json()) as {
       modelCatalog: Record<string, ReturnType<typeof safeModelMetadata>>;
       models: string[];
+      orgDefault: { modelId: string };
     };
+    assert.ok(body.models.includes(body.orgDefault.modelId), body.orgDefault.modelId);
     assert.equal(body.modelCatalog[MODEL_ID]?.contextWindow, 400_000);
     assert.deepEqual(body.modelCatalog[MODEL_ID]?.cost, spec.cost);
     assert.ok(body.models.includes(MODEL_ID));

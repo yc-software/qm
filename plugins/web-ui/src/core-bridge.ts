@@ -344,6 +344,10 @@ export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): 
   return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
 }
 
+export function isSharedScopeId(scopeId: string): boolean {
+  return scopeId.startsWith("channel:") || scopeId.startsWith("group:");
+}
+
 export function sharedContextLabel(scopeId: string | null, name: string | null): string | null {
   if (!scopeId) return null;
   if (scopeId.startsWith("channel:")) return name ? `#${name.replace(/^#/, "")}` : "Shared channel";
@@ -571,7 +575,14 @@ export type AssistantWork = AssistantMessage & {
   droppedAttachmentIds?: string[];
   continuing?: string;
   via?: string;
+  personaId?: string;
 };
+
+function tagPersona(item: Item, turnRows: AgentMessage[]): void {
+  const personaId = item.body.personaId;
+  if (typeof personaId !== "string") return;
+  for (const row of turnRows) if (row.role === "assistant") (row as AssistantWork).personaId = personaId;
+}
 
 export interface RunPoll {
   status: "pending" | "running" | "done" | "failed";
@@ -589,6 +600,7 @@ export interface RunPoll {
     reply?: string;
     reason?: string;
     refusalKind?: string;
+    errorCode?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
@@ -1150,11 +1162,12 @@ export async function withdrawRun(runId: string): Promise<boolean> {
 }
 
 export function makeRunResumeStreamFn(
-  runId: string,
+  run: string | Promise<LocatedRun | null>,
   initialRun?: RunPoll,
   onWork?: WorkObserver,
   slot?: RunSlot,
   seedText?: string,
+  seedWork?: Pick<WorkBlock, "startedAt" | "activity">,
 ): StreamFn {
   const fn = (
     model: Model<Api>,
@@ -1162,10 +1175,15 @@ export function makeRunResumeStreamFn(
     options?: { signal?: AbortSignal },
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    void resumeDrive(stream, model, runId, initialRun, options?.signal, onWork, slot, seedText);
+    void resumeDrive(stream, model, run, initialRun, options?.signal, onWork, slot, seedText, seedWork);
     return stream;
   };
   return fn as unknown as StreamFn;
+}
+
+export interface LocatedRun {
+  runId: string;
+  run: RunPoll;
 }
 
 export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
@@ -1444,19 +1462,22 @@ async function drive(
 async function resumeDrive(
   stream: AssistantMessageEventStream,
   model: Model<Api>,
-  runId: string,
-  initialRun?: RunPoll,
+  target: string | Promise<LocatedRun | null>,
+  knownRun?: RunPoll,
   signal?: AbortSignal,
   onWork?: WorkObserver,
   slot?: RunSlot,
   seedText?: string,
+  seedWork?: Pick<WorkBlock, "startedAt" | "activity">,
 ): Promise<void> {
   const gen = beginSubmit(slot);
   const partial = baseAssistant(model);
-  const snapshotText = initialRun?.partial ?? "";
-  (partial as AssistantWork).streamingBaseline =
-    snapshotText.length > (seedText?.length ?? 0) ? snapshotText : (seedText ?? "");
-  const work: WorkBlock = { status: "thinking", activity: [] };
+  const baseline = (run: RunPoll | undefined): string =>
+    (run?.partial?.length ?? 0) > (seedText?.length ?? 0) ? run!.partial! : (seedText ?? "");
+  (partial as AssistantWork).streamingBaseline = baseline(knownRun);
+  const work: WorkBlock = seedWork
+    ? { status: "working", startedAt: seedWork.startedAt, activity: seedWork.activity }
+    : { status: "thinking", activity: [] };
   (partial as AssistantWork).work = work;
   const notify = (): void => onWork?.(work);
   try {
@@ -1465,8 +1486,18 @@ async function resumeDrive(
     stream.push({ type: "text_start", contentIndex: 0, partial });
     const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
     if (seedText?.trim()) pushDelta(stream, partial, st, seedText);
+    const located = typeof target === "string" ? { runId: target, run: knownRun } : await target;
+    if (!located) {
+      work.status = "complete";
+      work.finishedAt = Date.now();
+      notify();
+      finish(stream, partial, st, st.acc);
+      return;
+    }
+    const initialRun = located.run;
+    (partial as AssistantWork).streamingBaseline = baseline(initialRun);
     if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
-    await followRun(stream, partial, runId, signal, notify, st, slot, gen);
+    await followRun(stream, partial, located.runId, signal, notify, st, slot, gen);
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -1729,42 +1760,58 @@ export function subscribeDeliveries(
   onInboxResync?: () => void,
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
-  const es = new EventSource(withBase("/api/deliveries/events"));
   let everOpened = false;
-  es.onopen = (): void => {
-    if (everOpened) {
-      onResync?.();
-      onInboxResync?.();
-    }
-    everOpened = true;
+  const connect = (): EventSource => {
+    const es = new EventSource(withBase("/api/deliveries/events"));
+    es.onopen = (): void => {
+      if (everOpened) {
+        onResync?.();
+        onInboxResync?.();
+      }
+      everOpened = true;
+    };
+    es.addEventListener("session_state_resync", () => onResync?.());
+    es.addEventListener("inbox_resync", () => onInboxResync?.());
+    es.addEventListener("session_state", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data) as SessionStateEvent;
+        if (typeof ev.threadRef === "string" && ev.threadRef && typeof ev.state === "string") onSessionState?.(ev);
+      } catch (err) {
+        swallow("web-ui: handle session-state frame", err);
+      }
+    });
+    es.addEventListener("inbox_item", (e: MessageEvent) => {
+      try {
+        const ev = JSON.parse(e.data) as InboxItemEvent;
+        if (typeof ev.loopId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
+      } catch (err) {
+        swallow("web-ui: handle inbox-item frame", err);
+      }
+    });
+    es.addEventListener("delivery", (e: MessageEvent) => {
+      try {
+        const d = JSON.parse(e.data) as { threadRef?: string };
+        if (typeof d.threadRef === "string" && d.threadRef) onThread(d.threadRef);
+      } catch (err) {
+        swallow("web-ui: handle delivery nudge", err);
+      }
+    });
+    return es;
   };
-  es.addEventListener("session_state_resync", () => onResync?.());
-  es.addEventListener("inbox_resync", () => onInboxResync?.());
-  es.addEventListener("session_state", (e: MessageEvent) => {
-    try {
-      const ev = JSON.parse(e.data) as SessionStateEvent;
-      if (typeof ev.threadRef === "string" && ev.threadRef && typeof ev.state === "string") onSessionState?.(ev);
-    } catch (err) {
-      swallow("web-ui: handle session-state frame", err);
-    }
-  });
-  es.addEventListener("inbox_item", (e: MessageEvent) => {
-    try {
-      const ev = JSON.parse(e.data) as InboxItemEvent;
-      if (typeof ev.loopId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
-    } catch (err) {
-      swallow("web-ui: handle inbox-item frame", err);
-    }
-  });
-  es.addEventListener("delivery", (e: MessageEvent) => {
-    try {
-      const d = JSON.parse(e.data) as { threadRef?: string };
-      if (typeof d.threadRef === "string" && d.threadRef) onThread(d.threadRef);
-    } catch (err) {
-      swallow("web-ui: handle delivery nudge", err);
-    }
-  });
-  return () => es.close();
+  let es = connect();
+  const suspend = (event: PageTransitionEvent): void => {
+    if (event.persisted) es.close();
+  };
+  const resume = (event: PageTransitionEvent): void => {
+    if (event.persisted) es = connect();
+  };
+  window.addEventListener("pagehide", suspend);
+  window.addEventListener("pageshow", resume);
+  return () => {
+    window.removeEventListener("pagehide", suspend);
+    window.removeEventListener("pageshow", resume);
+    es.close();
+  };
 }
 
 async function streamRunViaSse(
@@ -1951,6 +1998,7 @@ interface HistoryUserMessage {
   steered?: boolean;
   speaker?: string;
   speakerId?: string;
+  overheard?: boolean;
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
@@ -2124,6 +2172,7 @@ export function userItemMessage(item: Item): HistoryUserMessage | null {
     ...(mail ? { subagentMail: mail } : {}),
     ...(item.kind === "SteeringMessage" ? { steered: true } : {}),
     ...(typeof speakerId === "string" && speakerId ? { speakerId } : {}),
+    ...(item.body.overheard === true ? { overheard: true } : {}),
     ...(typeof name === "string" && name.trim() ? { speaker: name.trim() } : {}),
     ...(ts ? { ts } : {}),
     ...(attachments.length
@@ -2279,7 +2328,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     pending = [];
     deliveryFiles = [];
   };
+  let turn = { id: null as string | null, start: 0 };
   for (const e of items) {
+    if (e.turnId !== turn.id) turn = { id: e.turnId, start: out.length };
     const text = e.text ?? "";
     if (e.kind === "ElicitationResponse") {
       const decision = approvalDecisionMessage(e);
@@ -2368,6 +2419,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
           flushWork(text, e.createdAt, !posted, timing, stopped, [e.seq]);
         }
       }
+      tagPersona(e, out.slice(turn.start));
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));

@@ -3,17 +3,17 @@ import { samePerson } from "../directory/person.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
-import { appUrlOf, type Deployment } from "./deploy-store.ts";
+import { appUrlOf, type PublishedApp } from "./deploy-store.ts";
 
-export async function notifyDeploymentShared(
+export async function notifyAppShared(
   deps: { deliveries?: Pick<DeliveryStore, "enqueue">; publicWebUrl?: string; deployAppsDomain?: string },
-  deployment: Deployment | Promise<Deployment | null>,
+  publishedApp: PublishedApp | Promise<PublishedApp | null>,
   scope: ScopeId,
   permission: Permission | null,
   by: string,
 ): Promise<void> {
   try {
-    const d = await deployment;
+    const d = await publishedApp;
     const grantee = parseScopeId(scope);
     if (
       !d ||

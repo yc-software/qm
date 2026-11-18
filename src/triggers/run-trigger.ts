@@ -6,6 +6,7 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
+import { releasesQuarantinedContent } from "../core/orchestrator/approvals.ts";
 import { TransientTurnFailure } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
@@ -72,6 +73,7 @@ export interface TriggerOutcome {
   userNote?: string;
   reply?: string;
   sessionId?: string;
+  heldForApproval?: true;
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
@@ -252,6 +254,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
+  let heldForApproval = false;
   let runDelivers = false;
   let scriptVerdict: string | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
@@ -333,12 +336,14 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
+    heldForApproval = res.pendingApprovals?.some((approval) => !releasesQuarantinedContent(approval)) === true;
     runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       if (runDelivers) return;
-      note = "hit a require_approval command — failed closed (no human at fire/event time)";
+      const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
+      note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }
@@ -379,6 +384,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(heldForApproval ? { heldForApproval: true as const } : {}),
   };
 
   if (isTriggerFailure(outcome) && !runDelivers) await sendErrorNotice(userNote ?? note ?? status!);

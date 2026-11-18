@@ -22,6 +22,7 @@ function renderSurfaceBriefing(surface: SurfaceBriefing): string {
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
     isObj(body) &&
+    typeof body.surface === "string" &&
     typeof body.text === "string" &&
     isObj(body.actor) &&
     typeof body.actor.externalId === "string" &&
@@ -154,6 +155,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
+  const { hostIds: _hostIds, ...callerGateway } = rest.gatewayContext ?? {};
   let conversationHeader = rest.conversationHeader;
   if (rawSurfaceBriefing !== undefined) {
     const parsed = surfaceBriefingSchema.safeParse(rawSurfaceBriefing);
@@ -163,6 +165,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   return {
     request: {
       ...rest,
+      ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(origin ? { origin } : {}),
       ...(clientTools?.length ? { clientTools } : {}),
@@ -232,6 +235,7 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
   const tree = kind === "abort" && isObj(body) && body.tree === true;
+  const remark = kind === "steer" && isObj(body) && body.remark === true;
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
     if (!isTurnRequest(body.request)) {
@@ -253,6 +257,7 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
       ...(request ? { request } : {}),
       ...(queuedRunId ? { queuedRunId } : {}),
       ...(tree ? { tree } : {}),
+      ...(remark ? { remark } : {}),
     },
     actor?.p,
   );
@@ -350,7 +355,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "PATCH",
     path: "/v1/runs/:id/input",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "source",
     handle: patchQueuedRun,

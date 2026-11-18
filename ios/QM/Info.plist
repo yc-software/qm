@@ -36,7 +36,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>QM’s calling library supports camera access for video calls. This version of QM uses audio-only calls and does not request camera access.</string>
+	<string>QM uses the camera when you take a photo to attach to a conversation.</string>
 	<key>QMBaseURL</key>
 	<string>$(QM_BASE_URL)</string>
 	<key>UISupportedInterfaceOrientations</key>

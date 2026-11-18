@@ -116,6 +116,7 @@ export interface ChildIsolation {
 export interface SpawnMeta {
   surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
+  liveReplies?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
   openFingerprint?: string;
@@ -158,6 +159,7 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  botWork?: true;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   personaId?: string;
@@ -188,6 +190,7 @@ export interface Resolution {
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
   guidance?: string;
+  soulScopeId?: ScopeId;
 }
 
 export type Permission = "read" | "write";
@@ -237,7 +240,7 @@ export interface Destination {
   editNote?: string;
   webTranscript?:
     | { kind: "reply" }
-    | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
+    | { kind: "slack_reply"; sessionId: string; ts: string; name: string; speakerId: string }
     | { kind: "turn_failure"; notBefore: number; runId?: string };
 }
 
@@ -331,21 +334,23 @@ export interface AttachmentMeta {
 export interface GatewayContext {
   location?: string;
   details?: Record<string, string>;
+  hostIds?: Record<string, string>;
   instructions?: string;
   reactionGuidance?: string;
   botHandle?: string;
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
+  speakerId?: string;
   text: string;
   files?: string[];
   mentions?: Record<string, string>;
@@ -424,6 +429,7 @@ export interface TurnRequest {
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
+  liveReplies?: boolean;
   envelopeWrapped?: boolean;
   displayText?: string;
   turnWallClockMs?: number;
@@ -481,6 +487,7 @@ export interface PendingApprovalRecord {
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
+  homeChannel?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;
@@ -516,7 +523,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only" | "linked_bot";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

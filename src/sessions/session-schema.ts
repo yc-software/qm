@@ -579,6 +579,31 @@ const DROP_PARTICIPANT_WINDOWS: PgMigrationDefinition = {
   ],
 };
 
+const HUMAN_PROMPT_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0062-human-prompt-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_human_prompt ON items(tenant_id, session_id, seq DESC)
+     WHERE kind IN ('UserMessage', 'SteeringMessage') AND hidden IS DISTINCT FROM true
+       AND NOT (body @> '{"overheard":true}')
+       AND (body->>'speakerId' IS NOT NULL OR body @> '{"slackReplyReceipt":true}'
+         OR (kind = 'SteeringMessage' AND author IS NOT NULL))`,
+  ],
+};
+
+const BOT_WORK_COLUMN: PgMigrationDefinition = {
+  id: "sessions/store/0064-bot-work",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE OR REPLACE FUNCTION session_bot_work(spawn_meta TEXT) RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE AS $bot_work$
+BEGIN
+  RETURN COALESCE(spawn_meta::jsonb -> 'botActor' = 'true'::jsonb, false);
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RETURN false;
+END $bot_work$`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS bot_work BOOLEAN NOT NULL GENERATED ALWAYS AS (session_bot_work(spawn_meta)) STORED`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -599,6 +624,8 @@ export const SESSION_MIGRATIONS = [
   DROP_SESSION_LEASES,
   DROP_ITEMS_TARGET_SEQ,
   DROP_PARTICIPANT_WINDOWS,
+  HUMAN_PROMPT_INDEX,
+  BOT_WORK_COLUMN,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

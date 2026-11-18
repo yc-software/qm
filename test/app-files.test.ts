@@ -270,8 +270,8 @@ for (const [where, liveEdits] of [
   test(`on ${where} a change is published as a version, and the result says so`, async () => {
     const h = harness({ liveEdits });
     const d = await h.publish("notes");
-    await h.deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: OWNER }, { notify: false });
-    if (liveEdits) await h.deploy.archiveDeployment(d.id);
+    await h.deploy.shareApp(d.id, scopeId("personal", "U2"), "write", { createdBy: OWNER }, { notify: false });
+    if (liveEdits) await h.deploy.archiveApp(d.id);
     const chat = h.chat("notes", "U2");
 
     const out = await chat.call({
@@ -464,11 +464,11 @@ test("app source budgets file headings, fences and skipped paths along with cont
     "notes",
     Object.fromEntries(Array.from({ length: 1500 }, (_, i) => [`${"x".repeat(100)}-${i}.txt`, "a"])),
   );
-  let deploymentReads = 0;
+  let appReads = 0;
   let treeReads = 0;
   const { getByName } = h.deployStore;
   const { commitTreeOf } = h.deployStore;
-  h.deployStore.getByName = (...args) => (deploymentReads++, getByName(...args));
+  h.deployStore.getByName = (...args) => (appReads++, getByName(...args));
   h.deployStore.commitTreeOf = (...args) => (treeReads++, commitTreeOf(...args));
   const files = createAppFiles({
     deploy: h.deploy,
@@ -477,7 +477,7 @@ test("app source budgets file headings, fences and skipped paths along with cont
     actingScopeId: scopeId("personal", OWNER),
   });
   const shown = await appSourceShown(files, []);
-  assert.equal(deploymentReads, 1);
+  assert.equal(appReads, 1);
   assert.equal(treeReads, 1);
   assert.ok(shown.text.length <= 80_000, String(shown.text.length));
   assert.ok(shown.text.includes("```untrusted-data\na\n```"));
@@ -487,7 +487,7 @@ test("app source budgets file headings, fences and skipped paths along with cont
     { sessionId: "s", seq: 1, createdAt: 1 },
   );
   assert.equal((await appSourceShown(files, [prior])).text, "");
-  assert.equal(deploymentReads, 2);
+  assert.equal(appReads, 2);
   assert.equal(treeReads, 1);
   await files.save(async (read) => ({
     files: Array.from({ length: 1500 }, (_, i) => ({ path: `${"y".repeat(100)}-${i}.txt`, data: Buffer.from("b") })),

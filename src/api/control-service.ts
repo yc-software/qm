@@ -20,6 +20,7 @@ import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-not
 import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
 import {
   personAtKeyboard,
   resolveShareTarget,
@@ -32,6 +33,8 @@ import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../typ
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
+import { PERSON_REQUIRED } from "./http.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -556,7 +559,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
-        const cron = await app.updateCron(id, patch, trial);
+        const cron = await app.updateCron(id, patch, capability, trial);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");
@@ -618,11 +621,15 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
       const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
-      const outcome = await app.setCronFireNote(id, {
-        text: flattened,
-        at: fireEntry?.firedAt ?? Date.now(),
-        ...(ownFire ? {} : { by: capability.actorId }),
-      });
+      const outcome = await app.setCronFireNote(
+        id,
+        {
+          text: flattened,
+          at: fireEntry?.firedAt ?? Date.now(),
+          ...(ownFire ? {} : { by: capability.actorId }),
+        },
+        capability,
+      );
       if (outcome === "missing") return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (outcome === "applied" && !ownFire) await notifyEdit(cron, capability, ["note"]);
       return { ok: true, applied: outcome === "applied" };
@@ -633,7 +640,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      await app.deleteCron(id);
+      await app.deleteCron(id, capability);
       await notifyEdit(cron, capability, ["deleted"]);
       return { ok: true };
     },
@@ -689,7 +696,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
-      const updated = await app.setCronDestination(id, resolved.destination);
+      const updated = await app.setCronDestination(id, resolved.destination, capability);
       const destLabel = capability.destinations?.find((d) => d.key === destinationKey)?.label;
       await notifyEdit(cron, capability, ["destination"], destLabel ? { destinationLabel: destLabel } : undefined);
       return { ok: true, cron: updated ?? cron };
@@ -758,7 +765,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     readSoul(capability) {
-      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId);
+      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId, {
+        actorId: capability.actorId,
+        ownScopeBotWork: isOwnScopeBotWork(capability),
+      });
       return { effectiveSoul, soul, soulVersion };
     },
 
@@ -766,6 +776,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,
+          botActor: capability.botActor === true,
           expectedVersion,
           sessionId: capability.sessionId,
         });
@@ -780,6 +791,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
+      if (req.type === "deploy" && !personAtKeyboard(capability))
+        return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
@@ -789,8 +802,16 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           code: "not_found",
           message:
             req.type === "file"
-              ? `no Files record "${req.id}"; put the file in Files first using POST /v1/files/uploads, then share its ID`
+              ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
+        };
+      const sourceWithheld =
+        req.type === "skill" ? capability.botActor === true : req.type === "file" && isOwnScopeBotWork(capability);
+      if (!loadsScopeContext(capability.actorId, home.ownerScopeId, sourceWithheld))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move a person's own files or skills",
         };
 
       const target = await resolveArtifactTarget(app, req);
@@ -805,6 +826,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           candidates: target.candidates,
         };
       const toScope = target.scope;
+      if (!loadsScopeContext(capability.actorId, toScope, capability.botActor === true))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move anything into a person's own library",
+        };
       const toKind = parseScopeId(toScope).kind;
 
       const isOrg = toKind === "org";
@@ -903,7 +930,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
         const invite =
           req.type === "deploy" && req.email !== undefined && permission === "read"
-            ? await app.inviteToDeployment(
+            ? await app.inviteToApp(
                 home.id,
                 req.email,
                 { createdBy: capability.actorId, botActor: capability.botActor },
@@ -932,7 +959,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           permission,
         };
       } catch (e) {
-        if (e instanceof AdminError) {
+        if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         return { ok: false, code: "share_failed", message: errMessage(e) };

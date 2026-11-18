@@ -197,6 +197,7 @@ interface RenderSandboxEnv {
   apiKey?: string;
   workspaceId?: string;
   image?: string;
+  egressProxyUrl?: string;
   defaultTimeoutSec?: number;
 }
 
@@ -208,6 +209,7 @@ function renderSandboxEnv(env: NodeJS.ProcessEnv): RenderSandboxEnv {
     ...(env.RENDER_API_KEY?.trim() ? { apiKey: env.RENDER_API_KEY.trim() } : {}),
     ...(env.RENDER_WORKSPACE_ID?.trim() ? { workspaceId: env.RENDER_WORKSPACE_ID.trim() } : {}),
     ...(image ? { image } : {}),
+    ...egressProxyFor(env, "render"),
     ...(defaultTimeoutSec !== undefined ? { defaultTimeoutSec } : {}),
   };
 }
@@ -484,7 +486,7 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
 
 function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
   if (
-    ["sprites", "e2b", "modal", "smolmachines", "porter"].includes(env.SANDBOX_BACKEND ?? "") &&
+    ["sprites", "e2b", "modal", "smolmachines", "porter", "render"].includes(env.SANDBOX_BACKEND ?? "") &&
     !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
   ) {
     console.warn(

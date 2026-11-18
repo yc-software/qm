@@ -42,10 +42,10 @@ final class ChatScenarioProtocol: URLProtocol, @unchecked Sendable {
       } else if path == "/api/sessions/chat" {
         if request.url?.query?.contains("beforeSeq") == true {
           body =
-            #"{"items":[{"kind":"UserMessage","seq":0,"createdAt":1,"text":"Earlier","body":{}},{"kind":"AgentMessage","seq":1,"createdAt":2,"text":"Answer","body":{}}],"earlierItems":0}"#
+            #"{"items":[{"seq":0,"createdAt":1,"kind":"UserMessage","text":"Earlier","body":{"speakerId":"alice"}},{"seq":1,"createdAt":2,"kind":"AgentMessage","text":"Answer","body":{}}],"earlierItems":0}"#
         } else if request.url!.host!.hasPrefix("history-") {
           body =
-            #"{"items":[{"kind":"UserMessage","seq":2,"createdAt":3,"text":"Current","body":{}}],"earlierItems":2}"#
+            #"{"items":[{"seq":2,"createdAt":3,"kind":"UserMessage","text":"Current","body":{"speakerId":"alice"}}],"earlierItems":2}"#
         } else {
           status = 503
         }
@@ -63,6 +63,117 @@ final class ChatScenarioProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor
 final class ChatTests: XCTestCase {
+  func testAgentPromptBoundaryIgnoresHiddenInputsAndSubagentReturns() throws {
+    let chat = model()
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(
+        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Review this","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2000,"kind":"UserMessage","hidden":true,"text":"Continue","body":{}},{"seq":3,"createdAt":3000,"kind":"UserMessage","text":"<wake reason=\"subagent\" name=\"Scout\" sessionId=\"child\" kind=\"final_answer\">Done</wake>","body":{}},{"seq":4,"createdAt":4000,"kind":"AgentMessage","text":"Here is the result","body":{}}]"#
+          .utf8))
+    XCTAssertEqual(chat.latestPromptAt, 1000)
+    chat.draft = "A new draft"
+    chat.pending = PendingSend(text: chat.draft, idempotencyKey: "retry")
+    XCTAssertEqual(chat.latestPromptAt, 1000)
+    chat.items.append(
+      try JSONDecoder().decode(
+        Item.self,
+        from: Data(
+          #"{"seq":5,"createdAt":5000,"kind":"UserMessage","text":"The next question","body":{"speakerId":"alice"}}"#
+            .utf8)))
+    XCTAssertEqual(chat.latestPromptAt, 5000)
+  }
+
+  func testWorkingStatusPersistsAcrossToolsAndQuietPartialGapsUntilTheRunStops() throws {
+    let chat = model()
+    XCTAssertNil(chat.workStatus)
+    chat.activeRunID = "run"
+    XCTAssertEqual(chat.workStatus, .working)
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","turnId":"run","text":"Check","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"Reasoning","text":"Consider the question","body":{}}]"#
+          .utf8))
+    XCTAssertEqual(chat.workStatus, .working)
+    chat.items.append(
+      try JSONDecoder().decode(
+        Item.self,
+        from: Data(
+          #"{"seq":3,"createdAt":3,"kind":"ToolCall","callId":"search","tool":"search","body":{}}"#
+            .utf8)))
+    XCTAssertEqual(chat.workStatus, .working)
+    chat.items.append(
+      try JSONDecoder().decode(
+        Item.self,
+        from: Data(
+          #"{"seq":4,"createdAt":4,"kind":"ToolResult","callId":"search","body":{"ok":true}}"#
+            .utf8)))
+    XCTAssertEqual(chat.workStatus, .working)
+    chat.partial = "Here is the answer"
+    XCTAssertEqual(chat.workStatus, .working)
+    XCTAssertEqual(chat.displayedPartial, "Here is the answer")
+    chat.partial = ""
+    XCTAssertEqual(chat.workStatus, .working)
+    chat.approvals = [try approval()]
+    XCTAssertEqual(chat.workStatus, .awaitingInput)
+    chat.approvals = []
+    chat.error = "The next prompt could not be sent"
+    XCTAssertEqual(chat.workStatus, .working)
+    chat.error = nil
+    chat.activeRunID = nil
+    XCTAssertNil(chat.workStatus)
+  }
+
+  func testSlackMessagesShowNamesAndLinksInsteadOfWireTokens() throws {
+    let chat = model()
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(
+        #"""
+        [{"seq":1,"createdAt":1,"kind":"UserMessage","externalId":"1.1","text":"<@U1|ada> and <!here>: see <https://docs.example/plan|the plan> in <#C1|launch> &lt;today&gt; &amp; reply","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"SteeringMessage","externalId":"queued-steer:web:test:chat:run","text":"Return Result<T, E> &amp; ping <@U1|ada>","body":{}}]
+        """#.utf8))
+    XCTAssertEqual(
+      chat.messages.map(\.text),
+      [
+        "<@U1|ada> and <!here>: see <https://docs.example/plan|the plan> in <#C1|launch> &lt;today&gt; &amp; reply",
+        "Return Result<T, E> &amp; ping <@U1|ada>",
+      ])
+    chat.conversation.surface = "slack"
+    XCTAssertEqual(
+      chat.messages.map(\.text),
+      [
+        #"@ada and @here: see [the plan](https://docs.example/plan) in #launch \<today> & reply"#,
+        #"Return Result\<T, E> & ping @ada"#,
+      ])
+    XCTAssertEqual(
+      SlackText.plain("<@U1|ada> see <https://docs.example/plan|the plan> &lt;3 <not a token"),
+      "@ada see the plan <3 <not a token")
+  }
+
+  func testAgentActivityRetainsCurrentCompletedSpawnsAfterTheRunEnds() throws {
+    let chat = model()
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(
+        #"""
+        [{"seq":0,"createdAt":1000,"kind":"UserMessage","turnId":"old","text":"Earlier question","body":{"speakerId":"alice"}},{"seq":1,"createdAt":1100,"kind":"ToolCall","callId":"old-spawn","tool":"subagents","body":{"action":"open"}},{"seq":2,"createdAt":1200,"kind":"ToolResult","callId":"old-spawn","body":{"ok":true,"sessionId":"old-agent"}},{"seq":3,"createdAt":2000,"kind":"UserMessage","turnId":"current","text":"Current question","body":{"speakerId":"alice"}},{"seq":4,"createdAt":2100,"kind":"ToolCall","callId":"pending-spawn","tool":"subagents","body":{"action":"open"}},{"seq":5,"createdAt":2200,"kind":"ToolCall","callId":"started-spawn","tool":"subagents","body":{"action":"open"}},{"seq":6,"createdAt":2300,"kind":"ToolResult","callId":"started-spawn","body":{"ok":true,"sessionId":"current-agent"}}]
+        """#.utf8))
+    chat.activeRunID = "current"
+    XCTAssertEqual(
+      chat.agentActivity.compactMap { $0.entry.callId },
+      ["pending-spawn", "started-spawn"])
+    XCTAssertEqual(chat.agentActivity.map { $0.state(active: true) }, [.running, .complete])
+    chat.activeRunID = nil
+    XCTAssertEqual(chat.agentActivity.compactMap(\.agentSessionID), ["current-agent"])
+    XCTAssertEqual(chat.agentActivity.first?.entry.callId, "started-spawn")
+    chat.items.append(
+      try JSONDecoder().decode(
+        Item.self,
+        from: Data(
+          #"{"seq":7,"createdAt":3000,"kind":"UserMessage","turnId":"next","text":"Next question","body":{"speakerId":"alice"}}"#
+            .utf8)))
+    XCTAssertTrue(chat.agentActivity.isEmpty)
+  }
+
   func model(prefix: String = "") -> ChatModel {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [ChatScenarioProtocol.self]
@@ -81,6 +192,89 @@ final class ChatTests: XCTestCase {
       from: Data(
         #"{"requestId":"approval","command":"publish","grantModes":{"session":false,"always":false}}"#
           .utf8))
+  }
+
+  func testServerDeniedMutationsAreBlockedAndPermittedMutationsReachTheServer() async throws {
+    let file = FileManager.default.temporaryDirectory
+      .appendingPathComponent("\(UUID().uuidString).txt")
+    try Data("abc".utf8).write(to: file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    for parent in [nil, "parent"] as [String?] {
+      let configuration = URLSessionConfiguration.ephemeral
+      configuration.protocolClasses = [AttachmentSubmissionProtocol.self]
+      let base = URL(string: "https://\(UUID().uuidString).example.test")!
+      let chat = ChatModel(
+        conversation: Conversation(
+          id: "chat", scopeId: "personal:test", threadRef: "web:test:chat", surface: "web",
+          canContinue: parent == nil, parentSessionId: parent),
+        client: APIClient(baseURL: base, configuration: configuration), user: "test",
+        knownSession: true)
+      defer { DraftStore.removeAccount(chat.attachmentAccount) }
+      chat.draft = "Check the task"
+      chat.pending = PendingSend(text: chat.draft, idempotencyKey: "saved")
+      chat.activeRunID = "run"
+      let approval = try approval()
+      chat.approvals = [approval]
+
+      await chat.send()
+      await chat.decide(approval, approved: true)
+      await chat.stop()
+      let fork = await chat.fork()
+      XCTAssertNil(fork)
+      chat.addAttachments([.file(file)])
+      await chat.attachmentUploadTask?.value
+      await chat.uploadAttachments([.file(file)])
+
+      let paths = Set(
+        AttachmentSubmissionProtocol.requests.withLock {
+          $0.filter { $0.url?.host == base.host }.compactMap { $0.url?.path }
+        })
+      if parent == nil {
+        XCTAssertEqual(
+          paths,
+          [
+            "/api/turn", "/api/approvals/approval", "/api/runs/run/signal",
+            "/api/sessions/chat/fork", "/api/blobs",
+          ])
+      } else {
+        XCTAssertTrue(paths.isEmpty)
+        XCTAssertEqual(chat.draft, "Check the task")
+        XCTAssertEqual(chat.pending?.idempotencyKey, "saved")
+        XCTAssertEqual(chat.approvals.map(\.id), [approval.id])
+        XCTAssertTrue(chat.attachments.isEmpty)
+        XCTAssertNil(chat.attachmentUploadTask)
+        XCTAssertNil(chat.error)
+      }
+    }
+  }
+
+  func testSubagentDoesNotRestoreWritableDraftOrOfferForkPoints() throws {
+    let chat = model()
+    defer { DraftStore.removeAccount(chat.attachmentAccount) }
+    chat.draft = "Previously saved input"
+    chat.pending = PendingSend(text: chat.draft, idempotencyKey: "saved")
+    chat.attachments = [
+      .init(name: "notes.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "blob")
+    ]
+    chat.saveDraft()
+    var child = chat.conversation
+    child.parentSessionId = "parent"
+    let restored = ChatModel(
+      conversation: child, client: chat.client, user: chat.user, knownSession: true)
+    restored.items = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(
+        #"[{"seq":1,"createdAt":1,"kind":"UserMessage","text":"Check","body":{"speakerId":"alice"}},{"seq":2,"createdAt":2,"kind":"AgentMessage","text":"Done","body":{}}]"#
+          .utf8))
+    XCTAssertEqual(restored.messages.map(\.text), ["Check", "Done"])
+    XCTAssertTrue(restored.draft.isEmpty)
+    XCTAssertNil(restored.pending)
+    XCTAssertTrue(restored.attachments.isEmpty)
+    XCTAssertTrue(restored.forkableMessageIDs.isEmpty)
+    let original = ChatModel(
+      conversation: chat.conversation, client: chat.client, user: chat.user, knownSession: true)
+    XCTAssertEqual(original.draft, "Previously saved input")
+    XCTAssertEqual(original.pending?.idempotencyKey, "saved")
   }
 
   func testUnconfirmedApprovalKeepsDecisionAvailable() async throws {
@@ -167,21 +361,28 @@ final class ChatTests: XCTestCase {
     XCTAssertEqual(chat.messages.map(\.text), ["Keep the answer", "Queued successor completed"])
   }
 
-  func testRejectedSendCanBeEdited() async {
+  func testRejectedSendCanBeEditedWithoutRetiringAgents() async throws {
     let chat = model()
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(
+        #"[{"seq":1,"createdAt":1000,"kind":"UserMessage","text":"Previous question","body":{"speakerId":"alice"}}]"#
+          .utf8))
     chat.draft = "An oversized request"
     await chat.send()
     XCTAssertNil(chat.pending)
     XCTAssertEqual(chat.draft, "An oversized request")
     XCTAssertNotNil(chat.error)
+    XCTAssertEqual(chat.latestPromptAt, 1000)
   }
 
   func testConcurrentPaginationDoesNotDuplicateMessages() async throws {
     let chat = model()
     chat.items = try JSONDecoder().decode(
       [Item].self,
-      from: Data(#"[{"kind":"UserMessage","seq":2,"createdAt":3,"text":"Current","body":{}}]"#.utf8)
-    )
+      from: Data(
+        #"[{"seq":2,"createdAt":3,"kind":"UserMessage","text":"Current","body":{"speakerId":"alice"}}]"#
+          .utf8))
     async let first: Void = chat.loadEarlier()
     async let second: Void = chat.loadEarlier()
     _ = await (first, second)
@@ -194,7 +395,7 @@ final class ChatTests: XCTestCase {
     defer { chat.pause() }
     for _ in 0..<100 {
       if chat.activeRunID == nil && chat.messages.last?.text == "Keep the answer"
-        && chat.error != nil
+        && chat.reconnecting
       {
         break
       }
@@ -202,6 +403,7 @@ final class ChatTests: XCTestCase {
     }
     XCTAssertNil(chat.activeRunID)
     XCTAssertEqual(chat.messages.last?.text, "Keep the answer")
-    XCTAssertNotNil(chat.error)
+    XCTAssertTrue(chat.reconnecting)
+    XCTAssertNil(chat.error)
   }
 }

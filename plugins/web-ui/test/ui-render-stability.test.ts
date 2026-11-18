@@ -62,3 +62,17 @@ test("wave animation moves a root SVG inside a fixed-size accessible clip", () =
   render(waveLoader(), host);
   assert.equal(host.querySelector<HTMLElement>(".wl")!.style.width, "24.5px");
 });
+
+test("a chat surface's configured mark is drawn as its glyph, and the neutral icon stands in without one", async () => {
+  const { appState } = await import("../src/shell-state.ts");
+  const { chatSurfaceMark } = await import("../src/surface-mark.ts");
+  const host = document.createElement("div");
+  const path = () => host.querySelector("svg path:only-child")?.getAttribute("d");
+  appState.me = { user: "tester", org: "test", chatSurfaces: [{ kind: "partner-chat", label: "Chat" }] };
+  render(chatSurfaceMark({ surface: "partner-chat" }, 14, "mark"), host);
+  assert.notEqual(path(), "M2 2h20v20H2z");
+  appState.me.chatSurfaces = [{ kind: "partner-chat", label: "Chat", mark: "M2 2h20v20H2z" }];
+  render(chatSurfaceMark({ surface: "partner-chat" }, 14, "mark"), host);
+  assert.equal(path(), "M2 2h20v20H2z");
+  assert.equal(host.querySelector("svg path")?.getAttribute("fill"), "currentColor");
+});

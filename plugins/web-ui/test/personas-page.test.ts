@@ -41,7 +41,7 @@ interface Grant {
 
 const defaultAccess = (): Grant[] => [
   { scopeId: "personal:tester", role: "owner", personasEnabled: true },
-  { scopeId: "channel:C9", role: "read", label: "design", personasEnabled: true },
+  { scopeId: "channel:C9", role: "read", label: "#design", personasEnabled: true },
 ];
 
 let calls: Call[] = [];
@@ -274,11 +274,21 @@ test("a reader sees each part of the persona with nothing to add or remove", asy
     Skills: { actions: [], items: [] },
     Crons: { actions: ["New cron"], items: [] },
     Credentials: { actions: [], items: ["github"] },
-    "Slack channels": { actions: [], items: ["design"] },
+    "Channels and groups": { actions: [], items: ["#design"] },
     "Who has access": { actions: [], items: ["You"] },
     History: { actions: ["Show 3 versions"], items: [] },
   });
   assert.equal(main.querySelector(".persona-item-remove"), null);
+});
+
+test("a channel or group with no name and no conversation here is named as the rest of the UI names it", async () => {
+  access = [
+    { scopeId: "personal:tester", role: "owner", personasEnabled: true },
+    { scopeId: "channel:C7", role: "read", personasEnabled: true },
+    { scopeId: "group:G7", role: "read", personasEnabled: true },
+  ];
+  const { main } = await openPersonaPage("Ada");
+  assert.deepEqual(sections(main)["Channels and groups"]!.items, ["Shared channel", "Group"]);
 });
 
 function searchFor(root: ParentNode, text: string): HTMLInputElement {
@@ -359,9 +369,9 @@ test("Add channel searches your Slack channels on the page and adds one with cha
     return true;
   };
   calls = [];
-  main.querySelector<HTMLButtonElement>('button[aria-label="Remove design"]')!.click();
+  main.querySelector<HTMLButtonElement>('button[aria-label="Remove #design"]')!.click();
   await settle();
-  assert.equal(asked, "Remove design from Ada?");
+  assert.equal(asked, "Remove #design from Ada?");
   assert.deepEqual(putBody(), { access: [{ scopeId: "personal:tester", role: "owner" }] });
 });
 
@@ -653,7 +663,7 @@ test("people and groups the Personas flag doesn't reach are marked with where an
     { scopeId: "personal:tester", role: "owner", personasEnabled: true },
     { scopeId: "personal:bo@acme.com", role: "read", label: "Bo Person", personasEnabled: false },
     { scopeId: "org:acme", role: "read", personasEnabled: false },
-    { scopeId: "channel:C9", role: "read", label: "design", personasEnabled: false },
+    { scopeId: "channel:C9", role: "read", label: "#design", personasEnabled: false },
   ];
   const { main } = await openPersonaPage("Ada");
   const notes = (scope: string) =>
@@ -670,7 +680,7 @@ test("people and groups the Personas flag doesn't reach are marked with where an
   );
   assert.deepEqual(notes("org:acme"), [orgNote]);
   const channels = [...main.querySelectorAll(".persona-section")].find(
-    (section) => section.querySelector("h3")?.textContent?.trim() === "Slack channels",
+    (section) => section.querySelector("h3")?.textContent?.trim() === "Channels and groups",
   )!;
   assert.equal(channels.querySelector(".persona-item .hint"), null);
   assert.equal(channels.querySelector(".permission-note")?.textContent?.trim(), orgNote);
@@ -692,32 +702,12 @@ test("Share on a list row and on the page open the same search on the page, with
   assert.equal(document.activeElement, main.querySelector("#persona-grantee-search"));
 });
 
-test("the conversation shows its persona, and clearing it unsets the session's persona", async () => {
+test("the conversation shows its persona", async () => {
   const { personasModule } = await mountPage();
-  const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
   const { render } = await vite.ssrLoadModule("lit");
-  sessionsState.list = [
-    { id: "s-1", type: "dm", scopeId: "personal:tester", threadRef: "web:tester:1", createdAt: 1, personaId: "p-ada" },
-  ];
   const host = document.createElement("div");
-  let redraws = 0;
-  const draw = () =>
-    render(
-      personasModule.sessionPersonaChip(sessionsState.list[0], () => (redraws++, draw())),
-      host,
-    );
-  draw();
+  render(personasModule.sessionPersonaChip({ id: "s-1", personaId: "p-ada" }), host);
   assert.equal(host.textContent?.trim(), "🧮Ada");
-  calls = [];
-  host.querySelector<HTMLButtonElement>('button[aria-label="Stop using Ada"]')!.click();
-  await settle();
-  assert.deepEqual(
-    calls.map((c) => [c.method, c.path, c.body]),
-    [["PUT", "/api/sessions/s-1/persona", { personaId: null }]],
-  );
-  assert.equal(sessionsState.list[0].personaId, undefined);
-  assert.equal(redraws, 1);
-  assert.equal(host.querySelector(".session-persona-badge"), null);
 });
 
 test("a persona has its own link, so /personas/<id> opens it and its page keeps the address", async () => {

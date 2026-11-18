@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
+import type { PublishedApp, AppVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import {
   appEnv,
@@ -70,7 +70,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     ttl: Math.max(1, resolveCacheMs),
   });
 
-  const serialized = <T>(d: Deployment, fn: () => Promise<T>): Promise<T> =>
+  const serialized = <T>(d: PublishedApp, fn: () => Promise<T>): Promise<T> =>
     queue(d.id, () => advisoryLock.withLock(`e2b-deploy:${d.id}`, fn));
 
   const endpointOf = (body: Pick<StoredE2bDeployBody, "host" | "trafficAccessToken">): DeployEndpoint => ({
@@ -89,7 +89,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     if (r.code !== 0) throw execFailure(`e2b deploy: unpacking into ${guestDir}`, r);
   }
 
-  async function install(d: Deployment, session: E2bSession, version: DeploymentVersion): Promise<void> {
+  async function install(d: PublishedApp, session: E2bSession, version: AppVersion): Promise<void> {
     const stopped = await runE2bScript(
       session,
       `${STOP_APP}; rm -rf ${shq(APP_DIR)}; mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
@@ -109,12 +109,12 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     });
   }
 
-  const forget = (d: Deployment, sandboxId: string): Promise<unknown> =>
+  const forget = (d: PublishedApp, sandboxId: string): Promise<unknown> =>
     store
       .deleteIf(d.id, (cur) => cur.sandboxId === sandboxId)
       .catch((err) => swallow("e2b-deploy: drop dead body pointer", err));
 
-  async function connectStored(d: Deployment): Promise<{ stored: StoredE2bDeployBody; session: E2bSession } | null> {
+  async function connectStored(d: PublishedApp): Promise<{ stored: StoredE2bDeployBody; session: E2bSession } | null> {
     const stored = await store.get(d.id);
     if (!stored) return null;
     try {
@@ -126,7 +126,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     }
   }
 
-  async function storedAlive(d: Deployment): Promise<StoredE2bDeployBody | null> {
+  async function storedAlive(d: PublishedApp): Promise<StoredE2bDeployBody | null> {
     const stored = await store.get(d.id);
     if (!stored || !client.info) return stored;
     try {
@@ -139,7 +139,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     }
   }
 
-  async function killStrays(d: Deployment, keep?: string): Promise<void> {
+  async function killStrays(d: PublishedApp, keep?: string): Promise<void> {
     for (const s of await client.list({ [DEPLOY_TAG]: d.id })) if (s.sandboxId !== keep) await client.kill(s.sandboxId);
   }
 

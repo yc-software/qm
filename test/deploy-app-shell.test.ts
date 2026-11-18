@@ -93,7 +93,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     name: "mysite",
     createdInScope: scopeId("channel", "CBUILT"),
   });
-  await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
+  await app.shareApp(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
   const featureFlags = createFeatureFlagStore(testMap<FeatureFlagRecord>());
   const server = createInsecureTestServer(app, {
     featureFlags,
@@ -347,10 +347,10 @@ test("app shell: an app cannot plant the owner cookie on its visitors", async ()
 test("app shell: manage grants are checked on every navigation and version request", async () => {
   const f = await widgetFixture();
   try {
-    await f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "write", { createdBy: "U1" });
+    await f.app.shareApp("mysite", scopeId("personal", "U-viewer"), "write", { createdBy: "U1" });
     const page = await httpGet(f.port, "/", { Host: HOST, Cookie: viewerCookie(), "Sec-Fetch-Dest": "document" });
     assert.match(page.body, /__qmAppShell/);
-    await f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
+    await f.app.shareApp("mysite", scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
     const revoked = await httpGet(f.port, "/", { Host: HOST, Cookie: viewerCookie(), "Sec-Fetch-Dest": "document" });
     assert.doesNotMatch(revoked.body, /__qmAppShell/);
     const version = await httpGet(f.port, "/__claw__/version", { Host: HOST, Cookie: viewerCookie() });
@@ -368,8 +368,8 @@ test("app shell: a manager from the creation scope can load the app and its asse
       [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
       [{ channelId: "CBUILT", principalId: "U2" }],
     );
-    assert.equal(await f.app.canManageDeployment("mysite", { actorId: "U2" }), true);
-    assert.equal((await f.app.reachDeployment("mysite", "U2")).status, "denied");
+    assert.equal(await f.app.canManageApp("mysite", { actorId: "U2" }), true);
+    assert.equal((await f.app.reachApp("mysite", "U2")).status, "denied");
     const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U2")}` };
     const page = await httpGet(f.port, "/", { ...headers, "Sec-Fetch-Dest": "document" });
     assert.match(page.body, /__qmAppShell/);
@@ -479,7 +479,7 @@ test("app shell: the version poll tells the top bar who can open the app", async
       { level: "restricted", label: "Shared", canEdit: true },
       "the fixture app is shared with a viewer and the channel it was built in",
     );
-    await f.app.shareDeployment(f.d.id, "org:acme", "read", { createdBy: "U1" });
+    await f.app.shareApp(f.d.id, "org:acme", "read", { createdBy: "U1" });
     const after = JSON.parse((await httpGet(f.port, "/__claw__/version", headers)).body).access;
     assert.equal(after.level, "org", "a sharing change shows up on the next poll");
     assert.equal(after.label, "Your organization");

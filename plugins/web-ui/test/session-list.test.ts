@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { appState } from "../src/shell-state.ts";
 import {
   automationRunLabel,
+  chatSurfaceOf,
+  repliesAsViewer,
   surfaceOf,
   activityOf,
   cronRowMeta,
@@ -673,13 +676,20 @@ test("sidebar excludes attached subagents including pinned and orphaned children
   assert.deepEqual(sidebarSessions([parent, child, pinned, orphan, detached]), [parent, detached]);
 });
 
-test("surfaceOf shows only stored web and Slack surfaces as themselves", () => {
-  assert.deepEqual([{ surface: "slack" }, { surface: "web" }, { surface: "swarm" }, {}].map(surfaceOf), [
-    "slack",
-    "web",
-    "core",
-    "core",
-  ]);
+test("surfaceOf tells web chats, the chat surfaces the server names, and everything else apart", () => {
+  const sessions = [{ surface: "slack" }, { surface: "partner-chat" }, { surface: "web" }, { surface: "swarm" }, {}];
+  appState.me = { user: "tester", org: "test" };
+  assert.deepEqual(sessions.map(surfaceOf), ["core", "core", "web", "core", "core"]);
+  appState.me.chatSurfaces = [
+    { kind: "slack", label: "Slack" },
+    { kind: "partner-chat", label: "Community chat" },
+  ];
+  assert.deepEqual(sessions.map(surfaceOf), ["chat", "chat", "web", "core", "core"]);
+  assert.deepEqual(
+    sessions.map((s) => chatSurfaceOf(s)?.label ?? null),
+    ["Slack", "Community chat", null, null, null],
+  );
+  assert.deepEqual(sessions.map(repliesAsViewer), [true, false, false, false, false]);
 });
 
 test("sidebar excludes cron, webhook, and loop runs but keeps conversations", () => {

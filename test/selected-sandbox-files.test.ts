@@ -67,12 +67,12 @@ function agent(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDe
     files: {} as never,
     acl: {} as never,
     deploy: {
-      getDeployment: async () => ({ entrypoint: "node server.js" }),
+      getApp: async () => ({ entrypoint: "node server.js" }),
       deployOrUpdate: async (input: Record<string, unknown>) => {
         deployed.push(input);
         return { id: "d1", name: "site", currentVersion: 2, createdInScope: input.createdInScope };
       },
-      deploymentGrantees: async () => [],
+      appGrantees: async () => [],
     } as never,
     createdBy: "U1",
     ...opts.extra,

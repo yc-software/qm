@@ -21,9 +21,8 @@ export function segmentEnvironment(segment: {
   rosterMembers: Parameters<typeof membershipEvent>[0];
   rawEntries: Item[];
   session: Session;
-  external: boolean;
   deps: OrchestratorDeps;
-  scopeId: ScopeId;
+  soulScopeId: ScopeId | undefined;
   conversation: OrchestratorInput["conversation"];
   turnEnvironmentContents: string;
   mailbox: Awaited<ReturnType<typeof openSwarmMailbox>> | undefined;
@@ -44,9 +43,8 @@ export function segmentEnvironment(segment: {
     rosterMembers,
     rawEntries,
     session,
-    external,
     deps,
-    scopeId,
+    soulScopeId,
     conversation,
     turnEnvironmentContents,
     mailbox,
@@ -65,12 +63,12 @@ export function segmentEnvironment(segment: {
     cards,
   );
   const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
-  const guidance = !external
+  const guidance = soulScopeId
     ? guidanceUpdateEvent(
         {
-          version: deps.config.soulVersion(scopeId),
+          version: deps.config.soulVersion(soulScopeId),
           personal: conversation.kind === "dm",
-          revisions: deps.config.soulHistory(scopeId),
+          revisions: deps.config.soulHistory(soulScopeId),
         },
         continuation?.history ?? rawEntries,
         session.id,

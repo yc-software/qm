@@ -72,7 +72,7 @@ export async function continueInPrivate(
     ...(source.timezone ? { timezone: source.timezone } : {}),
     gatewayContext: {
       location: "a private DM with the requesting employee",
-      details: { channel: dm },
+      hostIds: { channel: dm },
       instructions:
         "Continue the employee's request from the external Slack conversation. The request and relevant channel context are already included; do not ask them to repeat it. Use the normal personal-context authorization checks. Keep all private results and approvals in this DM. There is no automatic return to the source channel.",
     },

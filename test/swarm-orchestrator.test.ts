@@ -154,7 +154,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
     for (const run of completed) {
       assert.equal(run.status, "done", JSON.stringify(run.result));
       assert.equal(run.result?.status, "ok", JSON.stringify(run.result));
-      const view = await built.app.getSessionForViewer(run.result!.sessionId!, "U1");
+      const view = await built.app.getSessionForViewer(run.result!.sessionId!, { actorId: "U1" });
       assert.ok(view);
       assert.equal(view.session.scopeId, root.scopeId);
       assert.equal(view.session.surface, "swarm");
@@ -162,7 +162,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
       const shown = JSON.stringify({ text: input?.text, ...input?.body });
       assert.match(shown, /Swarm human message/);
       assert.match(shown, /automation/);
-      assert.equal(await built.app.getSessionForViewer(view.session.id, "U2"), null);
+      assert.equal(await built.app.getSessionForViewer(view.session.id, { actorId: "U2" }), null);
       assert.equal(runResultDelivery(run), null);
       const requests = await built.sessions.listLlmRequests(view.session.id);
       assert.ok(JSON.stringify(requests).includes("Swarm session identity"));
@@ -342,10 +342,10 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     assert.equal(childIds.size, 3);
     for (const childId of childIds) {
       assert.notEqual(childId, rootId);
-      assert.ok(await built.app.getSessionForViewer(childId, "U1"));
-      assert.equal(await built.app.getSessionForViewer(childId, "U2"), null);
+      assert.ok(await built.app.getSessionForViewer(childId, { actorId: "U1" }));
+      assert.equal(await built.app.getSessionForViewer(childId, { actorId: "U2" }), null);
     }
-    const view = await built.app.getSessionForViewer(rootId, "U1");
+    const view = await built.app.getSessionForViewer(rootId, { actorId: "U1" });
     assert.ok(JSON.stringify(view?.items).includes("http-worker-result"));
     built.app.swarms!.stop();
     const human = { kind: "human" as const, actorId: "U1", sessionId: rootId };

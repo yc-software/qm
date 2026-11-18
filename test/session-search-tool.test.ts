@@ -52,7 +52,7 @@ test("session search reuses indexed search with participant intersection and bou
     conversations: {
       list: async () => [],
       start: async () => ({ error: "unused" }),
-      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
+      search: (input) => app.searchConversations(input),
     },
   });
   const tools = factory.forTurn({

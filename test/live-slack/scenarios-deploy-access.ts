@@ -56,7 +56,7 @@ function gateway(slug: string, sub: string, request = false): Promise<{ status: 
 }
 
 async function publishApp(owner: string, slug: string, marker: string): Promise<void> {
-  const path = `/v1/deployments?_nonce=${crypto.randomUUID()}`;
+  const path = `/v1/apps?_nonce=${crypto.randomUUID()}`;
   const body = JSON.stringify({
     ownerScopeId: `personal:${owner}`,
     createdBy: owner,

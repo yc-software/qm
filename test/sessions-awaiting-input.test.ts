@@ -32,7 +32,7 @@ test("listSessions flags a session whose turn paused on a blocking approval", as
   const waitingId = paused.sessionId!;
   assert.ok(waitingId);
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions({ actorId: "U1" });
   const waiting = list.find((s) => s.id === waitingId);
   const done = list.find((s) => s.threadRef === "web:U1:done");
 
@@ -49,7 +49,7 @@ test("the awaitingInput flag clears once the pending approval is resolved", asyn
   const requestId = paused.pendingApprovals?.[0]?.requestId;
   assert.ok(requestId);
 
-  assert.equal((await app.listSessions("U1")).find((s) => s.id === sid)?.awaitingInput, true);
+  assert.equal((await app.listSessions({ actorId: "U1" })).find((s) => s.id === sid)?.awaitingInput, true);
 
   await app.turn({
     surface: "test",
@@ -60,7 +60,7 @@ test("the awaitingInput flag clears once the pending approval is resolved", asyn
   });
 
   assert.ok(
-    !(await app.listSessions("U1")).find((s) => s.id === sid)?.awaitingInput,
+    !(await app.listSessions({ actorId: "U1" })).find((s) => s.id === sid)?.awaitingInput,
     "the flag clears after the approval is denied",
   );
 });

@@ -8,6 +8,7 @@ import {
 import { descendantsOf } from "./subagent-activity.ts";
 import { goalFloorLabel, goalWorkedLabel } from "./goal-strip.ts";
 import { relTime } from "./ui.ts";
+import { appState, type Me } from "./shell-state.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
@@ -29,8 +30,17 @@ export function activityOf(s: CoreSession): number {
 
 export type ChatBrowseStatus = "active" | "waiting" | "archived";
 
-export function surfaceOf(s: Pick<CoreSession, "surface">): "web" | "slack" | "core" {
-  return s.surface === "web" || s.surface === "slack" ? s.surface : "core";
+export function chatSurfaceOf(s: Pick<CoreSession, "surface">): NonNullable<Me["chatSurfaces"]>[number] | null {
+  return appState.me?.chatSurfaces?.find((surface) => surface.kind === s.surface) ?? null;
+}
+
+export function surfaceOf(s: Pick<CoreSession, "surface">): "web" | "chat" | "core" {
+  if (s.surface === "web") return "web";
+  return chatSurfaceOf(s) ? "chat" : "core";
+}
+
+export function repliesAsViewer(s: Pick<CoreSession, "surface">): boolean {
+  return s.surface === "slack";
 }
 
 const AUTOMATION_RUN_LABELS: Record<string, string> = {

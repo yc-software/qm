@@ -778,6 +778,7 @@ resource "aws_secretsmanager_secret_version" "database" {
 resource "aws_lb" "this" {
   name               = local.alb_name
   load_balancer_type = "application"
+  idle_timeout       = 300
   subnets            = local.subnet_ids
   security_groups    = [aws_security_group.alb.id]
   tags               = local.tags

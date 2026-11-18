@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
-import { X } from "lucide";
+import { ArrowUpRight, X } from "lucide";
 import { icon } from "./icons";
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
@@ -89,11 +89,15 @@ export function suggestedActivities(
     onDismiss,
     redraw,
     collapsed = false,
+    count = VISIBLE_COUNT,
+    fresh,
   }: {
     onSelect: (activity: SuggestedActivity) => void;
     onDismiss?: (activity: SuggestedActivity) => void;
     redraw: () => void;
     collapsed?: boolean;
+    count?: number;
+    fresh?: ReadonlySet<string>;
   },
 ): TemplateResult | typeof nothing {
   if (!activities || (!activities.length && !onDismiss)) return nothing;
@@ -106,9 +110,9 @@ export function suggestedActivities(
   >
     <div class="suggested-activities-list">
       ${suggestionRows(
-        activities.slice(0, VISIBLE_COUNT),
-        (activity, motion) =>
-          html`<div class="suggested-activity-row ${motion}" ?inert=${motion === "is-leaving"}>
+        activities.slice(0, count),
+        (activity, motion) => {
+          return html`<div class="suggested-activity-row ${motion}" ?inert=${motion === "is-leaving"}>
             <div class="suggested-activity-row-inner">
               <button
                 type="button"
@@ -120,6 +124,8 @@ export function suggestedActivities(
                   >${activity.icon === "yc" ? html`<span class="suggested-activity-yc">Y</span>` : (icons[activity.icon] ?? activity.icon)}</span
                 >
                 <span class="suggested-activity-title">${activity.title}</span>
+                ${activity.source ? html`<span class="suggested-activity-note ${fresh?.has(activity.id) ? "is-new" : ""}">${fresh?.has(activity.id) ? "New · " : ""}${activity.source}</span>` : nothing}
+                ${onDismiss ? nothing : html`<span class="suggested-activity-go" aria-hidden="true">${icon(ArrowUpRight, 13)}</span>`}
               </button>
               ${
                 onDismiss
@@ -136,7 +142,8 @@ export function suggestedActivities(
                   : nothing
               }
             </div>
-          </div>`,
+          </div>`;
+        },
         redraw,
       )}
     </div>

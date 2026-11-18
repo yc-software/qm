@@ -6,15 +6,16 @@ import { collectNamedOutbound, parseOutboundFiles, type ArtifactRegistration } f
 import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
-  assertBotMayUseComputer,
   BotComputerRefusedError,
   botMayUseComputers,
+  defaultComputer,
   SandboxAccessError,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
 import { resolveEnvironmentId } from "../../environments/environment-store.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { scopeId, type OutgoingAttachment } from "../../types.ts";
+import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 
 type ReachBody = {
   recipient?: unknown;
@@ -209,7 +210,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       }
     } else if (needsSandbox) {
       try {
-        await assertBotMayUseComputer(deps.sandboxResources, envScope, undefined, botMayUse);
+        resource = await defaultComputer(deps.sandboxResources, envScope, botMayUse);
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, { error: "forbidden", message: e.message });
@@ -224,7 +225,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         : sandbox!.provision(envScope));
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
-        app.openFileForViewer(tenantOf(ctx), id, capability.actorId),
+        app.openFileForViewer(tenantOf(ctx), id, capability.actorId, isOwnScopeBotWork(capability)),
       );
       const bad = [
         ...r.missing.map((p) => `${p} (not found)`),
@@ -262,6 +263,10 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     ...(attachments?.length ? { attachments } : {}),
     ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
     ...(capability.destination ? { currentDestination: capability.destination } : {}),
+    turn: {
+      ...(capability.surface ? { surface: capability.surface } : {}),
+      liveReplies: capability.liveReplies === true,
+    },
   });
   if (!result.ok) {
     return sendJson(res, result.status, {

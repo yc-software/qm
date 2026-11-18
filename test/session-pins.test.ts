@@ -25,7 +25,7 @@ describe("conversation pins self-API", async () => {
   let sessionId: string;
   const THREAD = "web:U1:pins";
 
-  const capFor = (actorId: string, threadRef?: string) =>
+  const capFor = (actorId: string, threadRef?: string, botActor?: true) =>
     mintCapabilityToken(
       {
         actorId,
@@ -34,6 +34,7 @@ describe("conversation pins self-API", async () => {
         exp: Date.now() + CAPABILITY_TTL_MS,
         liveActor: true,
         ...(threadRef ? { threadRef } : {}),
+        ...(botActor ? { botActor } : {}),
       },
       SECRET,
     );
@@ -127,6 +128,8 @@ describe("conversation pins self-API", async () => {
     const listing = await call("GET", "/v1/pins", undefined, await capFor("U1", THREAD));
     assert.ok(((await listing.json()) as { pins: { id: string }[] }).pins.some((p) => p.id === pin.id));
     assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U2", nested.threadRef))).status, 403);
+    assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U1", nested.threadRef, true))).status, 403);
+    assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U1", THREAD, true))).status, 403);
     assert.equal((await call("DELETE", `/v1/pins/${pin.id}`, undefined, token)).status, 200);
   });
 
@@ -137,7 +140,7 @@ describe("conversation pins self-API", async () => {
   });
 
   it("surfaces pins on the transcript for the web UI", async () => {
-    const found = await built.app.getSessionForViewer(sessionId, "U1");
+    const found = await built.app.getSessionForViewer(sessionId, { actorId: "U1" });
     assert.ok(found, "viewer can read the session");
     assert.ok((found!.pins?.length ?? 0) >= 2, "transcript response carries the pins");
     const entryPin = found!.pins!.find((p) => p.entrySeq !== undefined);
@@ -146,7 +149,7 @@ describe("conversation pins self-API", async () => {
 
   it("shows entry-pin previews to a participant who joined later", async () => {
     await built.sessions.addParticipant(sessionId, "U3");
-    const found = await built.app.getSessionForViewer(sessionId, "U3");
+    const found = await built.app.getSessionForViewer(sessionId, { actorId: "U3" });
     assert.ok(found, "the late joiner can read the session");
     const entryPin = found!.pins!.find((p) => p.entrySeq !== undefined);
     assert.ok(entryPin?.preview, "the late joiner sees the pinned entry's preview");
@@ -169,11 +172,11 @@ describe("conversation pins self-API", async () => {
       return getItems(...args);
     };
     try {
-      const view = await built.app.getSessionForViewer(sessionId, "U1", { sinceSeq: 999999 });
+      const view = await built.app.getSessionForViewer(sessionId, { actorId: "U1" }, { sinceSeq: 999999 });
       assert.deepEqual(view?.items, []);
       assert.ok(view?.pins?.filter((pin) => pin.entrySeq !== undefined).every((pin) => pin.preview));
       assert.equal(reads, 1);
-      assert.equal(await built.app.getSessionForViewer(sessionId, "outsider"), null);
+      assert.equal(await built.app.getSessionForViewer(sessionId, { actorId: "outsider" }), null);
     } finally {
       built.sessions.getItem = getItem;
       built.sessions.getItems = getItems;
