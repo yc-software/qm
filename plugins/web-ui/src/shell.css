@@ -2761,23 +2761,40 @@ qm-markdown .tok-in {
   height: calc(var(--file-html-bar) + var(--file-html-frame) + 2px);
   background: var(--muted);
 }
-.user-row > .attachment-gallery:has(.file-html-slot) {
+.user-row:not(.stuck) > .attachment-gallery:has(.file-html-slot),
+.user-row:not(.stuck) > .attachment-gallery > .attachment-documents:has(.file-html-slot) {
   width: min(100%, 620px);
 }
-.file-html-card {
+.file-html-layer {
   position: static;
   inset: auto;
   display: block;
   box-sizing: border-box;
-  width: 100%;
+  width: auto;
   height: auto;
   margin: 0;
   padding: 0;
+  overflow: visible;
+  border: 0;
+  background: none;
+  color: inherit;
+}
+.file-html-layer:focus {
+  outline: none;
+}
+.file-html-layer:popover-open {
+  position: fixed;
+  inset: 0;
+  padding: var(--dialog-pad-top) var(--dialog-pad-right) var(--dialog-pad-bottom) var(--dialog-pad-left);
+  background: color-mix(in srgb, var(--scrim) 42%, transparent);
+}
+.file-html-card {
+  position: relative;
+  box-sizing: border-box;
   overflow: clip;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--card);
-  color: inherit;
 }
 .file-html-bar {
   display: flex;
@@ -2785,7 +2802,7 @@ qm-markdown .tok-in {
   gap: 8px;
   box-sizing: border-box;
   height: var(--file-html-bar);
-  padding-inline: 12px 5px;
+  padding-inline: 10px 5px;
   list-style: none;
   cursor: default;
   color: var(--muted-foreground);
@@ -2797,8 +2814,11 @@ qm-markdown .tok-in {
 .file-html-card[open] > .file-html-bar {
   border-bottom: 1px solid var(--border);
 }
-.file-html-bar > .icon {
-  flex: none;
+.file-html-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 .file-html-name {
   min-width: 0;
@@ -2812,7 +2832,7 @@ qm-markdown .tok-in {
 a.file-html-name:hover {
   text-decoration: underline;
 }
-.file-html-bar > small {
+.file-html-title > small {
   flex: none;
   font-size: 12px;
 }
@@ -2832,43 +2852,84 @@ a.file-html-name:hover {
   border: 0;
   background: #fff;
 }
-.file-html-shrink,
-.file-html-card:popover-open .file-html-expand,
-.file-html-card:popover-open .activity-chevron,
-.message-stack .user-row.stuck .file-html-card:not(:popover-open) > iframe,
-.message-stack .user-row.stuck .file-html-card .activity-chevron {
+.file-html-close,
+.file-html-layer:popover-open .file-html-expand,
+.file-html-layer:popover-open .activity-chevron,
+.message-stack .user-row.stuck .file-html-card .activity-chevron,
+.message-stack .user-row.stuck .file-html-layer:not(:popover-open) iframe {
   display: none;
 }
-.message-stack .user-row.stuck .file-html-card:not(:popover-open) > .file-html-bar {
+.message-stack .user-row.stuck .file-html-layer:not(:popover-open) .file-html-bar {
   border-bottom: 0;
 }
-.file-html-card:popover-open {
-  position: fixed;
-  inset: var(--dialog-pad-top) var(--dialog-pad-right) var(--dialog-pad-bottom) var(--dialog-pad-left);
-  width: auto;
-  height: auto;
-  box-shadow: 0 32px 96px -16px rgb(0 0 0 / 0.55);
+.file-html-layer:popover-open > .file-html-card {
+  height: 100%;
 }
-.file-html-card:popover-open .file-html-shrink {
+.file-html-layer:popover-open .file-html-close {
   display: inline-flex;
 }
-.file-html-card:popover-open > iframe {
+.file-html-layer:popover-open iframe {
   position: absolute;
   inset-block-start: var(--file-html-bar);
   height: calc(100% - var(--file-html-bar));
 }
-::view-transition-group(file-html-card) {
-  overflow: clip;
-  border-radius: 12px;
+.file-html-layer.morphing > .file-html-card {
+  view-transition-name: file-html-card;
+  border-color: transparent;
+}
+.file-html-layer.morphing iframe {
+  view-transition-name: file-html-frame;
+}
+.file-html-layer.morphing .file-html-title {
+  view-transition-name: file-html-title;
+}
+.file-html-layer.morphing .file-html-actions {
+  view-transition-name: file-html-actions;
+}
+::view-transition-group(file-html-card),
+::view-transition-group(file-html-frame),
+::view-transition-group(file-html-title),
+::view-transition-group(file-html-actions) {
   animation-duration: 320ms;
   animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
+::view-transition-group(file-html-card) {
+  overflow: clip;
+  border-radius: 12px;
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
+}
+::view-transition-group(file-html-frame) {
+  overflow: clip;
+  border-radius: 0 0 11px 11px;
+}
+::view-transition-old(file-html-card),
+::view-transition-new(file-html-card),
+::view-transition-old(file-html-frame),
+::view-transition-new(file-html-frame) {
+  height: 100%;
+  object-fit: none;
+  object-position: top;
+  mix-blend-mode: normal;
+  animation: none;
+}
 ::view-transition-old(file-html-card),
 ::view-transition-new(file-html-card) {
-  height: 100%;
-  object-fit: cover;
   object-position: top left;
-  animation-duration: 320ms;
+}
+.file-html-expanding::view-transition-old(file-html-card),
+.file-html-expanding::view-transition-old(file-html-frame) {
+  z-index: 1;
+  animation: file-html-fade 100ms reverse both;
+}
+.file-html-closeing::view-transition-new(file-html-card),
+.file-html-closeing::view-transition-new(file-html-frame) {
+  animation: file-html-fade 100ms 220ms both;
+}
+@keyframes file-html-fade {
+  from {
+    opacity: 0;
+  }
 }
 .chip-open {
   display: inline-flex;
@@ -6692,7 +6753,7 @@ a.file-card:hover {
 }
 .project-dialog-backdrop,
 .project-dialog,
-.file-html-card {
+.file-html-layer {
   --dialog-pad-top: max(20px, env(safe-area-inset-top));
   --dialog-pad-right: max(20px, env(safe-area-inset-right));
   --dialog-pad-bottom: max(20px, env(safe-area-inset-bottom));
@@ -6709,8 +6770,7 @@ a.file-card:hover {
   box-sizing: border-box;
   background: color-mix(in srgb, var(--scrim) 28%, transparent);
 }
-.project-dialog::backdrop,
-.file-html-card::backdrop {
+.project-dialog::backdrop {
   background: color-mix(in srgb, var(--scrim) 28%, transparent);
 }
 .project-dialog {
