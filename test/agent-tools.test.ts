@@ -1191,6 +1191,14 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.body.count, 0);
 });
 
+test("a post marked final ends the turn once it is sent, and only then", async () => {
+  const end = (current: ToolContext, final: boolean) =>
+    call(surfaceTool({ current }), { action: "post", text: "done", final }) as Promise<{ terminate: boolean }>;
+  const failing = { ...fakeToolContext(), post: async () => ({ ok: false }) };
+  const ends = await Promise.all([end(fakeToolContext(), true), end(fakeToolContext(), false), end(failing, true)]);
+  assert.equal(ends.map((r) => r.terminate).join(), "true,false,false");
+});
+
 test("surface reads fail closed without persisting blocked content", async () => {
   const emitted: Emitted[] = [];
   const external = {
