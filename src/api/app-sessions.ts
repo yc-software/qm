@@ -25,7 +25,7 @@ import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../a
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import { swallowAs } from "../util/errors.ts";
-import { waitForNoRunningRun } from "../runs/run-store.ts";
+import { waitForNoRunningRun, type Run } from "../runs/run-store.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -259,6 +259,9 @@ export function createSessionMethods(
       }));
   };
 
+  const ownRunState = (run: Run | undefined) =>
+    run ? { working: true as const, workingSince: run.startedAt ?? run.createdAt } : {};
+
   async function decorateSessions(principalId: string, rows: Session[]): Promise<Session[]> {
     const all = rows.map(withoutStoredFacts);
     const visibleById = new Map(all.map((session) => [session.id, session]));
@@ -358,7 +361,7 @@ export function createSessionMethods(
     const workingChildren = new Map(
       childRuns.map(({ id, run }) => {
         const purpose = steps.get(run.id.toLowerCase())?.purpose;
-        return [id, { workingSince: run.startedAt ?? run.createdAt, ...(purpose ? { purpose } : {}) }];
+        return [id, { ...ownRunState(run), ...(purpose ? { purpose } : {}) }];
       }),
     );
     const subagents = new Map<string, { running: number; waiting: number }>();
@@ -428,9 +431,8 @@ export function createSessionMethods(
       const principalId = viewer.actorId;
       const found = await sessionForViewer(sessionId, principalId);
       if (!found || !sessionVisibleTo(viewer, found)) return null;
-      const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords, goals, latestPromptAt] = await Promise.all([
+      const [initialRead, pinRecords, goals, latestPromptAt, run] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -439,7 +441,13 @@ export function createSessionMethods(
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
         window?.beforeSeq === undefined ? deps.sessions.latestVisiblePromptAt(sessionId, principalId) : undefined,
+        window?.beforeSeq === undefined ? deps.runs.activeForThread(found.threadRef) : undefined,
       ]);
+      const session = {
+        ...withoutStoredFacts(found),
+        canContinue: await canContinueOnWeb(principalId, found),
+        ...ownRunState(run ?? undefined),
+      };
       const goal = openGoal(goals.get(sessionId));
       const runtime = window?.beforeSeq === undefined ? found.runtime : undefined;
       let read = initialRead;
@@ -632,14 +640,11 @@ export function createSessionMethods(
       const visible = rows.filter((row) => membership.get(row.scopeId) !== false);
       const running = await deps.runs.activeForThreads(visible.map((row) => row.threadRef));
       return Promise.all(
-        visible.map(async (row) => {
-          const run = running.get(row.threadRef);
-          return {
-            ...withoutStoredFacts(row),
-            canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
-            ...(run ? { working: true, workingSince: run.startedAt ?? run.createdAt } : {}),
-          };
-        }),
+        visible.map(async (row) => ({
+          ...withoutStoredFacts(row),
+          canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
+          ...ownRunState(running.get(row.threadRef)),
+        })),
       );
     },
 

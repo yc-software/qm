@@ -167,6 +167,8 @@ test("side chats preserve their anchor, stay out of session pages, expand in pla
   const { run } = await runs.enqueue({ sessionId: fork.session.threadRef, request });
   const [row] = (await app.sideChats("U1", source.session.id))!;
   assert.deepEqual([row!.working, row!.workingSince], [true, run.startedAt ?? run.createdAt]);
+  const opened = (await app.getSessionForViewer(fork.session.id, { actorId: "U1" }))!.session;
+  assert.deepEqual([opened.working, opened.workingSince], [true, run.startedAt ?? run.createdAt]);
 });
 
 test("side chats reject missing anchors and anchors beyond the fork boundary", async () => {
