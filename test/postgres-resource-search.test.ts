@@ -1,22 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const database = process.env.DATABASE_URL;
 test(
   "resource GIN indexes match real queries, exclude heavy fields, and track writes",
   { skip: !database },
   async () => {
-    const admin = createPgPool(database!);
-    const schema = `search_${randomUUID().replaceAll("-", "")}`;
-    await admin.q(`CREATE SCHEMA ${schema}`);
-    const url = new URL(database!);
-    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-    await seedTestTenant(url.toString());
-    const pg = createPgPool(url.toString());
+    const pg = createPgPool(testDatabaseUrl());
     try {
       let searchSql = "";
       let searchParams: unknown[] = [];
@@ -75,8 +68,8 @@ test(
         assert.equal((await store.search(kind, "privatebody", 50)).length, 0);
         assert.equal((await store.search(kind, "' | &", 50)).length, 0);
         const indexes = await pg.q(
-          "SELECT indexdef FROM pg_indexes WHERE schemaname=$1 AND tablename=$2 AND indexname LIKE '%resource_search_gin'",
-          [schema, table],
+          "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND tablename=$1 AND indexname LIKE '%resource_search_gin'",
+          [table],
         );
         assert.equal(indexes.length, 1);
         const client = await (await pg.pool()).connect();
@@ -96,8 +89,6 @@ test(
       }
     } finally {
       await pg.close();
-      await admin.q(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.close();
     }
   },
 );

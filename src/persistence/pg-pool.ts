@@ -509,11 +509,15 @@ export function createPgPool(connectionString: string): PgPool {
   const queryUrl = pooledDatabaseUrl(connectionString);
   async function pool(): Promise<Pool> {
     if (closed) throw new Error("Postgres store is closed");
-    return (queryPoolP ??= retainPool(queryUrl, "query"));
+    const instance = await (queryPoolP ??= retainPool(queryUrl, "query"));
+    if (closed) throw new Error("Postgres store is closed");
+    return instance;
   }
   async function sessionPool(): Promise<Pool> {
     if (closed) throw new Error("Postgres store is closed");
-    return (sessionPoolP ??= retainPool(connectionString, "session"));
+    const instance = await (sessionPoolP ??= retainPool(connectionString, "session"));
+    if (closed) throw new Error("Postgres store is closed");
+    return instance;
   }
   async function run(
     tenant: string | undefined,

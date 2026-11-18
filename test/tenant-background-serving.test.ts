@@ -10,7 +10,7 @@ import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/pers
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, createTestMapTables } from "./support/test-database.ts";
 import { ownerUrl } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the serving claim tests";
@@ -33,6 +33,7 @@ before(async () => {
   runtime = createPostgresRunStore(url);
   deliveries = createPostgresDeliveryStore(url);
   maps = createPostgresMapFactory(url);
+  await createTestMapTables(url, { serving_probe: [] });
   await runtime.runs.list({ limit: 1 });
   await deliveries.pending("slack");
   owner = new pg.Pool({ connectionString: ownerUrl(url).toString() });

@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,16 +21,6 @@ async function raw(sql: string, params: unknown[] = []): Promise<Record<string, 
     await p.end();
   }
 }
-
-before(async () => {
-  if (!URL) return;
-  await raw("DROP TABLE IF EXISTS deployment_access CASCADE");
-  await raw("DROP TABLE IF EXISTS deployments CASCADE");
-  await raw(
-    "DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/access/%' OR id LIKE 'durable-map/deployments/%'",
-  ).catch(() => {});
-  await raw("DELETE FROM durable_map_versions WHERE tbl = 'deployments'").catch(() => {});
-});
 
 const factories: PostgresArtifactMaps[] = [];
 

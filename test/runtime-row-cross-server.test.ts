@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore, testMap, createTestMapTables } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const factory = URL ? createPostgresMapFactory(URL) : null;
@@ -15,7 +15,7 @@ let tableSeq = 0;
 const freshMap = async (): Promise<DurableMap<PersistedBaseModel>> => {
   if (!factory) return testMap<PersistedBaseModel>();
   const table = `xsrv_base_model_${process.pid}_${tableSeq++}`;
-  await factory.pool.query(`DROP TABLE IF EXISTS ${table}`);
+  await createTestMapTables(URL!, { [table]: [] });
   return factory.map<PersistedBaseModel>(table);
 };
 

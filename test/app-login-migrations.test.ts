@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPgPool,migrateDatabase } from "../src/persistence/pg-pool.ts";
-import { testBareDatabaseUrl,testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { appUrl,ownerUrl } from "./support/test-tenant.ts";
+import { createPgPool, migrateDatabase } from "../src/persistence/pg-pool.ts";
+import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the app login migration tests";
 

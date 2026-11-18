@@ -76,8 +76,9 @@ test("pooled credentials cannot silently change company identity", { skip }, () 
 test("one session slot can hold a lock while a transaction uses the query pool", { skip }, async () => {
   const a = createPgPool(direct!);
   const lock = createPostgresAdvisoryLock(a);
-  const map = createPostgresMap<{ n: number }>(a, "fly_peer_claims", [], { tenanted: false });
+  const map = createPostgresMap<{ n: number }>(a, "pgbouncer_lock_write_test", [], { tenanted: false });
   try {
+    await a.q("CREATE TABLE IF NOT EXISTS pgbouncer_lock_write_test (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     await lock.withLock("pgbouncer-write", async () => {
       await map.put("one", { n: 42 });
       assert.deepEqual(await map.get("one"), { n: 42 });

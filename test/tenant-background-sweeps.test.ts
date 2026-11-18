@@ -34,6 +34,7 @@ import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts";
+import { createTestMapTables } from "./support/test-database.ts";
 
 type Pair = [string, string];
 const sorted = (rows: Pair[]): Pair[] => [...rows].sort(([l], [r]) => l.localeCompare(r));
@@ -189,8 +190,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
   });
 
   it("job computers are swept each under the tenant that owns the computer record", async () => {
-    for (const table of ["t_tenant_job_computers", "t_tenant_job_defaults"])
-      await createPostgresMap(db.owner, table).claimIds();
+    await createTestMapTables(db.ownerDatabaseUrl, { t_tenant_job_computers: [], t_tenant_job_defaults: [] });
     const records = createPostgresMap<SandboxResource>(db.app, "t_tenant_job_computers");
     const destroyed: Pair[] = [];
     const backend = {
@@ -346,7 +346,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
     const fake = installFakeModal();
     const stopSettingsLoad = onTenantLoad(() => loadTenantSettings(db.app));
     try {
-      await createPostgresMap(db.owner, "t_tenant_modal").claimIds();
+      await createTestMapTables(db.ownerDatabaseUrl, { t_tenant_modal: [] });
       const store = createPostgresMap<StoredModalSandbox>(db.app, "t_tenant_modal");
       const modal = createModalSandbox({
         snapshots: createMemorySnapshotStore(),

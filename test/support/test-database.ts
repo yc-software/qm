@@ -77,7 +77,7 @@ function sharedDatabase(): NonNullable<typeof shared> {
   return shared;
 }
 
-const mapTable = (table: string): string => `
+const mapTable = (table: string, fields: readonly string[] = []): string => `
   CREATE TABLE ${table} (LIKE ack_emoji INCLUDING ALL);
   ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
   CREATE POLICY tenant_isolation ON ${table} USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant());
@@ -86,12 +86,37 @@ const mapTable = (table: string): string => `
     AS $$ SELECT tenant_id, id FROM ${table} WHERE tenant_id IN (SELECT qm_serving_tenants()) ORDER BY tenant_id, id $$;
   CREATE FUNCTION claim_${table}_tenants() RETURNS TABLE(tenant_id uuid, id text) LANGUAGE sql SECURITY DEFINER
     SET search_path = public, pg_temp
-    AS $$ SELECT DISTINCT tenant_id, '${table}'::text FROM ${table} WHERE tenant_id IN (SELECT qm_serving_tenants()) $$;`;
+    AS $$ SELECT DISTINCT tenant_id, '${table}'::text FROM ${table} WHERE tenant_id IN (SELECT qm_serving_tenants()) $$;${fields
+      .map((field) => {
+        const name = `${table}_${field.toLowerCase()}`;
+        return `
+  CREATE INDEX ${name}_fold ON ${table} USING hash (lower(json->>'${field}'));
+  CREATE INDEX ${name}_unicode ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]';
+  CREATE STATISTICS ${name}_stats ON (json->>'${field}') FROM ${table};
+  CREATE FUNCTION claim_${table}_tenants_by_${field.toLowerCase()}(value text) RETURNS TABLE(tenant_id uuid, id text)
+    LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$ SELECT DISTINCT tenant_id, '${table}'::text FROM ${table}
+      WHERE lower(json->>'${field}') = lower(value) AND tenant_id IN (SELECT qm_serving_tenants()) $$;`;
+      })
+      .join("")}`;
+
+export async function createTestMapTables(
+  databaseUrl: string,
+  tables: Record<string, readonly string[]>,
+): Promise<void> {
+  const client = new pg.Client({ connectionString: ownerUrl(databaseUrl).toString() });
+  await client.connect();
+  try {
+    for (const [table, fields] of Object.entries(tables)) await client.query(mapTable(table, fields));
+  } finally {
+    await client.end();
+  }
+}
 
 export function testMap<T>(indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> {
   const { name, maps } = sharedDatabase();
   const table = `t_${randomBytes(8).toString("hex")}`;
-  askDatabaseWorker({ database: name, sql: mapTable(table) });
+  askDatabaseWorker({ database: name, sql: mapTable(table, indexedFields) });
   return maps.map<T>(table, indexedFields);
 }
 

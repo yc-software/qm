@@ -11,7 +11,7 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap, createTestMapTables } from "./support/test-database.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
@@ -24,12 +24,7 @@ const IDEM_TABLE = "cron_queue_test_idempotency";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
-  await p.end();
+  await createTestMapTables(URL, { [CRONS_TABLE]: [], [IDEM_TABLE]: [] });
   await installCronQueue(URL, SCHEMA);
 });
 
