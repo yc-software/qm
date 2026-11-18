@@ -246,6 +246,7 @@ const pinHit = (ids: Ids) => `x.tenant_id = ${ids.tenant} AND x.pinned AND ${isS
 
 const pinStep: Step = {
   table: "persona_access",
+  label: "persona_access.pinned",
   once: [`UPDATE persona_access x SET pinned = false FROM (${MOVES}) m WHERE ${pinHit(MOVE)} AND ${pinTaken(MOVE)}`],
   from: "persona_access x",
   hit: pinHit,

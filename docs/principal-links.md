@@ -14,7 +14,8 @@ its canonical principal, so ownership of credentials, admin grants, sessions,
 approvals, and secret drops recorded under either id belongs to the person.
 New writes use the canonical id: the identity service classifies a linked
 sign-in as its canonical principal, the portal resolves the session subject
-before proxying, and the keychain stores credentials under the canonical owner.
+before proxying, the API resolves an agent capability token's actor and personal
+scope, and the keychain stores credentials under the canonical owner.
 
 ## Rules
 
@@ -65,6 +66,19 @@ before proxying, and the keychain stores credentials under the canonical owner.
   user (it is that user's only sign-in), linking folds it into the canonical
   person's user in the same transaction (earliest first-seen time, earliest
   offboarding, and the person's kind) and deletes it.
+- **Linking moves the sign-in's records.** The same transaction re-keys every
+  record the sign-in owns to the canonical id: sessions and participants, sharing
+  grants, admin grants, files, memory facts, environments, teams, persona access,
+  personal settings (SOUL, model and runtime selection, model account, policies),
+  keychain credentials and grants, crons, loops, webhooks, monitors, skills, apps,
+  sandboxes, projects, member brains, Slack account links and saved UI state. When
+  both ids hold the same record, the canonical one wins and the sign-in's copy is
+  deleted; files and memory facts are kept side by side. A connector credential's id
+  is recomputed from its new owner and its grants follow it; other credentials keep
+  their id, so their handles keep working. Stores therefore only ever see the
+  canonical id. Composio connections stay under the sign-in's Composio user, so
+  Composio is the one place QM still reads across a person's sign-ins. A migration
+  applied the same move to links that existed before it.
 - **Links are reversible.** Deleting a link restores two separate principals.
   Records written while the link existed stay under the canonical id,
   including the merged user: the sign-in gets a new user of its own only
