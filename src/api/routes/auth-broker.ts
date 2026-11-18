@@ -142,7 +142,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
     shared: multitenant(),
-    ...(multitenant() && trustedAssertionSecret(ctx) && ctx.deps.admin?.selfServeAvailable ? { selfServe: true } : {}),
+    ...(multitenant() && trustedAssertionSecret(ctx) && ctx.deps.selfServe ? { selfServe: true } : {}),
   });
 }
 
@@ -286,6 +286,8 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
   const { deps, res } = ctx;
   const claims = await trustedAssertion(ctx, "trusted-self-serve");
   if (!claims || !deps.admin || !deps.replayDedupe) return;
+  if (!deps.selfServe)
+    return sendJson(res, 403, { error: "self_serve_failed", message: "self-serve workspaces are not available" });
   const org = externalOrgSchema.safeParse(claims.externalOrg);
   const email = claims.email;
   if (!org.success || (email !== null && (typeof email !== "string" || !validEmail(email))))
@@ -294,7 +296,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 409, { error: "assertion_already_used" });
   try {
     const admin = deps.admin;
-    const { tenant, created } = await admin.selfServeWorkspace(claims.issuer, claims.subject, org.data);
+    const { tenant, created } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
     await withTenant(tenant, async (bound) => {
       const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
       if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });

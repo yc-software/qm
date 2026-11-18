@@ -5,6 +5,9 @@ import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { APP_HANDLE_MAX } from "../../plugins/chassis/src/dns-label.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { tenantSettingsSchema } from "./settings.ts";
+import { bootTenant } from "./boot.ts";
+import { AdminError, trustedSubjectPrincipal } from "../admin/admin-service.ts";
+import { reportFailure } from "../util/errors.ts";
 
 export const externalOrgSchema = z
   .object({
@@ -47,17 +50,20 @@ const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, or
       INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, $2, found);
       fresh := true;
     END IF;
-    RETURN QUERY SELECT found, fresh, t.settings ? 'modelGatewayKey', t.settings->>'serving' IS DISTINCT FROM 'false', t.settings->>'handle'
-      FROM tenants t WHERE t.id = found;
+    RETURN QUERY SELECT found, fresh, o.provisioned_at IS NOT NULL, t.settings->>'serving' IS DISTINCT FROM 'false', t.settings->>'handle'
+      FROM tenants t JOIN tenant_external_orgs o ON o.tenant = t.id WHERE t.id = found;
   END $f$`;
 
 const provisionedDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_provisioned(tenant uuid, key text)
-  RETURNS void LANGUAGE sql VOLATILE SECURITY DEFINER
+  RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-    UPDATE tenants t SET settings = (t.settings || jsonb_build_object('modelGatewayKey', $2)) - 'serving'
-    WHERE t.id = $1 AND NOT t.settings ? 'modelGatewayKey'
-      AND EXISTS (SELECT 1 FROM tenant_external_orgs o WHERE o.tenant = $1)
-  $f$`;
+  BEGIN
+    UPDATE tenant_external_orgs o SET provisioned_at = now() WHERE o.tenant = $1 AND o.provisioned_at IS NULL;
+    IF FOUND THEN
+      UPDATE tenants t SET settings = t.settings || jsonb_build_object('modelGatewayKey', $2, 'serving', true)
+        WHERE t.id = $1;
+    END IF;
+  END $f$`;
 
 export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
   id: "tenancy/self-serve/0001-external-orgs",
@@ -67,6 +73,7 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
       issuer TEXT NOT NULL,
       org_id TEXT NOT NULL,
       tenant UUID NOT NULL UNIQUE REFERENCES tenants(id),
+      provisioned_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (issuer, org_id)
     )`,
@@ -146,16 +153,50 @@ export async function provisionWorkspace(
       "content-type": "application/json",
     }),
   });
-  if (!res.ok) throw new Error(`workspace provisioner returned HTTP ${res.status}`);
   const text = await readBoundedText(
     res,
     PROVISION_REPLY_BYTES_MAX,
     () => new Error(`workspace provisioner reply exceeds ${PROVISION_REPLY_BYTES_MAX} bytes`),
   );
+  if (!res.ok) throw new Error(`workspace provisioner returned HTTP ${res.status}: ${text}`);
   const parsed = provisionedSettings.safeParse(JSON.parse(text));
   if (!parsed.success)
     throw new Error(
       `workspace provisioner returned invalid settings: ${parsed.error.issues[0]?.message ?? "rejected"}`,
     );
   return parsed.data.settings.modelGatewayKey;
+}
+
+export interface SelfServe {
+  workspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
+}
+
+export function createSelfServe(
+  pg: Pick<PgPool, "q">,
+  provision: (request: WorkspaceProvisionRequest) => Promise<string>,
+): SelfServe {
+  return {
+    async workspace(issuer, subject, org) {
+      if (bootTenant() !== undefined) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
+      trustedSubjectPrincipal(issuer, subject);
+      const workspace = await selfServeTenant(pg, issuer, org);
+      if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
+      if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
+      if (!workspace.provisioned) {
+        const request = {
+          tenant: workspace.tenant,
+          brandName: org.name,
+          handle: workspace.handle,
+          issuer,
+          externalOrg: org,
+        };
+        const key = await provision(request).catch((error: unknown) => {
+          reportFailure("self-serve workspace provisioning", error, workspace.tenant);
+          throw new AdminError(502, "the new workspace could not be set up; try signing in again", { cause: error });
+        });
+        await markSelfServeProvisioned(pg, workspace.tenant, key);
+      }
+      return { tenant: workspace.tenant, created: workspace.created };
+    },
+  };
 }

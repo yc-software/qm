@@ -7,9 +7,7 @@ import { personKey, samePerson } from "../directory/person.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { bootTenant } from "../tenants/boot.ts";
-import type { ExternalOrg, ExternalOrgTenant, WorkspaceProvisionRequest } from "../tenants/self-serve.ts";
 import { PrincipalLinkError } from "../identity/principal-links.ts";
-import { errMessage } from "../util/errors.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -21,8 +19,8 @@ export interface AdminStatus {
 
 export class AdminError extends Error {
   status: number;
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(status: number, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "AdminError";
     this.status = status;
   }
@@ -47,8 +45,6 @@ export interface AdminService {
     issuer: string,
     subject: string,
   ): Promise<{ grant: AdminGrant; created: boolean }>;
-  selfServeAvailable: boolean;
-  selfServeWorkspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
   provisionSelfServe(
     tenant: Tenant,
     issuer: string,
@@ -83,11 +79,6 @@ export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
   memberTenants?: (principalId: string) => Promise<readonly string[]>;
-  selfServe?: {
-    workspaceFor(issuer: string, org: ExternalOrg): Promise<ExternalOrgTenant | undefined>;
-    provisioned(tenant: string, modelGatewayKey: string): Promise<void>;
-    provision(request: WorkspaceProvisionRequest): Promise<string>;
-  };
   users: UserStore;
 }
 
@@ -107,7 +98,6 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
 
   return {
     users: opts.users,
-    selfServeAvailable: opts.selfServe !== undefined,
     resolveActor(header) {
       if (!header) return null;
       const at = header.lastIndexOf("@");
@@ -141,31 +131,6 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
       const created = await grants.addIfAbsent(tenant, grant);
       return { grant, created };
-    },
-    async selfServeWorkspace(issuer, subject, org) {
-      const selfServe = opts.selfServe;
-      if (!selfServe || bootTenant() !== undefined)
-        throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
-      trustedSubjectPrincipal(issuer, subject);
-      const workspace = await selfServe.workspaceFor(issuer, org);
-      if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
-      if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
-      if (!workspace.provisioned) {
-        const key = await selfServe
-          .provision({
-            tenant: workspace.tenant,
-            brandName: org.name,
-            handle: workspace.handle,
-            issuer,
-            externalOrg: org,
-          })
-          .catch((error: unknown) => {
-            console.error(`[self-serve] provisioning workspace ${workspace.tenant} failed: ${errMessage(error)}`);
-            throw new AdminError(502, "the new workspace could not be set up; try signing in again");
-          });
-        await selfServe.provisioned(workspace.tenant, key);
-      }
-      return { tenant: workspace.tenant, created: workspace.created };
     },
     async provisionSelfServe(tenant, issuer, subject, email) {
       const principalId = trustedSubjectPrincipal(issuer, subject);

@@ -304,8 +304,8 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       res,
       200,
       deps.cardPage({
-        title: "Choose a workspace",
-        heading: "Choose a workspace",
+        title: o.orgs ? "Choose a company" : "Choose a workspace",
+        heading: o.orgs ? "Choose a company" : "Choose a workspace",
         icon: deps.lockIcon,
         msg: o.orgs
           ? "Your account belongs to more than one company. Pick the one to open a workspace for."

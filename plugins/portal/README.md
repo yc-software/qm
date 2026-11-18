@@ -96,9 +96,10 @@ A new workspace starts switched off. Core POSTs `{ tenant, brandName, handle, is
 externalOrg, nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
 `HMAC-SHA256(CORE_SIGNING_SECRET, "workspace-provisioner")` (hex). A 200 reply of
 `{ "settings": { "modelGatewayKey": "…" } }` (nothing else) gives the workspace its own
-model gateway key and switches it on. Until a call succeeds sign-in fails, the workspace
-never uses the deployment's model key, and the next sign-in retries, so the provisioner
-must answer repeated calls for a tenant with the same key.
+model gateway key and switches it on, once. Until a call succeeds sign-in fails and the
+next sign-in retries, so the provisioner must answer repeated calls for a tenant with the
+same key. A workspace whose `serving` setting is present never falls back to the
+deployment's model key: without a key of its own its model calls fail.
 
 When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a

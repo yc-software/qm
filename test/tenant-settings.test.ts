@@ -105,6 +105,11 @@ describe("tenant settings and operator commands", () => {
       });
     assert.deepEqual(await read(a), { name: "Acme", key: "sk-a" });
     assert.deepEqual(await read(b), { name: "Beta", key: "sk-deployment" });
+    lines.length = 0;
+    await run("create");
+    const keyless = lines[0]!;
+    await run("settings", "set", keyless, "serving", "true");
+    await assert.rejects(read(keyless), /this workspace has no model gateway key of its own/);
   });
 
   it("checks allowed emails per tenant and leaves tenants without a list to the deployment", async () => {

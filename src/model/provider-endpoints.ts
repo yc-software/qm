@@ -125,7 +125,7 @@ function gatewayScopeId(scopeId: string | undefined, key: string | undefined): s
 export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
   const { modelGatewayKey, serving } = tenantSettings();
   if (modelGatewayKey) return modelGatewayKey;
-  if (serving === false) throw new Error("this workspace is switched off and has no model gateway key of its own");
+  if (serving !== undefined) throw new Error("this workspace has no model gateway key of its own");
   return config.apiKey;
 }
 

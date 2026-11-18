@@ -44,6 +44,7 @@ function start(databaseUrl: string, workspaceProvisionerUrl?: string, enabled = 
     ...(enabled ? { portalIdentitySecret: identitySecret, requireSignedPortalIdentity: true } : {}),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
+    ...(built.selfServe ? { selfServe: built.selfServe } : {}),
     identity: built.identity,
     auditLog: built.auditLog,
   });
@@ -147,6 +148,7 @@ test("cofounders signing in at once share one new workspace and every one of the
     brandName: "Acme Robotics",
     handle: "acme",
     modelGatewayKey: "own-key",
+    serving: true,
   });
   for (const subject of founders) assert.equal(await isAdmin(tenant, subject), true, subject);
   await withoutTenant(async () => {
@@ -287,6 +289,7 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
     brandName: "Gated Co",
     handle: "gated",
     modelGatewayKey: "own-key",
+    serving: true,
   });
   const { nonce, ...body } = provision.state.calls[0]!.body;
   assert.equal(typeof nonce, "string");
@@ -300,6 +303,9 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
   await assert.rejects(signIn("g4"), /HTTP 503/);
   assert.equal(provision.state.calls.length, calls, "a workspace an operator switched off is not switched back on");
   assert.equal(await isAdmin(tenant, "g4"), false);
+  await db.owner.q(`UPDATE tenants SET settings = settings - 'modelGatewayKey' WHERE id = $1`, [tenant]);
+  await assert.rejects(signIn("g4"), /HTTP 503/);
+  assert.equal(provision.state.calls.length, calls, "removing the key does not reopen a switched-off workspace");
 });
 
 test("a provisioner reply without the workspace's own model gateway key leaves it switched off", async (t) => {
