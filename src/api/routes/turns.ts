@@ -235,6 +235,7 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
   const tree = kind === "abort" && isObj(body) && body.tree === true;
+  const remark = kind === "steer" && isObj(body) && body.remark === true;
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
     if (!isTurnRequest(body.request)) {
@@ -256,6 +257,7 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
       ...(request ? { request } : {}),
       ...(queuedRunId ? { queuedRunId } : {}),
       ...(tree ? { tree } : {}),
+      ...(remark ? { remark } : {}),
     },
     actor?.p,
   );

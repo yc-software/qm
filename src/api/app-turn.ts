@@ -29,7 +29,7 @@ import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { canonicalPerson, personIds, samePerson } from "../directory/person.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailureAs, swallowAs } from "../util/errors.ts";
 import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
 
@@ -434,6 +434,7 @@ export function createTurnMethods(
         routed: Boolean(req.approval || req.spawned || replay),
         ...(req.botActor ? { bot: true } : {}),
       };
+      let botTurn: Run | undefined;
       if (deps.signals && !queuedBefore && mayMeetLiveTurn(incoming)) {
         const ambientRef =
           spineRouted && origin.kind === "human" && origin.messageTs
@@ -466,10 +467,7 @@ export function createTurnMethods(
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
-        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer" && live?.run) {
-          const botTurn = live.run;
-          await withCurrentProjectRoster(() => stopRun(botTurn, false, true));
-        }
+        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer") botTurn = live?.run;
         if (live?.run && route.kind !== "turn") {
           const target = live.run;
           const steerTs =
@@ -516,14 +514,19 @@ export function createTurnMethods(
           };
       }
 
-      const enqueue = () =>
-        deps.runs.enqueue({
+      const enqueued = await withCurrentProjectRoster(async () => {
+        const queued = await deps.runs.enqueue({
           sessionId: conversation.threadRef,
           request,
           maxAttempts: deps.maxAttempts,
           ...(dedupKey ? { dedupKey } : {}),
         });
-      const enqueued = await withCurrentProjectRoster(enqueue);
+        if (botTurn)
+          await stopRun(botTurn, false, true).catch(
+            reportFailureAs("turn: stop the bot's turn behind a queued Steer", false, `run=${botTurn.id}`),
+          );
+        return queued;
+      });
       if (!enqueued) return { status: "refused", reason: "project membership changed; retry from the current project" };
       const { run, deduped } = enqueued;
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
@@ -715,7 +718,7 @@ export function createTurnMethods(
       return (await deps.runs.withdraw(runId)) ? { withdrawn: true } : { withdrawn: false, reason: "started" };
     },
 
-    async signalRun(runId, signal, viewer) {
+    async signalRun(runId, { remark, ...signal }, viewer) {
       if (!deps.signals) return { accepted: false, reason: "signals_unavailable" };
       const run = await deps.runs.get(runId);
       if (!run) return { accepted: false, reason: "not_found" };
@@ -793,21 +796,20 @@ export function createTurnMethods(
       if (route.kind === "turn") {
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
-        if (route.reason === "bot-turn" && (signal.queuedRunId || request)) {
+        if (route.reason === "bot-turn" && signal.queuedRunId) {
           await stopRun(run, false, true);
-          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
+          return { accepted: false, reason: "queued_started" };
         }
         if (signal.queuedRunId || !request) return { accepted: false, reason: "not_steerable", why: route.reason };
         const own = await methods.turn({
           ...request,
           text: signal.text ?? "",
           ...(signal.ts ? { idempotencyKey: `signal-turn:${runId}:${signal.ts}` } : {}),
-          midTurn: "queue",
+          midTurn: route.reason === "bot-turn" && !remark ? "steer" : "queue",
           async: true,
         });
-        return own.runId
-          ? { accepted: true, queuedRunId: own.runId }
-          : { accepted: false, reason: own.reason ?? own.status };
+        if (!own.runId) return { accepted: false, reason: own.reason ?? own.status };
+        return own.steered ? { accepted: true } : { accepted: true, queuedRunId: own.runId };
       }
       const outbound = {
         ...signal,

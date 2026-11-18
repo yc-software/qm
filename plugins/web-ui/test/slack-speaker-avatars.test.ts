@@ -87,14 +87,15 @@ test("a Slack channel transcript sets other people apart, groups a speaker's run
       rows.map((row) => [
         row.classList.contains("others-row"),
         row.querySelector(".pin-content")?.textContent?.trim(),
-        row.querySelector(":scope > .speaker-label img")?.getAttribute("src"),
+        row.querySelector(":scope > .speaker-label > .brand-mark > img")?.getAttribute("src"),
+        row.classList.contains("continued-row"),
       ]),
       [
-        [true, "deploys broke", undefined],
-        [false, "@qm DM me", undefined],
-        [false, "thanks!", undefined],
-        [false, undefined, "https://avatars.slack-edge.com/app_72.png"],
-        [false, undefined, undefined],
+        [true, "deploys broke", undefined, false],
+        [false, "@qm DM me", undefined, false],
+        [false, "thanks!", undefined, true],
+        [false, undefined, "https://avatars.slack-edge.com/app_72.png", false],
+        [false, undefined, undefined, false],
       ],
     );
     assert.deepEqual(

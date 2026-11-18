@@ -193,7 +193,8 @@ same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
 withdrawn before that version runs. Moving the app out of the publisher's own library, to
-a teammate or a shared home, withdraws it as the app moves. The token comes from the
+a teammate or a shared home, withdraws it as the app moves. While the app borrows
+connectors, only the publisher can share it with anyone else. The token comes from the
 publisher's personal connection, else their default, else their company one.
 
 The app's server sends the broker `connector` (the host) instead of `credential`, with
@@ -220,6 +221,12 @@ The AWS scaffold renders these paths before core's front-door catch-all rule. De
 and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
+
+Preflight rejects any other listener rule unless it carries the
+`qm:operator-managed` tag. Tag a rule only when you run the service behind it
+and keep it correct yourself; qm does not check what a tagged rule matches or
+where it sends traffic. Shared ALBs never skip rules. The deploy role needs
+`elasticloadbalancing:DescribeTags`.
 
 ### Sandbox egress proxy
 

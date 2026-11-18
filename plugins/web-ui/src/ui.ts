@@ -11,8 +11,8 @@ export function brandName(): string {
   return document.querySelector<HTMLMetaElement>('meta[name="brand-self-label"]')?.content || "QM";
 }
 
-export function brandMark(): TemplateResult {
-  return html`<span class="brand-mark" aria-hidden="true"></span>`;
+export function brandMark(iconUrl?: string): TemplateResult {
+  return html`<span class="brand-mark" aria-hidden="true">${photoTpl(iconUrl)}</span>`;
 }
 
 const SWELL_PATH =
@@ -218,32 +218,33 @@ function avatarHue(key: string): number {
 }
 
 export function avatarTpl(person: { key: string; name: string; avatarUrl?: string }): TemplateResult {
-  const photo = person.avatarUrl?.startsWith("https://") ? person.avatarUrl : undefined;
   return html`<span
     class="inbox-avatar"
     style=${`--avatar-hue:${avatarHue(person.key)}`}
     ${tip(person.name)}
     aria-hidden="true"
   >
-    ${initials(person.name)}
-    ${
-      photo
-        ? keyed(
-            photo,
-            html`<img
-              src=${photo}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerpolicy="no-referrer"
-              @error=${(event: Event) => {
-                (event.currentTarget as HTMLImageElement).hidden = true;
-              }}
-            />`,
-          )
-        : nothing
-    }
+    ${initials(person.name)} ${photoTpl(person.avatarUrl)}
   </span>`;
+}
+
+function photoTpl(url: string | undefined): ReturnType<typeof keyed> | typeof nothing {
+  const photo = url?.startsWith("https://") ? url : undefined;
+  return photo
+    ? keyed(
+        photo,
+        html`<img
+          src=${photo}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerpolicy="no-referrer"
+          @error=${(event: Event) => {
+            (event.currentTarget as HTMLImageElement).hidden = true;
+          }}
+        />`,
+      )
+    : nothing;
 }
 
 export function relTime(ms: number): string {

@@ -2,6 +2,7 @@ import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import { recordAuditInBinding, type AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
+import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import {
@@ -123,6 +124,16 @@ export interface McpToolService {
 class SignInRequired extends Error {}
 
 type RemoteTool = NonNullable<McpServer["tools"]>[number];
+type SharedListing = { listing?: McpListing; error?: unknown };
+
+function shared(server: McpServer): boolean {
+  return !server.catalog && server.auth === "none" && !server.attestActor;
+}
+
+function unique(tools: McpToolDescriptor[]): McpToolDescriptor[] {
+  const seen = new Set<string>();
+  return tools.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+}
 
 function catalogDescriptor(server: McpServer): McpToolDescriptor {
   return {
@@ -227,6 +238,21 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
+  const sharedListings = new LRUCache<string, SharedListing, McpServer>({
+    ttl: refreshIntervalMs,
+    ttlAutopurge: true,
+    ttlResolution: 0,
+    ignoreFetchAbort: true,
+    allowStaleOnFetchAbort: true,
+    perf: { now },
+    fetchMethod: async (_url, _stale, { context }) => {
+      try {
+        return { listing: await clientFor(context).listTools({}) };
+      } catch (error) {
+        return { error };
+      }
+    },
+  });
   const tenantState = perTenant<{
     clients: Map<string, { client: McpClient; server: McpServer }>;
     snapshot: McpToolDescriptor[];
@@ -357,7 +383,27 @@ export function createMcpToolService(opts: {
     return run;
   }
 
-  async function serverTools(server: McpServer): Promise<McpToolDescriptor[]> {
+  async function listServer(server: McpServer): Promise<McpListing> {
+    if (!shared(server)) return clientFor(server).listTools({ headers: headersFor(server, undefined) });
+    const entry = await sharedListings.fetch(server.url, { context: server });
+    if (!entry?.listing) throw entry?.error ?? new Error("the shared tool listing expired before the server answered");
+    return entry.listing;
+  }
+
+  async function adoptShared(state: ReturnType<typeof tenantState>): Promise<void> {
+    for (const server of state.servers.values()) {
+      if (!shared(server) || state.snapshot.some((t) => t.serverId === server.id)) continue;
+      const listing = sharedListings.get(server.url)?.listing;
+      if (listing?.tools.length) state.snapshot = unique([...state.snapshot, ...(await serverTools(server, []))]);
+      else if (!listing)
+        void sharedListings
+          .fetch(server.url, { forceRefresh: true, context: server })
+          .then((entry) => entry?.error && record("list", server.id, `error: ${errMessage(entry.error)}`))
+          .catch(reportFailureAs("mcp: list shared tools", undefined));
+    }
+  }
+
+  async function serverTools(server: McpServer, previous: McpToolDescriptor[]): Promise<McpToolDescriptor[]> {
     if (server.catalog) return [catalogDescriptor(server)];
     const next: McpToolDescriptor[] = [];
     try {
@@ -378,7 +424,7 @@ export function createMcpToolService(opts: {
         tools = server.tools ?? [];
         if (!tools.length) return next;
       } else {
-        const listing = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
+        const listing = await listServer(server);
         tools = listing.tools;
         about = listing.about ?? about;
       }
@@ -386,6 +432,8 @@ export function createMcpToolService(opts: {
       record("list", server.id, `ok tools=${tools.length}`);
     } catch (e) {
       record("list", server.id, `error: ${errMessage(e)}`);
+      const kept = previous.filter((t) => t.serverId === server.id);
+      if (kept.length) return kept;
     }
     return next;
   }
@@ -396,9 +444,9 @@ export function createMcpToolService(opts: {
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
-    const next = (await Promise.all(servers.map(serverTools))).flat();
-    const seen = new Set<string>();
-    state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+    const previous = state.snapshot;
+    const next = await Promise.all(servers.map((s) => serverTools(s, previous)));
+    state.snapshot = unique(next.flat());
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
     state.servers = new Map(servers.map((s) => [s.id, s]));
     state.version = version;
@@ -433,6 +481,7 @@ export function createMcpToolService(opts: {
     const version = await opts.servers.version().catch(reportFailureAs("mcp: tools version", state.version));
     if (version !== state.version)
       await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+    else await adoptShared(state);
     return state;
   }
 
