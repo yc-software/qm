@@ -1,3 +1,4 @@
+import type { WebPush } from "../notifications/web-push.ts";
 import type { WebEvents } from "./routes/web-events.ts";
 import type { WebShell } from "../web/shell.ts";
 import type { WebMeConfig } from "./routes/web-me.ts";
@@ -110,6 +111,7 @@ export interface ServerDeps {
   };
   requireSignedPortalIdentity?: boolean;
   web?: { events: WebEvents; me: WebMeConfig; shell: WebShell };
+  webPush?: WebPush;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   selfServe?: SelfServe;

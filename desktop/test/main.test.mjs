@@ -139,7 +139,8 @@ test(
         ["clipboard-sanitized-write", undefined, false],
         ["clipboard-read", "https://old.example/", false],
         ["media", "https://old.example/", false],
-        ["notifications", "https://old.example/", false],
+        ["notifications", "https://old.example/", true],
+        ["notifications", "https://evil.example/", false],
       ]) {
         assert.equal(session.checkPermission(windows[0].webContents, permission, requestingUrl), allowed);
         let granted;

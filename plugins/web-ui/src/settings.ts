@@ -18,6 +18,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
+import { notificationsSettingsRow, onNotificationStateChange } from "./notifications";
 import { ADMIN_SECTIONS, OWNER_VIEWS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
@@ -638,7 +639,7 @@ function generalPane(): TemplateResult {
       ${titledSection("Plan", aiAccountsRow())} ${titledSection("Appearance", themeRow())}
       ${titledSection("Chat", html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`)}
       ${titledSection("Sidebar", html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`)}
-      ${titledSection("Desktop", desktopRow())}
+      ${titledSection("Desktop", html`${notificationsSettingsRow()} ${desktopRow()}`)}
       ${titledSection(
         "Connections",
         html`<div class="settings-connections">
@@ -695,6 +696,8 @@ function drawSettings(): void {
   }
   render(settingsPane(), settingsHost);
 }
+
+onNotificationStateChange(drawSettings);
 
 export function renderSettings(): void {
   const section = settingsSection();
