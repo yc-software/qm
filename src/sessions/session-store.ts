@@ -512,7 +512,7 @@ export interface SessionStore {
 
   participantsOf(sessionId: string): Promise<string[]>;
 
-  claimReplyNotifications(sessionId: string): Promise<ReplyNotificationClaim[]>;
+  claimReplyNotifications(sessionId: string, people: readonly string[] | "everyone"): Promise<ReplyNotificationClaim[]>;
 }
 
 export interface ReplyNotificationClaim {
