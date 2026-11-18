@@ -51,7 +51,7 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
   ],
 };
 
-const provisionedSettingsDefiner = `CREATE FUNCTION qm_self_serve_provisioned(tenant uuid, settings jsonb)
+const provisionedSettingsDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_provisioned(tenant uuid, settings jsonb)
   RETURNS text LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
   DECLARE violated text;
