@@ -7,11 +7,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Grant, Permission, ScopeId } from "../types.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import { isManageableCreationScope, parseScopeId } from "../types.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { bytes, normalizeRelPath } from "./deploy-fs.ts";
-import { samePerson, sameScope } from "../directory/person.ts";
+import { ownsPersonalScope, samePerson } from "../directory/person.ts";
 import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
@@ -472,11 +472,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   async function canWriteScope(callerId: string, scope: ScopeId, actingScopeId?: ScopeId): Promise<boolean> {
     if (deps.canWriteScope) return deps.canWriteScope(callerId, scope);
-    return sameScope(scope, `personal:${callerId}`) || scope === actingScopeId;
+    return ownsPersonalScope(scope, callerId) || scope === actingScopeId;
   }
 
   async function managesHome(d: PublishedApp, callerId: string, actingScopeId?: ScopeId): Promise<boolean> {
-    if (sameScope(d.ownerScopeId, `personal:${callerId}`)) return true;
+    if (ownsPersonalScope(d.ownerScopeId, callerId)) return true;
     if (deps.managesArtifactHome && (await deps.managesArtifactHome(d.ownerScopeId, d.createdBy, callerId)))
       return true;
     if (
@@ -1032,7 +1032,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async assertAppOwner(d, actor) {
       const caller = { actorId: actor.createdBy, botActor: actor.botActor };
       if (
-        !sameScope(d.ownerScopeId, scopeId("personal", actor.createdBy)) ||
+        !ownsPersonalScope(d.ownerScopeId, actor.createdBy) ||
         !(await personOrOwningBot(caller, async () => samePerson(d.createdBy, actor.createdBy)))
       )
         throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
@@ -1094,7 +1094,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         throw new DeployAccessError("forbidden", `only the owner can transfer "${d.name ?? d.id}"`);
       }
       if (d.ownerScopeId === toScope) return d;
-      if (toScope !== scopeId("personal", d.createdBy))
+      if (!ownsPersonalScope(toScope, d.createdBy))
         await withdrawLoan(d, actor.callerId, "withdrawn: the app moved out of its publisher's library");
       const ref = appRef(d.id);
       const fromScope = d.ownerScopeId;

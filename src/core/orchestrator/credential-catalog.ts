@@ -15,7 +15,7 @@ import {
   type PublicServiceCredential,
 } from "../../credentials/keychain.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
-import { samePerson } from "../../directory/person.ts";
+import { ownsPersonalScope, samePerson } from "../../directory/person.ts";
 import { entitledScopes, principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { IsCurrentSharedScopeMember } from "../../resolution/scope-membership.ts";
@@ -88,10 +88,10 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
       isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
     }));
   const ownCredentialsAllowed =
-    (actorKeychain && scopeId === personalScope(actor.id)) || openSpeakerKeychain || openAutomationKeychain;
+    (actorKeychain && ownsPersonalScope(scopeId, actor.id)) || openSpeakerKeychain || openAutomationKeychain;
   const sharedScope =
     !external &&
-    (scopeId !== personalScope(actor.id) ||
+    (!ownsPersonalScope(scopeId, actor.id) ||
       environmentId !== scopeId ||
       ((await deps.environments?.attachmentsFor(environmentId)) ?? []).some(
         (attachment) => attachment.scopeId !== scopeId,

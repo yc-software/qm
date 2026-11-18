@@ -7,7 +7,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { perTenant, tenantListeners } from "../tenants/cache.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
-import { loadForScope, pickForScope } from "../directory/person.ts";
+import { loadForScope, pickForScope, recordForPerson } from "../directory/person.ts";
 import type { SpendLimit } from "../ratelimit/spend-limits.ts";
 import type { ActivitySeeds } from "../../plugins/chassis/src/suggested-activities.ts";
 import {
@@ -721,12 +721,12 @@ export function createConfigStore(
     setIndividualModelAuth: (on) => settings.individualModelAuth.set(org, on),
     async getIndividualModelAuthDurable(principalId) {
       if (await settings.individualModelAuth.durable(org)) return true;
-      return principalId
-        ? ((await settings.individualModelAuth.durable(scopeId("personal", principalId))) ?? false)
-        : false;
+      const own = (p: string) => settings.individualModelAuth.durable(scopeId("personal", p));
+      return !!principalId && !!(await recordForPerson(principalId, own));
     },
     async getModelAccountDurable(principalId) {
-      const row = await settings.individualModelAuth.store.get(scopeId("personal", principalId));
+      const own = (p: string) => settings.individualModelAuth.store.get(scopeId("personal", p));
+      const row = await recordForPerson(principalId, own);
       if (row?.on) return row.provider ?? "personal";
       return (await settings.individualModelAuth.durable(org)) ? "personal" : "company";
     },

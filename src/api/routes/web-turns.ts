@@ -45,16 +45,16 @@ async function resolveWebConversation(
   scope?: string,
   channelName?: string,
 ): Promise<{ conversation: WebConversation } | Refusal> {
-  const inbox = `web:${user}:inbox`;
-  if (/^web:.+:inbox$/.test(threadRef) && threadRef !== inbox)
+  const inbox = /^web:.+:inbox$/.test(threadRef);
+  if (inbox && !ownsWebThread(threadRef, user))
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   const conversation = conversationForScope(threadRef, scope, channelName);
-  if (!conversation || (threadRef === inbox && conversation.kind !== "dm"))
+  if (!conversation || (inbox && conversation.kind !== "dm"))
     return {
       error: "forbidden_scope",
       message: "you can only chat in your personal context or a shared context you're in",
     };
-  if (threadRef === inbox && !(await inboxPreviewEnabled(ctx.deps, user)))
+  if (inbox && !(await inboxPreviewEnabled(ctx.deps, user)))
     return { error: "feature_disabled", message: "inbox access is not enabled for this user" };
   return { conversation };
 }
@@ -127,7 +127,7 @@ async function webTurnBase(
 ): Promise<TurnRequest> {
   const displayName = ctx.actor?.n;
   const appSlug = appEditSlug(threadRef, user);
-  const inbox = threadRef === `web:${user}:inbox` ? await inboxContext(ctx) : undefined;
+  const inbox = /^web:.+:inbox$/.test(threadRef) ? await inboxContext(ctx) : undefined;
   const liveEdit = appSlug ? await ctx.app.appLiveEdit(appSlug) : null;
   const failure = liveEdit?.draft?.failure;
   const failedPublish =

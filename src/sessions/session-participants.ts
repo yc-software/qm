@@ -9,10 +9,16 @@ import type {
   SessionStore,
 } from "./session-store.ts";
 import { AGENT_REPLY_ITEM, msOf, TENANT } from "./items.ts";
+import { rosterIds } from "../directory/person.ts";
 import { BOT_VISIBLE, LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, USER_ACTIVITY } from "./session-rows.ts";
 
 const SEES_ITEMS = "COALESCE(s.messages, 0) > 0";
 const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
+export const PERSON_ROW = (p: string, n = 1): string =>
+  `${p}.principal_id = ANY($${n}::text[]) AND NOT EXISTS (SELECT 1 FROM participants o WHERE o.session_id = ${p}.session_id
+     AND o.principal_id = ANY($${n}::text[])
+     AND array_position($${n}::text[], o.principal_id) < array_position($${n}::text[], ${p}.principal_id))`;
+const VIEW_COLUMNS = { title: "title", archived: "archived", pinned: "pinned", color: "color", readAt: "read_at" };
 export const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
   `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
           p.read_at AS p_read_at,
@@ -22,7 +28,7 @@ export const participantSessionsSql = (extraWhere: string, columns = "s.*"): str
           ${SEES_ITEMS} AS has_entries
      FROM sessions s
      JOIN participants p ON p.session_id = s.id
-    WHERE p.principal_id = $1${extraWhere}`;
+    WHERE ${PERSON_ROW("p")}${extraWhere}`;
 
 export function createSessionParticipants(
   q: PgPool["q"],
@@ -44,7 +50,7 @@ export function createSessionParticipants(
     const rows = await q(
       participantSessionsSql(BOT_VISIBLE(opts?.botActor), LIST_COLUMNS) +
         (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
-      limit === undefined ? [principalId] : [principalId, limit],
+      limit === undefined ? [rosterIds(principalId)] : [rosterIds(principalId), limit],
     );
     return rows.map(rowToParticipantSession);
   };
@@ -58,9 +64,9 @@ export function createSessionParticipants(
           SELECT s.scope_id, s.channel_name, ${USER_ACTIVITY} AS activity, ${HAS_CONTENT} AS has_content
             FROM sessions s WHERE s.id = p.session_id OFFSET 0
         ) s
-        WHERE p.principal_id = $1
+        WHERE ${PERSON_ROW("p")}
         GROUP BY s.scope_id`,
-      [principalId],
+      [rosterIds(principalId)],
     );
     return rows.map((r) => ({
       scopeId: r.scope_id as ScopeId,
@@ -70,9 +76,9 @@ export function createSessionParticipants(
     }));
   };
   const participantPage = async (principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage> => {
-    const params: unknown[] = [principalId];
+    const params: unknown[] = [rosterIds(principalId)];
     const where: string[] = [
-      "p.principal_id = $1",
+      PERSON_ROW("p"),
       OWN_CHAT("s"),
       "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
       HAS_CONTENT,
@@ -108,7 +114,10 @@ export function createSessionParticipants(
     const more = page.length > limit;
     const ids = page.slice(0, limit).map((row) => row.id as string);
     if (!ids.length) return { sessions: [], next: null };
-    const rows = await q(participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS), [principalId, ids]);
+    const rows = await q(participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS), [
+      rosterIds(principalId),
+      ids,
+    ]);
     const byId = new Map(rows.map((row) => [row.id as string, rowToParticipantSession(row)]));
     const last = page[limit - 1];
     return {
@@ -117,7 +126,7 @@ export function createSessionParticipants(
     };
   };
   const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
-    const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
+    const rows = await q(participantSessionsSql(" AND s.id = $2"), [rosterIds(principalId), sessionId]);
     return rows[0] ? rowToParticipantSession(rows[0]) : null;
   };
 
@@ -135,44 +144,23 @@ export function createSessionParticipants(
     },
 
     async removeParticipant(sessionId, principalId): Promise<void> {
-      await q("DELETE FROM participants WHERE session_id = $1 AND principal_id = $2", [sessionId, principalId]);
+      await q("DELETE FROM participants WHERE session_id = $1 AND principal_id = ANY($2::text[])", [
+        sessionId,
+        rosterIds(principalId),
+      ]);
     },
 
     async updateParticipantView(sessionId, principalId, patch): Promise<void> {
-      if (patch.title !== undefined) {
-        await q("UPDATE participants SET title = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.title,
-        ]);
-      }
-      if (patch.archived !== undefined) {
-        await q("UPDATE participants SET archived = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.archived,
-        ]);
-      }
-      if (patch.pinned !== undefined) {
-        await q("UPDATE participants SET pinned = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.pinned,
-        ]);
-      }
-      if (patch.color !== undefined) {
-        await q("UPDATE participants SET color = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.color,
-        ]);
-      }
-      if (patch.readAt !== undefined) {
-        await q("UPDATE participants SET read_at = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.readAt,
-        ]);
+      for (const [column, value] of Object.entries(VIEW_COLUMNS).flatMap(([key, col]) => {
+        const v = patch[key as keyof typeof VIEW_COLUMNS];
+        return v === undefined ? [] : [[col, v] as const];
+      })) {
+        await q(
+          `UPDATE participants SET ${column} = $3 WHERE session_id = $1 AND principal_id = (
+             SELECT p.principal_id FROM participants p WHERE p.session_id = $1 AND p.principal_id = ANY($2::text[])
+              ORDER BY array_position($2::text[], p.principal_id) LIMIT 1)`,
+          [sessionId, rosterIds(principalId), value],
+        );
       }
     },
 
