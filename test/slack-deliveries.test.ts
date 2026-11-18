@@ -59,7 +59,7 @@ async function deliver(
     ackDelivery: async (id: string, body?: Record<string, unknown>) => {
       if (row.loseAck) throw new Error("acknowledgement lost");
       acknowledgements.push(id);
-      ackBodies.push({ id, ...(body || {}) });
+      ackBodies.push({ id, ...body });
     },
   };
   const client = {
