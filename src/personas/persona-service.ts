@@ -66,6 +66,7 @@ export interface PersonaService {
     personaId: string | null,
   ): Promise<PersonaResult<(PersonaView & { sessionModelId?: string }) | null>>;
   startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
+  adopt<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
   forTurn(
     personaId: string | undefined,
     actorId: string,
@@ -156,6 +157,11 @@ export function createPersonaService(deps: {
     if (!modelId) return session;
     await deps.sessions.setRuntime(session.id, { modelId });
     return { ...session, runtime: { modelId } };
+  }
+
+  async function adopt<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S> {
+    await deps.sessions.setPersona(session.id, personaId);
+    return startOnDefaultModel(session, personaId);
   }
 
   return {
@@ -295,14 +301,14 @@ export function createPersonaService(deps: {
       const persona = await store.get(personaId);
       const held = persona ? await role(principalId, personaId, session.scopeId) : null;
       if (!persona || !held) return { status: "not_found" };
-      await deps.sessions.setPersona(session.id, personaId);
-      const { runtime } = await startOnDefaultModel(session, personaId);
+      const { runtime } = await adopt(session, personaId);
       return {
         status: "ok",
         value: { ...persona, role: held, ...(runtime ? { sessionModelId: runtime.modelId } : {}) },
       };
     },
     startOnDefaultModel,
+    adopt,
     async forTurn(personaId, actorId, contextScope, route) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;

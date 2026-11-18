@@ -1042,10 +1042,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       );
       const session =
         persona && deps.personas
-          ? await deps.personas.startOnDefaultModel(threadSession, persona.persona.id)
+          ? await (persona.routedBy ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
+              threadSession,
+              persona.persona.id,
+            )
           : threadSession;
       screenSession.id = session.id;
-      if (persona?.routedBy) await deps.sessions.setPersona(session.id, persona.persona.id);
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
       const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
