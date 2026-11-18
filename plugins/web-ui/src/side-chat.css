@@ -499,3 +499,9 @@
   padding-inline: 12px;
   -webkit-line-clamp: 1;
 }
+
+.chat-scroll:has(> .message-stack.with-side-chats) ~ .chat-bottom-dock > .scroll-bottom-btn {
+  right: auto;
+  left: max(16px, calc((100% - var(--content-w)) / 2));
+  left: anchor(left);
+}
