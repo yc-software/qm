@@ -54,9 +54,9 @@ button.media-tile:hover::after {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgb(0 0 0 / 0.56);
+  background: rgb(12 12 14 / 0.7);
   color: #fff;
-  font: 600 20px / 1 var(--app-font);
+  font: 600 22px / 1 var(--app-font);
 }
 
 qm-player {
@@ -95,7 +95,7 @@ qm-player {
   height: 56px;
   margin: -28px 0 0 -28px;
   border-radius: 50%;
-  background: rgb(0 0 0 / 0.5);
+  background: rgb(16 16 18 / 0.64);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
   backdrop-filter: blur(10px) saturate(1.4);
   pointer-events: none;
@@ -122,8 +122,8 @@ qm-player {
 }
 .mp-length {
   position: absolute;
-  bottom: 10px;
-  left: 10px;
+  bottom: 12px;
+  left: 12px;
   padding: 4px 7px;
   border-radius: 7px;
   background: rgb(0 0 0 / 0.6);
@@ -137,20 +137,29 @@ qm-player {
 }
 .mp-bar {
   position: absolute;
-  inset: auto 0 0;
+  inset: auto 8px 8px;
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 44px 8px 6px;
-  background: linear-gradient(transparent, rgb(0 0 0 / 0.5) 45%, rgb(0 0 0 / 0.82));
+  padding: 4px 6px;
+  border-radius: 12px;
+  background: rgb(22 22 24 / 0.8);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.1),
+    0 4px 16px rgb(0 0 0 / 0.24);
+  backdrop-filter: blur(18px) saturate(1.6);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.18s;
+  transform: translateY(4px);
+  transition:
+    opacity 0.18s,
+    transform 0.18s cubic-bezier(0.32, 0.72, 0, 1);
 }
 .mp-video:is([data-state="paused"], [data-state="ended"]) .mp-bar,
 .mp-video[data-state="playing"]:hover:not(.mp-quiet) .mp-bar,
 .mp-video[data-state="playing"]:has(:focus-visible) .mp-bar {
   opacity: 1;
+  transform: none;
 }
 .mp-video:not([data-state="idle"]) .mp-bar > * {
   pointer-events: auto;
@@ -243,7 +252,7 @@ qm-player {
 }
 .mp-tip {
   position: absolute;
-  bottom: 28px;
+  bottom: 34px;
   left: calc(var(--mp-tip, 0) * 100%);
   padding: 4px 6px;
   border-radius: 6px;
@@ -354,8 +363,12 @@ qm-player {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mp-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .mp-audio .mp-track {
-  flex: none;
   height: 14px;
   margin: 0;
 }
@@ -426,23 +439,32 @@ dialog.media-viewer[open] {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .media-viewer::backdrop {
-  background: rgb(9 10 13 / 0.96);
-  backdrop-filter: blur(16px);
-  animation: mv-fade 0.22s ease-out;
-  transition: opacity 0.2s;
+  background: #0c0c0e;
 }
-.media-viewer > :not(.mv-stage),
-.mv-nav {
-  animation: mv-fade 0.26s ease-out;
-  transition: opacity 0.16s;
-}
-.media-viewer.closing::backdrop,
-.media-viewer.closing > :not(.mv-stage),
-.media-viewer.closing .mv-nav {
-  opacity: 0;
+@media (prefers-reduced-motion: no-preference) {
+  .media-viewer::backdrop,
+  .media-viewer > :not(.mv-stage),
+  .mv-nav {
+    animation: mv-fade 0.3s ease-out;
+  }
+  .media-viewer.closing::backdrop,
+  .media-viewer.closing > :not(.mv-stage),
+  .media-viewer.closing .mv-nav,
+  .media-viewer.fading .mv-frame {
+    animation: mv-fade-out 0.2s ease-in forwards;
+  }
+  .media-viewer.fading .mv-frame {
+    transform: scale(0.97);
+    transition: transform 0.2s ease-in;
+  }
 }
 @keyframes mv-fade {
   from {
+    opacity: 0;
+  }
+}
+@keyframes mv-fade-out {
+  to {
     opacity: 0;
   }
 }
@@ -522,6 +544,7 @@ img.mv-frame.zoomable {
 }
 .mv-stage.zoomed .mv-frame {
   width: var(--natural);
+  max-width: none;
   border-radius: 0;
   cursor: zoom-out;
 }
@@ -536,7 +559,8 @@ img.mv-frame.zoomable {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.14);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
   color: #fff;
   cursor: pointer;
   transition:
@@ -544,7 +568,7 @@ img.mv-frame.zoomable {
     opacity 0.15s;
 }
 .mv-nav:hover {
-  background: rgb(255 255 255 / 0.22);
+  background: rgb(255 255 255 / 0.24);
 }
 .mv-nav:disabled,
 .mv-stage.zoomed .mv-nav {
@@ -556,6 +580,9 @@ img.mv-frame.zoomable {
 }
 .mv-next {
   right: 18px;
+}
+.mv-strip[hidden] {
+  display: none;
 }
 .mv-strip {
   display: flex;
@@ -575,10 +602,8 @@ img.mv-frame.zoomable {
   overflow: hidden;
   background: rgb(255 255 255 / 0.08);
   cursor: pointer;
-  opacity: 0.5;
-  transition:
-    opacity 0.15s,
-    box-shadow 0.15s;
+  opacity: 0.72;
+  transition: opacity 0.15s;
 }
 .mv-thumb:first-child {
   margin-left: auto;
@@ -587,11 +612,17 @@ img.mv-frame.zoomable {
   margin-right: auto;
 }
 .mv-thumb:hover {
-  opacity: 0.85;
+  opacity: 0.9;
 }
 .mv-thumb[aria-current="true"] {
-  box-shadow: 0 0 0 2px #fff;
   opacity: 1;
+}
+.mv-thumb[aria-current="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px #fff;
 }
 .mv-thumb > :is(img, video) {
   display: block;
@@ -615,12 +646,26 @@ img.mv-frame.zoomable {
     display: none;
   }
 }
+.message-audio,
+.attachment-documents:has(> .mp-audio) {
+  flex-direction: column;
+}
+.user-row .attachment-documents:has(> .mp-audio) {
+  align-items: flex-end;
+}
+.composer-image .chip-x {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 14%, transparent);
+}
+.file-image > :is(img, video),
+.composer-image-open > :is(img, video) {
+  outline: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  outline-offset: -1px;
+}
 @media (prefers-reduced-motion: reduce) {
-  .media-viewer::backdrop,
-  .media-viewer > :not(.mv-stage),
-  .mv-nav,
-  .mp-glyph {
-    animation: none;
+  .mp-glyph,
+  .mp-bar,
+  .mp-rail,
+  .mp-knob {
     transition: none;
   }
 }

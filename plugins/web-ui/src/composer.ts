@@ -76,7 +76,6 @@ export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 const LEGACY_MODEL_STORAGE_KEY = "web-ui:model";
 const THREAD_PICKS_STORAGE_KEY = "web-ui:model-picks";
 const THREAD_PICKS_CAP = 50;
-const STAGED_VIDEO_PREVIEW_CHARS = 90_000_000;
 function loadThreadPicks(): Map<string, ModelOptionValue> {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(THREAD_PICKS_STORAGE_KEY) ?? "[]");
@@ -638,9 +637,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                                   <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
                                 </button>
                               `
-                            : html`${stagedMedia(a) ? nothing : icon(Paperclip, 14)}<span
-                                  dir="auto"
-                                  title=${a.fileName}
+                            : html`${stagedMedia(a) ? nothing : icon(Paperclip, 14)}<span dir="auto" title=${a.fileName}
                                   >${a.fileName}</span
                                 >`
                         }
@@ -1923,12 +1920,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function stagedMedia(attachment: Attachment): MediaItem | null {
     const kind = mediaKind(attachment.fileName, attachment.mimeType);
     if (kind !== "image" && kind !== "video") return null;
-    if (kind === "video" && attachment.content.length > STAGED_VIDEO_PREVIEW_CHARS) return null;
     let src = stagedSources.get(attachment.id);
     if (!src) {
       src =
         kind === "video"
-          ? URL.createObjectURL(new Blob([base64ToBytes(attachment.content) as BlobPart], { type: attachment.mimeType }))
+          ? URL.createObjectURL(
+              new Blob([base64ToBytes(attachment.content) as BlobPart], { type: attachment.mimeType }),
+            )
           : attachment.content.startsWith("data:")
             ? attachment.content
             : `data:${attachment.mimeType};base64,${attachment.content}`;

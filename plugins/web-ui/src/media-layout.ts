@@ -27,16 +27,17 @@ export function browserRenderableImage(mimeType?: string): boolean {
   return RENDERABLE_IMAGE_TYPES.has((mimeType ?? "").split(";")[0]!.trim().toLowerCase());
 }
 
-const VIDEO_NAME = /\.(mp4|m4v|mov|webm|ogv)$/i;
-const AUDIO_NAME = /\.(mp3|m4a|aac|wav|oga|ogg|opus|flac)$/i;
+const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "mov", "webm", "ogv"]);
+const AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "aac", "wav", "oga", "ogg", "opus", "flac"]);
 
 export function playableKind(name = "", mimetype = ""): "video" | "audio" | null {
   const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();
   if (mime.startsWith("video/")) return "video";
   if (mime.startsWith("audio/")) return "audio";
   if (mime && mime !== "application/octet-stream") return null;
-  if (VIDEO_NAME.test(name)) return "video";
-  if (AUDIO_NAME.test(name)) return "audio";
+  const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+  if (VIDEO_EXTENSIONS.has(extension)) return "video";
+  if (AUDIO_EXTENSIONS.has(extension)) return "audio";
   return null;
 }
 
@@ -65,8 +66,8 @@ export function rowHeight(ratios: readonly number[], width: number): number {
 }
 
 export function justifyRows(ratios: readonly number[], solo: readonly boolean[], width: number): number[][] {
-  const images = solo.filter((alone) => !alone).length;
-  const target = Math.min(230, Math.max(100, width * (images > 4 ? 0.21 : 0.3)));
+  const dense = solo.includes(true) || solo.length > 4;
+  const target = Math.min(230, Math.max(96, width * (dense ? 0.18 : 0.3)));
   const best: Array<{ cost: number; from: number }> = [{ cost: 0, from: 0 }];
   for (let end = 1; end <= ratios.length; end++) {
     let pick = { cost: Infinity, from: end - 1 };
