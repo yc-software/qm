@@ -5,7 +5,8 @@ import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyAppShared } from "../deploy/share-notice.ts";
 import { appShareScope } from "../deploy/email-access.ts";
 import { DeployAccessError } from "../deploy/deploy-service.ts";
-import { sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { sessionVisibleTo } from "../sessions/session-rows.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
@@ -1400,9 +1401,9 @@ export function createSessionMethods(
   };
 }
 
-function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "surfaceBinding">>(
+function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "botWork" | "surfaceBinding">>(
   session: T,
-): Omit<T, "spawnMeta" | "surfaceBinding"> {
-  const { spawnMeta: _spawnMeta, surfaceBinding: _surfaceBinding, ...shown } = session;
+): Omit<T, "spawnMeta" | "botWork" | "surfaceBinding"> {
+  const { spawnMeta: _spawnMeta, botWork: _botWork, surfaceBinding: _surfaceBinding, ...shown } = session;
   return shown;
 }
