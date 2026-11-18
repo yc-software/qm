@@ -37,7 +37,13 @@ async function cronReplyInto(viewers: { alice?: number; bob?: number }) {
       destination: { type: "web", target: threadRef, audienceScopeId: SCOPE },
       text,
       idempotencyKey: randomUUID(),
-      provenance: { trigger: "cron", surface: "cron", sourceScopeId: SCOPE, sourceThreadRef: "agent:main:cron:c1" },
+      provenance: {
+        trigger: "cron",
+        surface: "cron",
+        fireKey: `agent:main:cron:c1:${randomUUID()}`,
+        sourceScopeId: SCOPE,
+        sourceThreadRef: "agent:main:cron:c1",
+      },
     });
     await deliveries.pending("web");
     await new Promise((resolve) => setTimeout(resolve, 200));
