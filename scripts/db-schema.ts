@@ -17,13 +17,31 @@ scratch.pathname = `/${name}`;
 const admin = new pg.Client({ connectionString: url });
 await admin.connect();
 await admin.query(`CREATE DATABASE ${name}`);
+const keepFailure = (error: unknown, message: string) => (cleanupError: unknown) => {
+  throw new AggregateError([error, cleanupError], message);
+};
+const dropScratch = async () => {
+  await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
+  await admin.end();
+};
 try {
   const pool = new pg.Pool({ connectionString: scratch.toString(), max: 1 });
   const ledger = await applyPgMigrations(pool, dbMigrations({ schema: false }))
     .then(() =>
       pool.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE} ORDER BY id`),
     )
-    .finally(() => pool.end());
+    .then(
+      async (result) => {
+        await pool.end();
+        return result;
+      },
+      async (error: unknown) => {
+        await pool
+          .end()
+          .catch(keepFailure(error, "migrating the scratch database failed, then closing its pool failed"));
+        throw error;
+      },
+    );
   const [command, ...args] = (process.env.PG_DUMP ?? "pg_dump").split(" ");
   const dump = execFileSync(
     command!,
@@ -54,7 +72,8 @@ try {
     );
   writeFileSync(new URL("../db/schema.sql", import.meta.url), `${lines.join("\n")}\n`);
   console.log(`wrote db/schema.sql (${ledger.rows.length} migrations folded in)`);
-} finally {
-  await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
-  await admin.end();
+} catch (error) {
+  await dropScratch().catch(keepFailure(error, `db:schema failed, then dropping scratch database ${name} failed`));
+  throw error;
 }
+await dropScratch();
