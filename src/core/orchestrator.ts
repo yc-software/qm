@@ -2642,10 +2642,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const turnCompleted = outcome.completed;
         const pausing = outcome.paused;
-        if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        startMemoryCapture({
+        await startMemoryCapture({
           tenant,
           deps,
           input,
@@ -2657,6 +2656,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryPolicy,
           pendingCaptures,
           onTurnEnd,
+          enqueueTurnEnd: memoryStrategy.enqueueTurnEnd?.bind(memoryStrategy),
           pausing,
           cancelStopped,
           personConversationTurn,
@@ -2667,6 +2667,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reply,
           spine,
         });
+        if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
 
         const tail = async (): Promise<void> => {
           try {

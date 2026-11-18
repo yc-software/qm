@@ -43,13 +43,13 @@ test("parseFacts: bullets in, NONE/empty/prose out", () => {
   assert.deepEqual(parseFacts("-"), []);
 });
 
-test("per-turn swallows extraction failures and captures nothing", async () => {
+test("extraction failures remain retryable and capture nothing", async () => {
   const agent: ModelUtilities = {
     oneShot: () => Promise.reject(new Error("model down")),
   };
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
+  await assert.rejects(strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" }), /model down/);
   assert.equal(await memory.read(SCOPE), "", "nothing captured");
 });
 
@@ -122,7 +122,6 @@ test("turns of one session answered to different audiences are captured apart, e
   const strategy = createPerTurnStrategy({
     agent: { oneShot: () => Promise.resolve("- Durable fact") },
     memory: wrapped,
-    captureQuietMs: 30,
   });
   const turn = { scopeId: "personal:U1", actorId: "U1", sessionId: "session-1", reply: "answer" };
   await strategy.onTurnEnd!({ ...turn, audienceScopeId: "personal:U1", input: "private question" });
@@ -139,3 +138,13 @@ test("turns of one session answered to different audiences are captured apart, e
     ],
   );
 });
+
+for (const unavailable of ["missing utility", "unavailable route"] as const) {
+  test(`${unavailable} cannot acknowledge an extraction as if the model returned NONE`, async () => {
+    const { memory } = freshMemory();
+    const agent: ModelUtilities = unavailable === "missing utility" ? {} : { oneShot: async () => undefined };
+    const strategy = createPerTurnStrategy({ agent, memory });
+    await assert.rejects(strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" }), /utility model/);
+    assert.equal(await memory.read(SCOPE), "");
+  });
+}

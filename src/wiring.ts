@@ -1911,6 +1911,7 @@ export function buildApp(
   });
   const managedGroups = createDocumentGroups(documentConversations, projects);
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
+    databaseUrl,
     agent,
     memory: createDocumentMemory(baseMemory, documentConversations, auditLog),
     captureQuietMs: config.memoryCaptureQuietMs,
@@ -3095,6 +3096,16 @@ export function buildApp(
         { immediate: true },
       )
     : null;
+  const memoryCaptureStarter = memoryStrategy.start
+    ? createSweeper(
+        async () => {
+          await memoryStrategy.start!();
+          void memoryCaptureStarter?.stop();
+        },
+        1_000,
+        { label: "memory capture worker startup", immediate: true },
+      )
+    : null;
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
@@ -3122,6 +3133,7 @@ export function buildApp(
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
+      memoryCaptureStarter?.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
       composioReturnSweeper.start();
@@ -3161,6 +3173,8 @@ export function buildApp(
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),
+      memoryCaptureStarter?.stop(),
+      memoryStrategy.stopClaims?.(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
       deployMaintenanceSweeper.stop(),
@@ -3242,6 +3256,7 @@ export function buildApp(
           runStreamEvents.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
+      await memoryStrategy.stop?.();
       await agent.close?.();
       await semanticMemory.close();
       await flyTunnel?.stop();

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { classifiedMemory } from "../src/memory/classification.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
-import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
+import { createPerTurnStrategy, captureMemoryTurns } from "../src/memory/strategies/per-turn.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -132,14 +132,10 @@ test("burst capture joins dependencies and preserves missing provenance from any
     const dependency: MemoryProvenance[] = [
       { sensitivity: "sensitive", sources: ["group:private"], sourceUnknown: false },
     ];
-    const strategy = createPerTurnStrategy({
-      memory,
-      captureQuietMs: 1000,
-      captureMaxTurns: 2,
-      agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Combined fact" },
-    });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: dependency });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: complete ? [] : undefined });
+    await captureMemoryTurns({ memory, agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Combined fact" } }, [
+      { ...turn, inheritedFacts: dependency },
+      { ...turn, inheritedFacts: complete ? [] : undefined },
+    ]);
     const fact = (await facts(scope))[0]!;
     assert.equal(fact.sensitivity, "sensitive");
     assert.ok(fact.sources.includes("group:private"));

@@ -1,5 +1,4 @@
-import { PgBoss, type ConstructorOptions } from "pg-boss";
-import pgBossPackage from "pg-boss/package.json" with { type: "json" };
+import { poolBoss, assertJobQueueInstalled } from "../persistence/job-queue.ts";
 import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
@@ -31,13 +30,6 @@ const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 const FIRE_QUEUE = "cron-fire";
 const FIRE_QUEUE_OPTIONS = { policy: "short", notify: true } as const;
 
-export function poolBoss(pg: () => PgPool, options: Omit<ConstructorOptions, "db">): PgBoss {
-  return new PgBoss({
-    ...options,
-    db: { executeSql: async (text, values) => (await pg().pool()).query(text, values) },
-  });
-}
-
 export async function installCronQueue(databaseUrl: string, schema: string = "pgboss"): Promise<void> {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error(`invalid cron queue schema: ${schema}`);
   const pg = createPgPool(databaseUrl);
@@ -49,20 +41,6 @@ export async function installCronQueue(databaseUrl: string, schema: string = "pg
     await boss.stop({ close: true, graceful: false }).catch(swallowAs("cron queue install: cleanup", undefined));
     await pg.close().catch(swallowAs("cron queue install: cleanup", undefined));
   }
-}
-
-class CronQueueNotInstalled extends Error {}
-
-async function assertInstalled(boss: PgBoss, schema: string): Promise<void> {
-  const installed = (await boss.isInstalled()) ? await boss.schemaVersion() : null;
-  if (installed !== pgBossPackage.pgboss.schema)
-    throw new CronQueueNotInstalled(
-      `cron queue schema ${schema} is at version ${installed ?? "none"}, expected ${pgBossPackage.pgboss.schema}`,
-    );
-}
-
-export function cronQueueMisconfigured(error: unknown): boolean {
-  return error instanceof CronQueueNotInstalled || (error as { code?: unknown } | null)?.code === "42501";
 }
 
 export function createPgBossCronQueue(
@@ -96,7 +74,7 @@ export function createPgBossCronQueue(
       pg ??= createPgPool(databaseUrl);
       try {
         if (!initialized) {
-          await assertInstalled(boss, schema);
+          await assertJobQueueInstalled(boss, schema);
           await boss.start();
           initialized = true;
         }

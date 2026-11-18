@@ -1,14 +1,15 @@
+import { withAbort } from "../../util/async.ts";
+import { memoryCaptureBurst, type MemoryCaptureBurst, type MemoryCaptureTurn } from "../capture-context.ts";
 import { isObj } from "../../util/objects.ts";
 import type { ModelUtilities } from "../../agent/agent.ts";
 import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
-import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
 import { parseSensitivity, SENSITIVITY_PROMPT } from "../classification.ts";
-import { UNTRACKED_PROVENANCE, type MemoryCaptureMetadata } from "../facts.ts";
+import type { MemoryCaptureMetadata } from "../facts.ts";
 
 export const DEFAULT_CAPTURE_QUIET_MS = 180_000;
-const DEFAULT_CAPTURE_MAX_TURNS = 10;
+export const DEFAULT_CAPTURE_MAX_TURNS = 10;
 
 const MEMORY_EXTRACTION_RULES = [
   "You extract durable facts worth remembering about the user across FUTURE conversations.",
@@ -73,104 +74,19 @@ export function parseFacts(out: string): string[] {
 async function extractFacts(
   agent: ModelUtilities,
   turns: Array<{ input: string; reply: string }>,
+  signal?: AbortSignal,
 ): Promise<{ facts: string[]; sensitivity: NonNullable<MemoryCaptureMetadata["sensitivity"]> }> {
-  if (!agent.oneShot) return { facts: [], sensitivity: "unknown" };
-  try {
-    const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
-    const out = await agent.oneShot(MEMORY_EXTRACTION_PROMPT, transcript, "memory_capture");
-    return {
-      facts: parseFacts(out ?? ""),
-      sensitivity: parseSensitivity(/^SENSITIVITY: (ordinary|unknown|sensitive|restricted)\n/.exec(out ?? "")?.[1]),
-    };
-  } catch {
-    return { facts: [], sensitivity: "unknown" };
-  }
-}
-
-interface Burst extends MemoryCaptureMetadata {
-  scopeId: ScopeId;
-  actorId?: string;
-  audienceScopeId?: ScopeId;
-  conversationScopeId: ScopeId;
-  sessionId?: string;
-  idempotencyKey?: string;
-  turns: Array<{ input: string; reply: string }>;
-  timer?: NodeJS.Timeout;
-}
-
-type TurnEndCtx = MemoryCaptureMetadata & {
-  scopeId: ScopeId;
-  input: string;
-  reply: string;
-  actorId?: string;
-  audienceScopeId?: ScopeId;
-  conversationScopeId?: ScopeId;
-  sessionId?: string;
-  idempotencyKey?: string;
-};
-
-function createBurstBuffer(
-  quietMs: number,
-  maxTurns: number,
-  flush: (burst: Burst) => Promise<void>,
-  onError?: (e: unknown, burst: Burst) => void,
-): (ctx: TurnEndCtx) => Promise<void> {
-  const bursts = new Map<string, Burst>();
-  return async ({
-    scopeId,
-    input,
-    reply,
-    actorId,
-    audienceScopeId,
-    conversationScopeId,
-    sessionId,
-    idempotencyKey,
-    inheritedFacts,
-    personalOnly,
-    document,
-  }) => {
-    const burst: Burst = {
-      scopeId,
-      conversationScopeId: conversationScopeId ?? scopeId,
-      turns: [{ input, reply }],
-      ...(personalOnly ? { personalOnly } : {}),
-      ...(document ? { document } : {}),
-      ...(inheritedFacts !== undefined ? { inheritedFacts: structuredClone(inheritedFacts) } : {}),
-      ...(actorId !== undefined ? { actorId } : {}),
-      ...(audienceScopeId !== undefined ? { audienceScopeId } : {}),
-      ...(sessionId !== undefined ? { sessionId } : {}),
-      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
-    };
-    if (quietMs <= 0) return flush(burst);
-
-    const key = `${scopeId}\0${burst.conversationScopeId}\0${actorId ?? ""}\0${sessionId ?? ""}\0${audienceScopeId ?? ""}`;
-    const pending = bursts.get(key);
-    if (pending) {
-      pending.turns.push({ input, reply });
-      if (personalOnly) pending.personalOnly = true;
-      pending.inheritedFacts = [
-        ...(pending.inheritedFacts ?? [UNTRACKED_PROVENANCE]),
-        ...(burst.inheritedFacts ?? [UNTRACKED_PROVENANCE]),
-      ];
-      clearTimeout(pending.timer);
-    } else {
-      bursts.set(key, burst);
-    }
-    const active = bursts.get(key)!;
-    if (active.turns.length >= maxTurns) {
-      bursts.delete(key);
-      return flush(active);
-    }
-    const timer = setTimeout(() => {
-      bursts.delete(key);
-      flush(active).catch((e) => onError?.(e, active));
-    }, quietMs);
-    timer.unref?.();
-    active.timer = timer;
+  if (!agent.oneShot) throw new Error("Memory extraction utility model is unavailable");
+  const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
+  const out = await withAbort(() => agent.oneShot!(MEMORY_EXTRACTION_PROMPT, transcript, "memory_capture"), signal);
+  if (out === undefined) throw new Error("Memory extraction utility model returned no response");
+  return {
+    facts: parseFacts(out),
+    sensitivity: parseSensitivity(/^SENSITIVITY: (ordinary|unknown|sensitive|restricted)\n/.exec(out ?? "")?.[1]),
   };
 }
 
-function burstCaptureContext(burst: Burst): MemoryCaptureContext {
+function burstCaptureContext(burst: MemoryCaptureBurst): MemoryCaptureContext {
   return {
     mode: "automatic",
     ...(burst.personalOnly ? { personalOnly: true } : {}),
@@ -185,41 +101,41 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
   };
 }
 
-export function createPerTurnStrategy(deps: {
+interface CaptureDeps {
   agent: ModelUtilities;
   memory: MemoryService;
-  captureQuietMs?: number;
-  captureMaxTurns?: number;
-  onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
-}): MemoryStrategy {
-  async function flush(burst: Burst): Promise<void> {
-    const by = burst.actorId ? { actorId: burst.actorId, context: "conversation" as const } : undefined;
-    if (burst.document?.mode === "shared" && deps.agent.oneShot) {
-      const output = await deps.agent.oneShot(
-        DOCUMENT_MEMORY_EXTRACTION_PROMPT,
-        JSON.stringify(burst.turns),
-        "memory_capture",
-      );
-      const { facts, sensitivity } = parseDocumentFacts(output ?? "");
-      for (const applicability of ["document", "team"] as const) {
-        const texts = facts.filter((fact) => fact.applicability === applicability).map((fact) => fact.text);
-        if (!texts.length) continue;
-        const scope = applicability === "team" ? burst.document.teamScopeId : burst.document.documentScopeId;
-        await deps.memory.capture(scope, texts, Date.now(), by, { ...burstCaptureContext(burst), sensitivity });
-      }
-      return;
-    }
-    const { facts, sensitivity } = await extractFacts(deps.agent, burst.turns);
-    if (!facts.length) return;
-    await deps.memory.capture(burst.scopeId, facts, Date.now(), by, { ...burstCaptureContext(burst), sensitivity });
-  }
+}
 
-  return {
-    onTurnEnd: createBurstBuffer(
-      deps.captureQuietMs ?? 0,
-      deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,
-      flush,
-      (e, burst) => deps.onCaptureError?.(e, burst.scopeId),
-    ),
-  };
+export async function captureMemoryTurns(
+  deps: CaptureDeps,
+  turns: readonly MemoryCaptureTurn[],
+  id?: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const burst = memoryCaptureBurst(turns, id);
+  const by = burst.actorId ? { actorId: burst.actorId, context: "conversation" as const } : undefined;
+  if (burst.document?.mode === "shared" && deps.agent.oneShot) {
+    const output = await withAbort(
+      () => deps.agent.oneShot!(DOCUMENT_MEMORY_EXTRACTION_PROMPT, JSON.stringify(burst.turns), "memory_capture"),
+      signal,
+    );
+    const { facts, sensitivity } = parseDocumentFacts(output ?? "");
+    for (const applicability of ["document", "team"] as const) {
+      const texts = facts.filter((fact) => fact.applicability === applicability).map((fact) => fact.text);
+      if (!texts.length) continue;
+      const scope = applicability === "team" ? burst.document.teamScopeId : burst.document.documentScopeId;
+      signal?.throwIfAborted();
+      await deps.memory.capture(scope, texts, Date.now(), by, { ...burstCaptureContext(burst), sensitivity });
+    }
+    return;
+  }
+  const { facts, sensitivity } = await extractFacts(deps.agent, burst.turns, signal);
+  signal?.throwIfAborted();
+  if (facts.length)
+    await deps.memory.capture(burst.scopeId, facts, Date.now(), by, { ...burstCaptureContext(burst), sensitivity });
+}
+
+export function createPerTurnStrategy(deps: CaptureDeps): MemoryStrategy {
+  return { onTurnEnd: (turn) => captureMemoryTurns(deps, [turn]) };
 }

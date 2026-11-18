@@ -1,6 +1,7 @@
+import { jobQueueMisconfigured } from "../src/persistence/job-queue.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPgBossCronQueue, cronQueueMisconfigured, installCronQueue } from "../src/cron/job-queue.ts";
+import { createPgBossCronQueue, installCronQueue } from "../src/cron/job-queue.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { grantAppRole } from "../src/persistence/app-role-grants.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -17,7 +18,7 @@ test("the owner installs the cron queue at migrate time and the app login only u
     () => undefined,
     (error: unknown) => error,
   );
-  assert.ok(cronQueueMisconfigured(refused), String(refused));
+  assert.ok(jobQueueMisconfigured(refused), String(refused));
   await installCronQueue(ownerUrl(databaseUrl).toString());
   const owner = createPgPool(ownerUrl(databaseUrl).toString());
   await grantAppRole((text, params) => owner.q(text, params), APP_ROLE, "pgboss").finally(() => owner.close());

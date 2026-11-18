@@ -282,8 +282,6 @@ test("recorded document extraction routes a team procedure and workbook assumpti
     const strategy = createPerTurnStrategy({
       memory,
       agent: { oneShot: async () => fixture.response },
-      captureQuietMs: 180_000,
-      captureMaxTurns: 1,
     });
     await strategy.onTurnEnd!({
       ...fixture.turns[0]!,

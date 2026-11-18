@@ -48,40 +48,9 @@ test("redirected capture writes only to the resolved target, not the speaker's n
   assert.equal(await memory.read(CHANNEL), "");
 });
 
-test("burst debounce: turns within the quiet window flush as one extraction after it elapses", async () => {
+test("different speakers in one channel keep capture in the channel", async () => {
   const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory, captureQuietMs: 1_000 });
-  await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
-  await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
-
-  assert.equal(await memory.read(DM), "", "nothing captured before the quiet window elapses");
-  await settle(async () =>
-    /fact one is alpha[\s\S]*fact two is beta|fact two is beta[\s\S]*fact one is alpha/.test(await memory.read(DM)),
-  );
-  const body = await memory.read(DM);
-  assert.match(body, /fact one is alpha/);
-  assert.match(body, /fact two is beta/);
-});
-
-test("burst debounce: a full burst flushes immediately at captureMaxTurns", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({
-    agent: createMockAgent(),
-    memory,
-    captureQuietMs: 60_000,
-    captureMaxTurns: 2,
-  });
-  await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
-  await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
-
-  const body = await memory.read(DM);
-  assert.match(body, /fact one is alpha/, "cap reached — no waiting on the quiet window");
-  assert.match(body, /fact two is beta/);
-});
-
-test("burst debounce: different speakers in one channel keep separate bursts in the channel", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory, captureQuietMs: 30 });
+  const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory });
   await strategy.onTurnEnd!({
     scopeId: CHANNEL,
     input: "remember that my task list is ship the launch",

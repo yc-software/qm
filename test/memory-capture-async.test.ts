@@ -264,3 +264,35 @@ test("an addressed turn asks memory with the message the member sent, not its wa
   assert.ok(contexts.length > 0);
   assert.deepEqual(new Set(contexts.map((context) => context?.input)), new Set([message]));
 });
+
+test("a turn acknowledges completion only after its capture handoff is durable", async () => {
+  const handedOff = Promise.withResolvers<void>();
+  const persist = Promise.withResolvers<void>();
+  let completed = false;
+  const orch = buildOrchestrator(createMockAgent(), undefined, {
+    enqueueTurnEnd: async () => {
+      handedOff.resolve();
+      await persist.promise;
+    },
+  });
+  const pending = orch.handleTurn(dm("dm:U1:durable-handoff", "remember this procedure")).then((result) => {
+    completed = true;
+    return result;
+  });
+  await handedOff.promise;
+  assert.equal(completed, false);
+  persist.resolve();
+  assert.equal((await pending).status, "ok");
+});
+
+test("a failed capture handoff cannot acknowledge a completed turn", async () => {
+  const orch = buildOrchestrator(createMockAgent(), undefined, {
+    enqueueTurnEnd: async () => {
+      throw new Error("capture store unavailable");
+    },
+  });
+  await assert.rejects(
+    orch.handleTurn(dm("dm:U1:failed-handoff", "remember this procedure")),
+    /capture store unavailable/,
+  );
+});
