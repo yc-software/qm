@@ -5,7 +5,7 @@ import { rosterIds, samePerson } from "../../directory/person.ts";
 import { composioUserIds, credential, request as composioRequest } from "./composio.ts";
 import type { ApiCtx } from "./route.ts";
 
-async function personSlackAccounts(ctx: ApiCtx, principalId: string) {
+export async function personSlackAccounts(ctx: ApiCtx, principalId: string) {
   const ids = rosterIds(principalId);
   const records = (await ctx.deps.slackAccounts?.getMany(ids)) ?? [];
   return records

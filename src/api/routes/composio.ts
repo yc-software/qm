@@ -1,17 +1,10 @@
-import { hasSlackAccount } from "./slack-composio.ts";
+import { hasSlackAccount, personSlackAccounts } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
-import {
-  canonicalPerson,
-  ownsPersonalScope,
-  personIds,
-  pickForPerson,
-  rosterIds,
-  samePerson,
-} from "../../directory/person.ts";
+import { canonicalPerson, ownsPersonalScope, personIds, pickForPerson, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
@@ -541,9 +534,7 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
 
   ctx.res.setHeader("Cache-Control", "no-store");
   let failed = false;
-  for (const id of rosterIds(access.principal)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
-    if (!record || !samePerson(record.memberId, access.principal)) continue;
+  for (const record of await personSlackAccounts(ctx, access.principal)) {
     try {
       const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
       const toolkit = account.toolkit as { slug?: string } | undefined;
