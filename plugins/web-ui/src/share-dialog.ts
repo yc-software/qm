@@ -21,7 +21,10 @@ import { appState } from "./shell-state";
 interface Grant {
   scope: string;
   permission: "read" | "write";
+  status?: "pending" | "on" | "edited";
 }
+
+const STATUS = { pending: "Pending", on: "On", edited: "Edited their copy" };
 
 const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
 
@@ -338,7 +341,7 @@ export async function openShare(
               >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${grant.status ? html`<span class="badge">${STATUS[grant.status]}</span>` : nothing}${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
         ${
           offers.org

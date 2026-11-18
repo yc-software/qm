@@ -32,6 +32,25 @@ interface CronLike {
   botActor?: boolean;
   loopId?: string;
   taskAuthor?: "automation";
+  sharedFrom?: string;
+  sharedBy?: string;
+  forkedAt?: number;
+  copies?: Array<{ id: string; owner: string; enabled: boolean; forkedAt?: number }>;
+}
+
+function copyState(copy: { enabled: boolean; forkedAt?: number }): string {
+  if (copy.forkedAt) return "edited their copy";
+  return copy.enabled ? "on" : "paused";
+}
+
+function fmtSharing(c: CronLike): string {
+  let out = "";
+  if (c.sharedFrom)
+    out += c.forkedAt
+      ? `\n    shared copy of ${c.sharedFrom}${c.sharedBy ? ` (${c.sharedBy})` : ""}, since edited here: the original's edits no longer reach it`
+      : `\n    linked copy of ${c.sharedFrom}${c.sharedBy ? ` (${c.sharedBy})` : ""}: the original's edits reach it until it is edited here${c.enabled ? "" : "; paused until its owner turns it on"}`;
+  if (c.copies?.length) out += `\n    shared with: ${c.copies.map((k) => `${k.owner} (${copyState(k)})`).join(", ")}`;
+  return out;
 }
 
 function fmtCronLine(c: CronLike, preview = false): string {
@@ -58,7 +77,7 @@ function fmtCronLine(c: CronLike, preview = false): string {
   else if (!preview && c.taskAuthor === "automation")
     authority =
       "\n    authority: none — an automated turn wrote this task; its owner restores theirs by rewriting it on a turn they send";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${note}`;
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${preview ? "" : fmtSharing(c)}${note}`;
 }
 
 function fmtCronCreated(r: {
