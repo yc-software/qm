@@ -66,16 +66,16 @@ export function cronDeliveryList(
   return html`<div class="cron-card cron-delivery-list">
       ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
       ${(c.copies ?? []).map((copy) =>
-      deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), copyStatus(copy)),
-    )}
+        deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), copyStatus(copy)),
+      )}
       ${shares.map((g) => deliveryRow(granteeName(g.scope), g.permission === "write" ? "Can view and edit" : "Can view"))}
       ${
-      mine
-        ? html`<button class="cron-delivery-add" type="button" @click=${onAdd}>
-            ${icon(Plus, 15)}<span>Add people</span>
-          </button>`
-        : nothing
-    }
+        mine
+          ? html`<button class="cron-delivery-add" type="button" @click=${onAdd}>
+              ${icon(Plus, 15)}<span>Add people</span>
+            </button>`
+          : nothing
+      }
     </div>
     ${c.copies?.length ? html`<div class="cron-section-note">Each person gets a linked copy that runs as them.</div>` : nothing}`;
 }
