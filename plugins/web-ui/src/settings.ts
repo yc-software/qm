@@ -17,6 +17,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
+import { notificationsSettingsRow, onNotificationStateChange } from "./notifications";
 import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
@@ -632,7 +633,7 @@ function generalPane(): TemplateResult {
   return html`
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${desktopRow()} ${accountRow()}
+      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${notificationsSettingsRow()} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
@@ -680,6 +681,8 @@ function drawSettings(): void {
   }
   render(settingsPane(), settingsHost);
 }
+
+onNotificationStateChange(drawSettings);
 
 export function renderSettings(): void {
   const section = settingsSection();

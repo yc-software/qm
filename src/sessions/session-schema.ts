@@ -604,6 +604,11 @@ END $bot_work$`,
   ],
 };
 
+const PARTICIPANT_NOTIFIED_AT: PgMigrationDefinition = {
+  id: "sessions/store/0065-participant-notified-at",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE participants ADD COLUMN IF NOT EXISTS notified_at BIGINT`],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -626,6 +631,7 @@ export const SESSION_MIGRATIONS = [
   DROP_PARTICIPANT_WINDOWS,
   HUMAN_PROMPT_INDEX,
   BOT_WORK_COLUMN,
+  PARTICIPANT_NOTIFIED_AT,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

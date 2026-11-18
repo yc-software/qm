@@ -6,6 +6,7 @@ import type {
   ParticipantPage,
   ParticipantPageQuery,
   ParticipantScope,
+  ReplyNotificationClaim,
   SessionStore,
 } from "./session-store.ts";
 import { AGENT_REPLY_ITEM, msOf, TENANT } from "./items.ts";
@@ -38,6 +39,7 @@ export function createSessionParticipants(
   | "listParticipants"
   | "distinctParticipants"
   | "participantsOf"
+  | "claimReplyNotifications"
 > {
   const participantSessions: SessionStore["listByParticipant"] = async (principalId, opts) => {
     const limit = opts?.limit === undefined ? undefined : Math.max(0, Math.floor(opts.limit));
@@ -189,6 +191,28 @@ export function createSessionParticipants(
     async participantsOf(sessionId): Promise<string[]> {
       const rows = await q("SELECT principal_id FROM participants WHERE session_id = $1", [sessionId]);
       return rows.map((r) => r.principal_id as string);
+    },
+
+    async claimReplyNotifications(sessionId): Promise<ReplyNotificationClaim[]> {
+      const rows = await q(
+        `WITH reply AS (
+           SELECT e.text, ${msOf("e.created_at")} AS at FROM items e
+            WHERE e.tenant_id = ${TENANT} AND e.session_id = $1 AND ${AGENT_REPLY_ITEM("e")}
+            ORDER BY e.seq DESC LIMIT 1
+         )
+         UPDATE participants p SET notified_at = reply.at
+           FROM sessions s, reply
+          WHERE p.session_id = $1 AND s.id = p.session_id
+            AND s.parent_session_id IS NULL AND s.thread_ref LIKE 'web:%'
+            AND reply.at > COALESCE(p.read_at, 0) AND reply.at > COALESCE(p.notified_at, 0)
+         RETURNING p.principal_id, COALESCE(p.title, s.title) AS title, COALESCE(reply.text, '') AS text`,
+        [sessionId],
+      );
+      return rows.map((r) => ({
+        principalId: r.principal_id as string,
+        title: (r.title as string | null) ?? null,
+        text: r.text as string,
+      }));
     },
   };
 }

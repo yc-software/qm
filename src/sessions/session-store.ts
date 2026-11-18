@@ -503,4 +503,12 @@ export interface SessionStore {
   distinctParticipants(): Promise<string[]>;
 
   participantsOf(sessionId: string): Promise<string[]>;
+
+  claimReplyNotifications(sessionId: string): Promise<ReplyNotificationClaim[]>;
+}
+
+export interface ReplyNotificationClaim {
+  principalId: string;
+  title: string | null;
+  text: string;
 }
