@@ -217,33 +217,35 @@ function present<T, R>(value: T | Error | undefined, entry: (value: T) => R): R[
   return value === undefined ? [] : [entry(value)];
 }
 
-function batchedByPrincipal<V>(read: (refs: readonly string[], principalId: string) => Promise<Map<string, V>>) {
-  const loader = perTenant(
-    () =>
-      new DataLoader<readonly [string, string], V | undefined>(
-        async (keys) => {
-          const results = new Map<string, Map<string, V>>();
-          await Promise.all(
-            [...Map.groupBy(keys, ([principalId]) => principalId)].map(async ([principalId, held]) =>
-              results.set(
-                principalId,
-                await read(
-                  held.map(([, ref]) => ref),
-                  principalId,
-                ),
-              ),
+function principalLoader<V>(read: (refs: readonly string[], principalId: string) => Promise<Map<string, V>>) {
+  return new DataLoader<readonly [string, string], V | undefined>(
+    async (keys) => {
+      const results = new Map<string, Map<string, V>>();
+      await Promise.all(
+        [...Map.groupBy(keys, ([principalId]) => principalId)].map(async ([principalId, held]) =>
+          results.set(
+            principalId,
+            await read(
+              held.map(([, ref]) => ref),
+              principalId,
             ),
-          );
-          return keys.map(([principalId, ref]) => results.get(principalId)?.get(ref));
-        },
-        { cache: false },
-      ),
+          ),
+        ),
+      );
+      return keys.map(([principalId, ref]) => results.get(principalId)?.get(ref));
+    },
+    { cache: false },
   );
-  return async (refs: readonly string[], principalId: string): Promise<Map<string, V>> => {
-    const unique = [...new Set(refs)];
-    const found = await loader().loadMany(unique.map((ref) => [principalId, ref] as const));
-    return new Map(unique.flatMap((ref, index) => present(found[index], (value) => [ref, value] as const)));
-  };
+}
+
+async function loadByPrincipal<V>(
+  loader: DataLoader<readonly [string, string], V | undefined>,
+  refs: readonly string[],
+  principalId: string,
+): Promise<Map<string, V>> {
+  const unique = [...new Set(refs)];
+  const found = await loader.loadMany(unique.map((ref) => [principalId, ref] as const));
+  return new Map(unique.flatMap((ref, index) => present(found[index], (value) => [ref, value] as const)));
 }
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
@@ -319,24 +321,26 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     );
   }
 
-  const memberLoader = perTenant(
-    () =>
-      new DataLoader<string, DirectoryMember | undefined>(
-        async (ids) => {
-          const found = await readMembers(ids);
-          return ids.map((id) => found.get(id));
-        },
-        { cache: false },
-      ),
-  );
+  const loaders = perTenant(() => ({
+    members: new DataLoader<string, DirectoryMember | undefined>(
+      async (ids) => {
+        const found = await readMembers(ids);
+        return ids.map((id) => found.get(id));
+      },
+      { cache: false },
+    ),
+    channels: principalLoader(readChannelMemberships),
+    groups: principalLoader(readGroupMemberships),
+  }));
   async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
     const ids = [...new Set(principalIds)];
-    const found = await memberLoader().loadMany(ids);
+    const found = await loaders().members.loadMany(ids);
     return new Map(ids.flatMap((id, index) => present(found[index], (member) => [id, member] as const)));
   }
-
-  const channelMemberships = batchedByPrincipal(readChannelMemberships);
-  const groupMemberships = batchedByPrincipal(readGroupMemberships);
+  const channelMemberships = (channelIds: readonly string[], principalId: string) =>
+    loadByPrincipal(loaders().channels, channelIds, principalId);
+  const groupMemberships = (groupIds: readonly string[], principalId: string) =>
+    loadByPrincipal(loaders().groups, groupIds, principalId);
 
   async function pick<T>(
     query: string,
