@@ -94,6 +94,7 @@ import {
   revealSessionSurface,
   startNewChat,
   openNewChat,
+  openConversationIds,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
@@ -1171,7 +1172,10 @@ export async function boot(): Promise<void> {
   renderList();
   shellMounted = true;
   ensureDeliveryStream();
-  startNotifications((sessionId) => void openSessionAtMessage(sessionId, null, undefined, "push"));
+  startNotifications(
+    (sessionId) => void openSessionAtMessage(sessionId, null, undefined, "push"),
+    (sessionId) => openConversationIds().includes(sessionId),
+  );
   warmDeferredChunks();
   void refreshInbox({ silent: true });
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;

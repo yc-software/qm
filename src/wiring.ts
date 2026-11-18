@@ -299,6 +299,7 @@ import {
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
 import {
   createFeatureFlagStore,
+  enabledPeople,
   externalAppSharingAllowed,
   type FeatureFlagRecord,
   type FeatureFlagStore,
@@ -2610,8 +2611,9 @@ export function buildApp(
   watchReplyNotices({
     bus: sessionStateBus,
     sessions,
+    notifiable: () => enabledPeople(featureFlags, "web_notifications"),
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-    senders: webPush ? [webPush.send] : [],
+    ...(webPush ? { send: webPush.send } : {}),
   });
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>

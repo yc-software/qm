@@ -1,11 +1,11 @@
-import type { WebPush } from "../../notifications/web-push.ts";
+import { webNotificationsOn, type WebPush } from "../../notifications/web-push.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { isObj } from "./shared.ts";
 
-function webPushFor(ctx: ApiCtx): { push: WebPush; person: string } | null {
+async function webPushFor(ctx: ApiCtx): Promise<{ push: WebPush; person: string } | null> {
   const push = ctx.deps.webPush;
-  if (push && ctx.actor) return { push, person: ctx.actor.p };
+  if (push && ctx.actor && (await webNotificationsOn(ctx.deps, ctx.actor.p))) return { push, person: ctx.actor.p };
   sendJson(ctx.res, 404, { error: "not_found" });
   return null;
 }
@@ -20,12 +20,12 @@ function httpsEndpoint(value: unknown): string | null {
 }
 
 async function vapidKey(ctx: ApiCtx): Promise<void> {
-  const found = webPushFor(ctx);
+  const found = await webPushFor(ctx);
   if (found) sendJson(ctx.res, 200, { publicKey: await found.push.publicKey() });
 }
 
 async function putSubscription(ctx: ApiCtx): Promise<void> {
-  const found = webPushFor(ctx);
+  const found = await webPushFor(ctx);
   if (!found) return;
   if (ctx.actor?.imp)
     return sendJson(ctx.res, 403, {
@@ -45,7 +45,7 @@ async function putSubscription(ctx: ApiCtx): Promise<void> {
 }
 
 async function deleteSubscription(ctx: ApiCtx): Promise<void> {
-  const found = webPushFor(ctx);
+  const found = await webPushFor(ctx);
   if (!found) return;
   const endpoint = httpsEndpoint(ctx.url.searchParams.get("endpoint"));
   if (!endpoint)

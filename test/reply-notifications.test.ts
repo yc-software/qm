@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { createECDH, randomBytes, randomUUID } from "node:crypto";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
-import { fitReplyNotice, watchReplyNotices, type ReplyNotice } from "../src/notifications/reply-notifications.ts";
+import {
+  fitReplyNotice,
+  watchReplyNotices,
+  type AddressedReplyNotice,
+  type ReplyNotice,
+} from "../src/notifications/reply-notifications.ts";
 import { createWebPush, type VapidKeyRecord, type WebPushSubscriptionRecord } from "../src/notifications/web-push.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -16,11 +21,11 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SCOPE = "personal:alice@example.com" as ScopeId;
 
-async function cronReplyInto(viewers: { alice?: number; bob?: number }) {
+async function cronReplyInto(viewers: { alice?: number; bob?: number }, thread = randomUUID()) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const bus: SessionStateBus = createMemoryEventBus<SessionStateEvent>("test");
   const deliveries = withWebTranscriptDeliveries(createDeliveryStore(), sessions, testRuns(), bus);
-  const threadRef = `web:alice@example.com:${randomUUID()}`;
+  const threadRef = `web:alice@example.com:${thread}`;
   const session = await sessions.getOrCreateByThread(threadRef, "dm", SCOPE, undefined, "web");
   await sessions.addParticipant(session.id, "alice@example.com", "Standups");
   await sessions.addParticipant(session.id, "bob@example.com");
@@ -29,9 +34,11 @@ async function cronReplyInto(viewers: { alice?: number; bob?: number }) {
   const sent: Array<{ to: string; notice: ReplyNotice }> = [];
   const shown: SessionStateEvent[] = [];
   bus.subscribe((event) => void (event.state === "notify" && shown.push(event)));
-  const sender = async (to: string, notice: ReplyNotice) => void sent.push({ to, notice });
+  const send = async (notices: readonly AddressedReplyNotice[]) =>
+    void sent.push(...notices.map(({ principalId: to, notice }) => ({ to, notice })));
+  const notifiable = async () => ["Alice@example.com"];
   for (let instance = 0; instance < 2; instance++)
-    watchReplyNotices({ bus, sessions, publicUrl: "https://qm.example", senders: [sender] });
+    watchReplyNotices({ bus, sessions, notifiable, publicUrl: "https://qm.example", send });
   const reply = async (text: string) => {
     await deliveries.enqueue({
       destination: { type: "web", target: threadRef, audienceScopeId: SCOPE },
@@ -51,8 +58,8 @@ async function cronReplyInto(viewers: { alice?: number; bob?: number }) {
   return { session, sent, shown, reply };
 }
 
-test("a reply landing in a web chat notifies each unread participant once, across instances", async () => {
-  const { session, sent, shown, reply } = await cronReplyInto({ bob: Date.now() + 60_000 });
+test("a reply landing in a web chat notifies each unread participant with notifications on once, across instances", async () => {
+  const { session, sent, shown, reply } = await cronReplyInto({});
   await reply("Standup in 10 minutes");
   const notice = {
     sessionId: session.id,
@@ -75,11 +82,12 @@ test("a reply landing in a web chat notifies each unread participant once, acros
   );
 });
 
-test("a reply already read does not notify", async () => {
-  const later = Date.now() + 60_000;
-  const { sent, reply } = await cronReplyInto({ alice: later, bob: later });
-  await reply("seen");
-  assert.deepEqual(sent, []);
+test("a reply already read, or in an app's edit chat, does not notify", async () => {
+  const read = await cronReplyInto({ alice: Date.now() + 60_000 });
+  await read.reply("seen");
+  const appEdit = await cronReplyInto({}, `app-edit:${randomUUID()}`);
+  await appEdit.reply("published");
+  assert.deepEqual([...read.sent, ...appEdit.sent], []);
 });
 
 test("long replies are cut to fit one Web Push record", () => {
@@ -110,12 +118,12 @@ test("web push posts an encrypted VAPID request and forgets subscriptions the pu
     auth: randomBytes(16).toString("base64url"),
   });
   const notice = { sessionId: "s1", title: "Hi", body: "there" };
-  await push.send("carol@example.com", notice);
+  await push.send([{ principalId: "carol@example.com", notice }]);
   assert.equal(requests[0]!.url, endpoint);
   assert.equal(requests[0]!.headers["content-encoding"], "aes128gcm");
   assert.ok(requests[0]!.headers.authorization!.startsWith(`vapid t=`));
   assert.ok(requests[0]!.headers.authorization!.endsWith(`k=${await push.publicKey()}`));
   assert.equal((await subscriptions.all()).filter((s) => s.endpoint === endpoint).length, 1);
-  await push.send("carol@example.com", notice);
+  await push.send([{ principalId: "carol@example.com", notice }]);
   assert.equal((await subscriptions.all()).filter((s) => s.endpoint === endpoint).length, 0);
 });

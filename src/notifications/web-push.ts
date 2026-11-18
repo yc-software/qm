@@ -3,8 +3,11 @@ import { generateRequestDetails, generateVAPIDKeys } from "web-push";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { canonicalPerson } from "../directory/person.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
+import { scopeId } from "../types.ts";
+import { errMessage } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
-import type { ReplyNotice } from "./reply-notifications.ts";
+import type { AddressedReplyNotice } from "./reply-notifications.ts";
 
 export interface WebPushSubscriptionRecord {
   principalId: string;
@@ -27,7 +30,7 @@ export interface WebPush {
     subscription: Pick<WebPushSubscriptionRecord, "endpoint" | "p256dh" | "auth">,
   ): Promise<void>;
   unsubscribe(principalId: string, endpoint: string): Promise<void>;
-  send(principalId: string, notice: ReplyNotice): Promise<void>;
+  send(notices: readonly AddressedReplyNotice[]): Promise<void>;
 }
 
 const VAPID_ID = "current";
@@ -40,6 +43,13 @@ export function webPushSubject(publicUrl: string | undefined): string | undefine
   } catch {
     return undefined;
   }
+}
+
+export async function webNotificationsOn(
+  deps: { featureFlags?: Pick<FeatureFlagStore, "enabled"> },
+  person: string,
+): Promise<boolean> {
+  return (await deps.featureFlags?.enabled("web_notifications", scopeId("personal", person))) === true;
 }
 
 const subscriptionId = (endpoint: string): string => createHash("sha256").update(endpoint).digest("hex");
@@ -62,18 +72,15 @@ export function createWebPush(deps: {
       createdAt: Date.now(),
     });
   };
-  const deliver = async (sub: WebPushSubscriptionRecord, payload: string, vapid: VapidKeyRecord): Promise<void> => {
+  const deliver = async (
+    sub: WebPushSubscriptionRecord,
+    payload: string,
+    vapid: { publicKey: string; privateKey: string },
+  ): Promise<void> => {
     const request = generateRequestDetails(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
       payload,
-      {
-        vapidDetails: {
-          subject: deps.subject,
-          publicKey: vapid.publicKey,
-          privateKey: decryptSecret(vapid.privateKeyEnc, deps.key),
-        },
-        urgency: "high",
-      },
+      { vapidDetails: { subject: deps.subject, ...vapid }, urgency: "high" },
     );
     const res = await send(request.endpoint, { method: request.method, headers: request.headers, body: request.body });
     if (GONE.has(res.status)) {
@@ -98,17 +105,29 @@ export function createWebPush(deps: {
       const owner = canonicalPerson(principalId);
       await deps.subscriptions.deleteIf(subscriptionId(endpoint), (stored) => stored.principalId === owner);
     },
-    async send(principalId, notice) {
+    async send(notices) {
+      const payloads = new Map<string, string[]>();
+      for (const { principalId, notice } of notices) {
+        const owner = canonicalPerson(principalId);
+        payloads.set(owner, [...(payloads.get(owner) ?? []), JSON.stringify(notice)]);
+      }
+      if (!payloads.size) return;
       const subs = await deps.subscriptions.select({
-        where: { field: "principalId", anyOfFold: [canonicalPerson(principalId)] },
+        where: { field: "principalId", anyOfFold: [...payloads.keys()] },
       });
       if (!subs.length) return;
-      const vapid = await vapidRecord();
-      const payload = JSON.stringify(notice);
-      const results = await Promise.allSettled(subs.map((sub) => deliver(sub, payload, vapid)));
+      const stored = await vapidRecord();
+      const vapid = { publicKey: stored.publicKey, privateKey: decryptSecret(stored.privateKeyEnc, deps.key) };
+      const sends = subs.flatMap((sub) =>
+        (payloads.get(canonicalPerson(sub.principalId)) ?? []).map((payload) => deliver(sub, payload, vapid)),
+      );
+      const results = await Promise.allSettled(sends);
       const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason as unknown] : []));
       if (failures.length)
-        throw new AggregateError(failures, `web push failed for ${failures.length} of ${subs.length} subscriptions`);
+        throw new AggregateError(
+          failures,
+          `web push failed for ${failures.length} of ${sends.length} deliveries; first: ${errMessage(failures[0])}`,
+        );
     },
   };
 }

@@ -1,5 +1,5 @@
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
-import { isWebThread, type SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { reportFailure } from "../util/errors.ts";
 
@@ -10,7 +10,10 @@ export interface ReplyNotice {
   url?: string;
 }
 
-export type ReplyNoticeSender = (principalId: string, notice: ReplyNotice) => Promise<void>;
+export interface AddressedReplyNotice {
+  principalId: string;
+  notice: ReplyNotice;
+}
 
 const PUSH_RECORD_BYTES = 4096;
 const AES128GCM_OVERHEAD_BYTES = 103;
@@ -35,36 +38,39 @@ export function fitReplyNotice(notice: ReplyNotice, maxBytes = REPLY_NOTICE_MAX_
 export function watchReplyNotices(deps: {
   bus: SessionStateBus;
   sessions: Pick<SessionStore, "claimReplyNotifications">;
+  notifiable: () => Promise<readonly string[] | "everyone">;
   publicUrl?: string;
-  senders: readonly ReplyNoticeSender[];
+  send?: (notices: readonly AddressedReplyNotice[]) => Promise<void>;
 }): () => void {
   const notify = async (event: SessionStateEvent): Promise<void> => {
-    if (!NOTIFYING_STATES.has(event.state) || !event.sessionId || !isWebThread(event.threadRef)) return;
+    if (!NOTIFYING_STATES.has(event.state) || !event.sessionId) return;
+    const people = await deps.notifiable();
+    if (people !== "everyone" && !people.length) return;
     const sessionId = event.sessionId;
+    const claims = await deps.sessions.claimReplyNotifications(sessionId, people);
+    if (!claims.length) return;
     const url = conversationWebUrl(deps.publicUrl, sessionId);
-    for (const claim of await deps.sessions.claimReplyNotifications(sessionId)) {
-      const notice = fitReplyNotice({
+    const notices = claims.map((claim) => ({
+      principalId: claim.principalId,
+      notice: fitReplyNotice({
         sessionId,
         title: claim.title?.trim() || UNTITLED,
         body: claim.text.trim(),
         ...(url ? { url } : {}),
-      });
+      }),
+    }));
+    for (const { principalId, notice } of notices)
       deps.bus.emit({
         threadRef: event.threadRef,
         sessionId,
-        participants: [claim.principalId],
+        participants: [principalId],
         state: "notify",
         notice,
         at: Date.now(),
       });
-      await Promise.all(
-        deps.senders.map((send) =>
-          send(claim.principalId, notice).catch((error: unknown) =>
-            reportFailure("notifications: send reply notice", error, `session=${sessionId}`),
-          ),
-        ),
-      );
-    }
+    await deps
+      .send?.(notices)
+      .catch((error: unknown) => reportFailure("notifications: send reply notices", error, `session=${sessionId}`));
   };
   return deps.bus.subscribe((event) =>
     notify(event).catch((error: unknown) =>
