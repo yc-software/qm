@@ -234,6 +234,7 @@ else if (a.includes("elbv2 describe-rules")) {
   if (process.env.AWS_FAKE_EXTRA_RULE === "1") rules.push({ IsDefault: false, Actions: [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "503" } }], Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/status/*"] } }] });
   console.log(JSON.stringify({ Rules: rules }));
 }
+else if (a.includes("elbv2 describe-tags")) console.log(JSON.stringify({ TagDescriptions: [] }));
 else if (a.includes("elbv2 describe-target-health") && !${JSON.stringify(ingress.statefulTargetHealth ?? false)}) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: process.env.AWS_FAKE_UNHEALTHY_TARGET === "1" ? "unhealthy" : "healthy" } }] }));
 else if (a.includes("secretsmanager describe-secret")) console.log(JSON.stringify({ ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf", DeletedDate: process.env.AWS_FAKE_SECRET_DELETED || undefined, VersionIdsToStages: { current: ["AWSCURRENT"] } }));
 else {
