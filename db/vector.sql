@@ -15,8 +15,8 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 CREATE FUNCTION public.claim_memory_tenants() RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
-    AS $$ SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL
-           UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors $$;
+    AS $$ SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL AND tenant_id IN (SELECT qm_serving_tenants())
+           UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors WHERE true AND tenant_id IN (SELECT qm_serving_tenants()) $$;
 
 CREATE FUNCTION public.memory_fact_vectors_bits() RETURNS trigger
     LANGUAGE plpgsql

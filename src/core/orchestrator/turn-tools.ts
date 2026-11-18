@@ -23,6 +23,7 @@ export function createTurnBrokers(turn: {
   session: Session;
   scopeId: ScopeId;
   memoryScopeId: ScopeId;
+  livePersonTurn: boolean;
   defaultDestination: Destination | undefined;
   provision: TurnSandboxes["provision"];
   provisionJobSandbox: TurnSandboxes["provisionJobSandbox"];
@@ -37,6 +38,7 @@ export function createTurnBrokers(turn: {
     session,
     scopeId,
     memoryScopeId,
+    livePersonTurn,
     defaultDestination,
     provision,
     provisionJobSandbox,
@@ -51,6 +53,7 @@ export function createTurnBrokers(turn: {
           provisionSandbox: provisionJobSandbox,
           onExit: finishProcess,
           scopeId: memoryScopeId,
+          livePersonTurn,
           sessionRef: conversation.threadRef,
           ...(input.runId ? { runId: input.runId } : {}),
           ttlMs: deps.backgroundJobTtlMs,

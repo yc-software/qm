@@ -12,7 +12,7 @@ async function until(check: () => boolean): Promise<void> {
   assert.fail("Side chat did not reach the expected state");
 }
 
-test("side chats follow passage order even when created in reverse order", async () => {
+test("side chats follow passage order when created in reverse order and keep an open conversation across reloads", async () => {
   const source: CoreSession = {
     id: "source",
     threadRef: "web:tester:source",
@@ -33,12 +33,15 @@ test("side chats follow passage order even when created in reverse order", async
   const items = [
     item("UserMessage", { seq: 0, createdAt: Date.now(), text: "First garden. Second garden. Third garden." }),
   ];
+  let release = () => {};
+  let held: Promise<void> | undefined;
   const h = await harness({
     path: "/s/source",
     session: source,
     listSessions: [source, ...sides],
     items,
     api(path) {
+      if (held && path.endsWith("/source/side-chats")) return held.then(() => Response.json({ sessions: sides }));
       const side = sides.find((side) => path.startsWith(`/api/sessions/${side.id}?`));
       return side ? Response.json({ session: side, items }) : undefined;
     },
@@ -52,6 +55,15 @@ test("side chats follow passage order even when created in reverse order", async
       [...document.querySelectorAll<HTMLElement>(".side-chat-card")].map((card) => card.dataset.sideChatId),
       ["side-0", "side-1", "side-2"],
     );
+    const card = (id: number) => document.querySelector(`.side-chat-card[data-side-chat-id="side-${id}"]`);
+    for (const id of [0, 2]) {
+      held = id ? new Promise((resolve) => (release = resolve)) : undefined;
+      card(id)!.querySelector<HTMLButtonElement>(".side-chat-marker")!.click();
+      await until(() => Boolean(card(id)?.querySelector(".side-chat-conversation .custom-chat")));
+    }
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(card(2)!.querySelector(".side-chat-conversation .custom-chat"));
   } finally {
     await h.close();
   }

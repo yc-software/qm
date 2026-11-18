@@ -490,10 +490,18 @@ final class NativeVoiceModel: NSObject {
     do {
       let signal: VoiceSignal = try await client.fetch(
         "api/runs/\(run.apiComponent)/signal",
-        body: ["kind": "steer", "text": text, "threadRef": threadRef, "scopeId": scopeID],
+        body: [
+          "kind": "steer", "text": text, "threadRef": threadRef, "scopeId": scopeID,
+          "remark": remark,
+        ],
         accepting: [409])
       guard current == revision, !Task.isCancelled else { return }
-      if signal.accepted == true || signal.replayed == true {
+      if signal.accepted == true, signal.queuedRunId != nil, remark {
+        transcript.appendStatus("Your words will reach QM after its current task")
+      } else if signal.accepted == true, let queued = signal.queuedRunId {
+        transcript.appendStatus("QM will run this as its own task")
+        await follow(queued, delegation: delegation, revision: current)
+      } else if signal.accepted == true || signal.replayed == true {
         transcript.appendStatus(remark ? "Passed your words to QM" : "Added to QM's running task")
         bridge.steered(run: run, delegation: delegation, remark: remark)
         flushEvents()
@@ -581,6 +589,7 @@ final class NativeVoiceModel: NSObject {
 private struct VoiceSignal: Decodable {
   let accepted: Bool?
   let replayed: Bool?
+  let queuedRunId: String?
 }
 
 extension NativeVoiceModel: RTCPeerConnectionDelegate, RTCDataChannelDelegate {

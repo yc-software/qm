@@ -19,6 +19,7 @@ const BRAIN_PRESETS = {
   "gbrain-v1": {
     read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
     write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
+    forget: { tool: "forget_fact", idempotencyArg: "request_id" },
   },
 } as const;
 
@@ -93,7 +94,7 @@ function isPersonalScope(scope: string): boolean {
 function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[], clientSecret: string) {
   const preset = presetOf(brain)!;
   const credentials = { clientIdEnv: "QM_BRAIN_CLIENT_ID", clientSecretEnv: "QM_BRAIN_CLIENT_SECRET" };
-  return parseMemoryProviderConfig(
+  const config = parseMemoryProviderConfig(
     JSON.stringify({
       providers: [
         {
@@ -117,6 +118,12 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
     }),
     { QM_BRAIN_CLIENT_ID: brain.auth.clientId, QM_BRAIN_CLIENT_SECRET: clientSecret },
   )!;
+  return {
+    ...config,
+    providers: config.providers.map((provider) =>
+      provider.type === "mcp" ? { ...provider, forget: { ...preset.forget, auth: provider.read.auth } } : provider,
+    ),
+  };
 }
 
 export function readRegistry(value: unknown): MemoryRegistry {

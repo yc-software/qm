@@ -35,7 +35,7 @@ export type TurnSurfaceOrigin = {
   workspace: string;
   policyNamespace?: string;
   replyThread?: string;
-} & ({ audience: "internal" } | { audience: "external"; access: ExternalAudienceAccess });
+} & ({ audience: "internal" } | { audience: "external"; access: ExternalAudienceAccess; guests?: true });
 
 interface OutboundMessage {
   text: string;

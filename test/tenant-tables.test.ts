@@ -22,6 +22,8 @@ const UNTENANTED: Record<string, string> = {
   superserve_config_epochs: "numbers the installation's sandbox configuration generations, shared by every tenant",
   fly_peer_claims: "assigns the installation's WireGuard peers to core processes",
   fly_deploy_ports: "allocates ports inside the installation's shared Fly app across every tenant's deployments",
+  tenant_external_orgs:
+    "maps a trusted provider's organization to the tenant it self-served, read before any tenant binds and only through a definer function",
 };
 
 describe("tenant tables", () => {

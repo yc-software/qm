@@ -1361,3 +1361,53 @@ test("Slack reply failures redact both provider credentials from diagnostics", a
   assert.match(logged.join("\n"), /provider rejected/);
   assert.doesNotMatch(logged.join("\n"), /private-key|alice-user/);
 });
+
+test("apps a connector serves elsewhere link to their own connect page and report that connector's status", async () => {
+  const f = fixture();
+  await f.own();
+  const apps = [
+    { toolkit: "gmail", name: "Gmail", connectUrl: "https://host.example/google" },
+    { toolkit: "granola", name: "Granola", connectUrl: "https://host.example/integrations" },
+  ];
+  f.deps.mcpServers = {
+    list: async () => [{ id: "host", enabled: true, apps }],
+  } as unknown as ServerDeps["mcpServers"];
+  f.deps.mcpToolService = {
+    appConnections: async (principal: string) =>
+      apps.map((app) => ({ ...app, connector: "host", connected: principal === "alice" && app.toolkit === "gmail" })),
+  } as unknown as ServerDeps["mcpToolService"];
+  f.replies.push({
+    items: [
+      { slug: "gmail", name: "Gmail" },
+      { slug: "github", name: "GitHub" },
+    ],
+    next_cursor: null,
+  });
+  const catalog = (await f.invoke("/v1/composio/toolkits")).data.items;
+  assert.deepEqual(
+    catalog.map((x: { id: string; connectUrl?: string }) => [x.id, x.connectUrl]),
+    [
+      ["granola", "https://host.example/integrations"],
+      ["gmail", "https://host.example/google"],
+      ["github", undefined],
+    ],
+  );
+  f.replies.push({ items: [], next_cursor: null });
+  assert.deepEqual((await f.invoke("/v1/composio/connections")).data.items, [
+    { id: "", toolkit: "gmail", connector: "host", missingScopes: [] },
+  ]);
+  const refused = await f.invoke("/v1/composio/authorize", { toolkit: "gmail" });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.data.connectUrl, "https://host.example/google");
+  assert.equal(f.calls.length, 2);
+
+  const bare = fixture();
+  bare.deps.mcpServers = f.deps.mcpServers;
+  bare.deps.mcpToolService = f.deps.mcpToolService;
+  assert.deepEqual((await bare.invoke("/v1/composio/connections")).data.items, [
+    { id: "", toolkit: "gmail", connector: "host", missingScopes: [] },
+  ]);
+  assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
+  assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);
+  assert.equal(bare.calls.length, 0);
+});

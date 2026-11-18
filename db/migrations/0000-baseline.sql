@@ -380,7 +380,7 @@ CREATE FUNCTION public.claim_expired_file_uploads(bigint) RETURNS TABLE(tenant_i
     SET search_path TO 'public', 'pg_temp'
     AS $_$ WITH due AS (
              SELECT tenant_id, id FROM file_uploads
-             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
+             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed') AND tenant_id IN (SELECT qm_serving_tenants())
              ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
            ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
              WHERE file_uploads.tenant_id=due.tenant_id AND file_uploads.id=due.id
@@ -389,7 +389,8 @@ CREATE FUNCTION public.claim_expired_file_uploads(bigint) RETURNS TABLE(tenant_i
 CREATE FUNCTION public.claim_expired_process_sessions(bigint) RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
-    AS $_$ SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at <= $1 $_$;
+    AS $_$ SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at <= $1 AND tenant_id IN (SELECT qm_serving_tenants())
+             ORDER BY expires_at, process_id $_$;
 
 CREATE FUNCTION public.claim_expired_runs(now bigint) RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
@@ -984,7 +985,7 @@ CREATE FUNCTION public.claim_sharing_postures_tenants() RETURNS TABLE(tenant_id 
 CREATE FUNCTION public.claim_signaled_runs() RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
-    AS $$ SELECT DISTINCT tenant_id, run_id FROM run_signals WHERE consumed_at IS NULL ORDER BY tenant_id, run_id $$;
+    AS $$ SELECT DISTINCT tenant_id, run_id FROM run_signals WHERE consumed_at IS NULL AND tenant_id IN (SELECT qm_serving_tenants()) ORDER BY tenant_id, run_id $$;
 
 CREATE FUNCTION public.claim_skill_bundles() RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
@@ -1346,6 +1347,39 @@ BEGIN
   RETURN bound::uuid;
 END $$;
 
+CREATE FUNCTION public.qm_self_serve_provisioned(tenant uuid, key text) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$
+  BEGIN
+    UPDATE tenant_external_orgs o SET provisioned_at = now() WHERE o.tenant = $1 AND o.provisioned_at IS NULL;
+    IF FOUND THEN
+      UPDATE tenants t SET settings = t.settings || jsonb_build_object('modelGatewayKey', $2, 'serving', true)
+        WHERE t.id = $1;
+    END IF;
+  END $_$;
+
+CREATE FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand text) RETURNS TABLE(tenant uuid, created boolean, provisioned boolean, serving boolean)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$
+  DECLARE found uuid; fresh boolean := false;
+  BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended('qm-self-serve:' || $1 || chr(10) || $2, 0));
+    SELECT o.tenant INTO found FROM tenant_external_orgs o WHERE o.issuer = $1 AND o.org_id = $2;
+    IF found IS NULL THEN
+      IF NOT EXISTS (SELECT 1 FROM tenants) THEN
+        RETURN;
+      END IF;
+      INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3, 'serving', false, 'deploymentModelKey', false))
+        RETURNING id INTO found;
+      INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, $2, found);
+      fresh := true;
+    END IF;
+    RETURN QUERY SELECT found, fresh, o.provisioned_at IS NOT NULL, t.settings->>'serving' IS DISTINCT FROM 'false'
+      FROM tenants t JOIN tenant_external_orgs o ON o.tenant = t.id WHERE t.id = found;
+  END $_$;
+
 CREATE FUNCTION public.qm_serving_tenants() RETURNS SETOF uuid
     LANGUAGE plpgsql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
@@ -1483,7 +1517,16 @@ CREATE FUNCTION public.qm_tenants_for_principal(principal text) RETURNS SETOF uu
 CREATE FUNCTION public.qm_tenants_with_slack() RETURNS SETOF uuid
     LANGUAGE plpgsql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
-    AS $$ BEGIN RETURN QUERY SELECT DISTINCT tenant_id FROM slack_installation WHERE json->>'disabled' IS DISTINCT FROM 'true'; END $$;
+    AS $$ BEGIN RETURN QUERY SELECT DISTINCT tenant_id FROM slack_installation WHERE json->>'disabled' IS DISTINCT FROM 'true' AND tenant_id IN (SELECT qm_serving_tenants()); END $$;
+
+CREATE FUNCTION public.session_bot_work(spawn_meta text) RETURNS boolean
+    LANGUAGE plpgsql IMMUTABLE
+    AS $$
+BEGIN
+  RETURN COALESCE(spawn_meta::jsonb -> 'botActor' = 'true'::jsonb, false);
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RETURN false;
+END $$;
 
 CREATE FUNCTION public.spend_usage_json(t text) RETURNS jsonb
     LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
@@ -2812,6 +2855,7 @@ CREATE TABLE public.sessions (
     runtime jsonb,
     persona_id text,
     tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL,
+    bot_work boolean GENERATED ALWAYS AS (public.session_bot_work(spawn_meta)) STORED NOT NULL,
     CONSTRAINT sessions_fork_provenance_pair CHECK (((forked_from_session_id IS NULL) = (fork_boundary_seq IS NULL)))
 )
 WITH (fillfactor='70');
@@ -2957,6 +3001,14 @@ CREATE TABLE public.teams (
     created_by text NOT NULL,
     created_at bigint NOT NULL,
     tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL
+);
+
+CREATE TABLE public.tenant_external_orgs (
+    issuer text NOT NULL,
+    org_id text NOT NULL,
+    tenant uuid NOT NULL,
+    provisioned_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 CREATE TABLE public.tenants (
@@ -3513,6 +3565,12 @@ ALTER TABLE ONLY public.team_rooms
 
 ALTER TABLE ONLY public.teams
     ADD CONSTRAINT teams_pkey PRIMARY KEY (tenant_id, team_id);
+
+ALTER TABLE ONLY public.tenant_external_orgs
+    ADD CONSTRAINT tenant_external_orgs_pkey PRIMARY KEY (issuer, org_id);
+
+ALTER TABLE ONLY public.tenant_external_orgs
+    ADD CONSTRAINT tenant_external_orgs_tenant_key UNIQUE (tenant);
 
 ALTER TABLE ONLY public.tenants
     ADD CONSTRAINT tenants_pkey PRIMARY KEY (id);
@@ -4362,6 +4420,9 @@ ALTER TABLE ONLY public.team_rooms
 ALTER TABLE ONLY public.teams
     ADD CONSTRAINT teams_tenant FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);
 
+ALTER TABLE ONLY public.tenant_external_orgs
+    ADD CONSTRAINT tenant_external_orgs_tenant_fkey FOREIGN KEY (tenant) REFERENCES public.tenants(id);
+
 ALTER TABLE ONLY public.user_links
     ADD CONSTRAINT user_links_linked_by_fkey FOREIGN KEY (tenant_id, linked_by) REFERENCES public.users(tenant_id, id) ON DELETE SET NULL (linked_by);
 
@@ -4682,6 +4743,8 @@ ALTER TABLE public.team_rooms ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.teams ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE public.tenant_external_orgs ENABLE ROW LEVEL SECURITY;
+
 CREATE POLICY tenant_isolation ON public.ack_emoji USING ((tenant_id = public.qm_bound_tenant())) WITH CHECK ((tenant_id = public.qm_bound_tenant()));
 
 CREATE POLICY tenant_isolation ON public.ack_emoji_picks USING ((tenant_id = public.qm_bound_tenant())) WITH CHECK ((tenant_id = public.qm_bound_tenant()));
@@ -4999,5 +5062,9 @@ ALTER TABLE public.webhook_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.webhooks ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.webui_model_configs ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON FUNCTION public.qm_self_serve_provisioned(tenant uuid, key text) FROM PUBLIC;
+
+REVOKE ALL ON FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand text) FROM PUBLIC;
 
 INSERT INTO public.tenants DEFAULT VALUES;

@@ -2,6 +2,7 @@
 0000-tenancy/base/retire-0116-keys
 0000-tenancy/base/retire-0116-keys/repair
 0000-tenancy/boot-tenant-function
+0000-tenancy/external-orgs
 0000-tenancy/legacy-tenant
 0000-tenancy/retire-0116-hosts
 0000-tenancy/serving-tenants-function
@@ -1317,6 +1318,7 @@ files/uploads/0003-tenants/2-references
 files/uploads/0003-tenants/2-tenant-policy
 files/uploads/0003-tenants/3-policy
 files/uploads/0004-claims
+files/uploads/0005-serving-claim-expired
 memory/facts/0000-records-column
 memory/facts/0001
 memory/facts/0002-text-hash
@@ -1342,6 +1344,7 @@ processes/registry/0005-tenants/3-policy
 processes/registry/0006-claim-expired
 processes/registry/0007-bot-actor
 processes/registry/0008-bot-limited-runs
+processes/registry/0008-serving-claim-expired
 ratelimit/budget/0001
 ratelimit/budget/0002-tenants/0-column
 ratelimit/budget/0002-tenants/0-stamp-column
@@ -1374,6 +1377,7 @@ runs/signals/0003-tenants/2-references
 runs/signals/0003-tenants/2-tenant-policy
 runs/signals/0003-tenants/3-policy
 runs/signals/0004-claims
+runs/signals/0005-serving-claim-signaled
 runs/store/0011-base-schema
 runs/store/0012-tenants/0-column
 runs/store/0012-tenants/0-stamp-column
@@ -1411,6 +1415,7 @@ sessions/store/0060-drop-items-target-seq
 sessions/store/0061-drop-participant-windows
 sessions/store/0062-human-prompt-index
 sessions/store/0063-clear-bot-set-defaults
+sessions/store/0064-bot-work
 surface-cache/ack-emoji-pick/0001
 surface-cache/ack-emoji-pick/0002-tenants/0-column
 surface-cache/ack-emoji-pick/0002-tenants/0-stamp-column
@@ -1470,6 +1475,7 @@ tenancy/lookups/0004-slack-bridge
 tenancy/lookups/0005-principal-admin-tenants
 tenancy/lookups/0006-principal-user-tenants
 tenancy/lookups/0007-partner-chat
+tenancy/lookups/0008-serving-slack-tenants
 tenancy/lookups/consent_links-inbound-indexes
 tenancy/lookups/deployments-inbound-indexes
 tenancy/lookups/loop_ingress-inbound-indexes

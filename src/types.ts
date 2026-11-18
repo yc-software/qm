@@ -159,6 +159,7 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  botWork?: true;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   personaId?: string;
@@ -487,6 +488,7 @@ export interface PendingApprovalRecord {
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
   homeChannel?: string;
+  people?: string[];
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

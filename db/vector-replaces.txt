@@ -11,3 +11,4 @@ memory/vectors/0003-tenants/3-policy
 memory/vectors/0004-claims
 memory/vectors/0004-sketch-backfill
 memory/vectors/0005-claim-tenants
+memory/vectors/0006-serving-claim-tenants

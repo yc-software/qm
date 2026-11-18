@@ -84,8 +84,9 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
   not, keeping any lens it is unsure about. Lenses marked _always reviewed_ in the spec
   skip triage and always get a reviewer. Then dispatch a separate fresh-context
-  subagent or independent reviewer for each relevant lens. Launch reviews asynchronously
-  and in parallel within available capacity, queuing any overflow. Do not wait for
+  subagent or independent reviewer for each relevant lens. Lenses marked _reviewed on
+  Sonnet_ get a reviewer on the latest Sonnet; the rest use the author's model. Launch
+  reviews asynchronously and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
   Give each reviewer the raw evidence (diff, commands, logs, provider config), never the
   author's summary of it. Each reviewer reads their lens and examples, examines the diff and affected paths,

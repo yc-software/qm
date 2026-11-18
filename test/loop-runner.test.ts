@@ -139,38 +139,46 @@ test("an auto-gated action ships without a person, and the item closes", async (
   assert.deepEqual(await s.outputs.awaitingReview(loop.id), []);
 });
 
-test("a partial auto-ship parks for human review without superseding or requeueing", async () => {
-  const s = stores();
-  const loop = await loopIn(s, { shipActions: [{ action: "open_pr", gate: "auto" }] });
-  const doShip = shipVia(s);
-  let ships = 0;
-  const summary = await runLoopFire(
-    loop,
-    s,
-    effects(s, {
-      captureOutputs: async () => [
-        { shipAction: "open_pr", title: "one", capturedBy: "ledger", externalRef: "pr-1" },
-        { shipAction: "open_pr", title: "two", capturedBy: "ledger", externalRef: "pr-2" },
-      ],
-      ship: async (input) => {
-        ships += 1;
-        if (ships === 2) throw new Error("provider unavailable");
-        return doShip(input);
-      },
-    }),
-  );
-  const item = (await s.items.byLoop(loop.id))[0]!;
-  const outputs = await s.outputs.byItem(item.id);
-  assert.deepEqual(
-    outputs.map((output) => output.state),
-    ["shipped", "ready"],
-  );
-  assert.equal(item.status, "ready");
-  assert.equal(item.parkedReason, "partial auto-ship: 1 of 2 actions completed before failure — needs human review");
-  assert.deepEqual(summary.parked, [item.id]);
-  assert.deepEqual(summary.continued, []);
-  const next = await runLoopFire(loop, s, effects(s));
-  assert.equal(next.worked, 0);
+test("an auto-ship that throws parks for human review without superseding or requeueing", async () => {
+  for (const [failAt, states] of [
+    [1, ["ready", "ready"]],
+    [2, ["shipped", "ready"]],
+  ] as const) {
+    const s = stores();
+    const loop = await loopIn(s, { shipActions: [{ action: "open_pr", gate: "auto" }] });
+    const doShip = shipVia(s);
+    let ships = 0;
+    const summary = await runLoopFire(
+      loop,
+      s,
+      effects(s, {
+        captureOutputs: async () => [
+          { shipAction: "open_pr", title: "one", capturedBy: "ledger", externalRef: "pr-1" },
+          { shipAction: "open_pr", title: "two", capturedBy: "ledger", externalRef: "pr-2" },
+        ],
+        ship: async (input) => {
+          ships += 1;
+          if (ships === failAt) throw new Error("provider unavailable");
+          return doShip(input);
+        },
+      }),
+    );
+    const item = (await s.items.byLoop(loop.id))[0]!;
+    const outputs = await s.outputs.byItem(item.id);
+    assert.deepEqual(
+      outputs.map((output) => output.state),
+      states,
+    );
+    assert.equal(item.status, "ready");
+    assert.equal(
+      item.parkedReason,
+      `auto-ship stopped with ${failAt - 1} of 2 actions shipped: provider unavailable — needs human review`,
+    );
+    assert.deepEqual(summary.parked, [item.id]);
+    assert.deepEqual(summary.continued, []);
+    const next = await runLoopFire(loop, s, effects(s));
+    assert.equal(next.worked, 0);
+  }
 });
 
 test("a standing grant graduates its slice and leaves the rest for review", async () => {

@@ -49,7 +49,6 @@ try {
       ...args,
       "--schema-only",
       "--no-owner",
-      "--no-privileges",
       "--exclude-schema=pgboss",
       `--exclude-table=${PG_MIGRATIONS_TABLE}`,
       `--dbname=${scratch.toString()}`,

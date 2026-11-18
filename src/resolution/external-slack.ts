@@ -3,6 +3,7 @@ import type { RunStore } from "../runs/run-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { conversationScope } from "./resolution-service.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "../slack/external-access.ts";
+import { guestRequestAllowed, inGuestNamespace } from "./guest-audience.ts";
 import type { TurnRequest } from "../types.ts";
 
 export type ExternalSlackPolicies = Readonly<Record<string, ExternalSlackAccess>>;
@@ -16,6 +17,8 @@ export function externalSlackRequestAllowed(
 ): boolean {
   const ref = request.conversation.channelRef ?? request.conversation.threadRef;
   const origin = request.surfaceOrigin;
+  if (origin?.audience === "external" && origin.guests) return guestRequestAllowed(request);
+  if ([ref, request.conversation.threadRef].some(inGuestNamespace)) return false;
   if (origin?.audience === "external") {
     const supplied = origin.access;
     const current = policies[origin.author.account];

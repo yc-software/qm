@@ -17,7 +17,7 @@ async function setAppConnectors(ctx: ApiCtx): Promise<void> {
       error: "forbidden",
       message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
     });
-  if (!(await livePersonTurn(ctx))) return;
+  if (!livePersonTurn(ctx)) return;
   const connectors = (body as { connectors?: unknown }).connectors;
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
@@ -70,7 +70,7 @@ export async function shareApp(ctx: ApiCtx): Promise<void> {
       error: "forbidden",
       message: "sharing requires a signed-in person or an agent capability token",
     });
-  if (!(await livePersonTurn(ctx))) return;
+  if (!livePersonTurn(ctx)) return;
   const actor = { createdBy: principalId, botActor: ctx.capability?.botActor };
   const b = (isObj(body) ? body : {}) as {
     scope?: unknown;
@@ -84,7 +84,7 @@ export async function shareApp(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
   const notify = { notify: b.notify };
   if (b.public !== undefined) {
-    if (!(await livePersonTurn(ctx))) return;
+    if (!livePersonTurn(ctx)) return;
     if (typeof b.public !== "boolean")
       return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });
     if (b.scope !== undefined || b.recipient !== undefined || b.email !== undefined || b.access !== undefined)
