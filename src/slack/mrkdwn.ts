@@ -32,6 +32,7 @@ export function resolveMentions(text: string, nameById: ReadonlyMap<string, stri
 
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
+const STASH_TOKEN = new RegExp(`${STASH_OPEN}(\\d+)${STASH_OPEN}`, "g");
 
 const MASS_MENTION = /(?<!<)<+!(here|channel|everyone)(?:\|[^<>]*)?(?:>|(?=<))/gi;
 export function neutralizeMassMentions(text: string): string {
@@ -148,6 +149,7 @@ export function toSlackMrkdwn(md: string): string {
   if (!md) return md;
   const stash: string[] = [];
   const keep = (s: string): string => `${STASH_OPEN}${stash.push(s) - 1}${STASH_OPEN}`;
+  const unstash = (s: string): string => s.replace(STASH_TOKEN, (_m, i) => stash[Number(i)] ?? "");
 
   let text = md.replace(/\r\n/g, "\n");
 
@@ -155,7 +157,7 @@ export function toSlackMrkdwn(md: string): string {
   text = text.replace(/`[^`\n]+`/g, keep);
   text = neutralizeMassMentions(text);
 
-  text = reformatTables(text, keep);
+  text = reformatTables(text, keep, unstash);
 
   text = text.replace(/!?\[([^[\]\n]*)\]\(\s*<?([^()\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
     keep(label ? `<${url}|${label}>` : `<${url}>`),
@@ -186,9 +188,7 @@ export function toSlackMrkdwn(md: string): string {
   text = text.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![*\w])/g, "$1_$2_");
 
   text = text.replaceAll(BOLD_SENTINEL, "*");
-  text = text.replace(new RegExp(`${STASH_OPEN}(\\d+)${STASH_OPEN}`, "g"), (_m, i) => stash[Number(i)] ?? "");
-
-  return text;
+  return unstash(text);
 }
 
 function headingTitle(rest: string): string {
@@ -246,15 +246,16 @@ function renderAlignedTable(rows: string[][]): string {
   return [fmtRow(head ?? []), sep, ...body.map(fmtRow)].join("\n");
 }
 
-function reformatTables(text: string, keep: (s: string) => string): string {
+function reformatTables(text: string, keep: (s: string) => string, unstash: (s: string) => string): string {
   if (!text.includes("|")) return text;
   const lines = text.split("\n");
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (looksLikeTableRow(lines[i]) && isTableDelimiter(lines[i + 1])) {
-      const rows: string[][] = [splitTableRow(lines[i]!)];
+      const row = (line: string): string[] => splitTableRow(line).map(unstash);
+      const rows: string[][] = [row(lines[i]!)];
       let j = i + 2;
-      for (; j < lines.length && looksLikeTableRow(lines[j]); j++) rows.push(splitTableRow(lines[j]!));
+      for (; j < lines.length && looksLikeTableRow(lines[j]); j++) rows.push(row(lines[j]!));
       out.push(keep("```\n" + renderAlignedTable(rows) + "\n```"));
       i = j - 1;
     } else {
