@@ -15,6 +15,7 @@
         "src/sandbox/local-sandbox.ts",
         "scripts/aws-deploy-smoke.ts",
         "scripts/db.ts",
+        "scripts/live-qa/live-qa.ts",
         "scripts/aws-litestream-smoke.ts",
         "scripts/e2b-live-smoke.mjs",
         "scripts/seed-upgrade-rows.mjs",
