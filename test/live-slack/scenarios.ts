@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { assert, type Scenario } from "./harness.ts";
+import { assert, botReactions, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
 import { assertRuntimeHandoff } from "./runtime-handoff.ts";
 import { multiUserScenarios } from "./scenarios-multiuser.ts";
@@ -313,7 +313,10 @@ export const scenarios: Scenario[] = [
         onMessages: (messages) => {
           if (messages.some((m) => m.user === ctx.env.botUserId && (m.text ?? "").length > 500)) return;
           sawReaction ||=
-            messages.find((m) => m.ts === root)?.reactions?.some((r) => r.users.includes(ctx.env.botUserId)) === true;
+            botReactions(
+              ctx.env,
+              messages.find((m) => m.ts === root),
+            ).length > 0;
         },
       });
       assert.ok((reply.text ?? "").length > 500, `final reply suspiciously short (${reply.text?.length} chars)`);

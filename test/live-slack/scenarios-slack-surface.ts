@@ -1,10 +1,8 @@
 import path from "node:path";
 import { launchFirefox, SHOTS_DIR, slackPage, threadUrl } from "./browser.ts";
-import { assert, type Ctx, type Scenario } from "./harness.ts";
-import { sleep, type SlackMessage } from "./slack.ts";
-
-const botReactions = (ctx: Ctx, message?: SlackMessage): string[] =>
-  (message?.reactions ?? []).filter((r) => r.users.includes(ctx.env.botUserId)).map((r) => r.name);
+import { assert, botReactions, type Scenario } from "./harness.ts";
+import { FIXTURE_COMMAND, isCard, seedFixturePrompt } from "./scenarios-credential-approval.ts";
+import { sleep } from "./slack.ts";
 
 export const slackSurfaceScenarios: Scenario[] = [
   {
@@ -41,7 +39,7 @@ export const slackSurfaceScenarios: Scenario[] = [
       const root = await ch.mention("React to this message with the :tada: emoji. No text reply is needed.");
       for (const deadline = Date.now() + 180_000; Date.now() < deadline; await sleep(1000)) {
         const [request] = await ctx.env.qa.replies(ch.id, root);
-        if (botReactions(ctx, request).includes("tada")) return;
+        if (botReactions(ctx.env, request).includes("tada")) return;
       }
       throw new Error("bot never added :tada: to the request");
     },
@@ -75,19 +73,13 @@ export const slackSurfaceScenarios: Scenario[] = [
       const service = `demo-click-${ctx.env.runId}`;
       const fixture = `fixture-${marker}`;
       const dm = await ctx.dm();
-      const seed = await dm.send(
-        `Register this synthetic test value in my keychain (it is not a real secret): POST /v1/keychain/credentials with service "${service}", envKey "DEMO_FIXTURE", secret "${fixture}". Reply DONE when saved.`,
-      );
+      const seed = await dm.send(seedFixturePrompt(service, fixture));
       await dm.waitForBotReply(seed, { match: /DONE/ });
       const ch = await ctx.freshChannel();
       const root = await ch.mention(
-        `Using my ${service} credential, run \`printf %s "$DEMO_FIXTURE" | wc -c\` on your computer, requesting access through the keychain if needed, and reply COUNT=<number>.`,
+        `Using my ${service} credential, run \`${FIXTURE_COMMAND}\` on your computer, requesting access through the keychain if needed, and reply COUNT=<number>.`,
       );
-      await ch.waitForBotReply(root, {
-        includeChannel: true,
-        timeoutMs: 5 * 60_000,
-        accept: (m) => (m.blocks ?? []).some((b) => b.type === "actions"),
-      });
+      await ch.waitForBotReply(root, { includeChannel: true, timeoutMs: 5 * 60_000, accept: isCard(ctx.env, service) });
       const browser = await launchFirefox();
       try {
         const page = await slackPage(browser);

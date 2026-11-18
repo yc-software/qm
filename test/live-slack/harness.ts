@@ -99,6 +99,10 @@ export function isLiveStatusText(text: string): boolean {
   return false;
 }
 
+export function botReactions(env: Pick<Env, "botUserId">, message?: SlackMessage): string[] {
+  return (message?.reactions ?? []).filter((r) => r.users.includes(env.botUserId)).map((r) => r.name);
+}
+
 const POLL_MS = 1000;
 
 export interface WaitOpts {

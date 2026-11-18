@@ -18,11 +18,16 @@ async function waitFor<T>(label: string, fn: () => Promise<T | undefined>, timeo
   throw new Error(`timed out waiting for ${label}`);
 }
 
-const buttons = (m: SlackMessage): Array<{ action_id: string; value: string; block_id?: string }> => {
+export const buttons = (m: SlackMessage): Array<{ action_id: string; value: string; block_id?: string }> => {
   const block = (m.blocks ?? []).find((b) => b.type === "actions") as
     { block_id?: string; elements?: Array<{ action_id: string; value: string }> } | undefined;
   return (block?.elements ?? []).map((e) => ({ ...e, block_id: block?.block_id }));
 };
+
+export const FIXTURE_COMMAND = `printf %s "$DEMO_FIXTURE" | wc -c`;
+
+export const seedFixturePrompt = (service: string, fixture: string): string =>
+  `Register this synthetic test value in my keychain (it is not a real secret): POST /v1/keychain/credentials with service "${service}", envKey "DEMO_FIXTURE", secret "${fixture}". Reply DONE when saved.`;
 
 async function click(env: Env, clicker: Actor, channel: string, card: SlackMessage, actionId: string): Promise<void> {
   const action = buttons(card).find((a) => a.action_id === actionId);
@@ -71,7 +76,7 @@ async function approveOnWeb(env: Env, owner: Actor, card: SlackMessage): Promise
   assert.equal(res.status, 200, `web approval failed: ${res.status} ${await res.text()}`);
 }
 
-const isCard = (env: Env, service: string) => (m: SlackMessage) =>
+export const isCard = (env: Env, service: string) => (m: SlackMessage) =>
   m.user === env.botUserId && (m.text ?? "").includes(service) && buttons(m).length > 0;
 
 async function threadMessages(ctx: Ctx, channel: string, root: string): Promise<SlackMessage[]> {
@@ -124,17 +129,14 @@ export const credentialApprovalScenarios: Scenario[] = (["once", "standing", "we
     const marker = ctx.marker(mode);
     const fixture = `fixture-${marker}`;
     const ownerDm = await owner.client.openDm(env.botUserId);
-    const seed = await owner.client.post(
-      ownerDm,
-      `Register this synthetic test value in my keychain (it is not a real secret): POST /v1/keychain/credentials with service "demo-${mode}", envKey "DEMO_FIXTURE", secret "${fixture}". Reply DONE when saved.`,
-    );
+    const seed = await owner.client.post(ownerDm, seedFixturePrompt(`demo-${mode}`, fixture));
     await waitFor("seed saved", async () =>
       (await owner.client.history(ownerDm, seed)).find((m) => m.user === env.botUserId && /DONE/.test(m.text ?? "")),
     );
 
     const channel = await ctx.freshChannel();
     const since = String(Date.now() / 1000);
-    const command = `printf %s "$DEMO_FIXTURE" | wc -c`;
+    const command = FIXTURE_COMMAND;
     const root = await channel.mention(
       mode === "cron"
         ? `Schedule a one-shot cron for 1 minute from now that posts back to this thread. When it fires it must run \`${command}\` here with ${owner.mention}'s demo-cron credential, requesting access through the keychain if needed, and reply COUNT=<number>. Reply SCHEDULED now.`
