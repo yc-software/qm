@@ -114,7 +114,7 @@ test("persona deletes, attaches and detaches are audited with the grants they re
     as(impersonating, "POST", { service: "stripe", purpose: "x" }),
   );
   assert.equal(drop.status, 200);
-  const rows = async (filter: { scopeLabel?: ScopeId; action?: string }) =>
+  const rows = async (filter: { scopeLabel: ScopeId }) =>
     (await built.auditLog.tail(testTenant, { limit: 10, ...filter }))
       .map((e) => [e.action, e.resource, e.principalId, e.impersonatedBy ?? "-"].join(" "))
       .sort();
@@ -129,8 +129,13 @@ test("persona deletes, attaches and detaches are audited with the grants they re
       `persona.delete ${id} alice -`,
     ].sort(),
   );
+  const audit = await fetch(
+    `${base}/v1/admin/audit?scope=org:default-org&action=keychain.drop.mint`,
+    as(browserSessionCookie("admin-alice")),
+  );
+  const { events } = (await audit.json()) as { events: { principalId: string; impersonatedBy?: string }[] };
   assert.deepEqual(
-    (await rows({ action: "keychain.drop.mint" })).map((r) => r.split(" ").slice(2)),
+    events.map((e) => [e.principalId, e.impersonatedBy]),
     [["alice", "admin-alice"]],
   );
 });
