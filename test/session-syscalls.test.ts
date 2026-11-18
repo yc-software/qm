@@ -689,10 +689,11 @@ test("a subagent bot work opened still writes to its parent once bot work can't 
   assert.deepEqual(
     [
       wrote.ok && wrote.title,
+      wrote.ok && wrote.delivered,
       !read.ok && read.message.includes("hidden from bot work"),
       mail?.text.includes("which region?"),
     ],
-    [r.room.id, true, true],
+    [r.room.id, "queued_message", true, true],
   );
 });
 

@@ -1067,6 +1067,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return leaveMail("a private turn cannot start work in another session");
               if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
                 return leaveMail("a notebook-only turn cannot start work in a session that isn't notebook-only");
+              if (!sessionVisibleTo(binding.request, target))
+                return leaveMail("your parent is hidden from bot work, so this waits for the person's next turn");
               if (isPeerMessage(binding.session, target)) {
                 if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
                 if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)
