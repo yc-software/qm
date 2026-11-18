@@ -26,7 +26,7 @@ import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
 import { msOf } from "../sessions/items.ts";
-import { errText } from "../util/errors.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export interface SandboxResource {
   id: string;
@@ -510,6 +510,7 @@ export function createSandboxResources(opts: {
             spec: sandbox.profile.spec,
           })))!;
         } catch (error) {
+          console.error("%s", `[sandbox] resource ${id} failed:`, errMessage(error));
           await opts.records.update(id, (current) => ({
             ...current,
             state: "failed",

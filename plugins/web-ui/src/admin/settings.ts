@@ -18,7 +18,7 @@ import { decisionsCard, loadDecisions } from "./settings-decisions.ts";
 import { brandingCard } from "./settings-branding.ts";
 import { appHandleCard, appHandleError } from "./settings-app-handle.ts";
 import { runtimesCard } from "./settings-runtimes.ts";
-import { errChain } from "../../../chassis/src/errors.ts";
+import { errMessage } from "../../../chassis/src/errors.ts";
 
 type Model = { id: string; name?: string };
 type Data = Record<string, any>;
@@ -171,7 +171,7 @@ async function saveSetting(s: SettingsState) {
     body = s.collect();
   } catch (err) {
     return Object.assign(s, {
-      message: err instanceof Error ? errChain(err) : "Could not save.",
+      message: errMessage(err, "Could not save."),
       tone: "err",
     }).render();
   }

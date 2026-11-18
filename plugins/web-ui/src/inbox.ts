@@ -55,7 +55,7 @@ import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
-import { errChain } from "../../chassis/src/errors";
+import { errChain, errMessage } from "../../chassis/src/errors";
 
 export type InboxSource = "gmail" | "slack" | "generic";
 
@@ -601,7 +601,7 @@ async function loadDetail(itemId: string, loopId: string): Promise<void> {
     drawAll();
   } catch (error) {
     inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
-    notify(error instanceof Error ? errChain(error) : "Could not load item");
+    notify(errMessage(error, "Could not load item"));
   }
 }
 
@@ -617,7 +617,7 @@ async function selectInboxFilter(filter: InboxFilter): Promise<void> {
     else if (!saved.ok)
       notify("A newer inbox filter was already saved. Your selection wasn't saved. Please try again.");
   } catch (error) {
-    notify(error instanceof Error ? errChain(error) : "Could not save inbox filter");
+    notify(errMessage(error, "Could not save inbox filter"));
   } finally {
     inboxState.filterBusy = false;
     drawAll();
@@ -637,7 +637,7 @@ async function toggleSelection(id: string): Promise<void> {
     if (fullViewId === id) fullViewId = "all";
     await refreshInbox();
   } catch (error) {
-    notify(error instanceof Error ? errChain(error) : "Could not update Inbox");
+    notify(errMessage(error, "Could not update Inbox"));
   } finally {
     inboxState.selectionBusy = false;
     drawAll();
@@ -664,7 +664,7 @@ async function decideReview(
     await refreshInbox({ silent: true });
     return true;
   } catch (error) {
-    notify(error instanceof Error ? errChain(error) : "Could not confirm action");
+    notify(errMessage(error, "Could not confirm action"));
     return false;
   } finally {
     acting.delete(item.id);

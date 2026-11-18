@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
-import { swallow } from "../util/errors.ts";
-import { errText } from "../util/errors.ts";
+import { errText, swallow } from "../util/errors.ts";
 
 export interface ModalCommandResult {
   stdout: string;

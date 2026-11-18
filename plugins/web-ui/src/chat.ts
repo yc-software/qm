@@ -159,7 +159,7 @@ import "./slack-setup";
 import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
-import { errChain, errMessage, swallow } from "../../chassis/src/errors";
+import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
@@ -866,8 +866,7 @@ export function createChatSurface(
     try {
       await resolveApproval(decision);
     } catch (err) {
-      if (agent === chatState.agent)
-        ctx.composer.state.error = err instanceof Error ? errChain(err) : "Could not send the approval.";
+      if (agent === chatState.agent) ctx.composer.state.error = errMessage(err, "Could not send the approval.");
     } finally {
       if (agent === chatState.agent) {
         chatState.resolvingApprovals.delete(decision.requestId);
@@ -905,7 +904,7 @@ export function createChatSurface(
         });
     } catch (err) {
       if (agent === chatState.agent) {
-        ctx.composer.state.error = err instanceof Error ? errChain(err) : "Could not send the approval.";
+        ctx.composer.state.error = errMessage(err, "Could not send the approval.");
         drawActiveChat(agent);
       }
     } finally {
@@ -1226,7 +1225,7 @@ export function createChatSurface(
       await completion;
     } catch (err) {
       if (agent === chatState.agent)
-        ctx.composer.state.error = err instanceof Error ? errChain(err) : "Could not reconnect to the running task.";
+        ctx.composer.state.error = errMessage(err, "Could not reconnect to the running task.");
     } finally {
       if (agent === chatState.agent) {
         agent.streamFn = normalStreamFn;
@@ -2909,7 +2908,7 @@ export function createChatSurface(
         );
       })
       .catch((err: unknown) => {
-        ctx.composer.state.error = err instanceof Error ? errChain(err) : "Could not send the approval.";
+        ctx.composer.state.error = errMessage(err, "Could not send the approval.");
       })
       .finally(() => {
         chatState.resolvingApprovals.delete(decision.requestId);

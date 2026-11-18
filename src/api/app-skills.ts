@@ -15,7 +15,7 @@ import { entitledScopes, loadsScopeContext } from "../resolution/context-filter.
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
-import { errText } from "../util/errors.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -154,6 +154,7 @@ async function reconcilePack(
   try {
     repo = await fetcher.fetch(pack);
   } catch (e) {
+    console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
     await packs.recordImport(id, {
       at: Date.now(),
       commit: pack.ref,
@@ -220,6 +221,7 @@ async function reconcilePack(
       await packs.update(id, { updateAvailable: false, available: canonPlan.counts.eligible });
       return result;
     } catch (e) {
+      console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
       await packs.recordImport(id, {
         at: Date.now(),
         commit: pack.ref,
@@ -340,6 +342,7 @@ export function createSkillMethods(
         const plan = planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
         return await packs.update(pack.id, { available: plan.counts.eligible });
       } catch (e) {
+        console.error("%s", `[skills] pack ${pack.id} import failed:`, errMessage(e));
         await packs.recordImport(pack.id, {
           at: Date.now(),
           commit: pack.ref,
