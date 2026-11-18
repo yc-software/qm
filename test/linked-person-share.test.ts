@@ -120,7 +120,7 @@ test("skills saved under a linked sign-in are visible from the person's scope", 
   assert.equal((await skills.visibleFor([HOME])).length, 0);
   link();
   assert.deepEqual(
-    (await skills.visibleFor([HOME])).map((r) => r.skill.id),
+    (await skills.visibleFor([HOME])).map((r) => r.skill?.id),
     [s.id],
   );
   assert.equal((await skills.resolve("standup", [HOME])).skill?.id, s.id);
