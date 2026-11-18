@@ -16,7 +16,7 @@ export function linkedChanges(before: Cron, patch: CronPatch): CronPatch {
   );
 }
 
-export function copyStatus(c: Cron): CronCopy["status"] {
+function copyStatus(c: Cron): CronCopy["status"] {
   if (c.forkedAt) return "edited";
   return c.enabled ? "on" : "paused";
 }
@@ -45,7 +45,7 @@ export function withSharing(all: readonly Cron[]): (cron: VisibleCron) => Visibl
   return (cron) => sharingOf(cron, copies.get(cron.id) ?? [], cron.sharedFrom && owners.get(cron.sharedFrom));
 }
 
-export async function sharingFor(crons: AppDeps["crons"], cron: VisibleCron): Promise<VisibleCron> {
+async function sharingFor(crons: AppDeps["crons"], cron: VisibleCron): Promise<VisibleCron> {
   const source = cron.sharedFrom ? await crons.get(cron.sharedFrom) : null;
   return sharingOf(cron, await crons.copiesOf(cron.id), source?.owner);
 }
