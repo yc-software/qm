@@ -90,7 +90,7 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { PublishedApp, AppDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
-import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
+import { type ArtifactHome, type ArtifactType, type ShareAccess } from "./artifact-share.ts";
 import type {
   DeployService,
   DeployInput,
@@ -484,6 +484,7 @@ export interface App {
     granteeScopeId: ScopeId,
     revokedBy: string,
   ): Promise<void>;
+  grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;

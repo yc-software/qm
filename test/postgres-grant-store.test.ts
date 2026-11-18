@@ -43,27 +43,25 @@ const grant = (over: Partial<Grant> = {}): Grant => ({
 const onResource = (store: ReturnType<typeof createPostgresGrantStore>, ref: string) =>
   store.find(tenant, { ownerScopeId: owner, ref });
 
-test("pg grant persistence: put is an idempotent upsert; remove is permission-keyed", { skip }, async () => {
+test("pg grant persistence: put is an idempotent upsert that replaces the grantee's permission", { skip }, async () => {
   const store = createPostgresGrantStore(URL!);
 
   await store.put(tenant, grant());
   await store.put(tenant, grant());
-  assert.equal((await onResource(store, "redline.md")).length, 1, "put dedups on owner+path+grantee+permission");
+  assert.equal((await onResource(store, "redline.md")).length, 1, "put dedups on owner+path+grantee");
   assert.deepEqual((await onResource(store, "redline.md"))[0], grant());
 
   await store.put(tenant, grant({ permission: "write" }));
-  assert.equal((await onResource(store, "redline.md")).length, 2);
-
-  await store.put(tenant, grant({ grantedBy: "U1-again" }));
-  assert.equal((await onResource(store, "redline.md")).length, 2);
-  assert.equal((await onResource(store, "redline.md")).find((g) => g.permission === "read")!.grantedBy, "U1-again");
-
-  await store.remove(tenant, grant({ permission: "write" }));
   assert.deepEqual(
     (await onResource(store, "redline.md")).map((g) => g.permission),
-    ["read"],
-    "remove drops only the matched permission",
+    ["write"],
   );
+
+  await store.put(tenant, grant({ grantedBy: "U1-again" }));
+  assert.deepEqual(await onResource(store, "redline.md"), [grant({ grantedBy: "U1-again" })]);
+
+  await store.remove(tenant, grant({ permission: "write" }));
+  assert.equal((await onResource(store, "redline.md")).length, 1, "remove drops only the matched permission");
 });
 
 test("pg grant persistence: reads see writes that bypass the store entirely", { skip }, async () => {
@@ -156,12 +154,8 @@ test(
     );
 
     await acl.grant(tenant, grant({ ref: "owner-only", permission: "write" }));
-    assert.equal((await acl.grantsFor(tenant, owner, "owner-only")).length, 2);
+    assert.equal((await acl.grantsFor(tenant, owner, "owner-only")).length, 1);
     await acl.revoke(tenant, owner, "owner-only", carol, "U1");
-    assert.equal(
-      (await acl.grantsFor(tenant, owner, "owner-only")).length,
-      0,
-      "revoke drops every permission for the triple",
-    );
+    assert.equal((await acl.grantsFor(tenant, owner, "owner-only")).length, 0);
   },
 );

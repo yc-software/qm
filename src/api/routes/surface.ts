@@ -20,6 +20,7 @@ import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeConfigBody, userRuntimeConfigBody, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
+import { SHARE_ERROR_STATUS } from "./sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
@@ -1183,16 +1184,6 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
   }
 }
 
-const SHARE_ERROR_STATUS: Record<string, number> = {
-  bad_request: 400,
-  not_found: 404,
-  forbidden: 403,
-  human_consent_required: 403,
-  recipient_not_found: 404,
-  ambiguous_recipient: 409,
-  share_failed: 400,
-};
-
 export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!capability)
@@ -1225,8 +1216,8 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       message: 'toScope required ("org", a scope id, or a teammate\'s name)',
     });
   }
-  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write") {
-    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read" or "write"' });
+  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write" && b.permission !== "none") {
+    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read", "write" or "none"' });
   }
   if (b.notify !== undefined && typeof b.notify !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
@@ -1236,7 +1227,9 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       id: b.id,
       ...(typeof b.toScope === "string" ? splitToScope(b.toScope) : {}),
       ...(typeof b.email === "string" ? { email: b.email } : {}),
-      ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
+      ...(b.permission === "read" || b.permission === "write" || b.permission === "none"
+        ? { permission: b.permission }
+        : {}),
       ...(b.move === true ? { move: true } : {}),
       ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },
