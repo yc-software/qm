@@ -10,6 +10,7 @@ import { signedHeaders } from "../../plugins/chassis/src/core-client.ts";
 
 interface Proc {
   name: string;
+  port?: number;
   child: ChildProcess;
   lines: string[];
   exited: Promise<number | null>;
@@ -105,7 +106,7 @@ function baseEnv(): Record<string, string> {
   };
 }
 
-function launch(name: string, entry: string, env: Record<string, string>): Proc {
+function launch(name: string, entry: string, env: Record<string, string>, port?: number): Proc {
   const out: WriteStream = createWriteStream(join(evidence, `${name}.log`), { flags: "a" });
   const child = spawn(process.execPath, ["--import", "./scripts/dev/runtime-qa-clock.ts", entry], {
     cwd: root,
@@ -114,6 +115,7 @@ function launch(name: string, entry: string, env: Record<string, string>): Proc 
   });
   const proc: Proc = {
     name,
+    ...(port ? { port } : {}),
     child,
     lines: [],
     exited: new Promise((r) => child.once("exit", (code) => r(code))),
@@ -136,27 +138,25 @@ function seen(proc: Proc, text: string, from = 0): string | undefined {
   return proc.lines.slice(from).find((line) => line.includes(text));
 }
 
-async function startWorker(name: string, deployment: string): Promise<Proc> {
-  const proc = launch(name, "src/runs/worker-main.ts", {
-    BACKGROUND_WORK_ENABLED: "true",
-    GIT_SHA: deployment,
-    WORKERS: "2",
-  });
-  await until(`${name} to start draining runs`, () => seen(proc, "[qm:worker] draining runs"), 120_000);
+const ports = new Map<string, number>();
+
+async function startNode(name: string): Promise<Proc> {
+  const port = ports.get(name) ?? (await freePort());
+  ports.set(name, port);
+  const env = { PORT: String(port), BACKGROUND_WORK_ENABLED: "true", GIT_SHA: "runtime-qa-1", WORKERS: "2" };
+  const proc = launch(name, "src/index.ts", env, port);
+  await until(`${name} to listen`, () => seen(proc, `listening on :${port}`), 120_000);
   return proc;
 }
 
-async function startCore(): Promise<string> {
-  const port = await freePort();
-  const proc = launch("core", "src/index.ts", {
-    PORT: String(port),
-    BACKGROUND_WORK_ENABLED: "false",
-  });
-  await until("core to listen", () => seen(proc, `listening on :${port}`), 120_000);
-  return `http://127.0.0.1:${port}`;
+function alive(proc: Proc): boolean {
+  return proc.child.exitCode === null && proc.child.signalCode === null;
 }
 
-async function enqueue(core: string, text: string): Promise<string> {
+async function enqueue(text: string): Promise<string> {
+  const node = [...procs.values()].find((p) => p.port && alive(p));
+  if (!node) throw new Error("no QM node is running to accept a turn");
+  const core = `http://127.0.0.1:${node.port}`;
   const path = "/v1/turns?async=1";
   const body = JSON.stringify({
     surface: "runtime-qa",
@@ -239,7 +239,7 @@ function signal(proc: Proc, sig: NodeJS.Signals): void {
 }
 
 function other(proc: Proc): Proc {
-  return procs.get(proc.name === "worker-a" ? "worker-b" : "worker-a")!;
+  return procs.get(proc.name === "qm-a" ? "qm-b" : "qm-a")!;
 }
 
 async function heartbeatAt(deployment: string): Promise<number> {
@@ -251,7 +251,7 @@ async function heartbeatAt(deployment: string): Promise<number> {
 }
 
 async function scenarioTick(): Promise<string> {
-  const a = procs.get("worker-a")!;
+  const a = procs.get("qm-a")!;
   await sleep(1_500);
   const before = await heartbeatAt("runtime-qa-1");
   const from = a.lines.length;
@@ -279,21 +279,21 @@ async function scenarioLease(): Promise<string> {
     15_000,
   );
   const handoverMs = Date.now() - killedAt;
-  await startWorker(first, "runtime-qa-1");
+  await startNode(first);
   return `${key} moved ${first} -> ${next} ${handoverMs} ms after SIGKILL; ${first} restarted`;
 }
 
-async function sleepingRun(core: string): Promise<{ runId: string; worker: Proc }> {
+async function sleepingRun(): Promise<{ runId: string; worker: Proc }> {
   const from = marks();
   const marker = `runtime-qa-${randomUUID()}`;
-  const runId = await enqueue(core, sleepPrompt(marker));
+  const runId = await enqueue(sleepPrompt(marker));
   const worker = await until(`a worker to claim ${runId}`, () => claimant(runId, from), 60_000);
   await until(`the sandbox command in ${runId}`, () => sandboxCommandStarted(marker), 180_000);
   return { runId, worker };
 }
 
-async function scenarioCrash(core: string): Promise<string> {
-  const { runId, worker } = await sleepingRun(core);
+async function scenarioCrash(): Promise<string> {
+  const { runId, worker } = await sleepingRun();
   const survivor = other(worker);
   const from = marks();
   signal(worker, "SIGKILL");
@@ -304,13 +304,13 @@ async function scenarioCrash(core: string): Promise<string> {
   if (reclaimer.name !== survivor.name) throw new Error(`${runId} reclaimed by ${reclaimer.name}`);
   const status = await finished(runId);
   const row = (await runRow(runId))!;
-  await startWorker(worker.name, "runtime-qa-1");
+  await startNode(worker.name);
   if (status !== "done") throw new Error(`${runId} ended ${status} after handover`);
   return `${runId}: ${worker.name} SIGKILLed mid-command, forced reaper tick requeued it, ${survivor.name} resumed it to done (attempts=${row.attempts})`;
 }
 
-async function scenarioSigterm(core: string): Promise<string> {
-  const { runId, worker } = await sleepingRun(core);
+async function scenarioSigterm(): Promise<string> {
+  const { runId, worker } = await sleepingRun();
   const survivor = other(worker);
   const from = marks();
   const sentAt = Date.now();
@@ -322,28 +322,28 @@ async function scenarioSigterm(core: string): Promise<string> {
   const reclaimer = await until(`${survivor.name} to claim ${runId}`, () => claimant(runId, from), LEASE_TTL_MS);
   const reclaimMs = Date.now() - sentAt;
   const status = await finished(runId);
-  await startWorker(worker.name, "runtime-qa-1");
+  await startNode(worker.name);
   if (status !== "done") throw new Error(`${runId} ended ${status} after hand-back`);
   return `${runId}: ${worker.name} exited ${code} ${exitMs} ms after SIGTERM (last_stop=${handed.last_stop}), ${reclaimer.name} reclaimed in ${reclaimMs} ms without the reaper and finished it`;
 }
 
-async function scenarioDeploy(core: string): Promise<string> {
+async function scenarioDeploy(): Promise<string> {
   const from = marks();
-  const next = launch("worker-c", "src/runs/worker-main.ts", {
+  const next = launch("worker-next", "src/runs/worker-main.ts", {
     BACKGROUND_WORK_ENABLED: "true",
     GIT_SHA: "runtime-qa-2",
     WORKERS: "2",
   });
-  await until("worker-c to boot", () => seen(next, "[qm:worker] draining runs"), 120_000);
-  const old = [procs.get("worker-a")!, procs.get("worker-b")!];
+  await until("worker-next to boot", () => seen(next, "[qm:worker] draining runs"), 120_000);
+  const old = [procs.get("qm-a")!, procs.get("qm-b")!];
   for (const p of old) signal(p, "SIGUSR2");
   for (const p of old) await until(`${p.name} to drain`, () => seen(p, "newer build is live", from.get(p.name)), 5_000);
-  const runId = await enqueue(core, "Reply with exactly: PONG");
+  const runId = await enqueue("Reply with exactly: PONG");
   const worker = await until(`a worker to claim ${runId}`, () => claimant(runId, from), 30_000);
-  if (worker.name !== "worker-c") throw new Error(`${runId} claimed by ${worker.name}, an older build`);
+  if (worker.name !== "worker-next") throw new Error(`${runId} claimed by ${worker.name}, an older build`);
   const status = await finished(runId);
   if (status !== "done") throw new Error(`${runId} ended ${status}`);
-  return `newer build worker-c took over: worker-a and worker-b drained on a forced tick, ${runId} ran on worker-c`;
+  return `newer build worker-next took over: qm-a and qm-b drained on a forced tick, ${runId} ran on worker-next`;
 }
 
 async function teardown(): Promise<void> {
@@ -363,16 +363,14 @@ async function main(): Promise<void> {
   await admin.query(`CREATE DATABASE ${dbName}`);
   await admin.end();
   log(`database ${dbName}; logs in ${evidence}`);
-  const core = await startCore();
-  await startWorker("worker-a", "runtime-qa-1");
-  await startWorker("worker-b", "runtime-qa-1");
-  log(`booted core + 2 workers in ${Date.now() - started} ms`);
+  await Promise.all([startNode("qm-a"), startNode("qm-b")]);
+  log(`booted two QM nodes in ${Date.now() - started} ms`);
   const runs: Record<Scenario, () => Promise<string>> = {
     tick: scenarioTick,
     lease: scenarioLease,
-    crash: () => scenarioCrash(core),
-    sigterm: () => scenarioSigterm(core),
-    deploy: () => scenarioDeploy(core),
+    crash: scenarioCrash,
+    sigterm: scenarioSigterm,
+    deploy: scenarioDeploy,
   };
   for (const s of selected) await check(s, runs[s]);
 }
