@@ -681,15 +681,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const hasRoster = !external && conversation.kind !== "dm";
+      const storedWindow = hasRoster && storedSession ? deps.sessions.getContextWindow(storedSession.id) : undefined;
       const [rosterMembers, previous, conversationKeychain] = await Promise.all([
         hasRoster
           ? conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
               swallowAs("orchestrator: conversation roster", undefined),
             )
           : undefined,
-        hasRoster && storedSession
-          ? deps.sessions.getContextWindow(storedSession.id).then((window) => previousRoster(window.items))
-          : undefined,
+        storedWindow?.then((window) => previousRoster(window.items)),
         loadConversationKeychain({ deps, actor, conversation, scopeId, external, strictReadOnly }),
       ]);
       const peopleNames = shownNames(actor, rosterMembers, previous, conversationKeychain);
@@ -1389,7 +1388,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const contextWindow = deps.sessions.getContextWindow(session.id);
+        const contextWindow =
+          storedWindow && storedSession?.id === session.id ? storedWindow : deps.sessions.getContextWindow(session.id);
         const snapshot = context.memorySnapshot();
         const recallOutcomes: MemoryProviderOutcome[] = [];
         const loadedFacts = snapshot.then((view) => view.loaded);
