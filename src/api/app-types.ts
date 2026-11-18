@@ -624,18 +624,18 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
+  listVisibleSkills(principalId: string, ownScopeBotWork: boolean, contextScopeId?: ScopeId, personalOnlyContext?: true): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   updateOwnedSkill(
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean; botActor?: boolean },
-  ): Promise<Skill | "trigger_blocked" | null>;
+    opts?: { liveActor?: boolean; botActor?: boolean; personalOnly?: true; contextScopeId?: ScopeId },
+  ): Promise<Skill | "trigger_blocked" | "private_context" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean; botActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean; contextScopeId?: ScopeId; personalOnly?: true },
   ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
@@ -647,6 +647,7 @@ export interface App {
   removeSkillPack(id: string): Promise<{ removed: number }>;
   createOwnedSkill(input: {
     principalId: string;
+    personalOnly?: true;
     homeScope?: ScopeId;
     name: string;
     description: string;
@@ -658,6 +659,8 @@ export interface App {
     id: string;
     liveActor?: boolean;
     botActor?: boolean;
+    contextScopeId?: ScopeId;
+    personalOnly?: true;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackApp(id: string, version: number, actor?: string): Promise<void>;
   archiveApp(id: string): Promise<void>;

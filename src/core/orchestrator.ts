@@ -1254,6 +1254,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryPolicy,
         memoryScopeId,
         memoryAccess,
+        ...(document?.mode === "private" || nativeSkills.some((entry) => entry.skill?.personalOnly) ? { personalOnly: true as const } : {}),
         baseRecallScopes,
         ownCredentialsAllowed,
         turnTimezone,

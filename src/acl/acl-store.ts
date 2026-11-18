@@ -99,6 +99,7 @@ type GrantQuery = {
 );
 
 export interface AclStoreOptions {
+  isPersonalOnly?: (ownerScopeId: ScopeId, ref: string) => Promise<boolean>;
   manages?: ScopeManagement;
   resolveFiles?: (refs: readonly FileArtifactRef[]) => Promise<FileArtifact[]>;
 }
@@ -179,6 +180,8 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
         throw new Error("only a manager of this scope may grant access (no transitive re-share)");
       }
       await validateFileGrant(g);
+      if (g.granteeScopeId !== g.ownerScopeId && (await opts.isPersonalOnly?.(g.ownerScopeId, g.ref)))
+        throw new Error("Private artifacts cannot change audience");
       await persist.put(tenant, g);
     },
     async revoke(tenant, ownerScopeId, ref, granteeScopeId, revokedBy, authoredBy) {
@@ -198,7 +201,11 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
       ) {
         throw new Error("replacement grants must belong to the selected resource");
       }
-      for (const grant of replacement) await validateFileGrant(grant);
+      for (const grant of replacement) {
+        await validateFileGrant(grant);
+        if (grant.granteeScopeId !== grant.ownerScopeId && (await opts.isPersonalOnly?.(grant.ownerScopeId, grant.ref)))
+          throw new Error("Private artifacts cannot change audience");
+      }
       return persist.replaceForResourceIfCurrent(tenant, ownerScopeId, ref, expected, replacement);
     },
     async handlesFor(tenant, scopeIds) {

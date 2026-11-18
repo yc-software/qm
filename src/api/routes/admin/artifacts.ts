@@ -7,6 +7,7 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { personNamer, requireScopedResource } from "./common.ts";
+import { skillAllowedInContext } from "../../../skills/skill-store.ts";
 
 function adminCronDestination(v: unknown, current: Destination | undefined): Destination | null {
   if (typeof v !== "object" || v === null) return null;
@@ -86,6 +87,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
   const skills = (await app.listSkills())
+    .filter((skill) => skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId, ctx.capability?.personalOnly))
     .filter((s) => orgWide || s.scopeId === scope)
     .map((s) => {
       const provenancePack = s.pack ? packsById.get(s.pack.packId) : undefined;
@@ -191,6 +193,8 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
+  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId, ctx.capability?.personalOnly))
+    return sendJson(res, 404, { error: "not_found" });
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
   audit(ctx, { principalId: actor.id, action: "skill.read", resource: id, scopeLabel: skill.scopeId });
@@ -222,6 +226,8 @@ export async function archiveAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
+  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId, ctx.capability?.personalOnly))
+    return sendJson(res, 404, { error: "not_found" });
   await app.archiveSkill(id);
   audit(ctx, { principalId: actor.id, action: "skill.archive", resource: id, scopeLabel: skill.scopeId });
   return sendJson(res, 200, { ok: true });

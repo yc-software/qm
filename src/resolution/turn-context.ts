@@ -18,7 +18,7 @@ import type { MemoryRecallContext, MemoryService } from "../memory/memory-servic
 import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
-import { type Resolution, type ScopeId, type Principal } from "../types.ts";
+import { personalScope, type Resolution, type ScopeId, type Principal } from "../types.ts";
 import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
 import type { CurrentScopeMembers } from "./scope-membership.ts";
@@ -211,6 +211,7 @@ export async function resolveTurnContext(input: ContextInput) {
           (await input.skills?.visibleFor(
             sources ? skillScopes.filter((scope) => sources.includes(scope)) : skillScopes,
             sources ? grantedSkills.filter((grant) => sources.includes(grant.ownerScopeId)) : grantedSkills,
+            input.targetScope === personalScope(input.actor.id) ? input.targetScope : undefined,
           )) ?? [],
         sharingSources,
         skillSources: [...new Set([...skillScopes, ...grantedSkills.map((grant) => grant.ownerScopeId)])],

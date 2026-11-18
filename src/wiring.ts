@@ -115,6 +115,7 @@ import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
+import { parseRef } from "./acl/resource-ref.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
@@ -660,6 +661,12 @@ export function buildApp(
     manages: (principalId, scopeId, authoredBy) =>
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
     resolveFiles: (refs) => files.resolveByIds(refs),
+    isPersonalOnly: async (ownerScopeId, ref) => {
+      const parsed = parseRef(ref);
+      if (parsed.kind !== "skill") return false;
+      const skill = await skills.get(parsed.id);
+      return skill?.scopeId === ownerScopeId && skill.personalOnly === true;
+    },
   });
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>

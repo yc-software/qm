@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import { parseScopeId, personalScope } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -53,6 +53,7 @@ export interface Skill {
   signature: string;
   status: SkillStatus;
   createdBy: string;
+  personalOnly?: true;
   version: number;
   grantedCapabilities: string[];
   approvals: string[];
@@ -65,6 +66,18 @@ export interface Skill {
 export interface GrantedSkillRef {
   id: string;
   ownerScopeId: ScopeId;
+}
+
+export function skillAllowedInContext(
+  skill: Pick<Skill, "personalOnly" | "scopeId">,
+  actorId: string,
+  contextScopeId?: ScopeId,
+  personalOnlyContext?: true,
+): boolean {
+  return !skill.personalOnly || (
+    skill.scopeId === personalScope(actorId) &&
+    (contextScopeId === undefined || (contextScopeId === skill.scopeId && personalOnlyContext === true))
+  );
 }
 
 export interface SkillResolution {
@@ -80,7 +93,13 @@ export interface SkillStoreOptions {
 }
 
 export interface SkillStore {
-  create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
+  create(input: {
+    scopeId: ScopeId;
+    manifest: SkillManifest;
+    createdBy: string;
+    personalOnly?: true;
+    pack?: Skill["pack"];
+  }): Promise<Skill>;
   update(id: string, manifest: SkillManifest): Promise<Skill>;
   withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
@@ -92,8 +111,12 @@ export interface SkillStore {
   restore(skill: Skill): Promise<void>;
   delete(id: string): Promise<void>;
   recordUse(id: string, at?: number): Promise<void>;
-  resolve(name: string, orderedScopes: ScopeId[]): Promise<SkillResolution>;
-  visibleFor(orderedScopes: ScopeId[], granted?: readonly GrantedSkillRef[]): Promise<SkillResolution[]>;
+  resolve(name: string, orderedScopes: ScopeId[], personalScopeId?: ScopeId): Promise<SkillResolution>;
+  visibleFor(
+    orderedScopes: ScopeId[],
+    granted?: readonly GrantedSkillRef[],
+    personalScopeId?: ScopeId,
+  ): Promise<SkillResolution[]>;
   promote(id: string, targetScopeId: ScopeId): Promise<Skill>;
   move(id: string, toScopeId: ScopeId): Promise<Skill>;
 }
@@ -202,6 +225,8 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     withNameLock,
     async create(input) {
       assertSafeSkillName(input.manifest.name);
+      if (input.personalOnly && scopeKind(input.scopeId) !== "personal")
+        throw new Error("Private skills require a personal scope");
       const at = Date.now();
       const skill: Skill = {
         id: randomUUID(),
@@ -210,6 +235,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         signature: sign(input.manifest),
         status: "draft",
         createdBy: input.createdBy,
+        ...(input.personalOnly ? { personalOnly: true as const } : {}),
         version: 1,
         grantedCapabilities: [],
         approvals: [],
@@ -283,7 +309,14 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
 
     async restore(skill) {
       assertSafeSkillName(skill.manifest.name);
-      await skills.put(skill.id, structuredClone(skill));
+      const current = await skills.get(skill.id);
+      if (current?.personalOnly && skill.scopeId !== current.scopeId)
+        throw new Error("Private skills cannot change audience");
+      const restored = structuredClone(skill);
+      if (current?.personalOnly) restored.personalOnly = true;
+      if (restored.personalOnly && scopeKind(restored.scopeId) !== "personal")
+        throw new Error("Private skills require a personal scope");
+      await skills.put(skill.id, restored);
     },
 
     async delete(id) {
@@ -294,18 +327,26 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       await skills.merge(id, { lastUsedAt: at ?? Date.now() });
     },
 
-    async resolve(name, orderedScopes) {
-      return resolveFromIndex(publishedByScopeAndName(await inScopes(orderedScopes)), name, orderedScopes);
+    async resolve(name, orderedScopes, personalScopeId) {
+      const visible = (await inScopes(orderedScopes)).filter(
+        (skill) => !skill.personalOnly || skill.scopeId === personalScopeId,
+      );
+      return resolveFromIndex(publishedByScopeAndName(visible), name, orderedScopes);
     },
 
-    async visibleFor(orderedScopes, granted) {
+    async visibleFor(orderedScopes, granted, personalScopeId) {
       const all = await inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
-      return visibleSkillRows(all, orderedScopes, granted);
+      return visibleSkillRows(
+        all.filter((skill) => !skill.personalOnly || skill.scopeId === personalScopeId),
+        orderedScopes,
+        granted,
+      );
     },
 
     async promote(id, targetScopeId) {
       const s = await skills.get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
+      if (s.personalOnly && targetScopeId !== s.scopeId) throw new Error("Private skills cannot change audience");
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
       if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — cannot promote");
@@ -324,6 +365,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
           signature: sign(s.manifest),
           status: "published",
           createdBy: s.createdBy,
+          ...(s.personalOnly || existing?.personalOnly ? { personalOnly: true as const } : {}),
           version: (existing?.version ?? 0) + 1,
           grantedCapabilities: [...s.grantedCapabilities],
           approvals: [...s.approvals],
@@ -338,6 +380,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     async move(id, toScopeId) {
       const s = await skills.get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
+      if (s.personalOnly && toScopeId !== s.scopeId) throw new Error("Private skills cannot change audience");
       assertSafeSkillName(s.manifest.name);
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");

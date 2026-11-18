@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { foreignSkillCollision, type SkillManifest } from "../skills/skill-store.ts";
+import { foreignSkillCollision, skillAllowedInContext, type SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
@@ -265,7 +265,7 @@ export function createSkillMethods(
     archiveSkill(id) {
       return deps.skills.archive(id);
     },
-    async listVisibleSkills(principalId, ownScopeBotWork) {
+    async listVisibleSkills(principalId, ownScopeBotWork, contextScopeId, personalOnlyContext) {
       const { ordered, granted } = await skillVisibilityContext(
         deps,
         h,
@@ -273,7 +273,12 @@ export function createSkillMethods(
         (await deps.skills.list()).map((s) => s.scopeId),
         ownScopeBotWork,
       );
-      return deps.skills.visibleFor(ordered, granted);
+      const personal = scopeId("personal", principalId);
+      return deps.skills.visibleFor(
+        ordered,
+        granted,
+        contextScopeId === undefined || (contextScopeId === personal && personalOnlyContext) ? personal : undefined,
+      );
     },
     canManageSkill(skill, principalId, botWork) {
       return canManageSkill(skill, principalId, botWork);
@@ -281,6 +286,8 @@ export function createSkillMethods(
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
       if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
+      if (!skillAllowedInContext(skill, principalId, opts?.contextScopeId, opts?.personalOnly)) return null;
+      if (opts?.personalOnly && !skill.personalOnly) return "private_context";
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -304,6 +311,7 @@ export function createSkillMethods(
     },
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
+      if (skill && !skillAllowedInContext(skill, principalId, opts?.contextScopeId, opts?.personalOnly)) return null;
       if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId, opts?.botActor === true)))
         return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
@@ -418,6 +426,8 @@ export function createSkillMethods(
       const body = input.body.trim();
       if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
       const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
+      if (input.personalOnly && homeScope !== scopeId("personal", input.principalId))
+        throw new Error("Private skills require the creator's personal scope");
       const homeKind = parseScopeId(homeScope).kind;
       if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group" && homeKind !== "persona") {
         throw new Error(
@@ -434,7 +444,12 @@ export function createSkillMethods(
           requiredCapabilities: input.requiredCapabilities ?? [],
           body,
         };
-        const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
+        const skill = await deps.skills.create({
+          scopeId: homeScope,
+          manifest,
+          createdBy: input.principalId,
+          ...(input.personalOnly ? { personalOnly: true as const } : {}),
+        });
         await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
         const published = await deps.skills.publish(skill.id);
         h.recordAudit({
@@ -447,9 +462,10 @@ export function createSkillMethods(
         return published;
       });
     },
-    async deleteOwnedSkill({ principalId, id, liveActor, botActor }) {
+    async deleteOwnedSkill({ principalId, id, liveActor, botActor, contextScopeId, personalOnly }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
+      if (!skillAllowedInContext(skill, principalId, contextScopeId, personalOnly)) return "forbidden";
       if (!(await canManageSkill(skill, principalId, botActor === true))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);

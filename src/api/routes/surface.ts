@@ -22,7 +22,7 @@ import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
-import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
+import { skillAllowedInContext, type Skill, type SkillResolution } from "../../skills/skill-store.ts";
 import type { ItemKind } from "../../sessions/items-schema.ts";
 import { compactItem } from "../../sessions/items.ts";
 import {
@@ -900,12 +900,12 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId, false)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, false, ctx.capability?.scopeId, ctx.capability?.personalOnly)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
   const archivedChecks = await Promise.all(
     (await app.listSkills())
-      .filter((skill) => skill.status === "archived")
+      .filter((skill) => skill.status === "archived" && skillAllowedInContext(skill, principalId, ctx.capability?.scopeId, ctx.capability?.personalOnly))
       .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId, false) })),
   );
   const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
@@ -944,8 +944,9 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   const skill = await app.getSkill(ctx.params.id!);
   if (
     !skill ||
+    !skillAllowedInContext(skill, principalId, capability?.scopeId, capability?.personalOnly) ||
     (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
-      !(await app.listVisibleSkills(principalId, ownScopeBotWork))
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork, capability?.scopeId, capability?.personalOnly))
         .flatMap((row) => row.shadowed.concat(row.skill ?? []))
         .some((visible) => visible.id === skill.id))
   ) {
@@ -985,6 +986,8 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
     liveActor,
     botActor: ctx.capability?.botActor === true,
+    contextScopeId: ctx.capability?.scopeId,
+    ...(ctx.capability?.personalOnly ? { personalOnly: true as const } : {}),
   });
   if (restored === "trigger_blocked")
     return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1029,7 +1032,11 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   const updated = await app.updateOwnedSkill(id, principalId, patch, {
     liveActor,
     botActor: capability?.botActor === true,
+    ...(capability?.personalOnly ? { personalOnly: true as const } : {}),
+    contextScopeId: capability?.scopeId,
   });
+  if (updated === "private_context")
+    return sendJson(res, 403, { error: "forbidden", message: "Create a private copy before editing this skill from a private conversation." });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1065,6 +1072,8 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     id,
     liveActor,
     botActor: capability?.botActor === true,
+    contextScopeId: capability?.scopeId,
+    ...(capability?.personalOnly ? { personalOnly: true as const } : {}),
   });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
@@ -1122,6 +1131,8 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
       message: "a Slack bot's work cannot add skills to a person's own library",
     });
   }
+  if (capability?.personalOnly && homeScope !== makeScopeId("personal", principalId))
+    return sendJson(res, 403, { error: "forbidden", message: "Private skills require your personal scope." });
   if (typeof b.name !== "string" || !b.name.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "name required" });
   }
@@ -1134,6 +1145,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   }
   const created = await app.createOwnedSkill({
     principalId,
+    ...(capability?.personalOnly ? { personalOnly: true as const } : {}),
     ...(homeScope ? { homeScope } : {}),
     name: b.name,
     description: b.description,
@@ -1516,7 +1528,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/memory/search", auth: "either", allowedInStrict: true, handle: searchMemory },
   { method: "POST", path: "/v1/grants", actor: "system", auth: "source", handle: createGrant },
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
-  { method: "POST", path: "/v1/skills/:id/share", browser: "embed", auth: "either", handle: publishSkillFromBrowser },
+  { method: "POST", path: "/v1/skills/:id/share", browser: "embed", actor: "person", auth: "either", handle: publishSkillFromBrowser },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
   { method: "GET", path: "/v1/custom-emoji", browser: true, actor: "person", auth: "source", handle: getCustomEmoji },

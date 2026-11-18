@@ -84,6 +84,7 @@ export interface CapabilityClaims {
   members?: Principal[];
   keychainMembers?: Principal[];
   privateScope?: boolean;
+  personalOnly?: true;
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;

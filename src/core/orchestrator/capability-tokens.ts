@@ -42,6 +42,7 @@ export interface CapabilityTurn {
   memoryPolicy: MemoryPolicy;
   memoryScopeId: TurnContext["memoryScopeId"];
   memoryAccess: TurnContext["memoryAccess"];
+  personalOnly?: true;
   baseRecallScopes: TurnContext["baseRecallScopes"];
   ownCredentialsAllowed: boolean;
   turnTimezone: string | undefined;
@@ -198,6 +199,7 @@ async function mintControlPlaneTokens(
         ? { privateScope: true }
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
+      ...(turn.personalOnly || memoryAccess?.personalOnly ? { personalOnly: true as const } : {}),
       ...presence,
       ...runBinding,
       sessionId: session.id,
