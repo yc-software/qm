@@ -294,15 +294,75 @@ test("a worker attempt between producer lookup and locking cannot mutate the bur
   releaseLookup.resolve();
   await enqueue;
   await replacement.start();
-  const a = await one.promise;
-  assert.deepEqual(
-    a.turns.map((ctx) => ctx.idempotencyKey),
+  const [a, b] = await Promise.all([one.promise, two.promise]);
+  assert.deepEqual([a, b].map((batch) => batch.turns.map((ctx) => ctx.idempotencyKey)).sort(), [
     ["turn-1"],
-  );
-  const b = await two.promise;
-  assert.deepEqual(
-    b.turns.map((ctx) => ctx.idempotencyKey),
     ["turn-2"],
-  );
+  ]);
   assert.notEqual(a.id, b.id);
+});
+
+test("completed capture handoffs remain idempotent after queue recreation", { timeout: 20_000 }, async (t) => {
+  const databaseUrl = await readyDatabase();
+  const done = Promise.withResolvers<void>();
+  const captured: MemoryCaptureTurn[][] = [];
+  const options = {
+    databaseUrl,
+    quietMs: 0,
+    maxTurns: 1,
+    capture: async (turns: MemoryCaptureTurn[]) => {
+      captured.push(turns);
+      done.resolve();
+    },
+  };
+  const first = createMemoryCaptureQueue(options);
+  const recovered = createMemoryCaptureQueue(options);
+  t.after(async () => {
+    await first.stop();
+    await recovered.stop();
+  });
+  await first.enqueue(turn(91));
+  await first.start();
+  await done.promise;
+  await first.stop();
+  await recovered.enqueue(turn(91));
+  await recovered.enqueue(turn(92));
+  await recovered.start();
+  await t.waitFor(() => assert.equal(captured.length, 2));
+  assert.deepEqual(
+    captured.flatMap((batch) => batch.map((item) => item.idempotencyKey)),
+    ["turn-91", "turn-92"],
+  );
+  await recovered.enqueue({ ...turn(91), reply: "Different rendered answer" });
+  await recovered.stop();
+  assert.equal(captured.length, 2);
+  assert.equal(captured[0]![0]!.reply, "Noted");
+});
+
+test("a failed job insert rolls its capture receipt back", { timeout: 20_000 }, async (t) => {
+  const databaseUrl = await readyDatabase();
+  const captured: MemoryCaptureTurn[][] = [];
+  const queue = createMemoryCaptureQueue({
+    databaseUrl,
+    quietMs: 0,
+    maxTurns: 1,
+    capture: async (turns) => {
+      captured.push(turns);
+    },
+  });
+  t.after(() => queue.stop());
+  const send = PgBoss.prototype.send;
+  let fail = true;
+  t.mock.method(PgBoss.prototype, "send", async function (this: PgBoss, ...args: Parameters<PgBoss["send"]>) {
+    if (fail) {
+      fail = false;
+      throw new Error("job insert unavailable");
+    }
+    return send.apply(this, args);
+  });
+  await assert.rejects(queue.enqueue(turn(93)), /job insert unavailable/);
+  await queue.enqueue(turn(93));
+  await queue.start();
+  await t.waitFor(() => assert.equal(captured.length, 1));
+  assert.equal(captured[0]![0]!.idempotencyKey, "turn-93");
 });

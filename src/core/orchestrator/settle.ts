@@ -6,7 +6,7 @@ import type { MemoryCaptureMetadata, MemoryProvenance } from "../../memory/facts
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import { isAgentReply, type Item } from "../../sessions/items.ts";
-import type { createSurfaceToolDeps, SpineState } from "../../surfaces/surface-tools.ts";
+import type { createSurfaceToolDeps } from "../../surfaces/surface-tools.ts";
 import type { PendingApproval, PendingApprovalRecord, ScopeId, Session, TurnResult } from "../../types.ts";
 import { hashId } from "../../util/crypto.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
@@ -68,7 +68,7 @@ export async function startMemoryCapture(turn: {
   audienceScopeId: ScopeId | undefined;
   memoryPolicy: MemoryPolicy;
   pendingCaptures: Map<ScopeId, Promise<void>>;
-  onTurnEnd: MemoryStrategy["onTurnEnd"];
+  onTurnEnd?: MemoryStrategy["onTurnEnd"];
   enqueueTurnEnd: MemoryStrategy["enqueueTurnEnd"];
   pausing: boolean;
   cancelStopped: boolean;
@@ -78,7 +78,7 @@ export async function startMemoryCapture(turn: {
   document?: MemoryCaptureMetadata["document"];
   turnInput: string;
   reply: string;
-  spine: SpineState;
+  sourceUserSeq?: number;
 }): Promise<void> {
   const {
     tenant,
@@ -100,7 +100,7 @@ export async function startMemoryCapture(turn: {
     captureDependencies,
     turnInput,
     reply,
-    spine,
+    sourceUserSeq,
   } = turn;
   if (
     !pausing &&
@@ -127,7 +127,7 @@ export async function startMemoryCapture(turn: {
       reply,
       actorId: actor.id,
       sessionId: session.id,
-      idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
+      idempotencyKey: input.runId ?? `${session.id}:${sourceUserSeq ?? "turn"}`,
     };
     if (enqueueTurnEnd) {
       try {

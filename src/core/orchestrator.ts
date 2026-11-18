@@ -1189,7 +1189,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       const recorded = isRetry ? await recordedTurnForRun() : null;
       const recordedTurn = recorded?.turn;
-      if (recorded && recordedTurn?.answer)
+      if (recorded && recordedTurn?.answer) {
+        await startMemoryCapture({
+          tenant,
+          deps,
+          input,
+          actor,
+          session,
+          scopeId,
+          memoryScopeId,
+          audienceScopeId,
+          memoryPolicy,
+          pendingCaptures,
+          enqueueTurnEnd: memoryStrategy.enqueueTurnEnd?.bind(memoryStrategy),
+          pausing: false,
+          cancelStopped: recordedTurn.answer.stopped === true || recordedTurn.answer.cancelled === true,
+          personConversationTurn,
+          useMemory,
+          captureDependencies: () => [UNTRACKED_PROVENANCE],
+          ...(document ? { document } : {}),
+          turnInput: recorded.items.find((item) => item.seq === recordedTurn.userSeq)?.text ?? input.text,
+          reply: recordedTurn.answer.text,
+          sourceUserSeq: recordedTurn.userSeq,
+        });
         return replayRecordedAnswer(
           {
             deps: { ...deps, files },
@@ -1209,6 +1231,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           recordedTurn,
           recordedTurn.answer,
         );
+      }
 
       audit({
         action: "turn",
@@ -2705,6 +2728,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnCompleted = outcome.completed;
         const pausing = outcome.paused;
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
+        const captureItems = [...rawEntries, ...emittedEntries];
+        const captureTurn = turnUserSeq === undefined ? null : turnAtSeq(captureItems, turnUserSeq);
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         await startMemoryCapture({
           tenant,
@@ -2720,14 +2745,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           onTurnEnd,
           enqueueTurnEnd: memoryStrategy.enqueueTurnEnd?.bind(memoryStrategy),
           pausing,
-          cancelStopped,
+          cancelStopped: captureTurn?.answer?.stopped === true || captureTurn?.answer?.cancelled === true,
           personConversationTurn,
           useMemory,
           captureDependencies,
           ...(document ? { document } : {}),
-          turnInput,
-          reply,
-          spine,
+          turnInput: captureItems.find((item) => item.seq === turnUserSeq)?.text ?? turnInput,
+          reply: captureTurn?.answer?.text ?? reply,
+          sourceUserSeq: spine.turnUserEntrySeq,
         });
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
 

@@ -1,3 +1,4 @@
+import { TENANCY, tenantRowSecurity } from "../tenants/migrations.ts";
 import { mergeProvenance } from "./facts.ts";
 import { inTenant } from "../tenants/claim.ts";
 import { createHash } from "node:crypto";
@@ -29,7 +30,30 @@ export function createMemoryCaptureQueue(input: {
 }) {
   if (!Number.isFinite(input.quietMs)) throw new Error("Memory capture quietMs must be finite");
   if (!Number.isFinite(input.maxTurns)) throw new Error("Memory capture maxTurns must be finite");
-  const pg = createPgPool(input.databaseUrl);
+  const pg = createPgPool(input.databaseUrl, [
+    ...TENANCY,
+    {
+      id: "memory/capture/0001-handoffs",
+      statements: [
+        `CREATE TABLE memory_capture_handoffs (
+          tenant_id UUID NOT NULL,
+          id TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id)
+        )`,
+        ...tenantRowSecurity("memory_capture_handoffs"),
+        `DO $$ BEGIN
+          IF to_regclass('pgboss.job') IS NOT NULL THEN
+            INSERT INTO memory_capture_handoffs (tenant_id, id)
+            SELECT (j.data->>'tenantId')::uuid, j.singleton_key || ':' || (t->>'idempotencyKey')
+              FROM pgboss.job j CROSS JOIN LATERAL jsonb_array_elements(j.data->'turns') t
+             WHERE j.name = 'memory-capture' AND j.data->>'tenantId' IS NOT NULL
+               AND j.singleton_key IS NOT NULL AND t->>'idempotencyKey' IS NOT NULL
+            ON CONFLICT DO NOTHING;
+          END IF;
+        END $$`,
+      ],
+    },
+  ]);
   const schema = "pgboss";
   const boss: PgBoss = poolBoss(() => pg, { schema, migrate: false });
   boss.on("error", (error) => reportFailure("memory capture queue", error));
@@ -110,6 +134,15 @@ export function createMemoryCaptureQueue(input: {
       await initialize();
       await withPgTransaction(await pg.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`memory-capture:${key}`]);
+        if (turn.idempotencyKey) {
+          const id = `${key}:${turn.idempotencyKey}`;
+          const inserted = await client.query(
+            `INSERT INTO memory_capture_handoffs (tenant_id, id)
+             VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING id`,
+            [tenantId, id],
+          );
+          if (!inserted.rowCount) return;
+        }
         const db = { executeSql: (text: string, values?: unknown[]) => client.query(text, values) };
         const pending = await boss.findJobs<MemoryCaptureBatch>(MEMORY_CAPTURE_QUEUE, { key, queued: true, db });
         for (const job of pending) {
@@ -117,8 +150,6 @@ export function createMemoryCaptureQueue(input: {
           const duplicate =
             turn.idempotencyKey && job.data.turns.find((item) => item.idempotencyKey === turn.idempotencyKey);
           if (duplicate) {
-            if (duplicate.input !== turn.input || duplicate.reply !== turn.reply)
-              throw new Error("Conflicting memory capture turn identity");
             return;
           }
         }

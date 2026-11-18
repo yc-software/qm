@@ -51,9 +51,14 @@ function fakeSandbox(): Sandbox {
   };
 }
 
+import type { MemoryStrategy } from "../src/memory/strategy.ts";
+import type { MemoryCaptureTurn } from "../src/memory/capture-context.ts";
+
 function buildScenario(
   interruptAfterToolResult = false,
   attachment?: { id: string; fileOnly?: boolean; onResume?: string },
+  memoryStrategy?: MemoryStrategy,
+  answer?: { text: string; stopped?: true },
 ) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
@@ -91,9 +96,10 @@ function buildScenario(
         });
       }
       if (attachment?.onResume && turns.length === 1) throw new Error("interrupted after first attachment");
-      const reply = attachment?.fileOnly ? "" : "it runs on this conversation's computer";
-      if (reply) await turn.emit({ kind: "AgentMessage", text: reply });
-      return { reply, modelCalls: 1 };
+      const reply = attachment?.fileOnly ? "" : (answer?.text ?? "it runs on this conversation's computer");
+      if (reply)
+        await turn.emit({ kind: "AgentMessage", text: reply, ...(answer?.stopped ? { body: { stopped: true } } : {}) });
+      return { reply, modelCalls: 1, ...(answer?.stopped ? { stopped: true } : {}) };
     },
     async screenSecurity() {
       return { decision: "auto" as const };
@@ -107,6 +113,7 @@ function buildScenario(
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...orchestratorTestDeps(),
+    ...(answer ? { publicWebUrl: "https://tools.example.test" } : {}),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     config: testConfigStore(ORG),
@@ -117,6 +124,7 @@ function buildScenario(
     auditLog,
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
+    ...(memoryStrategy ? { memoryStrategy } : {}),
     deploy: createDeployService({
       ...singleProcessDeps(),
       deployStore: createDeployStore(testDeployBackings()),
@@ -640,4 +648,86 @@ test("a resumed reply keeps its prior attachment when it stages another", async 
     (delivered[0]!.body.files as { artifactId: string }[]).map((file) => file.artifactId),
     ["file-A", "file-B"],
   );
+});
+
+test("recorded answers retry a failed capture handoff without repeating the model or losing private provenance", async () => {
+  const captured: MemoryCaptureTurn[] = [];
+  let failed = false;
+  const { orchestrator, sessions, runs, turns, input } = buildScenario(false, undefined, {
+    enqueueTurnEnd: async (context) => {
+      if (!failed) {
+        failed = true;
+        throw new Error("capture handoff unavailable");
+      }
+      captured.push(context);
+    },
+  });
+  const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
+  await sessions.recordContextProvenance(session.id, session.scopeId, {
+    personalOnly: true,
+    sensitivity: "restricted",
+    sources: ["group:restricted-source"],
+    sourceUnknown: true,
+  });
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /capture handoff unavailable/,
+  );
+  const retried = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retried.status, "ok");
+  assert.equal(turns.length, 1);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0]!.idempotencyKey, run.id);
+  assert.equal(captured[0]!.personalOnly, true);
+  assert.equal(captured[0]!.input, ASK);
+  assert.equal(captured[0]!.reply, retried.reply);
+  assert.ok(
+    captured[0]!.inheritedFacts?.some(
+      (fact) => fact.sensitivity === "restricted" && fact.sources.includes("group:restricted-source"),
+    ),
+  );
+});
+
+test("capture handoff uses the same saved payload before and after reply link rendering", async () => {
+  const captured: MemoryCaptureTurn[] = [];
+  const { orchestrator, runs, turns, input } = buildScenario(
+    false,
+    undefined,
+    {
+      enqueueTurnEnd: async (context) => {
+        captured.push(context);
+      },
+    },
+    { text: "  [Open report](/d/report/)  " },
+  );
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const first = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 }));
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(first.status, "ok");
+  assert.equal(retry.status, "ok");
+  assert.equal(turns.length, 1);
+  assert.equal(captured.length, 2);
+  assert.equal(captured[0]!.input, captured[1]!.input);
+  assert.equal(captured[0]!.reply, captured[1]!.reply);
+  assert.equal(captured[0]!.reply, "[Open report](/d/report/)");
+  assert.ok(first.reply?.includes("https://tools.example.test/d/report/"));
+});
+
+test("persisted stopped replies do not start capture on either attempt", async () => {
+  const captured: MemoryCaptureTurn[] = [];
+  const { orchestrator, runs, input } = buildScenario(
+    false,
+    undefined,
+    {
+      enqueueTurnEnd: async (context) => {
+        captured.push(context);
+      },
+    },
+    { text: "partial answer", stopped: true },
+  );
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 }));
+  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.deepEqual(captured, []);
 });
