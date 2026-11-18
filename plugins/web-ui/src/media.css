@@ -442,16 +442,22 @@ dialog.media-viewer[open] {
   background: #0c0c0e;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .media-viewer::backdrop,
+  .media-viewer::backdrop {
+    animation: mv-fade 0.2s ease-out;
+  }
   .media-viewer > :not(.mv-stage),
   .mv-nav {
-    animation: mv-fade 0.3s ease-out;
+    animation: mv-fade 0.2s ease-out 0.14s backwards;
   }
-  .media-viewer.closing::backdrop,
-  .media-viewer.closing > :not(.mv-stage),
-  .media-viewer.closing .mv-nav,
+  .media-viewer.closing::backdrop {
+    animation: mv-fade-out 0.18s ease-in 0.06s forwards;
+  }
   .media-viewer.fading .mv-frame {
     animation: mv-fade-out 0.2s ease-in forwards;
+  }
+  .media-viewer.closing > :not(.mv-stage),
+  .media-viewer.closing .mv-nav {
+    animation: mv-fade-out 0.08s linear forwards;
   }
   .media-viewer.fading .mv-frame {
     transform: scale(0.97);
