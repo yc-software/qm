@@ -4,6 +4,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
 import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { personScope, personScopes } from "../directory/person.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS memory_facts(
@@ -81,7 +82,7 @@ function fact(row: Row): MemoryFact {
 }
 
 const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at
-  FROM memory_facts WHERE scope_id = $1 AND deleted_at IS NULL ORDER BY id`;
+  FROM memory_facts WHERE scope_id = ANY($1::text[]) AND deleted_at IS NULL ORDER BY id`;
 
 export const MEMORY_FACTS_MIGRATIONS = [
   {
@@ -117,13 +118,13 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
 
   function tx(client: PoolClient, scopeId: ScopeId): FactStoreTx {
     return {
-      list: async () => (await client.query(LIVE, [scopeId])).rows.map(fact),
+      list: async () => (await client.query(LIVE, [personScopes(scopeId)])).rows.map(fact),
       async insert(f) {
         await client.query(
           `INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
-            scopeId,
+            personScope(scopeId),
             f.text,
             f.sensitivity,
             f.sources,
@@ -139,9 +140,9 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
         await client.query(
           `UPDATE memory_facts SET text = COALESCE($3, text), sensitivity = COALESCE($4, sensitivity),
              sources = COALESCE($5, sources), source_unknown = COALESCE($6, source_unknown), updated_at = $7
-           WHERE scope_id = $1 AND id = $2`,
+           WHERE scope_id = ANY($1::text[]) AND id = $2`,
           [
-            scopeId,
+            personScopes(scopeId),
             id,
             patch.text ?? null,
             patch.sensitivity ?? null,
@@ -153,18 +154,18 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
       },
       async remove(ids, at) {
         await client.query(
-          "UPDATE memory_facts SET deleted_at = $3 WHERE scope_id = $1 AND id = ANY($2::bigint[]) AND deleted_at IS NULL",
-          [scopeId, ids, at],
+          "UPDATE memory_facts SET deleted_at = $3 WHERE scope_id = ANY($1::text[]) AND id = ANY($2::bigint[]) AND deleted_at IS NULL",
+          [personScopes(scopeId), ids, at],
         );
       },
     };
   }
 
   return createNotebookMemory({
-    list: async (scopeId) => (await q(LIVE, [scopeId])).map(fact),
+    list: async (scopeId) => (await q(LIVE, [personScopes(scopeId)])).map(fact),
     transact: async (scopeId, fn) =>
       withPgTransaction(await pool(), async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [personScope(scopeId)]);
         return fn(tx(client, scopeId));
       }),
     async metadata() {

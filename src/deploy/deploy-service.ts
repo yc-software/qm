@@ -11,7 +11,7 @@ import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { bytes, normalizeRelPath } from "./deploy-fs.ts";
-import { samePerson } from "../directory/person.ts";
+import { samePerson, sameScope } from "../directory/person.ts";
 import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
@@ -472,11 +472,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   async function canWriteScope(callerId: string, scope: ScopeId, actingScopeId?: ScopeId): Promise<boolean> {
     if (deps.canWriteScope) return deps.canWriteScope(callerId, scope);
-    return scope === `personal:${callerId}` || scope === actingScopeId;
+    return sameScope(scope, `personal:${callerId}`) || scope === actingScopeId;
   }
 
   async function managesHome(d: PublishedApp, callerId: string, actingScopeId?: ScopeId): Promise<boolean> {
-    if (d.ownerScopeId === `personal:${callerId}`) return true;
+    if (sameScope(d.ownerScopeId, `personal:${callerId}`)) return true;
     if (deps.managesArtifactHome && (await deps.managesArtifactHome(d.ownerScopeId, d.createdBy, callerId)))
       return true;
     if (
@@ -1032,7 +1032,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async assertAppOwner(d, actor) {
       const caller = { actorId: actor.createdBy, botActor: actor.botActor };
       if (
-        d.ownerScopeId !== scopeId("personal", actor.createdBy) ||
+        !sameScope(d.ownerScopeId, scopeId("personal", actor.createdBy)) ||
         !(await personOrOwningBot(caller, async () => samePerson(d.createdBy, actor.createdBy)))
       )
         throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);

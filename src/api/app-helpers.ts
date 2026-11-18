@@ -32,7 +32,7 @@ import {
   scopeMembershipSnapshot,
   type ScopeMembershipDeps,
 } from "../resolution/scope-membership.ts";
-import { samePerson } from "../directory/person.ts";
+import { personScopes, samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { PublishedApp } from "../deploy/deploy-store.ts";
@@ -441,7 +441,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const actor = deps.identity?.classify(principalId);
     if (actor && !deps.identity?.isInternal(actor)) return [];
     const scopes = new Set<ScopeId>([
-      scopeId("personal", principalId),
+      ...personScopes(scopeId("personal", principalId)),
       ...(actor?.teamIds ?? []).map((teamId) => scopeId("team", teamId)),
       scopeId("org", orgIdOf()),
     ]);
