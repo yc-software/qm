@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { deriveKey, impersonationFor, openSession, readCookie } from "../../plugins/portal/src/session.ts";
+import { verifiedDevelopmentIdentity } from "../../plugins/portal/src/development-impersonation.ts";
 import { originOf, sameOriginRequest } from "../../plugins/chassis/src/http.ts";
 import type { PortalIdentity } from "../auth/portal-identity.ts";
 import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
@@ -300,7 +301,7 @@ export async function browserIdentity(
   const sub = canonicalPerson(session.sub);
   const foreign = req.headers.origin !== undefined && !sameOriginRequest(req, originOf(deps.portalUrl!));
   const imp = foreign
-    ? null
+    ? verifiedDevelopmentIdentity(req)
     : impersonationFor({ sub, org: session.org }, cookies, deriveKey(secret, "portal.impersonate.v1"), now);
   const target = imp && (await isAdmin(deps, tenant, sub)) ? imp.target : null;
   return {

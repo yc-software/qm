@@ -7,11 +7,18 @@ import {
   updateImpersonation,
   type SessionClaims,
   type ImpersonationResult,
+  type ImpersonationClaims,
 } from "./session.ts";
 
 export const DEVELOPMENT_IMPERSONATION_PATH = "/api/development/impersonation";
 export const DEVELOPMENT_VIEW = "development_view";
 export const DEVELOPMENT_IMPERSONATING = "development_impersonating";
+const verifiedIdentity = Symbol("developmentIdentity");
+type DevelopmentRequest = IncomingMessage & { [verifiedIdentity]?: ImpersonationClaims };
+
+export function verifiedDevelopmentIdentity(req: IncomingMessage): ImpersonationClaims | null {
+  return (req as DevelopmentRequest)[verifiedIdentity] ?? null;
+}
 
 export async function developmentImpersonation(input: {
   req: IncomingMessage;
@@ -90,6 +97,7 @@ export async function developmentImpersonation(input: {
     return true;
   }
   if (impersonating && !valid) return refuse(401, "test_identity_expired");
+  if (impersonating && valid) (req as DevelopmentRequest)[verifiedIdentity] = valid;
   const cookies = (req.headers.cookie ?? "")
     .split(";")
     .map((part) => part.trim())
