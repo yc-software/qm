@@ -59,6 +59,7 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
+import { DEFAULT_BABYSITTER } from "../agent/babysitter.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
@@ -2165,7 +2166,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         }).catch(swallowAs("orchestrator: reply check setup", undefined));
         const checkReply = replyCheck?.enforce ? replyCheck.check : undefined;
-        const babysit = (await deps.featureFlags?.enabled("babysitter", personalScope(actor.id))) === true;
+        const babysit =
+          (await deps.featureFlags?.enabled("babysitter", personalScope(actor.id))) === true
+            ? (deps.config.getBabysitter(personalScope(actor.id)) ?? DEFAULT_BABYSITTER)
+            : undefined;
         const runAgentSegment = async (
           agentInput: string,
           extras: {

@@ -36,7 +36,7 @@ import {
   type ModelThinkingLevel,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { CONFIG_DEFAULTS, type BabysitterMode, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { ConversationTurn, StopScope } from "../types.ts";
 import type { Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
@@ -152,7 +152,6 @@ export interface AgentOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
-  babysitterMode?: BabysitterMode;
 }
 
 export function agentConfigOptions(config: Config): AgentOptions {
@@ -162,7 +161,6 @@ export function agentConfigOptions(config: Config): AgentOptions {
     captureRequests: config.captureLlmRequests,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
-    babysitterMode: config.babysitterMode,
   };
 }
 
@@ -602,23 +600,22 @@ export function createAgent(opts?: AgentOptions): Agent {
         const steps = createStepRecorder(turn, persist);
         activeSteps = steps;
         const babysitterNotes = new Set<string>();
-        const babysitter =
-          turn.babysit && opts?.babysitterMode
-            ? createBabysitter({
-                mode: opts.babysitterMode,
-                ask: (modelId, systemPrompt, trace) =>
-                  askUtility(modelId, systemPrompt, trace, "judge", { signal: toolAbort.signal }),
-                messages: () => entry.agentSession.messages,
-                deliver: async (note) => {
-                  if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
-                  babysitterNotes.add(note);
-                  await entry.agentSession.steer(note);
-                  steerWake.abort();
-                  return true;
-                },
-                onError: (error) => swallow("pi: babysitter", error),
-              })
-            : undefined;
+        const babysitter = turn.babysit
+          ? createBabysitter({
+              ...turn.babysit,
+              ask: (modelId, systemPrompt, trace) =>
+                askUtility(modelId, systemPrompt, trace, "judge", { signal: toolAbort.signal }),
+              messages: () => entry.agentSession.messages,
+              deliver: async (note) => {
+                if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
+                babysitterNotes.add(note);
+                await entry.agentSession.steer(note);
+                steerWake.abort();
+                return true;
+              },
+              onError: (error) => swallow("pi: babysitter", error),
+            })
+          : undefined;
         entry.ref.emit = steps.emit;
         const onMessageEnd = async (message: unknown): Promise<void> => {
           const role = (message as { role?: string }).role;

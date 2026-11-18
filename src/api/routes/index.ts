@@ -53,6 +53,7 @@ import { inboxRoutes } from "./inbox.ts";
 import { loopItemRoutes } from "./loop-items.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
+import { babysitterRoutes } from "./babysitter.ts";
 import { swarmRoutes } from "./swarms.ts";
 import { personaRoutes } from "./personas.ts";
 
@@ -163,4 +164,5 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...egressAuditRoutes,
   ...authBrokerRoutes,
   ...userModelAuthRoutes,
+  ...babysitterRoutes,
 ];

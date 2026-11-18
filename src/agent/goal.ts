@@ -394,13 +394,17 @@ const GOAL_GOVERNOR_SYSTEM_PROMPT = [
   'Reply with ONLY JSON: {"verdict": "continue" | "complete" | "step_back" | "pause", "reasons": "<one short paragraph; for pause, the exact question for the user>"}.',
 ].join("\n");
 
-export function goalWorkDigest(lines: ReadonlyArray<string>, maxChars = GOAL_WORK_DIGEST_CHARS): string {
+export function goalWorkDigest(
+  lines: ReadonlyArray<string>,
+  maxChars = GOAL_WORK_DIGEST_CHARS,
+  lineChars = GOAL_WORK_LINE_CHARS,
+): string {
   const kept: string[] = [];
   let used = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
     const raw = lines[i]!.replace(/\s+/g, " ").trim();
     if (!raw) continue;
-    const line = raw.length > GOAL_WORK_LINE_CHARS ? `${raw.slice(0, GOAL_WORK_LINE_CHARS)}…` : raw;
+    const line = raw.length > lineChars ? `${raw.slice(0, lineChars)}…` : raw;
     if (used + line.length > maxChars) break;
     kept.push(line);
     used += line.length + 1;

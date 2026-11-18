@@ -39,6 +39,8 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/webhooks", "/v1/webhooks"],
   ["GET /api/webhooks/:id/events", "/v1/webhooks/:id/events"],
   ["GET /api/user-model-auth/status", "/v1/user-model-auth/status"],
+  ["GET /api/babysitter", "/v1/babysitter"],
+  ["POST /api/babysitter", "/v1/babysitter"],
   ["GET /api/connectors", "/v1/connectors/oauth/status"],
   ["GET /api/directory/channels", "/v1/directory/channels"],
   ["GET /api/ui-state", "/v1/ui-state"],

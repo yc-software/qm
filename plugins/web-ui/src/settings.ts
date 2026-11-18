@@ -1,6 +1,7 @@
 import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
+import { babysitterRow, loadBabysitter } from "./babysitter-settings";
 import {
   alwaysSteer,
   api,
@@ -632,7 +633,7 @@ function generalPane(): TemplateResult {
   return html`
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${desktopRow()} ${accountRow()}
+      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${babysitterRow(drawSettings)} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
@@ -687,4 +688,5 @@ export function renderSettings(): void {
   drawSettings();
   if (section !== "general") void mountAdmin();
   void loadAiStatus();
+  void loadBabysitter(drawSettings);
 }

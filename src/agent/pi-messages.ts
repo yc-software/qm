@@ -32,7 +32,7 @@ export function textFromContent(content: unknown): string {
     .join("");
 }
 
-export function piGoalWork(messages: ReadonlyArray<unknown>): string {
+export function piGoalWork(messages: ReadonlyArray<unknown>, lineChars?: number): string {
   const lines: string[] = [];
   for (const m of messages as ReadonlyArray<{ role?: string; content?: unknown; toolName?: string }>) {
     if (m.role === "toolResult") lines.push(`tool_result ${m.toolName ?? ""}: ${textFromContent(m.content)}`);
@@ -46,7 +46,7 @@ export function piGoalWork(messages: ReadonlyArray<unknown>): string {
           );
     }
   }
-  return goalWorkDigest(lines);
+  return goalWorkDigest(lines, undefined, lineChars);
 }
 
 export type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;

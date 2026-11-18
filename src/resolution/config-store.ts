@@ -1,3 +1,4 @@
+import type { BabysitterSettings } from "../agent/babysitter.ts";
 import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
@@ -189,6 +190,8 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
+  getBabysitter(id: ScopeId): BabysitterSettings | null;
+  setBabysitter(id: ScopeId, settings: BabysitterSettings | null): Promise<void>;
   getCompactionSettings(): CompactionSettings;
   getCompactionSettingsDurable(): Promise<CompactionSettings>;
   setCompactionKeepPercent(percent: number | null): Promise<void>;
@@ -224,6 +227,7 @@ export interface ConfigStoreMaps {
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
   activitySeeds?: DurableMap<ScopedRow<"seeds", ActivitySeeds>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
+  babysitter?: DurableMap<ScopedRow<"settings", BabysitterSettings>>;
   spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
@@ -249,6 +253,7 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   branding: "branding_configs",
   activitySeeds: "activity_seeds_configs",
   browseMaxSteps: "browse_max_steps_configs",
+  babysitter: "babysitter_configs",
   spendLimits: "spend_limit_configs",
   deploymentIdentity: "deployment_identity",
 };
@@ -349,6 +354,7 @@ export function createConfigStore(
     branding: field("branding", "branding"),
     activitySeeds: field("activitySeeds", "seeds"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
+    babysitter: field("babysitter", "settings"),
     spendLimits: field("spendLimits", "limit"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
@@ -761,6 +767,8 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
+    getBabysitter: (id) => settings.babysitter.get(id) ?? null,
+    setBabysitter: (id, value) => settings.babysitter.set(id, value),
     getCompactionSettings: () => compactionSettingsOf(tenantState().baseModels.get(org)),
     getCompactionSettingsDurable: async () => compactionSettingsOf(await baseModelStore.get(org)),
     setCompactionKeepPercent: (percent) => setOrgModelField("compactionKeepPercent", percent),
