@@ -33,6 +33,7 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     surfaceCache,
     isInternalEmail,
     unansweredReply,
+    guestReply: unansweredReply,
     onAction: async () => {},
   });
   const blobs = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };

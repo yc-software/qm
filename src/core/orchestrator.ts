@@ -13,7 +13,7 @@ import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolut
 import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
-import { externalTools } from "./orchestrator/external-tools.ts";
+import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
@@ -936,7 +936,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const personaBlock = persona ? personaPrompt(persona) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
       let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
-      if (external)
+      if (external && surfaceOrigin.guests)
+        systemPrompt +=
+          "\n\nThis group chat includes guests from outside your organization. Answer and run code here only with what is in this chat and your own computer. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable, and nothing private may be shared here. When a request needs them, say briefly that you can't do that with guests present and suggest the requester ask you in a private chat.";
+      else if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
       const turnContextBlocks: SystemContextBlocks = {};
@@ -1803,7 +1806,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         baseTools.withdrawApproval = (card: string) =>
           withdrawCallApprovals(pending, session.id, actor.id, card, audit);
-        const tools = external ? externalTools(baseTools, accessResource) : baseTools;
+        const externalDenial = external && surfaceOrigin.guests ? GUEST_CHAT_DENIAL : undefined;
+        const tools = external ? externalTools(baseTools, accessResource, externalDenial) : baseTools;
         const cronScript =
           input.cronScript && input.surface === "cron" && !input.sessionSenderId && !isRetry
             ? await runCronScript(

@@ -2627,8 +2627,14 @@ export function buildApp(
           stageBlob: slackCore.stageBlob,
           app,
           surfaceCache,
-          isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
+          isInternalEmail: async (email, vouchedByHost) => {
+            if (!email.includes("@")) return false;
+            if (!vouchedByHost) return vouchedInternalEmail(email);
+            await identity.refresh();
+            return isActiveMember(email);
+          },
           unansweredReply: genericChatNotices.unanswered,
+          guestReply: genericChatNotices.guest,
           turns: genericChatTurns,
           registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, GENERIC_CHAT),
           onAction: createGenericChatApprovals({
