@@ -2629,6 +2629,7 @@ export function buildApp(
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           unansweredReply: genericChatNotices.unanswered,
+          guestReply: genericChatNotices.guest,
           turns: genericChatTurns,
           registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, GENERIC_CHAT),
           onAction: createGenericChatApprovals({

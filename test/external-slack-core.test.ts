@@ -250,6 +250,28 @@ test("external policy changes invalidate retained requests while untouched works
   );
 });
 
+test("a generic-chat guest audience is admitted only in its own account's guest namespace with nothing shared", async () => {
+  const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
+  const access = { companyDomains: [], companyTeamIds: [], serviceCredentials: [] };
+  const author = { surface: "partner-chat", account: "7001", id: "5" };
+  const origin = { author, workspace: "7001", audience: "external" as const, access, guests: true as const };
+  const ref = "guests:partner-chat:7001:group:88";
+  const turn = (o: object = origin, threadRef = `${ref}:1`, kind: "group" | "dm" = "group") => ({
+    surface: "partner-chat",
+    conversation: { kind, channelRef: ref, threadRef },
+    surfaceOrigin: o as typeof origin,
+  });
+  assert.equal(externalSlackRequestAllowed(turn(), {}), true);
+  for (const denied of [
+    turn({ ...origin, author: { ...author, account: "7002" }, workspace: "7002" }),
+    turn({ ...origin, access: { ...access, serviceCredentials: ["safe"] } }),
+    turn({ ...origin, audience: "internal" }),
+    turn(origin, `${ref}:1`, "dm"),
+    turn(origin, "partner-chat:7001:group:88:1"),
+  ])
+    assert.equal(externalSlackRequestAllowed(denied, externalSlackPolicies), false);
+});
+
 test("external account DMs require admission under the current policy", async () => {
   const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
   const dm = {
