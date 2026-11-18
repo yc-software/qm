@@ -657,12 +657,10 @@ function cronSummaryLine(c: CronView): TemplateResult {
   const next = cronNextFire(c);
   const tz = c.schedule.cron ? timezoneLabel(c.schedule.timezone) : "";
   const last = cronRuns.get(c.id)?.at(-1);
-  const lastMark =
-    last?.status === "failed" || last?.status === "refused"
-      ? html` <span class="cron-mark bad">failed</span>`
-      : last && (last.status === "completed" || last.status === undefined)
-        ? html` <span class="cron-mark ok" aria-label="succeeded">✓</span>`
-        : nothing;
+  const tone = last ? runStatusTone(last.status) : "";
+  let lastMark: TemplateResult | typeof nothing = nothing;
+  if (tone === "bad") lastMark = html` <span class="cron-mark bad">failed</span>`;
+  if (tone === "ok") lastMark = html` <span class="cron-mark ok" aria-label="succeeded">✓</span>`;
   const parts: TemplateResult[] = [html`<strong>${describeSchedule(c.schedule)}</strong>${tz ? ` ${tz}` : ""}`];
   if (c.archived) parts.push(html`Archived`);
   else if (!c.enabled) parts.push(html`Paused`);

@@ -58,11 +58,9 @@ export function cronDeliveryList(
   shares: Array<{ scope: string; permission: "read" | "write" }>,
   onAdd: () => void,
 ): TemplateResult {
-  const ownStatus = c.archived
-    ? { label: "Archived", tone: "" }
-    : c.enabled
-      ? { label: "On", tone: "on" }
-      : { label: "Paused", tone: "" };
+  let ownStatus = { label: "Paused", tone: "" };
+  if (c.archived) ownStatus = { label: "Archived", tone: "" };
+  else if (c.enabled) ownStatus = { label: "On", tone: "on" };
   return html`<div class="cron-card cron-delivery-list">
       ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
       ${(c.copies ?? []).map((copy) =>

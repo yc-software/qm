@@ -186,11 +186,13 @@ export function schedulePreset(expression: string): SchedulePreset | null {
 
 export function presetCron(preset: SchedulePreset): string {
   if (preset.kind === "hourly") return `${preset.minute} * * * *`;
-  const dayOfWeek = preset.kind === "daily" ? "*" : preset.kind === "weekdays" ? "1-5" : String(preset.day);
+  let dayOfWeek = "*";
+  if (preset.kind === "weekdays") dayOfWeek = "1-5";
+  if (preset.kind === "weekly") dayOfWeek = String(preset.day);
   return `${preset.minute} ${preset.hour} * * ${dayOfWeek}`;
 }
 
-export function clockTime(hour: number, minute: number): string {
+function clockTime(hour: number, minute: number): string {
   return new Date(Date.UTC(2000, 0, 1, hour, minute)).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
