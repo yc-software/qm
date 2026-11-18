@@ -19,6 +19,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -71,6 +72,7 @@ function start(
     ? createServer(built.app, {
         ...deps,
         signingSecret: SECRET,
+        runs: liveRunStore(),
       })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
@@ -95,7 +97,7 @@ const capFor = (actorId: string) =>
       actorId,
       scopeId: scopeId("personal", actorId),
       aud: CONTROL_PLANE_AUD,
-      liveActor: true,
+      ...liveRunClaims(actorId),
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,

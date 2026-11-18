@@ -20,8 +20,8 @@ import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
-import { refuseImpersonated, sendJson } from "../http.ts";
-import { isObj, refuseInactiveRun, resolveCapabilityDestination, runIsActive } from "./shared.ts";
+import { PERSON_REQUIRED, refuseImpersonated, sendJson } from "../http.ts";
+import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
@@ -65,12 +65,11 @@ export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
     const atKeyboard = ctx.capability.liveActor === true && personAtKeyboard(ctx.capability);
-    let running: Promise<boolean> | undefined;
     return {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
-      liveHuman: async () => atKeyboard && (await (running ??= runIsActive(ctx))),
+      liveHuman: async () => atKeyboard,
     };
   }
   if (ctx.actor?.p) {
@@ -86,8 +85,7 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
 export async function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): Promise<boolean> {
   if (await acting.liveHuman()) return true;
   if (ctx.actor?.imp) refuseImpersonated(ctx.res);
-  else if (ctx.capability?.liveActor && personAtKeyboard(ctx.capability)) refuseInactiveRun(ctx);
-  else sendJson(ctx.res, 403, { error: "human_required", message: "this action requires a live human actor" });
+  else sendJson(ctx.res, 403, { error: "human_required", message: PERSON_REQUIRED });
   return false;
 }
 

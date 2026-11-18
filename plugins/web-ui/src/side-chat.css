@@ -123,7 +123,8 @@
   align-content: start;
   align-items: start;
 }
-.message-stack.with-side-chats > * {
+.message-stack.with-side-chats > *,
+.message-stack.with-side-chats > .inline-steer > .user-row {
   grid-column: 1 / -1;
   width: min(calc(var(--content-w) - 2 * var(--composer-inset)), 100%);
   justify-self: center;
@@ -189,7 +190,8 @@
   }
 }
 @container chat (max-width: 860px) {
-  .message-stack.with-side-chats > * {
+  .message-stack.with-side-chats > *,
+  .message-stack.with-side-chats > .inline-steer > .user-row {
     width: 100%;
   }
 }
@@ -498,4 +500,10 @@
 .side-chat-markers.dense .side-chat-preview {
   padding-inline: 12px;
   -webkit-line-clamp: 1;
+}
+
+.chat-scroll:has(> .message-stack.with-side-chats) ~ .chat-bottom-dock > .scroll-bottom-btn {
+  right: auto;
+  left: max(16px, calc((100% - var(--content-w)) / 2));
+  left: anchor(left);
 }

@@ -1,11 +1,12 @@
 import "./side-chat.css";
-import { cachedTranscript, storeTranscript } from "./transcript-cache";
+import { cachedTranscript, refreshCachedTranscript, storeTranscript } from "./transcript-cache";
 import { passageOccurrence, passageRange } from "./passage-range";
 import { html, nothing } from "lit";
 import { markdown } from "./message-markdown";
 import { retractedReason } from "./items";
 import { messageWorkTimeline } from "./timeline";
 import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, Minus, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
 import {
@@ -45,6 +46,7 @@ export function createSideChatController(ctx: ConvCtx) {
   let pendingAnchor: SelectionAnchor | null = null;
   let pendingQuote: string | null = null;
   let pendingDraft = "";
+  let sendOnOpen = false;
   let maximized = false;
   let includeExcerpt = true;
   const previews = new Map<string, { text: string }>();
@@ -204,6 +206,14 @@ export function createSideChatController(ctx: ConvCtx) {
     void discuss(false, event.key);
   }
 
+  function pendingKeydown(event: KeyboardEvent) {
+    if (event.isComposing || event.keyCode === 229 || event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    if (!pendingDraft.trim()) return;
+    sendOnOpen = true;
+    redraw();
+  }
+
   function panelKeydown(event: KeyboardEvent) {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     event.preventDefault();
@@ -214,13 +224,14 @@ export function createSideChatController(ctx: ConvCtx) {
 
   async function loadPreview(session: CoreSession) {
     const id = sourceId;
-    const preview = { text: "Loading…" };
+    const preview = { text: previews.get(session.id)?.text ?? "Loading…" };
     previews.set(session.id, preview);
     try {
       const page = await fetchTranscript(session.id, { tailTurns: 1 });
       const { items } = page;
       if (sourceId !== id || previews.get(session.id) !== preview) return;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
+      else refreshCachedTranscript(session.id);
       const messages = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1))).filter(
         (message): message is AssistantWork => message.role === "assistant",
       );
@@ -251,7 +262,10 @@ export function createSideChatController(ctx: ConvCtx) {
     void api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/side-chats`).then(
       (result) => {
         if (sourceId !== id) return;
-        chats = result.sessions ?? [];
+        const order = new Map(chats.map((chat, position) => [chat.id, position]));
+        chats = (result.sessions ?? []).toSorted(
+          (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
+        );
         redraw();
       },
       (cause) => {
@@ -271,6 +285,7 @@ export function createSideChatController(ctx: ConvCtx) {
     pendingQuote = null;
     pendingAnchor = null;
     pendingDraft = "";
+    sendOnOpen = false;
     epoch++;
     busy = false;
     choices.clear();
@@ -427,15 +442,19 @@ export function createSideChatController(ctx: ConvCtx) {
       if (conversation === conv) {
         if (!loaded) throw new Error("Could not load side chat. Try again.");
         if (creating) conv.composer.state.draft = pendingDraft;
+        const send = creating && sendOnOpen;
         pendingQuote = null;
         pendingDraft = "";
+        sendOnOpen = false;
         redraw();
         conv.drawActiveChat();
         conv.composer.focusComposerEnd();
+        if (send) void conv.composer.submit();
       }
     } catch (cause) {
       reportHandledError("web:side_chat_open", cause);
       if (opening !== epoch) return;
+      sendOnOpen = false;
       error = errMessage(cause, "Could not open side chat.");
       redraw();
     }
@@ -488,7 +507,10 @@ export function createSideChatController(ctx: ConvCtx) {
       await show(result.session, true);
     } catch (cause) {
       reportHandledError("web:side_chat_create", cause);
-      if (opening === epoch) error = errMessage(cause, "Could not start side chat.");
+      if (opening === epoch) {
+        error = errMessage(cause, "Could not start side chat.");
+        sendOnOpen = false;
+      }
     } finally {
       if (opening === epoch) {
         busy = false;
@@ -533,8 +555,8 @@ export function createSideChatController(ctx: ConvCtx) {
     onDelivery(threadRef: string) {
       const chat = chats.find((session) => session.threadRef === threadRef);
       if (!chat) return;
-      previews.delete(chat.id);
-      redraw();
+      void loadPreview(chat);
+      refreshHighlights();
     },
     select,
     dismissSelection,
@@ -621,7 +643,9 @@ export function createSideChatController(ctx: ConvCtx) {
           });
         })}
       >
-        ${matches.map(
+        ${repeat(
+          matches,
+          (chat) => chat.id,
           (chat) =>
             html` <div
               class="side-chat-card ${active?.id === chat.id ? "" : "collapsed"}"
@@ -757,6 +781,8 @@ export function createSideChatController(ctx: ConvCtx) {
                           aria-label="Ask about"
                           placeholder="Ask about…"
                           .value=${pendingDraft}
+                          ?readonly=${sendOnOpen}
+                          @keydown=${pendingKeydown}
                           @input=${(event: Event) => {
                             pendingDraft = (event.target as HTMLTextAreaElement).value;
                           }}

@@ -1,10 +1,18 @@
 import type { ToolContext } from "../../tools/primitives.ts";
 
-export function externalTools(tools: ToolContext, authorizeSandbox?: (id: string) => Promise<unknown>): ToolContext {
+const PRIVATE_CONTINUATION_DENIAL =
+  "This operation requires private access. Continue in the requesting person's DM with [[continue-private: task]].";
+
+export const GUEST_CHAT_DENIAL =
+  "This operation isn't available while guests are in this chat. Tell the requester to ask you in a private chat instead.";
+
+export function externalTools(
+  tools: ToolContext,
+  authorizeSandbox?: (id: string) => Promise<unknown>,
+  denial: string = PRIVATE_CONTINUATION_DENIAL,
+): ToolContext {
   const denied = (): never => {
-    throw new Error(
-      "This operation requires private access. Continue in the requesting person's DM with [[continue-private: task]].",
-    );
+    throw new Error(denial);
   };
   const allowed = new Set(["attach", "history", "historyOpen"]);
   return new Proxy(tools, {

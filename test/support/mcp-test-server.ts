@@ -224,3 +224,11 @@ export const routedTo =
     Object.assign(url, { protocol, host });
     return loopbackFetch(url, init);
   };
+
+export async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((r) => server.close(() => r()));
+  return port;
+}

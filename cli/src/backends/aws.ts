@@ -3855,7 +3855,8 @@ export function assertAwsPublicRouting(
         }>;
       }>;
     }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
-  let nonDefault = rules.filter((rule) => !rule.IsDefault);
+  const operatorRules = aws.sharedAlb ? new Set<string>() : operatorManagedRules(aws, rules);
+  let nonDefault = rules.filter((rule) => !rule.IsDefault && !operatorRules.has(rule.RuleArn ?? ""));
   if (aws.sharedAlb) {
     const hostname = new URL(config.publicUrl).hostname.toLowerCase();
     const portalAppsDomain = awsPortalAppsDomain(config);
@@ -4015,6 +4016,27 @@ export function assertAwsPublicRouting(
   }
   if (nonDefault.length) throw new Error("ALB has non-default rules beyond the declared plugin and core API routes");
   return targets;
+}
+
+const AWS_OPERATOR_RULE_TAG = "qm:operator-managed";
+
+function operatorManagedRules(aws: AwsConfig, rules: Array<{ RuleArn?: string; IsDefault?: boolean }>): Set<string> {
+  const arns = rules.filter((rule) => !rule.IsDefault && rule.RuleArn).map((rule) => rule.RuleArn!);
+  const tagged = new Set<string>();
+  for (const batch of chunks(arns, 20)) {
+    const described =
+      awsJson<{ TagDescriptions?: Array<{ ResourceArn?: string; Tags?: Array<{ Key?: string }> }> }>(aws, [
+        "elbv2",
+        "describe-tags",
+        "--resource-arns",
+        ...batch,
+      ]).TagDescriptions ?? [];
+    for (const description of described) {
+      if (description.ResourceArn && description.Tags?.some((tag) => tag.Key === AWS_OPERATOR_RULE_TAG))
+        tagged.add(description.ResourceArn);
+    }
+  }
+  return tagged;
 }
 
 function assertAwsPublicFrontDoor(config: QmConfig): void {

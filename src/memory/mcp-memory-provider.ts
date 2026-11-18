@@ -1,11 +1,17 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
+import { McpCallError, mcpEnvelope, mcpResultText, providerCode, type McpClient } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
-import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
+import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryCandidate } from "./facts.ts";
-import { DENIED_CODES, MAX_FACTS_PER_WRITE, reportEnvelope } from "./provider-outcome.ts";
+import {
+  DENIED_CODES,
+  MAX_FACTS_PER_WRITE,
+  MemoryWriteUnconfirmed,
+  reportEnvelope,
+  requestKey,
+} from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
 import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
 import { flatText } from "../util/text.ts";
@@ -13,6 +19,10 @@ import { flatText } from "../util/text.ts";
 const MAX_PROVENANCE_CHARS = 200;
 
 export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { client: McpClient; timeoutMs: number };
+
+const ACTING_USER = "acting_user";
+const PENDING_STATES = new Set(["queued", "running", "recovering"]);
+const UNPUBLISHED_STATES = new Set(["conflict", "failed", "cancelled"]);
 
 function resultText(result: CallToolResult): string {
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
@@ -59,20 +69,22 @@ const stamped = (fact: ProviderFact) => {
 export function createMcpMemoryProvider(opts: {
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
+  forget?: McpMemoryOperation;
   attestActor?: boolean;
 }): MemoryService {
   const call = async (
-    op: McpMemoryOperation,
+    op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs">,
     args: Record<string, unknown>,
+    actorArg: string | undefined,
     actorId: string | undefined,
     scopeId: string,
     audienceScopeId: string | undefined,
     deadline = Date.now() + op.timeoutMs,
   ) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
-    if (opts.attestActor && !(attestableAudience(actorId, scopeId) && attestableAudience(actorId, audienceScopeId)))
+    if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
       throw new OutsideAudience("memory provider");
-    if (person) args[op.actorArg ?? "acting_user"] = person;
+    if (person && actorArg) args[actorArg] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
@@ -93,7 +105,14 @@ export function createMcpMemoryProvider(opts: {
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const result = await call(op, args, context?.actorId, scopeId, context?.audienceScopeId).catch((error: unknown) => {
+    const result = await call(
+      op,
+      args,
+      op.actorArg ?? ACTING_USER,
+      context?.actorId,
+      scopeId,
+      context?.audienceScopeId,
+    ).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
     const { code } = mcpEnvelope(result);
@@ -148,7 +167,9 @@ export function createMcpMemoryProvider(opts: {
         if (context?.idempotencyKey && op.idempotencyArg)
           args[op.idempotencyArg] = start ? `${context.idempotencyKey}:${start / size}` : context.idempotencyKey;
         if (op.scopeArg) args[op.scopeArg] = scopeId;
-        const { code } = mcpEnvelope(await call(op, args, actor, scopeId, context?.audienceScopeId, deadline));
+        const { code } = mcpEnvelope(
+          await call(op, args, op.actorArg ?? ACTING_USER, actor, scopeId, context?.audienceScopeId, deadline),
+        );
         if (code && DENIED_CODES.has(code))
           throw new McpCallError(`memory provider refused the write (${code})`, { code });
       }
@@ -161,5 +182,46 @@ export function createMcpMemoryProvider(opts: {
     },
 
     read: async (scopeId) => resultText(await read(scopeId, "")),
+
+    ...(opts.forget
+      ? {
+          async delete(scopeId, ids, by, context) {
+            const op = opts.forget!;
+            const deadline = (context?.startedAt ?? Date.now()) + op.timeoutMs;
+            for (const id of ids) {
+              const factId = Number(id);
+              if (!Number.isSafeInteger(factId) || factId < 0 || String(factId) !== id)
+                throw new McpCallError(`memory provider fact ids are whole numbers, not ${JSON.stringify(id)}`, {
+                  code: "fact_not_found",
+                });
+              const args: Record<string, unknown> = { id: factId };
+              if (context?.idempotencyKey && op.idempotencyArg)
+                args[op.idempotencyArg] = requestKey(context.idempotencyKey, id);
+              const result = await call(
+                op,
+                args,
+                undefined,
+                by?.actorId,
+                scopeId,
+                context?.audienceScopeId,
+                deadline,
+              ).catch((error: unknown) => {
+                if (error instanceof McpCallError && error.code === "fact_already_expired") return undefined;
+                throw error;
+              });
+              if (!result) continue;
+              const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
+              if (state === "committed") continue;
+              if (typeof state === "string" && UNPUBLISHED_STATES.has(state))
+                throw new McpCallError(`memory provider ${op.tool} ended ${state}: ${resultText(result)}`, {
+                  code: state,
+                });
+              if (typeof state !== "string" || !PENDING_STATES.has(state))
+                throw new MemoryWriteUnconfirmed(providerCode(state) ?? "no_state", resultText(result));
+              reportEnvelope({ status: "pending", code: state });
+            }
+          },
+        }
+      : {}),
   };
 }

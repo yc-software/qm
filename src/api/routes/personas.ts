@@ -7,6 +7,7 @@ import type { PersonaResult } from "../../personas/persona-service.ts";
 import { scopeId } from "../../types.ts";
 import type { Cron } from "../../triggers/types.ts";
 import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
+import { sessionVisibleTo } from "../../sessions/session-rows.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -112,7 +113,7 @@ function auditPersona(ctx: ApiCtx, principalId: string, personaId: string, actio
 async function deletePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const id = ctx.params.id!;
   const result = await personas.remove(principalId, id, (grantId) =>
     auditPersona(ctx, principalId, id, "keychain.revoke", grantId),
@@ -162,7 +163,7 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const access = isObj(ctx.body) ? ctx.body.access : undefined;
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
@@ -179,7 +180,7 @@ async function keychainResult<T>(ctx: ApiCtx, fn: () => Promise<PersonaResult<T>
 async function attachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const credentialId = isObj(ctx.body) ? ctx.body.credentialId : undefined;
   const id = ctx.params.id!;
   await keychainResult(
@@ -196,7 +197,7 @@ async function attachCredential(ctx: ApiCtx): Promise<void> {
 async function detachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const [id, grantId] = [ctx.params.id!, ctx.params.grantId!];
   await keychainResult(
     ctx,
@@ -221,6 +222,9 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
   const viewed = await ctx.app.getSessionForViewer(sessionId, ctx.capability ?? { actorId: principalId }, {
     tailTurns: 1,
   });
+  const stored = !viewed && ctx.capability?.botActor ? await ctx.deps.sessions?.get(sessionId) : null;
+  if (stored && !sessionVisibleTo(ctx.capability!, stored))
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "this conversation is no longer accessible" });
   if (!viewed) return sendJson(ctx.res, 404, { error: "not_found" });
   const personaId = isObj(ctx.body) ? ctx.body.personaId : undefined;
   if (personaId !== null && (typeof personaId !== "string" || !personaId))

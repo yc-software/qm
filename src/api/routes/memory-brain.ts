@@ -29,7 +29,7 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  if (!(await livePersonTurn(ctx))) return null;
+  if (!livePersonTurn(ctx)) return null;
   if (
     parseScopeId(capability.scopeId).kind !== "personal" &&
     (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==

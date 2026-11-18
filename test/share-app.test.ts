@@ -584,10 +584,6 @@ test("the apps tool and the share action change public access only with a person
   const fired = { ...cap("U1"), triggered: true };
   await assert.rejects(() => toolCtx(deploy, fired).setAppPublic("solo", true), /Only the person/);
   assert.equal((await callShare(app, fired, "solo", { public: true })).body.error, "human_consent_required");
-  assert.equal(
-    (await callShare(app, { ...cap("U1"), runId: "ended" }, "solo", { public: true })).body.error,
-    "inactive_run",
-  );
   assert.equal((await app.getApp("solo"))?.public, undefined);
   assert.equal((await toolCtx(deploy).setAppPublic("solo", true)).public, true);
   assert.equal((await callShare(app, null, "solo", { public: false }, externalSharingOn, "U1")).body.public, false);

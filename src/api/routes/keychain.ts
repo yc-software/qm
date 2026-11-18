@@ -198,7 +198,7 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
     const signedIn = ticket !== null && refusal === null;
     let meta = await kc.create(input);
     if (!meta) {
-      if (!signedIn && !(await livePersonTurn(ctx))) return;
+      if (!signedIn && !livePersonTurn(ctx)) return;
       meta = await kc.save(input);
     }
     if (signedIn) {
@@ -226,7 +226,7 @@ const startLogin = keychainRoute(async (ctx, _kc, { actorId, scopeId, threadRef 
   if (typeof service !== "string" || !service.trim())
     return sendJson(res, 400, { error: "bad_request", message: "service required" });
   if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
-  if (!(await livePersonTurn(ctx))) return;
+  if (!livePersonTurn(ctx)) return;
   const { dropId } = await deps.secretDrops.mint({
     kind: "login",
     ownerId: actorId,
@@ -279,7 +279,7 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
 
 const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!(await livePersonTurn(ctx))) return;
+  if (!livePersonTurn(ctx)) return;
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
@@ -295,7 +295,7 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
 
 const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!(await livePersonTurn(ctx))) return;
+  if (!livePersonTurn(ctx)) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
