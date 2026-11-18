@@ -11,7 +11,7 @@ import { hmacHex } from "../../src/webhooks/verifiers.ts";
 type Env = Record<string, string | undefined>;
 type Reply = { status: number; text: string; json: any };
 type Item = { kind: string; tool: string; text: string };
-type Run = { status: string; provenance: string; transcript: string; items: Item[] };
+type Run = { status: string; provenance: string; ownerFire: boolean; transcript: string; items: Item[] };
 
 const root = resolve(import.meta.dirname, "../..");
 
@@ -102,7 +102,7 @@ async function waitRun(id: string, seconds = 360): Promise<Run> {
     await sleep(1000);
   }
   const [row] = await sql(
-    `select 'surface='||coalesce(request::jsonb->>'surface','')||' actor='||coalesce(request::jsonb->'actor'->>'id','')||' origin='||coalesce(((request::jsonb->'origin') - 'screenData')::text,'') as p, result::jsonb->>'sessionId' as sid from runs where id=$1`,
+    `select 'surface='||coalesce(request::jsonb->>'surface','')||' actor='||coalesce(request::jsonb->'actor'->>'id','')||' origin='||coalesce(((request::jsonb->'origin') - 'screenData')::text,'') as p, coalesce((request::jsonb->'origin'->>'ownerFire')::boolean, false) as owner_fire, result::jsonb->>'sessionId' as sid from runs where id=$1`,
     [id],
   );
   const items = row?.sid
@@ -117,6 +117,7 @@ async function waitRun(id: string, seconds = 360): Promise<Run> {
   return {
     status,
     provenance: row?.p ?? "",
+    ownerFire: row?.owner_fire === true,
     transcript: items.map((i) => `${i.seq} ${i.kind} ${i.tool} ${i.text}`).join("\n"),
     items,
   };
@@ -130,7 +131,7 @@ async function turn(who: string, thread: string, text: string, file: string): Pr
   const id = started.json?.runId;
   if (!id) {
     save(file, started.text);
-    return { status: `HTTP ${started.status}`, provenance: "", transcript: "", items: [] };
+    return { status: `HTTP ${started.status}`, provenance: "", ownerFire: false, transcript: "", items: [] };
   }
   const run = await waitRun(id);
   record(file, run, id);
@@ -179,8 +180,7 @@ function check(t: string, run: Run, name: string, want: RegExp) {
   );
 }
 
-const ownerFire = (label: string, run: Run) =>
-  verdict(/"ownerFire":\s*true/.test(run.provenance), `${label} run carries ownerFire`);
+const ownerFire = (label: string, run: Run) => verdict(run.ownerFire, `${label} run carries ownerFire`);
 
 async function fireTyped() {
   const typed = await turn(admin, `qa-typed-${tag()}`, probePrompt("TYPED", false), "10-typed-admin.txt");
@@ -364,7 +364,7 @@ async function sandbox() {
   try {
     await sandboxTurns(who, thread, cmd);
   } finally {
-    await retireBoxes(who);
+    await retireBoxes(who).catch((error) => verdict(false, `retiring ${who}'s boxes: ${error}`));
   }
 }
 
