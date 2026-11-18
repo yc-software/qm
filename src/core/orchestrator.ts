@@ -949,6 +949,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       await deps.skillsReady?.();
+      const skillSources = tracePhase("turn.skills", () => context.listSkills([scopeId, resolution.orgScopeId]), {
+        counts: countSkills,
+      });
+      void skillSources.catch(() => undefined);
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
@@ -985,11 +989,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         recordScreenRequest,
         audit,
       });
-      const skillSourceContext = await tracePhase(
-        "turn.skills",
-        () => context.listSkills([scopeId, resolution.orgScopeId]),
-        { counts: countSkills },
-      );
+      const skillSourceContext = await skillSources;
       const otherSkillSources = skillSourceContext.skillSources
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
         .sort();
@@ -1114,6 +1114,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           recordedTurn,
           recordedTurn.answer,
         );
+
+      const contextWindow = deps.sessions.getContextWindow(session.id);
+      const snapshot = context.memorySnapshot();
+      void contextWindow.catch(() => undefined);
+      const recallOutcomes: MemoryProviderOutcome[] = [];
+      const loadedFacts = snapshot.then((view) => view.loaded);
+      void loadedFacts.catch(() => undefined);
+      const recallFor = async (history: Item[]) =>
+        appEdit
+          ? []
+          : context.recallMemory(
+              memoryRecallQuery(input.text, history),
+              loadedFacts,
+              (outcome) => void recallOutcomes.push(outcome),
+              isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
+              session.id,
+            );
+      const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
+      const earlyRecall =
+        input.approval || importsOverheard || ambientTurn || input.cronScript
+          ? undefined
+          : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
+      void earlyRecall?.catch(() => undefined);
 
       audit({
         action: "turn",
@@ -1366,27 +1389,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const contextWindow = deps.sessions.getContextWindow(session.id);
-        const snapshot = context.memorySnapshot();
-        const recallOutcomes: MemoryProviderOutcome[] = [];
-        const loadedFacts = snapshot.then((view) => view.loaded);
-        void loadedFacts.catch(() => undefined);
-        const recallFor = async (history: Item[]) =>
-          appEdit
-            ? []
-            : context.recallMemory(
-                memoryRecallQuery(input.text, history),
-                loadedFacts,
-                (outcome) => void recallOutcomes.push(outcome),
-                isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
-                session.id,
-              );
-        const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
-        const earlyRecall =
-          input.approval || importsOverheard || ambientTurn || input.cronScript
-            ? undefined
-            : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
-        void earlyRecall?.catch(() => undefined);
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const captureDependencies = () => [
