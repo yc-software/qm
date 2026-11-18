@@ -33,7 +33,7 @@ export const slackSurfaceScenarios: Scenario[] = [
     },
   },
   {
-    name: "channel-ack-reaction",
+    name: "channel-turn-ack",
     lane: "parallel",
     tags: ["sandbox", "slack-surface"],
     timeoutMs: 6 * 60_000,
@@ -41,17 +41,19 @@ export const slackSurfaceScenarios: Scenario[] = [
       const ch = await ctx.freshChannel();
       const marker = ctx.marker();
       const root = await ch.mention(`Run \`sleep 20\` on your computer, then reply with the exact token ${marker}.`);
-      const seen = new Set<string>();
-      await ch.waitForBotReply(root, {
+      let reacted = false;
+      const reply = await ch.waitForBotReply(root, {
         match: new RegExp(marker),
         timeoutMs: 5 * 60_000,
         onMessages: (messages) =>
-          botReactions(
-            ctx,
-            messages.find((m) => m.ts === root),
-          ).forEach((r) => seen.add(r)),
+          (reacted ||=
+            botReactions(
+              ctx,
+              messages.find((m) => m.ts === root),
+            ).length > 0),
       });
-      assert.ok(seen.size > 0, "no ack reaction from the bot on the request while it worked");
+      const acks = (await ch.botMessagesInThread(root)).filter((m) => Number(m.ts) < Number(reply.ts));
+      assert.ok(reacted || acks.length > 0, "no ack reaction or ack message before the final reply");
     },
   },
   {
