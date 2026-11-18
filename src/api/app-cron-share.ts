@@ -78,8 +78,8 @@ export function createCronShareMethods(
       const started = (await deps.admin?.adminStatusOf(tenant, { id: by, type: "internal" }))?.isAdmin === true;
       const ownerScopeId = scopeId("personal", recipient);
       const title = source.title ?? "Shared cron";
-      const onSlack = (await app.directoryMember(recipient))?.slackId !== undefined;
-      const home = onSlack ? null : await app.spawnSession(recipient, { scopeId: ownerScopeId, title });
+      const onChat = (await app.directoryMember(recipient)) !== null;
+      const home = onChat ? null : await app.spawnSession(recipient, { scopeId: ownerScopeId, title });
       const destination: Destination = home
         ? { type: "web", target: home.session.threadRef }
         : principalDestination(recipient, recipient);
