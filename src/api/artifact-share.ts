@@ -1,7 +1,7 @@
 import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
-import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
+import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId, type ScopeKind } from "../types.ts";
 import type { ResourceKind } from "../acl/resource-ref.ts";
 import type { RecipientResolution } from "../directory/directory-store.ts";
 
@@ -10,6 +10,20 @@ export const SHARED_SKILL_TRIGGER_REFUSAL =
 
 export function isMultiMemberSkillScope(scope: ScopeId): boolean {
   return isSharedScope(scope) || parseScopeId(scope).kind === "team";
+}
+
+const AUTHOR_PUBLISHED_SKILL_KINDS: Record<ScopeKind, boolean> = {
+  personal: true,
+  channel: true,
+  group: true,
+  persona: true,
+  org: false,
+  team: false,
+};
+
+export function authorPublishesSkill(scope: ScopeId): boolean {
+  const { kind } = parseScopeId(scope);
+  return kind !== null && AUTHOR_PUBLISHED_SKILL_KINDS[kind];
 }
 
 export function triggerBlocksSharedSkill(homeScope: ScopeId, liveActor: boolean): boolean {

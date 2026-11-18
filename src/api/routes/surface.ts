@@ -53,6 +53,7 @@ import { selfSpend } from "./admin/spend.ts";
 import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
+  authorPublishesSkill,
   isArtifactType,
   personAtKeyboard,
   splitToScope,
@@ -1107,7 +1108,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
       homeScope = b.scopeId as ScopeId;
     }
   }
-  if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team")) {
+  if (homeScope && !authorPublishesSkill(homeScope)) {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
