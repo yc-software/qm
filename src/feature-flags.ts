@@ -29,7 +29,7 @@ export const FEATURES = {
   babysitter: {
     label: "Babysitter (experimental)",
     personalOnly: true,
-    hint: "Watches the selected people's agent turns with an extra model call that checks the trace against the Wall of shame rules and adds a short reminder to the turn when the agent heads toward breaking one. The firing mode comes from BABYSITTER_MODE.",
+    hint: "Watches the selected people's agent turns with an extra model call that checks the trace against the Wall of shame rules and adds a short reminder to the turn when the agent heads toward breaking one. Each person sets the rules and firing mode under Settings › General.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
