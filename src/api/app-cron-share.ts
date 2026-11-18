@@ -72,7 +72,8 @@ export function createCronShareMethods(
       if (!source) throw new Error(`no cron ${id}`);
       if (source.script)
         throw new Error("a cron with a script can't be shared with a person: its script runs with the owner's access");
-      const existing = (await deps.crons.copiesOf(id)).find((c) => samePerson(c.owner, recipient));
+      const linkedTo = source.sharedFrom && !source.forkedAt ? source.sharedFrom : id;
+      const existing = (await deps.crons.copiesOf(linkedTo)).find((c) => samePerson(c.owner, recipient));
       if (existing) return { copy: existing, existed: true };
       const started = (await deps.admin?.adminStatusOf(tenant, { id: by, type: "internal" }))?.isAdmin === true;
       const ownerScopeId = scopeId("personal", recipient);
@@ -89,7 +90,7 @@ export function createCronShareMethods(
         destination,
         schedule: source.schedule,
         enabled: started,
-        sharedFrom: id,
+        sharedFrom: linkedTo,
         title,
         ...(source.action !== undefined ? { action: source.action } : {}),
         ...(source.message !== undefined ? { message: source.message } : {}),
