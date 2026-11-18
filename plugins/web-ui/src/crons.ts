@@ -680,9 +680,9 @@ function cronInstructions(c: CronView, manageable: boolean): TemplateResult {
               dir="auto"
               @click=${() => startEdit(c, "task")}
             >
-              ${cronText(c)}
+              <span class="cron-task-text">${cronText(c)}</span>
             </button>`
-          : html`<div class="cron-task" dir="auto">${cronText(c)}</div>`
+          : html`<div class="cron-task" dir="auto"><span class="cron-task-text">${cronText(c)}</span></div>`
       }
     </div>`,
     canEdit
