@@ -105,10 +105,9 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
       built.app.createCron({ ownerScopeId: "channel:C1", owner: who, createdBy: who, schedule, action: who }),
     ),
   );
-  for (const [alias, person] of Object.entries({ [bot]: pat, U0PAT: pat, [bot2]: sam, [app2]: app })) {
+  for (const [alias, person] of Object.entries({ [bot]: pat, U0PAT: pat, [bot2]: sam, [app2]: app }))
     await users.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "U0ADM", createdAt: 1 });
-    await users.markApps([person]);
-  }
+  await users.markApps([pat, sam, app]);
   for (const who of [kim, lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
   await built.directory.replace([
     { principalId: pat, displayName: "Pat", type: "internal", slackId: "U0PAT" },
