@@ -2,7 +2,6 @@ import { createHmac } from "node:crypto";
 import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
-import { bootTenant } from "../tenants/boot.ts";
 import { loadedTenantSettings } from "../tenants/settings.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
@@ -126,7 +125,6 @@ function gatewayScopeId(scopeId: string | undefined, key: string | undefined): s
 export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
   const settings = loadedTenantSettings();
   if (settings?.modelGatewayKey) return settings.modelGatewayKey;
-  if (!settings && bootTenant() === undefined) throw new Error("this workspace's settings are not loaded");
   if (settings?.deploymentModelKey === false) throw new Error("this workspace has no model gateway key of its own");
   return config.apiKey;
 }

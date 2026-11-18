@@ -78,7 +78,7 @@ Self-serve workspaces are available on a multitenant deployment whose core sets
 `WORKSPACE_PROVISIONER_URL` and whose trusted sign-in is configured with a distinct
 `PORTAL_IDENTITY_SECRET`. Core then reports self-serve as available in its sign-in
 lookups, and the trusted provider may return an `orgs` claim in userinfo (or the ID
-token): an array of `{ "id": string, "name": string, "handle"?: string }` naming the
+token): an array of `{ "id": string, "name": string }` naming the
 organizations the person may open a workspace for. When a trusted sign-in finds no
 workspace for the person and carries organizations, portal submits a short-lived,
 single-use, purpose-bound assertion for the chosen organization; with one organization it
@@ -86,20 +86,22 @@ is chosen automatically, with several the workspace picker lists them. Core crea
 organization's workspace on first use, keyed by issuer and organization id so concurrent
 sign-ins share one workspace, or joins the existing one, then records the person (and
 links their verified email) and, the first time they join, grants them organization admin.
-The name becomes the workspace brand; the handle is used only when
-it is valid and free, and is never part of the key. A person an admin removed from the
+The name becomes the workspace brand. A person an admin removed from the
 workspace is refused. Self-serve never creates a deployment's first workspace, never
 reopens a workspace an operator switched off, and never runs on a deployment with a boot
 tenant.
 
-A new workspace starts switched off. Core POSTs `{ tenant, brandName, handle, issuer,
-externalOrg, nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
+A new workspace starts switched off. Core POSTs `{ tenant, brandName, issuer, externalOrg,
+nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
 `HMAC-SHA256(CORE_SIGNING_SECRET, "workspace-provisioner")` (hex). A 200 reply of
 `{ "settings": { "modelGatewayKey": "…" } }` (nothing else) gives the workspace its own
 model gateway key and switches it on, once. Until a call succeeds sign-in fails and the
 next sign-in retries, so the provisioner must answer repeated calls for a tenant with the
 same key. A self-served workspace carries `deploymentModelKey: false`, so it never falls
-back to the deployment's model key: without a key of its own its model calls fail.
+back to the deployment's model key: without a key of its own its model calls fail. Core
+refuses to start with `WORKSPACE_PROVISIONER_URL` alongside deployment-wide model provider
+credentials (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
+`CLAUDE_AUTH_CREDENTIAL`, `CODEX_AUTH_CREDENTIAL`).
 
 When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a

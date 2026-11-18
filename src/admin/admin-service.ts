@@ -145,7 +145,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         grantedBy: `trusted-oidc-self-serve:${issuer}`,
         createdAt: at,
       };
-      const granted = !known.has(principalId) && (await grants.addIfAbsent(tenant, grant));
+      const granted = known.size === 0 && (await grants.addIfAbsent(tenant, grant));
       await opts.users.record({ id: principalId, source: "admin", at });
       if (email)
         await opts.users

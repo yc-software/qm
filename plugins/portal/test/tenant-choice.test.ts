@@ -368,7 +368,7 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
   selfServe = true;
   const principal = trustedPrincipal(upstreamUrl, "idp-subject");
   try {
-    orgs = [{ id: "42", name: "Acme", handle: "Acme" }, { id: "" }, "junk"];
+    orgs = [{ id: "42", name: "Acme" }, { id: "" }, "junk"];
     const one = await trustedCallback("founder@acme.test");
     assert.equal(one.status, 302);
     assert.deepEqual([sessionOf(one)?.sub, sessionOf(one)?.t], [principal, alpha]);
@@ -377,7 +377,7 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
       [selfServed[0]!.purpose, selfServed[0]!.issuer, selfServed[0]!.subject, selfServed[0]!.email, selfServed[0]!.org],
       ["trusted-self-serve", upstreamUrl, "idp-subject", "founder@acme.test", "org:acme"],
     );
-    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme", handle: "Acme" });
+    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme" });
 
     orgs = [
       { id: "42", name: "Acme" },

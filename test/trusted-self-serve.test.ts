@@ -21,10 +21,7 @@ import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { provisionerSigningKey } from "../src/tenants/self-serve.ts";
-import { APP_HANDLE_MAX } from "../plugins/chassis/src/dns-label.ts";
 import { orgId } from "../src/config.ts";
-import { randomUUID } from "node:crypto";
-import { gatewayKey } from "../src/model/provider-endpoints.ts";
 import { scopeId } from "../src/types.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 
@@ -68,7 +65,7 @@ function claims(overrides: Record<string, unknown> = {}) {
     issuer,
     subject: "founder-1",
     email: null,
-    externalOrg: { id: "42", name: "Acme Robotics", handle: "acme" },
+    externalOrg: { id: "42", name: "Acme Robotics" },
     org: "org:default-org",
     exp: Date.now() + 55_000,
     jti: crypto.randomUUID(),
@@ -137,11 +134,7 @@ test("cofounders signing in at once share one new workspace and every one of the
   const tenants = await withoutTenant(() =>
     Promise.all(
       founders.map((subject, i) =>
-        selfServeWorkspace(
-          s.config,
-          { subject, email: `f${i}@acme.test` },
-          { id: "42", name: "Acme Robotics", handle: "acme" },
-        ),
+        selfServeWorkspace(s.config, { subject, email: `f${i}@acme.test` }, { id: "42", name: "Acme Robotics" }),
       ),
     ),
   );
@@ -150,7 +143,6 @@ test("cofounders signing in at once share one new workspace and every one of the
   const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]);
   assert.deepEqual(row?.settings, {
     brandName: "Acme Robotics",
-    handle: "acme",
     modelGatewayKey: "own-key",
     serving: true,
     deploymentModelKey: false,
@@ -158,11 +150,9 @@ test("cofounders signing in at once share one new workspace and every one of the
   for (const subject of founders) assert.equal(await isAdmin(tenant, subject), true, subject);
   await withoutTenant(async () => {
     assert.deepEqual(await directory.tenantsForPrincipal!(trustedPrincipal(issuer, "founder-2")), [
-      { id: tenant, brandName: "Acme Robotics", handle: "acme" },
+      { id: tenant, brandName: "Acme Robotics" },
     ]);
-    assert.deepEqual(await directory.tenantsForEmail!("f3@acme.test"), [
-      { id: tenant, brandName: "Acme Robotics", handle: "acme" },
-    ]);
+    assert.deepEqual(await directory.tenantsForEmail!("f3@acme.test"), [{ id: tenant, brandName: "Acme Robotics" }]);
   });
   const events = await withTenant(tenant, (token) => s.built.auditLog.events(token));
   assert.equal(events.filter((e) => e.action === "tenant.self_serve.create").length, 1);
@@ -175,32 +165,6 @@ test("cofounders signing in at once share one new workspace and every one of the
     n: 1,
   });
   assert.deepEqual(await db.app.q("SELECT * FROM tenant_external_orgs"), [], "the app login cannot read the mapping");
-});
-
-test("a workspace takes the provider's handle only when it is valid and free, and a handle never blocks sign-in", async (t) => {
-  const { db, s } = await shared(t);
-  const [alpha] = db.tenants;
-  await db.owner.q(`UPDATE tenants SET settings = '{"handle":"acmeai"}' WHERE id = $1`, [alpha]);
-  const create = (id: string, handle?: string) =>
-    withoutTenant(() =>
-      selfServeWorkspace(
-        s.config,
-        { subject: `s-${id}`, email: null },
-        { id, name: `Org ${id}`, ...(handle === undefined ? {} : { handle }) },
-      ),
-    );
-  const handleOf = async (tenant: string) =>
-    (await db.owner.q("SELECT settings->>'handle' AS h FROM tenants WHERE id = $1", [tenant]))[0]?.h ?? null;
-  assert.equal(await handleOf(await create("a", "Beta-Labs!")), "betalabs");
-  assert.equal(await handleOf(await create("b", "acme-ai")), null);
-  assert.equal(await handleOf(await create("c", "admin")), null);
-  assert.equal(await handleOf(await create("d", "y".repeat(APP_HANDLE_MAX + 5))), "y".repeat(APP_HANDLE_MAX));
-  assert.equal(await handleOf(await create("e", "---")), null);
-  assert.equal(await handleOf(await create("f")), null);
-  await db.owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ('https://other.test', 'i', $1)", [
-    alpha,
-  ]);
-  assert.notEqual(await create("i"), alpha);
 });
 
 test("self-serve rejects forged, unrelated, expired and replayed assertions, and is off without a portal identity secret", async (t) => {
@@ -299,7 +263,7 @@ test("a deployment with a boot tenant never self-serves another workspace", asyn
 test("a deployment's provisioner sets up each new workspace before anyone can use it, and a failure leaves it switched off", async (t) => {
   const { db, s, directory, isAdmin, provision } = await shared(t);
   provision.state.failing = true;
-  const org = { id: "55", name: "Gated Co", handle: "gated" };
+  const org = { id: "55", name: "Gated Co" };
   const signIn = (subject: string) => withoutTenant(() => selfServeWorkspace(s.config, { subject, email: null }, org));
   await assert.rejects(signIn("g1"), /HTTP 502/);
   const [row] = await db.owner.q("SELECT tenant::text AS tenant FROM tenant_external_orgs WHERE org_id = '55'");
@@ -308,7 +272,6 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
     (await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]))[0]?.settings;
   assert.deepEqual(await settingsOf(), {
     brandName: "Gated Co",
-    handle: "gated",
     serving: false,
     deploymentModelKey: false,
   });
@@ -318,14 +281,13 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
   assert.deepEqual(await Promise.all([signIn("g1"), signIn("g2")]), [tenant, tenant]);
   assert.deepEqual(await settingsOf(), {
     brandName: "Gated Co",
-    handle: "gated",
     modelGatewayKey: "own-key",
     serving: true,
     deploymentModelKey: false,
   });
   const { nonce, ...body } = provision.state.calls[0]!.body;
   assert.equal(typeof nonce, "string");
-  assert.deepEqual(body, { tenant, brandName: "Gated Co", handle: "gated", issuer, externalOrg: org });
+  assert.deepEqual(body, { tenant, brandName: "Gated Co", issuer, externalOrg: org });
   assert.ok(provision.state.calls.every((call) => call.signed));
   const calls = provision.state.calls.length;
   await signIn("g3");
@@ -358,15 +320,6 @@ test("a provisioner reply without the workspace's own model gateway key leaves i
       "n1",
     ),
     false,
-  );
-});
-
-test("a multitenant deployment never uses its own model key for a workspace whose settings are not loaded", async (t) => {
-  await bindBootTenant(async () => undefined);
-  t.after(() => bindBootTenant(async () => TEST_TENANT));
-  assert.throws(
-    () => withTenant(randomUUID(), () => gatewayKey({ apiKey: "sk-deployment" })),
-    /this workspace's settings are not loaded/,
   );
 });
 

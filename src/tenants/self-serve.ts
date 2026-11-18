@@ -2,7 +2,6 @@ import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { readBoundedText } from "../util/bytes.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
-import { APP_HANDLE_MAX } from "../../plugins/chassis/src/dns-label.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { tenantSettingsSchema } from "./settings.ts";
 import { bootTenant } from "./boot.ts";
@@ -13,7 +12,6 @@ export const externalOrgSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().trim().min(1),
-    handle: z.string().optional(),
   })
   .strip();
 
@@ -24,11 +22,10 @@ export interface ExternalOrgTenant {
   created: boolean;
   provisioned: boolean;
   serving: boolean;
-  handle: string | null;
 }
 
-const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, org text, brand text, handle text)
-  RETURNS TABLE(tenant uuid, created boolean, provisioned boolean, serving boolean, tenant_handle text)
+const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, org text, brand text)
+  RETURNS TABLE(tenant uuid, created boolean, provisioned boolean, serving boolean)
   LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
   DECLARE found uuid; fresh boolean := false;
@@ -41,16 +38,10 @@ const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, or
       END IF;
       INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3, 'serving', false, 'deploymentModelKey', false))
         RETURNING id INTO found;
-      IF $4 <> '' AND qm_tenant_handle(jsonb_build_object('handle', $4)) IS NOT DISTINCT FROM $4 THEN
-        BEGIN
-          UPDATE tenants SET settings = settings || jsonb_build_object('handle', $4) WHERE id = found;
-        EXCEPTION WHEN unique_violation THEN NULL;
-        END;
-      END IF;
       INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, $2, found);
       fresh := true;
     END IF;
-    RETURN QUERY SELECT found, fresh, o.provisioned_at IS NOT NULL, t.settings->>'serving' IS DISTINCT FROM 'false', t.settings->>'handle'
+    RETURN QUERY SELECT found, fresh, o.provisioned_at IS NOT NULL, t.settings->>'serving' IS DISTINCT FROM 'false'
       FROM tenants t JOIN tenant_external_orgs o ON o.tenant = t.id WHERE t.id = found;
   END $f$`;
 
@@ -80,18 +71,12 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
     `ALTER TABLE tenant_external_orgs ENABLE ROW LEVEL SECURITY`,
     `DO $self_serve$ BEGIN EXECUTE format($sql$${definer}$sql$, current_schema()); END $self_serve$`,
     `DO $self_serve$ BEGIN EXECUTE format($sql$${provisionedDefiner}$sql$, current_schema()); END $self_serve$`,
-    `REVOKE ALL ON FUNCTION qm_self_serve_tenant(text, text, text, text), qm_self_serve_provisioned(uuid, text) FROM PUBLIC`,
+    `REVOKE ALL ON FUNCTION qm_self_serve_tenant(text, text, text), qm_self_serve_provisioned(uuid, text) FROM PUBLIC`,
   ],
 };
 
 const PROVISION_TIMEOUT_MS = 30_000;
 const PROVISION_REPLY_BYTES_MAX = 65_536;
-
-const handleChar = (c: string): boolean => (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
-
-function handleBase(handle: string | undefined): string {
-  return [...(handle ?? "").toLowerCase()].filter(handleChar).join("").slice(0, APP_HANDLE_MAX);
-}
 
 export async function selfServeTenant(
   pg: Pick<PgPool, "q">,
@@ -99,8 +84,8 @@ export async function selfServeTenant(
   org: ExternalOrg,
 ): Promise<ExternalOrgTenant | undefined> {
   const rows = await pg.q(
-    "SELECT tenant::text AS tenant, created, provisioned, serving, tenant_handle FROM qm_self_serve_tenant($1, $2, $3, $4)",
-    [issuer, org.id, org.name, handleBase(org.handle)],
+    "SELECT tenant::text AS tenant, created, provisioned, serving FROM qm_self_serve_tenant($1, $2, $3)",
+    [issuer, org.id, org.name],
   );
   const row = rows[0];
   if (row === undefined) return undefined;
@@ -109,7 +94,6 @@ export async function selfServeTenant(
     created: row.created === true,
     provisioned: row.provisioned === true,
     serving: row.serving === true,
-    handle: typeof row.tenant_handle === "string" ? row.tenant_handle : null,
   };
 }
 
@@ -128,7 +112,6 @@ const provisionedSettings = z.object({
 export interface WorkspaceProvisionRequest {
   tenant: string;
   brandName: string;
-  handle: string | null;
   issuer: string;
   externalOrg: ExternalOrg;
 }
@@ -186,7 +169,6 @@ export function createSelfServe(
         const request = {
           tenant: workspace.tenant,
           brandName: org.name,
-          handle: workspace.handle,
           issuer,
           externalOrg: org,
         };

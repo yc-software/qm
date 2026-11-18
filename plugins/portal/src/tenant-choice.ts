@@ -34,7 +34,6 @@ export interface EmailTenants {
 export interface ExternalOrg {
   id: string;
   name: string;
-  handle?: string;
 }
 
 export interface Workspace {

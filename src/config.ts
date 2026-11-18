@@ -337,11 +337,24 @@ export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTranspo
   };
 }
 
+const DEPLOYMENT_MODEL_CREDENTIALS = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "CLAUDE_AUTH_CREDENTIAL",
+  "CODEX_AUTH_CREDENTIAL",
+] as const;
+
 function workspaceProvisionerUrl(env: NodeJS.ProcessEnv): string {
   const url = env.WORKSPACE_PROVISIONER_URL!;
   if (!URL.canParse(url)) throw new Error("WORKSPACE_PROVISIONER_URL must be an absolute URL");
   if (!isStrongSigningSecret(env.CORE_SIGNING_SECRET))
     throw new Error("WORKSPACE_PROVISIONER_URL requires CORE_SIGNING_SECRET to sign provisioning requests");
+  const shared = DEPLOYMENT_MODEL_CREDENTIALS.filter((name) => env[name]?.trim());
+  if (shared.length)
+    throw new Error(
+      `WORKSPACE_PROVISIONER_URL cannot be combined with deployment model credentials: ${shared.join(", ")}`,
+    );
   return url;
 }
 

@@ -49,10 +49,10 @@ function trustedOrgs(...sources: Record<string, unknown>[]): ExternalOrg[] {
   const orgs = new Map<string, ExternalOrg>();
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { id, name, handle } = entry as Record<string, unknown>;
-    const org = { id: orgText(id), name: orgText(name), handle: orgText(handle) };
+    const { id, name } = entry as Record<string, unknown>;
+    const org = { id: orgText(id), name: orgText(name) };
     if (!org.id || !org.name || orgs.has(org.id)) continue;
-    orgs.set(org.id, { id: org.id, name: org.name, ...(org.handle ? { handle: org.handle } : {}) });
+    orgs.set(org.id, { id: org.id, name: org.name });
   }
   if (orgs.size < raw.length)
     console.warn(
