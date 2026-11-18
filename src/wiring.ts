@@ -2631,8 +2631,7 @@ export function buildApp(
             if (!email.includes("@")) return false;
             if (!vouchedByHost) return vouchedInternalEmail(email);
             await identity.refresh();
-            const syncOnly = identity.deactivationSource(email) === "directory-sync" && !identity.externalMember(email);
-            return syncOnly || identity.isInternal(identity.classify(email));
+            return identity.isInternal(identity.classify(email, false, true));
           },
           unansweredReply: genericChatNotices.unanswered,
           turns: genericChatTurns,
