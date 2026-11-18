@@ -1,3 +1,4 @@
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
@@ -423,6 +424,41 @@ test("selected private learning publishes only to its authorized document team a
       });
     };
     await assert.rejects(publish("owner", "team"), /owner does not match/);
+    let opaqueWrites = 0;
+    const routed = createRoutedMemoryService({
+      providers: {
+        notebook: memory,
+        opaque: {
+          recall: async () => [],
+          query: async () => [],
+          read: async () => "",
+          capture: async () => {
+            opaqueWrites++;
+            return 1;
+          },
+        },
+      },
+      routes: [
+        { provider: "notebook", scopes: ["personal"], capture: "automatic", manage: true },
+        { provider: "opaque", scopes: [knowledge.teamScopeId], capture: "automatic", manage: true },
+      ],
+    });
+    const selected = (await raw.facts!("personal:member")).find((fact) => fact.text === "Selected procedure")!;
+    await assert.rejects(
+      publishDocumentLearning(built.documentConversations, routed, built.auditLog, {
+        sessionId,
+        actorId: "member",
+        applicability: "team",
+        facts: [{ id: selected.id, text: selected.text }],
+        disclosure: {
+          actor: built.identity.classify("member"),
+          nativeScopes: [],
+          currentScopeMembers: (scope) => built.app.currentScopeMembers(scope),
+        },
+      }),
+      /no enabled notebook/,
+    );
+    assert.equal(opaqueWrites, 0);
     assert.equal((await publish("member", "team"))?.added, 1);
     assert.deepEqual(
       (await raw.facts!(knowledge.teamScopeId)).map((fact) => fact.text),

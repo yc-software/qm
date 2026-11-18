@@ -4,7 +4,12 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import { ambientTenant } from "../tenants/context.ts";
 import type { DocumentConversations } from "./conversations.ts";
 import type { MemoryAuthority, MemoryService, MemoryEdit } from "../memory/memory-service.ts";
-import { memoryDisclosurePolicy, MemoryDisclosureDenied, type MemoryDisclosure } from "../memory/disclosure.ts";
+import {
+  memoryDisclosurePolicy,
+  disclosedMemory,
+  MemoryDisclosureDenied,
+  type MemoryDisclosure,
+} from "../memory/disclosure.ts";
 import { parseScopeId, personalScope } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 
@@ -94,16 +99,14 @@ export async function publishDocumentLearning(
     });
     const published = { ...provenance, personalOnly: undefined, sources: sources.length ? sources : [scope] };
     const audience = await input.disclosure.currentScopeMembers?.(scope);
-    if (
-      !audience?.length ||
-      !(await memoryDisclosurePolicy({
-        ...input.disclosure,
-        targetScope: scope,
-        nativeScopes: [scope, document.teamScopeId, ...input.disclosure.nativeScopes],
-        audience,
-        open: true,
-      }).allows(scope, published))
-    )
+    const access: MemoryDisclosure = {
+      ...input.disclosure,
+      targetScope: scope,
+      nativeScopes: [scope, document.teamScopeId, ...input.disclosure.nativeScopes],
+      audience: audience ?? [],
+      open: true,
+    };
+    if (!audience?.length || !(await memoryDisclosurePolicy(access).allows(scope, published)))
       throw new MemoryDisclosureDenied(
         "The selected learning cannot be published here while its source restrictions remain in effect.",
       );
@@ -121,6 +124,13 @@ export async function publishDocumentLearning(
       },
       input.runId,
     );
+    if (!result.added && !result.outcomes.length && !result.problems.length) {
+      const saved = await disclosedMemory(memory, access).facts?.(scope);
+      if (!selected.every((fact) => saved?.some((copy) => copy.text === fact.text)))
+        throw new MemoryDisclosureDenied(
+          "The destination has no enabled notebook that can preserve this learning's source restrictions.",
+        );
+    }
     auditLog.record(ambientTenant(), {
       at: Date.now(),
       principalId: input.actorId,
