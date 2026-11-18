@@ -50,7 +50,7 @@ const KEPT_TRACE_DATA = new Set([
   "time_to_model_request",
   "time_to_first_text",
 ]);
-const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin", "qm.started_by"];
+const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin"];
 const SENT_ROOTS = new Set(["http.server", "queue.process"]);
 const SQL_VERBS = new Set(
   "SELECT INSERT UPDATE DELETE WITH BEGIN COMMIT ROLLBACK SAVEPOINT RELEASE CREATE ALTER DROP TRUNCATE SET RESET SHOW LISTEN UNLISTEN NOTIFY COPY LOCK VACUUM ANALYZE EXPLAIN DO CALL PREPARE EXECUTE DEALLOCATE DISCARD".split(
@@ -349,6 +349,18 @@ export function traceQueued<T>(
   return carrier
     ? sdk.continueTrace({ sentryTrace: carrier.sentryTrace, baggage: undefined }, begin)
     : sdk.startNewTrace(begin);
+}
+
+export function tagRun(key: string, value: string | undefined): void {
+  if (!client || !tracing || value === undefined) return;
+  try {
+    const active = client.getActiveSpan();
+    if (!active) return;
+    client.getRootSpan(active).setAttribute(key, value);
+    client.getCurrentScope().setTag(key, value);
+  } catch (error) {
+    swallow("tracing", error);
+  }
 }
 
 export type Phase = Sentry.Span;

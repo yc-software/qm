@@ -15,9 +15,10 @@ export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "dele
 
 export function runStarter(
   input: Pick<TurnRequest, "origin" | "sessionSenderId" | "delegatingRunId">,
+  sentByParent: boolean,
 ): "person" | "subagent" | "wake" | undefined {
-  if (input.delegatingRunId) return "subagent";
-  if (input.sessionSenderId) return "wake";
+  if (sentByParent) return "subagent";
+  if (isSessionTurn(input)) return "wake";
   return input.origin && (isPersonAuthored(input.origin.kind) || spokenByPerson(input.origin)) ? "person" : undefined;
 }
 

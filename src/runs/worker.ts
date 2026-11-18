@@ -28,7 +28,6 @@ import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 import { type Tenant, withTenant } from "../tenants/context.ts";
-import { runStarter } from "../core/turn-origin.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -69,7 +68,6 @@ export async function processRun(
           run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
         "qm.surface": request.surface,
         "qm.origin": "origin" in request ? request.origin.kind : undefined,
-        "qm.started_by": runStarter(request),
       },
       () => attemptRun(tenant, deps, { ...run, request }, opts),
       (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
