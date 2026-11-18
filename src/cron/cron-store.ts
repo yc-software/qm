@@ -199,14 +199,9 @@ export function createCronStore(
       const before = await backing.get(id);
       if (!before) return [];
       assertCronRuntime({ ...before, ...patch });
-      const copies: string[] = [];
-      for (let parents = [id]; parents.length;) {
-        const children = (await backing.select({ where: { field: "sharedFrom", anyOfFold: parents } })).filter(
-          (c) => parents.includes(c.sharedFrom!) && !c.forkedAt,
-        );
-        parents = children.map((c) => c.id);
-        copies.push(...parents);
-      }
+      const copies = (await backing.select({ where: { field: "sharedFrom", anyOfFold: [id] } }))
+        .filter((c) => c.sharedFrom === id && !c.forkedAt)
+        .map((c) => c.id);
       const own = cronFields(patch);
       const shared = cronFields(linked);
       return backing.mutateMany([
