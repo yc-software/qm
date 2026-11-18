@@ -17,7 +17,8 @@ It needs the same environment as a dev instance (`scripts/dev-instance.sh`): a
 sandbox backend (`SANDBOX_BACKEND` plus its key). It creates a fresh database on that
 server, starts two QM nodes (`src/index.ts` with background work on, as two replicas of
 one build) against it, and drops the database at the end. Exit code 0 means every
-scenario passed. Each process's log is kept in the temp directory the script prints.
+scenario passed. Each process's log is kept in the temp directory the script prints. The turns create agent sandboxes on the configured provider; the script
+lists them at the end so you can delete them there.
 
 ## Scenarios
 

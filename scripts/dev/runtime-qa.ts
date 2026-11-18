@@ -354,6 +354,10 @@ async function teardown(): Promise<void> {
   for (const p of procs.values()) if (p.child.exitCode === null) p.child.kill("SIGTERM");
   await Promise.race([Promise.all([...procs.values()].map((p) => p.exited)), sleep(20_000)]);
   for (const p of procs.values()) if (p.child.exitCode === null) p.child.kill("SIGKILL");
+  const left = await query<{ id: string; backend: string }>(
+    "SELECT id, json->>'backend' AS backend FROM sandbox_resources",
+  ).catch(() => []);
+  for (const s of left) log(`agent sandbox ${s.id} (${s.backend}) outlives this run; delete it on the provider`);
   await db.end();
   const admin = new pg.Client({ connectionString: baseUrl });
   await admin.connect();
