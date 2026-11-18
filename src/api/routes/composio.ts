@@ -18,15 +18,10 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, activeRun, audit } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
-import type { McpServerApp } from "../../mcp/mcp-server-store.ts";
+import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
-const TOOLKIT_ID = /^[a-z0-9_-]{1,100}$/;
 const NO_COMPOSIO: Record<string, unknown> = { items: [] };
-
-export function isToolkitId(value: unknown): value is string {
-  return typeof value === "string" && TOOLKIT_ID.test(value);
-}
 
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
@@ -202,11 +197,8 @@ export async function request(
   return (await response.json()) as Record<string, unknown>;
 }
 
-export async function externalApps(ctx: ApiCtx): Promise<Array<McpServerApp & { connector: string }>> {
-  const servers = (await ctx.deps.mcpServers?.list()) ?? [];
-  return servers.flatMap((server) =>
-    server.enabled ? (server.apps ?? []).map((app) => ({ ...app, connector: server.id })) : [],
-  );
+export async function externalApps(ctx: ApiCtx): Promise<ConnectorApp[]> {
+  return connectorApps((await ctx.deps.mcpServers?.list()) ?? []);
 }
 
 async function catalog(ctx: ApiCtx): Promise<void> {
@@ -238,25 +230,8 @@ async function catalog(ctx: ApiCtx): Promise<void> {
         },
       ];
     });
-    const external = new Map(apps.map((app) => [app.toolkit, app]));
-    const listed = items.map((item) => {
-      const app = external.get(item.id);
-      return app ? { ...item, connectUrl: app.connectUrl, connector: app.connector } : item;
-    });
-    const unlisted = cursor
-      ? []
-      : [...external.values()]
-          .filter((app) => !items.some((item) => item.id === app.toolkit))
-          .map((app) => ({
-            id: app.toolkit,
-            logoUrl: `https://logos.composio.dev/api/${app.toolkit}`,
-            name: app.name,
-            description: "",
-            connectUrl: app.connectUrl,
-            connector: app.connector,
-          }));
     return sendJson(ctx.res, 200, {
-      items: [...unlisted, ...listed],
+      items: withConnectorApps(items, apps, !cursor),
       nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
     });
   } catch {
@@ -323,7 +298,8 @@ function missingScopes(account: { state?: { val?: { scope?: unknown } } }, confi
 async function connections(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx, true);
   if (!access) return;
-  if (!access.key && !(await externalApps(ctx)).length) return composioUnavailable(ctx, 403);
+  const servers = (await ctx.deps.mcpServers?.list()) ?? [];
+  if (!access.key && !connectorApps(servers).length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
   const userIds = composioUserIds(access.principal);
@@ -332,7 +308,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
   try {
     const [data, external] = await Promise.all([
       access.key ? request(ctx, access.key, `/connected_accounts?${query}`) : NO_COMPOSIO,
-      cursor ? [] : (ctx.deps.mcpToolService?.appConnections(access.principal) ?? []),
+      cursor ? [] : (ctx.deps.mcpToolService?.appConnections(access.principal, servers) ?? []),
     ]);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
     const accounts = data.items.filter((item) => usableAccount(item, userIds));

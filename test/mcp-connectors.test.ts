@@ -721,7 +721,11 @@ test("an app a connector serves is connected for a person only when that person'
   const apps = [app("mail", "inbox"), app("calendar", "events"), app("notes")];
   await store.put(server({ id: "host", url: mcp.url, catalog: true, attestActor: true, apps }));
   const status = async (person: string) =>
-    (await service.appConnections(person)).map((entry) => [entry.toolkit, entry.connector, entry.connected]);
+    (await service.appConnections(person, await store.list())).map((entry) => [
+      entry.toolkit,
+      entry.connector,
+      entry.connected,
+    ]);
   assert.deepEqual(await status("alice@example.com"), [
     ["mail", "host", true],
     ["calendar", "host", false],

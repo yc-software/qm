@@ -9,15 +9,8 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import { refuseWithoutPerson, sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
-import {
-  ACCOUNT_ID,
-  composioUnavailable,
-  composioUserId,
-  credential,
-  externalApps,
-  isToolkitId,
-  request,
-} from "./composio.ts";
+import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";
+import { isToolkitId } from "../../mcp/connector-apps.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 

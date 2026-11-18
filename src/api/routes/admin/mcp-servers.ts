@@ -17,7 +17,7 @@ import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
-import { isToolkitId } from "../composio.ts";
+import { isToolkitId } from "../../../mcp/connector-apps.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
 const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
