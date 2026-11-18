@@ -8,6 +8,8 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
 
 async function core(t: TestContext): Promise<{ base: string; built: ReturnType<typeof buildApp> }> {
   const config = testConfig({ signingSecret: "web-keychain-signing-secret-0123456789" });
@@ -85,4 +87,50 @@ test("a signed-in person adds, lists and removes only their own keychain entries
   assert.equal((await fetch(`${base}/api/keychain/credentials/${saved.id}`, as(alice, "DELETE"))).status, 200);
   assert.equal((await built.keychain!.listByOwner("alice")).length, 0);
   assert.equal((await fetch(`${base}/api/keychain/grants/missing/revoke`, as(alice, "POST", {}))).status, 404);
+});
+
+test("persona deletes, attaches and detaches are audited with the grants they revoke, and impersonation is named", async (t) => {
+  const { base, built } = await core(t);
+  const alice = browserSessionCookie("alice");
+  await built.featureFlags.setEnabled("personas", "personal:alice", true, "test");
+  const created = await fetch(`${base}/api/personas`, as(alice, "POST", { name: "Ada" }));
+  const { id } = ((await created.json()) as { persona: { id: string } }).persona;
+  const attach = async () => {
+    const saved = await built.keychain!.save({
+      ownerId: "alice",
+      service: "stripe",
+      envKey: "STRIPE_KEY",
+      secret: "sk",
+    });
+    const res = await fetch(`${base}/api/personas/${id}/credentials`, as(alice, "POST", { credentialId: saved.id }));
+    return ((await res.json()) as { credential: { grantId: string } }).credential.grantId;
+  };
+  const [kept, dropped] = [await attach(), await attach()];
+  assert.equal((await fetch(`${base}/api/personas/${id}/credentials/${dropped}`, as(alice, "DELETE", {}))).status, 200);
+  assert.equal((await fetch(`${base}/api/personas/${id}`, as(alice, "DELETE", {}))).status, 200);
+  const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "alice")}`;
+  const drop = await fetch(
+    `${base}/api/keychain/drops`,
+    as(impersonating, "POST", { service: "stripe", purpose: "x" }),
+  );
+  assert.equal(drop.status, 200);
+  const rows = async (filter: { scopeLabel?: ScopeId; action?: string }) =>
+    (await built.auditLog.tail(testTenant, { limit: 10, ...filter }))
+      .map((e) => [e.action, e.resource, e.principalId, e.impersonatedBy ?? "-"].join(" "))
+      .sort();
+  assert.deepEqual(
+    await rows({ scopeLabel: scopeId("persona", id) }),
+    [
+      `keychain.revoke ${dropped} alice -`,
+      `keychain.revoke ${kept} alice -`,
+      `persona.credential.attach ${dropped} alice -`,
+      `persona.credential.attach ${kept} alice -`,
+      `persona.credential.detach ${dropped} alice -`,
+      `persona.delete ${id} alice -`,
+    ].sort(),
+  );
+  assert.deepEqual(
+    (await rows({ action: "keychain.drop.mint" })).map((r) => r.split(" ").slice(2)),
+    [["alice", "admin-alice"]],
+  );
 });

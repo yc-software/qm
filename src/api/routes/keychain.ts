@@ -278,12 +278,11 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
 }, true);
 
 const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
-  const { res, deps, tenant, params } = ctx;
+  const { res, params } = ctx;
   if (!(await livePersonTurn(ctx))) return;
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
-  if (ok)
-    audit({ deps, tenant }, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
+  if (ok) audit(ctx, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
 }, true);
 
@@ -295,12 +294,11 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
 });
 
 const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
-  const { res, deps, tenant, params } = ctx;
+  const { res, params } = ctx;
   if (!(await livePersonTurn(ctx))) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
-  if (ok)
-    audit({ deps, tenant }, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
+  if (ok) audit(ctx, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
 }, true);
 
