@@ -66,6 +66,7 @@ export interface CronStore {
   ownedBy(scopeId: string): Promise<Cron[]>;
   copiesOf(id: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
+  updateLinked(id: string, patch: CronPatch, linked: CronPatch): Promise<Cron[]>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
@@ -110,6 +111,30 @@ function normalizeTitle(title: string | undefined): string | undefined {
   const trimmed = title?.trim().replace(/\s+/g, " ");
   if (!trimmed) return undefined;
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
+}
+
+function cronFields(patch: CronPatch): Partial<Cron> {
+  const fields: Partial<Cron> = {};
+  if (patch.runtime !== undefined) fields.runtime = patch.runtime;
+  if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
+  if (patch.action !== undefined) fields.action = patch.action;
+  if (patch.message !== undefined) fields.message = patch.message;
+  if (patch.schedule !== undefined) {
+    const normalized = normalizeSchedule(patch.schedule, Date.now());
+    fields.schedule = normalized.schedule;
+    fields.nextFireAt = normalized.nextFireAt;
+  }
+  if (patch.enabled !== undefined) fields.enabled = patch.enabled;
+  if (patch.archived !== undefined) fields.archived = patch.archived;
+  if (patch.destination !== undefined) fields.destination = patch.destination;
+  if (patch.archived === true) fields.enabled = false;
+  if (patch.owner !== undefined) fields.owner = patch.owner;
+  if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
+  if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
+  if (patch.script !== undefined) fields.script = patch.script ?? undefined;
+  if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;
+  if (patch.sharedFrom === null) fields.sharedFrom = undefined;
+  return fields;
 }
 
 export function createCronStore(
@@ -168,27 +193,26 @@ export function createCronStore(
       const before = await backing.get(id);
       if (!before) return null;
       assertCronRuntime({ ...before, ...patch });
-      const fields: Partial<Cron> = {};
-      if (patch.runtime !== undefined) fields.runtime = patch.runtime;
-      if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
-      if (patch.action !== undefined) fields.action = patch.action;
-      if (patch.message !== undefined) fields.message = patch.message;
-      if (patch.schedule !== undefined) {
-        const normalized = normalizeSchedule(patch.schedule, Date.now());
-        fields.schedule = normalized.schedule;
-        fields.nextFireAt = normalized.nextFireAt;
+      return backing.merge(id, cronFields(patch));
+    },
+    async updateLinked(id, patch, linked) {
+      const before = await backing.get(id);
+      if (!before) return [];
+      assertCronRuntime({ ...before, ...patch });
+      const copies: string[] = [];
+      for (let parents = [id]; parents.length;) {
+        const children = (await backing.select({ where: { field: "sharedFrom", anyOfFold: parents } })).filter(
+          (c) => parents.includes(c.sharedFrom!) && !c.forkedAt,
+        );
+        parents = children.map((c) => c.id);
+        copies.push(...parents);
       }
-      if (patch.enabled !== undefined) fields.enabled = patch.enabled;
-      if (patch.archived !== undefined) fields.archived = patch.archived;
-      if (patch.destination !== undefined) fields.destination = patch.destination;
-      if (patch.archived === true) fields.enabled = false;
-      if (patch.owner !== undefined) fields.owner = patch.owner;
-      if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
-      if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
-      if (patch.script !== undefined) fields.script = patch.script ?? undefined;
-      if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;
-      if (patch.sharedFrom === null) fields.sharedFrom = undefined;
-      return backing.merge(id, fields);
+      const own = cronFields(patch);
+      const shared = cronFields(linked);
+      return backing.mutateMany([
+        { id, apply: (c) => ({ ...c!, ...own }) },
+        ...copies.map((copy) => ({ id: copy, apply: (c: Cron | null) => ({ ...c!, ...shared }) })),
+      ]);
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {

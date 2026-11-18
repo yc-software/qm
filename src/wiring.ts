@@ -2040,6 +2040,11 @@ export function buildApp(
       cronChanged.notify?.(id);
       return cron;
     },
+    async updateLinked(id, patch, linked) {
+      const updated = await cronsBase.updateLinked(id, patch, linked);
+      for (const cron of updated) cronChanged.notify?.(cron.id);
+      return updated;
+    },
     async setEnabled(id, enabled) {
       await cronsBase.setEnabled(id, enabled);
       cronChanged.notify?.(id);

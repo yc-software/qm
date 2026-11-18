@@ -36,7 +36,7 @@ function deliveryRow(
   </div>`;
 }
 
-const COPY_STATUS = {
+export const COPY_STATUS = {
   on: { label: "On", tone: "on" },
   paused: { label: "Paused", tone: "" },
   edited: { label: "Edited their copy", tone: "" },
@@ -63,18 +63,17 @@ export function cronDeliveryList(
   if (c.archived) ownStatus = { label: "Archived", tone: "" };
   else if (c.enabled) ownStatus = { label: "On", tone: "on" };
   return html`<div class="cron-card cron-delivery-list">
-      ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
-      ${(c.copies ?? []).map((copy) =>
+    ${deliveryRow(mine ? "You" : friendlyPrincipal(c.owner), destinationLabel(c, mine), ownStatus)}
+    ${(c.copies ?? []).map((copy) =>
         deliveryRow(friendlyPrincipal(copy.owner), copyDestinationLabel(copy.deliversTo), COPY_STATUS[copy.status]),
       )}
-      ${shares.map((g) => deliveryRow(granteeName(g.scope), g.permission === "write" ? "Can view and edit" : "Can view"))}
-      ${
+    ${shares.map((g) => deliveryRow(granteeName(g.scope), g.permission === "write" ? "Can view and edit" : "Can view"))}
+    ${
         mine
           ? html`<button class="cron-delivery-add" type="button" @click=${onAdd}>
               ${icon(Plus, 15)}<span>Add people</span>
             </button>`
           : nothing
       }
-    </div>
-    ${c.copies?.length ? html`<div class="cron-section-note">Each person gets a linked copy that runs as them.</div>` : nothing}`;
+  </div>`;
 }
