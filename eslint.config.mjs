@@ -75,6 +75,10 @@ export default tseslint.config(
     languageOptions: { globals: globals.browser },
   },
   {
+    files: ["plugins/web-ui/qa/record-flow.mjs"],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
+  {
     plugins: { qm: { rules: { "no-comments": noComments } } },
     linterOptions: { noInlineConfig: true },
     rules: {

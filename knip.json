@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
-  "ignoreBinaries": ["tail", "cloudflared", "litestream"],
+  "ignoreBinaries": ["tail", "cloudflared", "litestream", "ffmpeg"],
   "ignoreIssues": {
     "scripts/migrate-principals-to-email.d.mts": ["files"],
     "src/slack/lib.ts": ["exports", "types"]
@@ -65,7 +65,9 @@
         "src/app-devbar.ts",
         "src/inbox.ts",
         "src/context-model.ts",
-        "src/assistant-sidebar.ts"
+        "src/assistant-sidebar.ts",
+        "qa/*.mjs",
+        "qa/flows/*.mjs"
       ],
       "ignoreDependencies": [
         "katex-real",
