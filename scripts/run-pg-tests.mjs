@@ -7,7 +7,7 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
 import { boundUrl, seedTestTenant } from "../test/support/test-tenant.ts";
-import { databaseUrl, quoted } from "./pg-test-template.ts";
+import { databaseUrl } from "./pg-test-template.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -60,7 +60,7 @@ async function dropDatabase(name) {
     [name],
   );
   for (const { datname } of rows) {
-    await admin.query(`DROP DATABASE IF EXISTS ${quoted(datname)} WITH (FORCE)`);
+    await admin.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(datname)} WITH (FORCE)`);
   }
 }
 

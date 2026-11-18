@@ -21,10 +21,6 @@ interface Template {
   note: Note;
 }
 
-export function quoted(name: string): string {
-  return `"${name.replaceAll('"', '""')}"`;
-}
-
 export function databaseUrl(base: string, name: string): string {
   const url = new URL(base);
   url.pathname = `/${name}`;
@@ -71,7 +67,7 @@ async function templates(admin: pg.Client): Promise<Template[]> {
 }
 
 async function annotate(admin: pg.Client, name: string, note: Note): Promise<void> {
-  await admin.query(`COMMENT ON DATABASE ${quoted(name)} IS ${pg.escapeLiteral(JSON.stringify(note))}`);
+  await admin.query(`COMMENT ON DATABASE ${pg.escapeIdentifier(name)} IS ${pg.escapeLiteral(JSON.stringify(note))}`);
 }
 
 function recordImports(): Set<string> {
@@ -114,20 +110,22 @@ async function migrate(databaseUrl: string, vector: boolean): Promise<void> {
   }
 }
 
-async function publish(admin: pg.Client, build: string, name: string): Promise<void> {
-  await admin.query(`ALTER DATABASE ${quoted(build)} WITH ALLOW_CONNECTIONS false`);
+async function publish(admin: pg.Client, build: string, name: string): Promise<boolean> {
+  await admin.query(`ALTER DATABASE ${pg.escapeIdentifier(build)} WITH ALLOW_CONNECTIONS false`);
   await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [build]);
   try {
-    await admin.query(`ALTER DATABASE ${quoted(build)} RENAME TO ${quoted(name)}`);
+    await admin.query(`ALTER DATABASE ${pg.escapeIdentifier(build)} RENAME TO ${pg.escapeIdentifier(name)}`);
+    return true;
   } catch (error) {
     if (!(error instanceof pg.DatabaseError && error.code === "42P04")) throw error;
+    return false;
   }
 }
 
 async function evictUnused(admin: pg.Client, now: number): Promise<void> {
   for (const { name, note } of await templates(admin)) {
     if (now - note.usedAt < UNUSED_MS) continue;
-    await admin.query(`DROP DATABASE IF EXISTS ${quoted(name)}`).catch((error: unknown) => {
+    await admin.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)}`).catch((error: unknown) => {
       if (!(error instanceof pg.DatabaseError && error.code === "55006")) throw error;
     });
   }
@@ -145,7 +143,7 @@ async function template(base: string, build: string): Promise<string> {
       return name;
     }
     const seen = recordImports();
-    await admin.query(`CREATE DATABASE ${quoted(build)}`);
+    await admin.query(`CREATE DATABASE ${pg.escapeIdentifier(build)}`);
     await migrate(databaseUrl(base, build), vector);
     const files = [
       ...[...seen].map((file) => relative(ROOT, file)).filter((file) => !file.startsWith("node_modules/")),
@@ -153,8 +151,8 @@ async function template(base: string, build: string): Promise<string> {
     ].sort();
     const note = { files, digest: digest(files, vector), usedAt: now };
     const name = `${PREFIX}${note.digest.slice(0, 32)}`;
-    await publish(admin, build, name);
-    await annotate(admin, name, note);
+    await annotate(admin, build, note);
+    if (!(await publish(admin, build, name))) await annotate(admin, name, note);
     await evictUnused(admin, now);
     return name;
   } finally {
