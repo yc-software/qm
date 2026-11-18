@@ -192,13 +192,21 @@ export interface CommandCredential {
 }
 
 interface AttachedFileMeta {
+  artifactViewerId?: string;
   name: string;
   mimetype: string;
   sizeBytes: number;
   artifactId?: string;
 }
 
-export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number } | { ok: false; message: string };
+export interface StagedFileMeta extends AttachedFileMeta {
+  key: ["path", string | null, string] | ["file", string];
+  created: boolean;
+}
+
+export type AttachResult =
+  | { ok: true; files: AttachedFileMeta[]; staged: number; stagedFiles: StagedFileMeta[]; stagedRevision: number }
+  | { ok: false; message: string };
 
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 

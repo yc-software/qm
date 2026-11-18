@@ -28,7 +28,7 @@ export function turnTools(kit: ToolKit) {
       const total = r.staged > r.files.length ? ` ${r.staged} file(s) are now staged for this reply.` : "";
       return recordResult(
         callId,
-        { tool: "attach", ok: true, files: r.files },
+        { tool: "attach", ok: true, files: r.files, stagedFiles: r.stagedFiles, stagedRevision: r.stagedRevision },
         text(`[attached] ${list} — delivered with your reply when this turn ends.${total}`),
       );
     },

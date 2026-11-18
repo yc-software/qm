@@ -56,7 +56,7 @@ import type { MemoryCaptureTurn } from "../src/memory/capture-context.ts";
 
 function buildScenario(
   interruptAfterToolResult = false,
-  attachment?: { id: string; fileOnly?: boolean; onResume?: string },
+  attachment?: { id: string; fileOnly?: boolean; onResume?: string; replacePath?: true },
   memoryStrategy?: MemoryStrategy,
   answer?: { text: string; stopped?: true },
 ) {
@@ -64,7 +64,16 @@ function buildScenario(
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
   const histories: Item[][] = [];
-  const sandbox = fakeSandbox();
+  let attachmentReads = 0;
+  const sandbox = attachment?.replacePath
+    ? {
+        ...fakeSandbox(),
+        provision: async () => ({ id: "attachment-test", rootDir: "/workspace" }),
+        removeDir: async () => undefined,
+        listDir: async () => [],
+        readFileBytes: async () => Buffer.from(`version-${++attachmentReads}`),
+      }
+    : fakeSandbox();
   const agent: Agent = {
     async runTurn(turn) {
       histories.push([...turn.history]);
@@ -79,21 +88,24 @@ function buildScenario(
       }
       const attachmentId = turn.continueTurn ? attachment?.onResume : attachment?.id;
       if (attachmentId) {
-        const callId = "attachment-" + turns.length;
-        await turn.emit({
-          kind: "ToolCall",
-          tool: "attach",
-          callId,
-          body: { files: [{ file_id: attachmentId }] },
-        });
-        const attached = await turn.tools.attach([{ file_id: attachmentId }]);
-        assert.ok(attached.ok);
-        await turn.emit({
-          kind: "ToolResult",
-          tool: "attach",
-          callId,
-          body: { ok: true, files: attached.files },
-        });
+        for (let index = 0; index < (attachment?.replacePath && !attachment.onResume ? 2 : 1); index++) {
+          const callId = `attachment-${turns.length}-${index}`;
+          const files = attachment?.replacePath ? ["report.txt"] : [{ file_id: attachmentId }];
+          await turn.emit({ kind: "ToolCall", tool: "attach", callId, body: { files } });
+          const attached = await turn.tools.attach(files);
+          assert.ok(attached.ok);
+          await turn.emit({
+            kind: "ToolResult",
+            tool: "attach",
+            callId,
+            body: {
+              ok: true,
+              files: attached.files,
+              stagedFiles: attached.stagedFiles,
+              stagedRevision: attached.stagedRevision,
+            },
+          });
+        }
       }
       if (attachment?.onResume && turns.length === 1) throw new Error("interrupted after first attachment");
       const reply = attachment?.fileOnly ? "" : (answer?.text ?? "it runs on this conversation's computer");
@@ -105,12 +117,13 @@ function buildScenario(
       return { decision: "auto" as const };
     },
   };
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const fileDatabaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(fileDatabaseUrl);
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(fileDatabaseUrl, createMemoryDurableByteStore(), sessions);
   const orchestrator = createOrchestrator({
     ...orchestratorTestDeps(),
     ...(answer ? { publicWebUrl: "https://tools.example.test" } : {}),
@@ -730,4 +743,68 @@ test("persisted stopped replies do not start capture on either attempt", async (
   await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 }));
   await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.deepEqual(captured, []);
+});
+
+test("reply recovery retains only the replacement when superseded artifact deletion failed", async (t) => {
+  const { orchestrator, files, sessions, runs, turns, input } = buildScenario(false, {
+    id: "unused",
+    replacePath: true,
+  });
+  t.mock.method(files, "delete", async () => {
+    throw new Error("artifact cleanup unavailable");
+  });
+  const append = sessions.append.bind(sessions);
+  let interrupt = true;
+  t.mock.method(
+    sessions,
+    "append",
+    async (writer: Parameters<typeof sessions.append>[0], item: Parameters<typeof sessions.append>[1]) => {
+      if (interrupt && item.kind === "AgentMessage" && item.variant === "files_delivered") {
+        interrupt = false;
+        throw new Error("interrupted before final file receipt");
+      }
+      return append(writer, item);
+    },
+  );
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted before final file receipt/,
+  );
+  const session = (await sessions.getByThread(conversation.threadRef))!;
+  const attached = (await sessions.getItems(session.id)).filter(
+    (item) => item.kind === "ToolResult" && item.tool === "attach",
+  );
+  const ids = attached.flatMap((item) => (item.body.files as { artifactId: string }[]).map((file) => file.artifactId));
+  assert.equal(ids.length, 2);
+  assert.ok(await files.get(ids[0]!));
+  assert.ok(await files.get(ids[1]!));
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.deepEqual(
+    retry.attachments?.map((file) => file.artifactId),
+    [ids[1]],
+  );
+  assert.equal(turns.length, 1);
+});
+
+test("resuming attachment staging replaces the prior path and reserves a new artifact identity", async () => {
+  const { orchestrator, files, sessions, runs, turns, input } = buildScenario(false, {
+    id: "unused",
+    onResume: "continue",
+    replacePath: true,
+  });
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted after first attachment/,
+  );
+  const session = (await sessions.getByThread(conversation.threadRef))!;
+  const history = await sessions.getItems(session.id);
+  const first = history.find((item) => item.kind === "ToolResult" && item.tool === "attach")!;
+  const previousId = (first.body.files as { artifactId: string }[])[0]!.artifactId;
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.attachments?.length, 1);
+  assert.notEqual(retry.attachments?.[0]?.artifactId, previousId);
+  assert.equal(await files.get(previousId), null);
+  assert.equal(turns.length, 2);
 });

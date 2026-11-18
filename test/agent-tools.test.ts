@@ -38,6 +38,8 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
           sizeBytes: 1,
         })),
         staged: files.length,
+        stagedFiles: [],
+        stagedRevision: 1,
       };
     },
     async restartComputer() {},

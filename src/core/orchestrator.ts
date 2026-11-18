@@ -198,7 +198,7 @@ import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import { appSourceShown } from "./orchestrator/app-source.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { recordReplyFiles, selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
-import { replayRecordedAnswer, restoreReplyAttachments } from "./orchestrator/turn-replay.ts";
+import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
 import {
   addConversationBlocks,
   appendTurnGuidance,
@@ -231,7 +231,7 @@ import {
   registerServiceCredentials,
 } from "./orchestrator/credential-catalog.ts";
 import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tools.ts";
-import { createAttachStaging } from "./orchestrator/attach-tool.ts";
+import { createAttachStaging, restoreAttachmentState } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
@@ -1747,6 +1747,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           spine,
         });
         const attachStaging = createAttachStaging({
+          ...(isRetry
+            ? {
+                initial: await restoreAttachmentState(
+                  recorded?.items ?? [],
+                  input.runId,
+                  blobTransfer,
+                  openStoredOutbound,
+                  actor.id,
+                ),
+              }
+            : {}),
           sandbox: deps.sandbox,
           provision: provisionOutbound,
           openStored: openStoredOutbound,
@@ -2701,15 +2712,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           result,
         );
 
-        let stagedAttachments = attachStaging.staged();
-        if (isRetry)
-          stagedAttachments = await restoreReplyAttachments(
-            { ...deps, files },
-            rawEntries,
-            input.runId,
-            openStoredOutbound,
-            stagedAttachments,
-          );
+        const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
           if (!liveReplies || sessionTurn || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream.firstBlock(input.runId);
@@ -2794,10 +2797,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           withManagedRosterVersion,
         });
 
-        if (finalResult.status === "ok" && finalResult.attachments?.length)
-          await withManagedRosterVersion(() =>
-            recordReplyFiles(deps.sessions, writer, finalResult.attachments ?? [], [...rawEntries, ...emittedEntries]),
+        if (finalResult.status === "ok" && finalResult.attachments?.length) {
+          const recordedFiles = await withManagedRosterVersion(() =>
+            recordReplyFiles(
+              deps.sessions,
+              writer,
+              finalResult.attachments ?? [],
+              [...rawEntries, ...emittedEntries],
+              attachStaging.snapshot(),
+            ),
           );
+          if (recordedFiles) await attachStaging.cleanup();
+        }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };

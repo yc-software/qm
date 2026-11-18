@@ -13,6 +13,7 @@ import { errMessage, swallowAs } from "../../util/errors.ts";
 import { commandApprovalId } from "../approval-id.ts";
 import { approvalBlocksInput, type deriveTurnOutcome, heldReplyResult } from "../turn-outcome.ts";
 import type { createApprovalLedger } from "./approvals.ts";
+import type { StagedAttachments } from "./attach-tool.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 type QuarantineReleaseApproval = Awaited<ReturnType<typeof createApprovalLedger>>["quarantineReleaseApprovals"][number];
@@ -25,8 +26,9 @@ export async function recordReplyFiles(
     "artifactId" | "name" | "mimetype" | "sizeBytes" | "artifactViewerId"
   >[],
   previous: readonly Item[],
-): Promise<void> {
-  if (!filesToRecord.length) return;
+  snapshot?: ReturnType<StagedAttachments["snapshot"]>,
+): Promise<boolean> {
+  if (!filesToRecord.length) return false;
   const recorded = new Set(
     previous.flatMap((item) =>
       writer.turnId &&
@@ -54,7 +56,8 @@ export async function recordReplyFiles(
     ];
   });
   if (files.length)
-    await sessions.append(writer, { kind: "AgentMessage", variant: "files_delivered", body: { files } });
+    await sessions.append(writer, { kind: "AgentMessage", variant: "files_delivered", body: { files, ...snapshot } });
+  return filesToRecord.every((file) => Boolean(file.artifactId));
 }
 
 export async function startMemoryCapture(turn: {
