@@ -17,7 +17,7 @@ function setExpanded(layer: HTMLElement, expanded: boolean): void {
     apply();
     return;
   }
-  const direction = expanded ? "file-html-expanding" : "file-html-closeing";
+  const direction = expanded ? "file-html-expanding" : "file-html-shrinking";
   layer.classList.add("morphing");
   document.documentElement.classList.add(direction);
   void document.startViewTransition(apply).finished.finally(() => {
@@ -60,54 +60,58 @@ export function htmlPreviewCard(name: string, src: string, size?: number, href?:
           else collapsed.add(key);
         }}
       >
-      <summary class="file-html-bar" @click=${onBarClick}>
-        <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
-        <span class="file-html-title">
-          ${href
-            ? html`<a
-                class="file-html-name"
-                dir="auto"
-                href=${href}
-                target="_blank"
-                rel="noreferrer"
-                @click=${(event: MouseEvent) => previewFile(event, name, href)}
-                >${name}</a
-              >`
-            : html`<span class="file-html-name" dir="auto">${name}</span>`}
-          ${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}
-        </span>
-        <span class="file-html-actions">
-          ${href
-            ? html`<a
-                class="icon-btn subtle compact"
-                href=${href}
-                download=${name}
-                aria-label="Download ${name}"
-                ${tip("Download")}
-                >${icon(Download, 15)}</a
-              >`
-            : nothing}
-          <button
-            type="button"
-            class="icon-btn subtle compact file-html-expand"
-            aria-label="Expand ${name}"
-            ${tip("Expand")}
-            @click=${(event: Event) => setExpanded(layerOf(event), true)}
-          >
-            ${icon(Maximize2, 15)}
-          </button>
-          <button
-            type="button"
-            class="icon-btn subtle compact file-html-close"
-            aria-label="Close expanded ${name}"
-            ${tip("Close · Esc")}
-            @click=${(event: Event) => setExpanded(layerOf(event), false)}
-          >
-            ${icon(X, 16)}
-          </button>
-        </span>
-      </summary>
-      <iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy"></iframe>
+        <summary class="file-html-bar" @click=${onBarClick}>
+          <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+          <span class="file-html-title">
+            ${
+              href
+                ? html`<a
+                    class="file-html-name"
+                    dir="auto"
+                    href=${href}
+                    target="_blank"
+                    rel="noreferrer"
+                    @click=${(event: MouseEvent) => previewFile(event, name, href)}
+                    >${name}</a
+                  >`
+                : html`<span class="file-html-name" dir="auto">${name}</span>`
+            }
+            ${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}
+          </span>
+          <span class="file-html-actions">
+            ${
+              href
+                ? html`<a
+                    class="icon-btn subtle compact"
+                    href=${href}
+                    download=${name}
+                    aria-label="Download ${name}"
+                    ${tip("Download")}
+                    >${icon(Download, 15)}</a
+                  >`
+                : nothing
+            }
+            <button
+              type="button"
+              class="icon-btn subtle compact file-html-expand"
+              aria-label="Expand ${name}"
+              ${tip("Expand")}
+              @click=${(event: Event) => setExpanded(layerOf(event), true)}
+            >
+              ${icon(Maximize2, 15)}
+            </button>
+            <button
+              type="button"
+              class="icon-btn subtle compact file-html-close"
+              aria-label="Close expanded ${name}"
+              ${tip("Close · Esc")}
+              @click=${(event: Event) => setExpanded(layerOf(event), false)}
+            >
+              ${icon(X, 16)}
+            </button>
+          </span>
+        </summary>
+        <iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy"></iframe>
       </details>
     </div>
   </div>`;

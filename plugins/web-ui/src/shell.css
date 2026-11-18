@@ -2783,10 +2783,12 @@ qm-markdown .tok-in {
   outline: none;
 }
 .file-html-layer:popover-open {
+  --file-html-edge: clamp(8px, 2vw, 20px);
   position: fixed;
   inset: 0;
-  padding: var(--dialog-pad-top) var(--dialog-pad-right) var(--dialog-pad-bottom) var(--dialog-pad-left);
-  background: color-mix(in srgb, var(--scrim) 42%, transparent);
+  padding: max(var(--file-html-edge), env(safe-area-inset-top)) max(var(--file-html-edge), env(safe-area-inset-right))
+    max(var(--file-html-edge), env(safe-area-inset-bottom)) max(var(--file-html-edge), env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--scrim) 28%, transparent);
 }
 .file-html-card {
   position: relative;
@@ -2922,8 +2924,10 @@ a.file-html-name:hover {
   z-index: 1;
   animation: file-html-fade 100ms reverse both;
 }
-.file-html-closeing::view-transition-new(file-html-card),
-.file-html-closeing::view-transition-new(file-html-frame) {
+.file-html-shrinking::view-transition-new(file-html-card) {
+  animation: file-html-fade 100ms both;
+}
+.file-html-shrinking::view-transition-new(file-html-frame) {
   animation: file-html-fade 100ms 220ms both;
 }
 @keyframes file-html-fade {
@@ -6752,8 +6756,7 @@ a.file-card:hover {
   color: var(--destructive);
 }
 .project-dialog-backdrop,
-.project-dialog,
-.file-html-layer {
+.project-dialog {
   --dialog-pad-top: max(20px, env(safe-area-inset-top));
   --dialog-pad-right: max(20px, env(safe-area-inset-right));
   --dialog-pad-bottom: max(20px, env(safe-area-inset-bottom));
