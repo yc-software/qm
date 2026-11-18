@@ -164,7 +164,9 @@ const SHOW_AFTER_MS = 30_000;
 const BACKGROUND_STEP = { watch: "Watching for updates", job: "Background job" } as const;
 
 function stillWorking(step: string): string {
-  return `Still working: ${step.charAt(0).toLowerCase()}${step.slice(1)}`;
+  const second = step.charAt(1);
+  const lower = second && second === second.toLowerCase() ? step.charAt(0).toLowerCase() + step.slice(1) : step;
+  return `Still working: ${lower}`;
 }
 
 function headlineOf(work: SessionWork | undefined): [string, string] {
@@ -187,18 +189,17 @@ function renderCard(
   card: { cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
   const [title, phrase] = headlineOf(work);
-  const headline = title;
   const details = richText(card.elapsed >= 60_000 ? `${phrase} · ${minutes(card.elapsed)}` : phrase, card.followUrl);
   const blocks: Record<string, unknown>[] = [
     {
       type: "task_card",
       task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
-      title: headline,
+      title,
       status: "in_progress",
       ...(details ? { details } : {}),
     },
   ];
-  return { blocks, headline };
+  return { blocks, headline: title };
 }
 
 function minutes(ms: number): string {

@@ -4,7 +4,6 @@ export interface AckPresenter {
   onFirstBlock(text: string): void;
   onSurfacePosted(): void;
   postedAck(): string | undefined;
-  emoji(): Promise<string>;
   drain(): Promise<void>;
   settle(): Promise<void>;
 }
@@ -67,10 +66,6 @@ export function createAckPresenter(deps: {
       clearReaction();
     },
     postedAck: () => ackPosted,
-    async emoji() {
-      await Promise.race([deps.emojiPick, new Promise((done) => setTimeout(done, delayMs))]);
-      return choose();
-    },
     async drain() {
       await chain;
     },

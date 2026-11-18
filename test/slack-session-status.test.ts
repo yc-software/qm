@@ -338,6 +338,9 @@ test("running subagents keep one flat card titled with their latest step", async
   assert.equal(f.card()[0]?.type, "task_card");
   assert.equal(f.card()[0]?.title, "Still working: reading Slack docs");
   assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  f.purposes.set(child.id, "PR checks for the card");
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Still working: PR checks for the card");
   child.status = "done";
   const job = f.background("sub:c1");
   job.purpose = "Waiting on CI";
