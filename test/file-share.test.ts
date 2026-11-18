@@ -5,7 +5,7 @@ import { createToolContext } from "../src/tools/primitives.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { entitledScopes } from "../src/resolution/context-filter.ts";
+import { entitledScopes as entitledScopesFor } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
@@ -14,6 +14,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+const entitledScopes = entitledScopesFor(false);
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,

@@ -93,7 +93,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
       audience,
       ctx.capability?.scopeId ?? personal,
       org,
-      entitledScopes,
+      entitledScopes(false),
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(

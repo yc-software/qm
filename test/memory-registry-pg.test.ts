@@ -11,7 +11,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
 import type { MemoryCaptureContext } from "../src/memory/memory-service.ts";
-import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
+import { forgetFacts, withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import {
   MEMORY_REGISTRY_TABLE,
@@ -33,6 +33,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { sleep } from "../src/util/async.ts";
 
 const change = {
   actor: "admin-alice",
@@ -54,10 +55,14 @@ async function startBrain(t: {
 }): Promise<McpTestServer & { calls: BrainCall[] }> {
   const calls: BrainCall[] = [];
   const server = await startMcpTestServer(t, {
-    tools: ["memory_recall", "memory_write"].map((name) => ({ name, inputSchema: { type: "object" as const } })),
+    tools: ["memory_recall", "memory_write", "forget_fact"].map((name) => ({
+      name,
+      inputSchema: { type: "object" as const },
+    })),
     clients: { "qm-personal": "personal-secret" },
     call: (tool, args) => {
       calls.push({ tool, args });
+      if (tool === "forget_fact") return { content: [], structuredContent: { ...args, state: "committed" } };
       return { content: [{ type: "text", text: tool === "memory_recall" ? BRAIN_FACT : "stored" }] };
     },
   });
@@ -381,6 +386,7 @@ function serve(built: ReturnType<typeof buildApp>) {
     auditLog: built.auditLog,
     memory: built.memory,
     memoryRegistry: built.memoryRegistry,
+    runs: built.runs,
     capabilitySecret: TEST_CAPABILITY_SECRET,
   });
   server.listen(0);
@@ -734,6 +740,8 @@ test("blue-green: a binding written through one instance serves turns on the oth
 
 const ALICE_SCOPE = "personal:U1";
 const writes = (brain: { calls: BrainCall[] }) => brain.calls.filter(({ tool }) => tool === "memory_write").length;
+const forgets = (brain: { calls: BrainCall[] }) => brain.calls.filter(({ tool }) => tool === "forget_fact");
+const BRAIN_REF = { ids: ["acme-personal:42"] };
 const notebook = async (built: ReturnType<typeof buildApp>) =>
   ((await built.memory.facts!(ALICE_SCOPE)) ?? []).map(({ text }) => text);
 
@@ -763,6 +771,40 @@ async function boundToBrain(t: { after(fn: () => Promise<void>): void }, agent?:
   };
   return { brain, built, api, bind };
 }
+
+test("a registry brain forgets by ref only while a binding serves it, so a revocation applies at once", async (t) => {
+  const brain = await startBrain(t);
+  const url = testDatabaseUrl();
+  const registry = stores(url);
+  const memory = createRegistryMemoryService({
+    defaultMemory: createPostgresMemoryService(url),
+    registry,
+    registryFetch: routedTo(brain.url),
+  });
+  const forget = () =>
+    forgetFacts(
+      memory,
+      ALICE_SCOPE,
+      BRAIN_REF.ids,
+      { actorId: "U1", context: "conversation", personTurn: true },
+      { audienceScopeId: ALICE_SCOPE },
+      "session:call",
+    );
+  await registry.update(personalBrain());
+  await registry.update((record) =>
+    putBinding(record, "alice", { brain: "acme-personal", scope: ALICE_SCOPE, capture: "explicit" }, change),
+  );
+  assert.equal((await forget()).forgotten, 1);
+  await registry.update((record) => deleteBinding(record, "alice"));
+  await assert.rejects(forget(), /Nothing was changed/);
+
+  const [sent, ...more] = forgets(brain);
+  assert.deepEqual(more, []);
+  assert.deepEqual(Object.keys(sent!.args).sort(), ["id", "request_id"]);
+  assert.equal(sent!.args.id, 42);
+  assert.match(String(sent!.args.request_id), /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(brain.requests.filter(({ rpc }) => rpc === "tools/call").at(-1)?.actor, "U1");
+});
 
 test("only Alice's own conversation writes to her brain; admin, onboarding and self-service change her notebook alone", async (t) => {
   const { brain, built, api, bind } = await boundToBrain(t);
@@ -799,18 +841,36 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
   );
   const mint = (await built.memory.facts!(ALICE_SCOPE)).find(({ text }) => text.includes("mint"))!;
   assert.equal((await api.call("DELETE", "/v1/memory", "U1", { ...self, ids: [mint.id] })).status, 200);
+  assert.equal((await api.call("DELETE", scoped, admin, BRAIN_REF)).status, 403);
+  assert.equal((await api.call("DELETE", "/v1/memory", "U1", { ...self, ...BRAIN_REF })).status, 403);
+  const endedTurn = await mintCapabilityToken(
+    {
+      actorId: "U1",
+      scopeId: ALICE_SCOPE,
+      audienceScopeId: ALICE_SCOPE,
+      liveActor: true,
+      runId: "ended-run",
+      memory: { write: ALICE_SCOPE, read: [ALICE_SCOPE] },
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    TEST_CAPABILITY_SECRET,
+  );
+  const ended = await api.call("DELETE", "/v1/memory/facts", endedTurn, BRAIN_REF, "x-agent-capability");
+  assert.equal(ended.status, 403);
+  assert.match(ended.text, /only while that turn is running/);
 
   assert.deepEqual(
     (await notebook(built)).map((text) => text.replace(/ on \d{4}-\d\d-\d\d\.$/, ".")),
     ["Alice sits at desk 5C.", "Onboarding: completed v2."],
   );
   assert.equal(writes(brain), 1);
+  assert.deepEqual(forgets(brain), []);
   assert.ok(brain.requests.every(({ actor }) => actor === "U1"));
 });
 
 test("the nightly tidy changes the notebook alone, through its tools and its agent API token, with a brain bound", async (t) => {
   const mock = createMockAgent();
-  const seen: { prompt: string; search: string[]; tools: string[] } = { prompt: "", search: [], tools: [] };
+  const seen = { prompt: "", search: [] as string[], tools: [] as string[], forget: "" };
   let ids: Record<string, string> = {};
   const agent: Agent = {
     ...mock,
@@ -823,7 +883,11 @@ test("the nightly tidy changes the notebook alone, through its tools and its age
       ).map(({ name }) => name);
       seen.search = (await input.tools.memorySearch("Alice"))?.hits ?? [];
       await input.tools.memoryEdit([{ id: ids.tea!, text: "Alice drinks tea every morning." }]);
-      await input.tools.memoryDelete([ids.daily!, ids.desk!]);
+      await input.tools.memoryDelete([ids.daily!, ids.desk!], "call-1");
+      seen.forget = await input.tools.memoryDelete(BRAIN_REF.ids, "call-2").then(
+        () => "forgot",
+        (error: Error) => error.message,
+      );
       await input.tools.memoryAdd(["Alice sits at desk 4B."]);
       return mock.runTurn({ ...input, input: "!run echo tidied" });
     },
@@ -874,6 +938,8 @@ test("the nightly tidy changes the notebook alone, through its tools and its age
   assert.equal(searched.status, 200);
   assert.doesNotMatch(searched.text, /BLACKBEARD-42/);
   assert.equal((await agentApi("POST", "/v1/memory/facts", { facts: ["Alice parks in bay 7."] })).status, 200);
+  assert.match(seen.forget, /can't forget .* Nothing was changed/);
+  assert.equal((await agentApi("DELETE", "/v1/memory/facts", BRAIN_REF)).status, 403);
   assert.ok((await notebook(built)).includes("Alice parks in bay 7."));
   assert.ok(seen.tools.includes("memory"));
   assert.deepEqual(
@@ -933,4 +999,70 @@ test("Alice's own turn into a notebook-only subagent leaves her brain alone, and
   const [helper] = await built.sessions.childrenOf(session.id);
   assert.equal(helper?.spawnMeta?.memoryNotebookOnly, true);
   assert.equal(brain.calls.length, before);
+});
+
+test("only Alice's own DM turn forgets a brain fact; her subagent and the turn its report starts are refused", async (t) => {
+  const { brain, built, api, bind } = await boundToBrain(t);
+  await bind();
+  const text = "!memoryforget acme-personal:42";
+  const dm: TurnRequest = {
+    surface: "test",
+    actor: { externalId: "U1" },
+    origin: { kind: "human" },
+    conversation: { kind: "dm", threadRef: "dm:U1:forget" },
+    text,
+  };
+  assert.equal((await built.app.turn(dm)).reply, "forgot 1");
+  const [parent] = await built.runs.list({ threadRef: "dm:U1:forget", limit: 1 });
+  const own = (await built.sessions.getByThread("dm:U1:forget"))!;
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:forget", "dm", ALICE_SCOPE);
+  await built.sessions.setParentSession(child.id, own.id);
+  const { actor, conversation } = parent!.request;
+  await built.sessions.setSpawnMeta(child.id, { actor, conversation, surface: "test" });
+  await built.sessions.addParticipant(child.id, "U1");
+  const enqueue = async (threadRef: string, sessionSenderId: string) =>
+    (
+      await built.runs.enqueue({
+        sessionId: threadRef,
+        maxAttempts: 1,
+        request: {
+          ...parent!.request,
+          conversation: { ...conversation, threadRef },
+          delegatingRunId: parent!.id,
+          sessionSenderId,
+          text,
+        },
+      })
+    ).run.id;
+  const held = (await built.runs.claimById(await enqueue(child.threadRef, own.id), "test-worker", 60_000))!;
+  const token = await mintCapabilityToken(
+    {
+      actorId: "U1",
+      scopeId: ALICE_SCOPE,
+      audienceScopeId: ALICE_SCOPE,
+      liveActor: true,
+      liveAuthor: true,
+      runId: held.id,
+      runAttempt: held.attempts,
+      runLeaseToken: held.leaseToken!,
+      threadRef: child.threadRef,
+      memory: { write: ALICE_SCOPE, read: [ALICE_SCOPE] },
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    TEST_CAPABILITY_SECRET,
+  );
+  const overHttp = await api.call("DELETE", "/v1/memory/facts", token, BRAIN_REF, "x-agent-capability");
+  assert.match(overHttp.text, /Nothing was changed/);
+  await built.runs.complete(held.id, held.leaseToken!, { status: "ok" });
+  built.runtime.start();
+  t.after(() => built.runtime.stop());
+  const replyTo = async (runId: string) => {
+    for (let current = await built.runs.get(runId); ; current = await built.runs.get(runId)) {
+      if (current?.status === "done" || current?.status === "failed") return current.result?.reply;
+      await sleep(25);
+    }
+  };
+  assert.match((await replyTo(await enqueue(child.threadRef, own.id)))!, /Nothing was changed/);
+  assert.match((await replyTo(await enqueue(own.threadRef, child.id)))!, /Nothing was changed/);
+  assert.equal(forgets(brain).length, 1);
 });

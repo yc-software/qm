@@ -84,6 +84,11 @@ export interface Run {
   startedAt: number | null;
   finishedAt: number | null;
   lastStop?: RunStop | null;
+  botLimited?: true;
+}
+
+export function botLimited(run: Pick<Run, "request" | "botLimited">): boolean {
+  return run.request.botActor === true || run.botLimited === true;
 }
 
 interface TerminalCursor {
@@ -143,6 +148,7 @@ export interface RunStore {
   setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean>;
 
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
+  markBotLimited(tenant: Tenant, runId: string): Promise<void>;
 
   activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   lastFinishedForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;

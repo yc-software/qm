@@ -68,8 +68,10 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
 import {
+  forgetFacts,
   withProviders,
   writeFacts,
+  type MemoryForget,
   type MemoryProviderProblem,
   type MemoryWrite,
   type OutcomeReport,
@@ -87,7 +89,7 @@ import type {
   ControlOk,
   ControlErr,
 } from "../api/control-service.ts";
-import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
+import { personAtKeyboard, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
@@ -252,7 +254,7 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryRead(scope?: ScopeId): Promise<string | null>;
   memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
   memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
-  memoryDelete(ids: string[]): Promise<true | null>;
+  memoryDelete(ids: string[], callId: string): Promise<MemoryForget | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
@@ -542,6 +544,7 @@ export interface ToolContextDeps {
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
+  personTurn?: boolean;
   toolOutput?: ToolOutputStore;
   sessionId?: string;
 }
@@ -1140,6 +1143,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.setAppPublic(id, isPublic, {
         createdBy: deps.createdBy,
         botActor: deps.botActor,
+        personAtKeyboard: personAtKeyboard(deps.controlClaims),
       });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
@@ -1200,11 +1204,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return true;
     },
 
-    async memoryDelete(ids: string[]): Promise<true | null> {
+    async memoryDelete(ids: string[], callId: string) {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      await memory.delete(write, ids, turnAuthority(deps.createdBy, deps.memoryAccess));
-      return true;
+      return forgetFacts(
+        memory,
+        write,
+        ids,
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
+        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+        deps.sessionId && `${deps.sessionId}:${callId}`,
+      );
     },
 
     ...(deps.humanTurn ? { humanTurn: true } : {}),

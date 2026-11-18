@@ -22,9 +22,10 @@ import { createSessionAdminReads } from "./session-admin-reads.ts";
 import { createSessionParticipants, participantSessionsSql } from "./session-participants.ts";
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
-import { TENANT } from "./items.ts";
+import { authoredUserTurn, TENANT } from "./items.ts";
 import {
   GENERIC_CHAT_TENANT,
+  SERVING_SLACK_TENANTS,
   SLACK_TENANTS,
   SLACK_BRIDGE_TENANT,
   TENANT_LOOKUPS,
@@ -69,6 +70,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     SLACK_TENANTS,
     SLACK_BRIDGE_TENANT,
     GENERIC_CHAT_TENANT,
+    SERVING_SLACK_TENANTS,
   ]);
   const { pool, q } = db;
 
@@ -153,6 +155,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         principalId === undefined ? [sessionId] : [principalId, sessionId],
       );
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
+    },
+
+    async forkOrigin(tenant, sessionId): Promise<Session | null> {
+      const rows = await db.forTenant(tenant).q(
+        `WITH RECURSIVE chain(id, source_id) AS (
+           SELECT id, forked_from_session_id FROM sessions WHERE tenant_id = $1 AND id = $2
+           UNION
+           SELECT s.id, s.forked_from_session_id FROM chain c JOIN sessions s ON s.tenant_id = $1 AND s.id = c.source_id
+         )
+         SELECT s.* FROM chain c JOIN sessions s ON s.tenant_id = $1 AND s.id = c.id
+          WHERE NOT EXISTS (SELECT 1 FROM chain source WHERE source.id = c.source_id)`,
+        [tenant.id, sessionId],
+      );
+      return rows[0] ? rowToSession(rows[0]) : null;
     },
 
     async expandSideChat(sessionId) {
@@ -333,6 +349,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async scopeHasSessions(scope): Promise<boolean> {
       const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1) AS present", [scope]);
+      return Boolean(rows[0]?.present);
+    },
+
+    async personHasAuthoredTurns(tenant, principalIds): Promise<boolean> {
+      const rows = await db.forTenant(tenant).q(
+        `SELECT EXISTS(SELECT 1 FROM items
+                        WHERE tenant_id = $1 AND author = ANY($2) AND ${authoredUserTurn("items")}) AS present`,
+        [tenant.id, principalIds],
+      );
       return Boolean(rows[0]?.present);
     },
 

@@ -133,8 +133,9 @@ enum ConversationFilter: String, CaseIterable {
   func includes(_ conversation: Conversation) -> Bool {
     if self == .archived { return conversation.archived == true }
     guard conversation.archived != true else { return false }
-    return self == .waiting
-      ? conversation.awaitingInput == true : conversation.awaitingInput != true
+    if self == .waiting { return conversation.awaitingInput == true }
+    // Pinned conversations always show in Active, waiting or not.
+    return conversation.pinned == true || conversation.awaitingInput != true
   }
 }
 

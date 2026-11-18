@@ -3,18 +3,22 @@ import { setTimeout as wait } from "node:timers/promises";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { shq } from "../util/shell.ts";
 import type { RenderClient, RenderSnapshot } from "./render-client.ts";
-import { parseRenderSandboxImage } from "./render-limits.ts";
+import { parseRenderSandboxImage, RENDER_BASE_TOOLS } from "./render-limits.ts";
 
 const BUILDER_LIFETIME_SEC = 3600;
 const PREPARE_POLL_MS = 15_000;
 const PREPARE_RETRY_MS = 5 * 60_000;
 const READY_POLL_MS = 5_000;
 const READY_WAIT_MS = 45 * 60_000;
+const TOOL_PROBE_SEC = 60;
+const TOOL_PROBE = `for c in ${RENDER_BASE_TOOLS.map(([, command]) => shq(command)).join(" ")}; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true`;
 
 export interface StoredRenderBase {
   ref: string;
   snapshot?: RenderSnapshot;
+  tools?: string[];
   readyAtMs?: number;
   error?: string;
 }
@@ -22,6 +26,7 @@ export interface StoredRenderBase {
 interface RenderGolden {
   ref: string;
   snapshotId: string;
+  tools?: string[];
 }
 
 type Progress = "ready" | "pending" | "failed";
@@ -94,8 +99,12 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     const builder = await client.create({ image: imageId, lifetimeSec: BUILDER_LIFETIME_SEC });
     let progress: Progress = "failed";
     try {
-      const staged = await client.createSnapshot(builder.id, image.name);
-      await store.merge(image.digest, { snapshot: staged });
+      const probe = await client.runScript(builder.id, TOOL_PROBE, TOOL_PROBE_SEC);
+      if (probe.exitCode !== 0) throw new Error(`Render could not list the tools in ${image.ref}: ${probe.stderr}`);
+      const found = new Set(probe.stdout.split("\n"));
+      const tools = RENDER_BASE_TOOLS.filter(([, command]) => found.has(command)).map(([label]) => label);
+      const staged = await client.createSnapshot(builder.id, image.name, "runtime");
+      await store.merge(image.digest, { snapshot: staged, tools });
       progress = await finish(staged);
       return progress;
     } finally {
@@ -145,12 +154,18 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
       for (let announced = false; ; announced = true) {
         const entries = await store.entries();
         const own = entries.find(([digest]) => digest === image.digest)?.[1];
-        if (own && isReady(own)) return (ownGolden = { ref: own.ref, snapshotId: own.snapshot!.id });
+        if (own && isReady(own))
+          return (ownGolden = {
+            ref: own.ref,
+            snapshotId: own.snapshot!.id,
+            ...(own.tools ? { tools: own.tools } : {}),
+          });
         const older = entries
           .map(([, record]) => record)
           .filter(isReady)
           .sort((a, b) => b.readyAtMs! - a.readyAtMs!)[0];
-        if (older) return { ref: older.ref, snapshotId: older.snapshot!.id };
+        if (older)
+          return { ref: older.ref, snapshotId: older.snapshot!.id, ...(older.tools ? { tools: older.tools } : {}) };
         if (own?.error) throw new Error(`Render sandbox image ${image.ref} is not ready: ${own.error}`);
         if (Date.now() >= deadline)
           throw new Error(

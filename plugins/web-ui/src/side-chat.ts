@@ -6,6 +6,7 @@ import { markdown } from "./message-markdown";
 import { retractedReason } from "./items";
 import { messageWorkTimeline } from "./timeline";
 import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, Minus, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
 import {
@@ -214,7 +215,7 @@ export function createSideChatController(ctx: ConvCtx) {
 
   async function loadPreview(session: CoreSession) {
     const id = sourceId;
-    const preview = { text: "Loading…" };
+    const preview = { text: previews.get(session.id)?.text ?? "Loading…" };
     previews.set(session.id, preview);
     try {
       const page = await fetchTranscript(session.id, { tailTurns: 1 });
@@ -251,7 +252,10 @@ export function createSideChatController(ctx: ConvCtx) {
     void api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/side-chats`).then(
       (result) => {
         if (sourceId !== id) return;
-        chats = result.sessions ?? [];
+        const order = new Map(chats.map((chat, position) => [chat.id, position]));
+        chats = (result.sessions ?? []).toSorted(
+          (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
+        );
         redraw();
       },
       (cause) => {
@@ -533,8 +537,7 @@ export function createSideChatController(ctx: ConvCtx) {
     onDelivery(threadRef: string) {
       const chat = chats.find((session) => session.threadRef === threadRef);
       if (!chat) return;
-      previews.delete(chat.id);
-      redraw();
+      void loadPreview(chat);
     },
     select,
     dismissSelection,
@@ -621,7 +624,9 @@ export function createSideChatController(ctx: ConvCtx) {
           });
         })}
       >
-        ${matches.map(
+        ${repeat(
+          matches,
+          (chat) => chat.id,
           (chat) =>
             html` <div
               class="side-chat-card ${active?.id === chat.id ? "" : "collapsed"}"

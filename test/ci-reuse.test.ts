@@ -344,34 +344,19 @@ test("only a queue ref for main names the queued PR", () => {
 
 test("a main push without a green merge group run of its exact commit runs full checks", async () => {
   for (const change of [
-    (f: any) => {
-      f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].workflow_runs = [];
-    },
-    (f: any) => {
-      f.run.conclusion = "failure";
-    },
-    (f: any) => {
-      f.run.conclusion = "cancelled";
-    },
-    (f: any) => {
-      f.run.event = "pull_request";
-    },
-    (f: any) => {
-      f.run.path = ".github/workflows/fake.yml";
-    },
+    (f: any) =>
+      (f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].workflow_runs = []),
+    (f: any) => (f.run.conclusion = "failure"),
+    (f: any) => (f.run.conclusion = "cancelled"),
+    (f: any) => (f.run.event = "pull_request"),
+    (f: any) => (f.run.path = ".github/workflows/fake.yml"),
     (f: any) => {
       f.run.head_sha = head;
       for (const job of f.jobs) job.head_sha = head;
     },
-    (f: any) => {
-      f.run.head_branch = `gh-readonly-queue/other/pr-7-${base}`;
-    },
-    (f: any) => {
-      f.run.head_repository.full_name = "fork/qm";
-    },
-    (f: any) => {
-      f.run.repository.full_name = "fork/qm";
-    },
+    (f: any) => (f.run.head_branch = `gh-readonly-queue/other/pr-7-${base}`),
+    (f: any) => (f.run.head_repository.full_name = "fork/qm"),
+    (f: any) => (f.run.repository.full_name = "fork/qm"),
     (f: any) => {
       f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].workflow_runs.push({
         ...f.run,
@@ -380,27 +365,14 @@ test("a main push without a green merge group run of its exact commit runs full 
         conclusion: "failure",
       });
     },
-    (f: any) => {
-      f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].total_count = 101;
-    },
-    (f: any) => {
-      f.jobs[0].conclusion = "skipped";
-    },
-    (f: any) => {
-      f.jobs[0].run_attempt = 2;
-    },
-    (f: any) => {
-      f.jobs[0].head_sha = head;
-    },
-    (f: any) => {
-      f.jobs.splice(1, 1);
-    },
-    (f: any) => {
-      f.jobs.push(f.jobs[0]);
-    },
-    (f: any) => {
-      f.jobs[0].status = "in_progress";
-    },
+    (f: any) =>
+      (f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].total_count = 101),
+    (f: any) => (f.jobs[0].conclusion = "skipped"),
+    (f: any) => (f.jobs[0].run_attempt = 2),
+    (f: any) => (f.jobs[0].head_sha = head),
+    (f: any) => f.jobs.splice(1, 1),
+    (f: any) => f.jobs.push(f.jobs[0]),
+    (f: any) => (f.jobs[0].status = "in_progress"),
   ]) {
     const f = mergeGroup();
     change(f);
@@ -424,36 +396,52 @@ const jobs = Object.fromEntries(
   ),
 );
 
-test("all quality jobs keep successful names and missing proof runs full checks", () => {
+test("all quality jobs keep successful names and missing proof or selection runs full checks", () => {
   assert.ok(workflow.includes("permissions:\n  contents: read"));
   assert.ok(jobs.core!.includes("if: always() && !cancelled()"));
-  assert.ok(jobs.core!.includes('test "$TYPECHECK" = success && test "$TESTS" = success'));
-  const names: string[] = [];
+  assert.ok(jobs.core!.includes('test "$SELECT" = success && test "$TYPECHECK" = success'));
+  assert.ok(jobs.core!.includes('test "$TESTS" = success || { test "$TESTS" = skipped && test "$SHARDS" = 0; }'));
+  const names = ["Core tests (${{ matrix.shard }}/${{ needs.select.outputs.shard-count }})"];
   for (const [id, block] of Object.entries(jobs)) {
-    if (["reuse", "certify", "notify-deployments", "coauthor-trailers"].includes(id)) continue;
+    if (["reuse", "certify", "notify-deployments", "core-tests"].includes(id)) continue;
     const name = block.match(/^ {4}name: (.+)$/m)![1]!;
-    if (id === "core-tests") names.push(...[1, 2, 3, 4, 5].map((n) => name.replace("${{ matrix.shard }}", String(n))));
-    else names.push(name);
-    if (["core", "dependency-audit"].includes(id)) continue;
-    assert.ok(block.includes("needs: reuse\n    if: always() && !cancelled()"));
+    if (id !== "web-ui-checks") names.push(name);
+    if (["select", "core", "web-ui-plugin", "dependency-audit", "coauthor-trailers"].includes(id)) continue;
+    const suite = { cli: "needs.select.outputs.cli", "web-ui-checks": "env.SELECTED" }[id];
+    assert.ok(block.includes(`needs: ${suite ? "[reuse, select]" : "reuse"}\n    if: always() && !cancelled()`), id);
     const steps = block.split(/(?=^ {6}- (?:name|uses):)/m).slice(1);
-    assert.ok(steps[0]!.includes("if: needs.reuse.outputs.reusable == 'true'"));
-    for (const step of steps.slice(1)) assert.ok(step.includes("if: needs.reuse.outputs.reusable != 'true'"));
+    const run = `needs.reuse.outputs.reusable != 'true'${suite ? ` && ${suite} == 'true'` : ""}`;
+    const skip = `needs.reuse.outputs.reusable == 'true'${suite ? ` || ${suite} != 'true'` : ""}`;
+    assert.ok(steps[0]!.includes(`if: ${skip}\n`), id);
+    for (const step of steps.slice(1)) assert.ok(step.includes(`if: ${run}`), id);
   }
-  assert.deepEqual(names.sort(), [...CI_JOBS].sort());
+  assert.deepEqual(
+    names.filter((name) => !name.startsWith("Core tests")).sort(),
+    PR_JOBS.filter((name) => name !== "Certify tested tree").sort(),
+  );
+  assert.ok(jobs["core-tests"]!.includes("if: always() && !cancelled() && needs.select.result == 'success'"));
+  assert.ok(jobs["core-tests"]!.includes("shard: ${{ fromJSON(needs.select.outputs.shards) }}"));
   assert.ok(jobs.reuse!.includes("continue-on-error: true"));
   assert.ok(jobs.reuse!.includes("steps.proof.outcome == 'success' && steps.proof.outputs.reusable == 'true'"));
   assert.ok(
-    jobs.reuse!.includes(
-      "if: github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')",
+    jobs.reuse!.includes("if: github.event_name == 'merge_group' || (github.event_name == 'push' && !inputs.full)\n"),
+  );
+  assert.ok(
+    jobs["web-ui-checks"]!.includes(
+      "SELECTED: ${{ matrix.check == 'core image' && needs.select.outputs.core-image || needs.select.outputs.web-ui }}",
     ),
+  );
+  assert.ok(
+    jobs.select!.includes("github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha"),
   );
 });
 
 test("deployment notice fires only for a fully green main push and holds no repository access", () => {
   const job = jobs["notify-deployments"]!;
   assert.ok(
-    job.includes("if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'"),
+    job.includes(
+      "if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.full",
+    ),
   );
   assert.ok(
     job.includes(

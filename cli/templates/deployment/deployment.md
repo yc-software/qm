@@ -15,8 +15,8 @@ Before cloud mutation, read `qm.config.jsonc` when it exists. Its `target` is
 the selected provider; confirm it with the operator and do not offer to change
 it in place. If the repository has not been initialized, collect:
 
-- hosting target: a cloud provider — Fly.io, AWS, Render, or Porter. Recommend Fly.io
-  when the operator has no preference. Porter deploys onto a Kubernetes
+- hosting target: a cloud provider — AWS, Render, Fly.io, or Porter. Ask which
+  one the operator uses; do not recommend one by default. Porter deploys onto a Kubernetes
   cluster in the operator's own cloud account and has no `qm` CLI target:
   choosing it switches this workflow to `references/porter.md`, which drives
   the Porter CLI and dashboard directly. The docker target runs everything on

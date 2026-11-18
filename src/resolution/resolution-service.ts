@@ -10,7 +10,13 @@ import type { Tenant } from "../tenants/context.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
-  resolve(tenant: Tenant, conversation: Conversation, actor: Principal, external?: boolean): Promise<Resolution>;
+  resolve(
+    tenant: Tenant,
+    conversation: Conversation,
+    actor: Principal,
+    external: boolean,
+    ownScopeBotWork: boolean,
+  ): Promise<Resolution>;
 }
 
 export function conversationScope(
@@ -48,7 +54,7 @@ export function createResolutionService(
 
   return {
     scopeFor,
-    async resolve(tenant, conversation, actor, external = false): Promise<Resolution> {
+    async resolve(tenant, conversation, actor, external, ownScopeBotWork): Promise<Resolution> {
       const scope = scopeFor(conversation, actor);
       const isDm = conversation.kind === "dm";
       const liveConfigScopes = new Set<ScopeId>([orgScope, scope, scopeId("personal", actor.id)]);
@@ -63,7 +69,8 @@ export function createResolutionService(
         : [orgScope, ...((isDm ? actor.teamIds : conversation.teamIds) ?? []).map((tid) => scopeId("team", tid))];
 
       const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
-      const scopeSoul = external ? null : config.getSoul(scope);
+      const soulScopeId = external || ownScopeBotWork ? undefined : scope;
+      const scopeSoul = soulScopeId ? config.getSoul(soulScopeId) : null;
       const systemPrompt = composeSoul(orgSoul, scopeSoul);
 
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
@@ -82,7 +89,7 @@ export function createResolutionService(
 
       const grantedHandles = external
         ? []
-        : await acl.handlesForAudience(tenant, conversation.audience, scope, orgScope, entitledScopes);
+        : await acl.handlesForAudience(tenant, conversation.audience, scope, orgScope, entitledScopes(ownScopeBotWork));
 
       return {
         writableScopeId: scope,
@@ -96,6 +103,7 @@ export function createResolutionService(
         orgScopeId: orgScope,
         grantedHandles,
         ...(scopeSoul?.trim() ? { guidance: scopeSoul } : {}),
+        ...(soulScopeId ? { soulScopeId } : {}),
       };
     },
   };

@@ -7,23 +7,27 @@ import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
-import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
+import { forgetFacts, withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
+import { EMPTY_MEMORY_REGISTRY, putBinding, putBrain, type MemoryRegistry } from "../src/memory/registry.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
-import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 
+interface ContractTool {
+  name: string;
+  description: string;
+  mutating: boolean;
+  input_schema: Tool["inputSchema"] & { properties: Record<string, unknown> };
+}
+
 const contract = JSON.parse(
-  readFileSync(new URL("./fixtures/gbrain/qm-memory-provider-v1.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fixtures/gbrain/qm-memory-provider-v3.json", import.meta.url), "utf8"),
 ) as {
-  tools: Array<{
-    name: string;
-    description: string;
-    mutating: boolean;
-    input_schema: Tool["inputSchema"] & { properties: Record<string, unknown> };
-  }>;
+  tools: ContractTool[];
+  personal_tools: { tools: ContractTool[] };
   actor: { header: string; argument: string; actor_id: { pattern: string } };
   memory_recall: { limits: { max_chars: { min: number; max: number } } };
   unlinked_recall: CallToolResult;
@@ -34,6 +38,8 @@ const contract = JSON.parse(
   };
   errors: { codes: Array<{ code: string; class: string; summary: string; reasons?: Array<{ reason: string }> }> };
 };
+
+const contractTools = [...contract.tools, ...contract.personal_tools.tools];
 
 const guide = readFileSync(new URL("../docs/memory-providers.md", import.meta.url), "utf8");
 const recipe = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(guide.split("\n## gbrain\n")[1] ?? "")?.[1] ?? "null") as {
@@ -59,6 +65,7 @@ async function gbrain(
   t: { after(fn: () => Promise<void>): void },
   answer: (name: string, args: Record<string, unknown>) => CallToolResult,
   routes = recipe.routes,
+  record: MemoryRegistry | null = null,
 ) {
   installPrincipalLinks({
     canonical: (key) => (key === "jordan@acme.example" || key === "U0JORDAN" ? "U0JORDAN" : undefined),
@@ -67,7 +74,7 @@ async function gbrain(
   t.after(async () => installPrincipalLinks(null));
   const calls: Call[] = [];
   const server = await startMcpTestServer(t, {
-    tools: contract.tools.map(({ name, description, input_schema }) => ({
+    tools: contractTools.map(({ name, description, input_schema }) => ({
       name,
       description,
       inputSchema: input_schema,
@@ -100,7 +107,8 @@ async function gbrain(
     },
   };
   const memory = createRegistryMemoryService({
-    registry: emptyMemoryRegistry,
+    registry: { ...emptyMemoryRegistry, current: async () => ({ version: "1", record }) },
+    registryFetch: routedTo(server.url),
     defaultMemory: notebook,
     overlay: parseMemoryProviderConfig(
       JSON.stringify({ ...recipe, routes, providers: [{ ...recipe.providers[0], url: server.url }] }),
@@ -112,7 +120,7 @@ async function gbrain(
 }
 
 function violations({ name, args }: Call): string[] {
-  const tool = contract.tools.find((entry) => entry.name === name);
+  const tool = contractTools.find((entry) => entry.name === name);
   if (!tool) return [`${name} is not a contract tool`];
   const undeclared = tool.mutating ? Object.keys(args).filter((key) => !(key in tool.input_schema.properties)) : [];
   return [
@@ -305,6 +313,44 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
   );
   for (const { code, class: cls } of contract.errors.codes)
     assert.equal(await write(refusal(code)), expected(code, cls), code);
+});
+
+test("a registry gbrain brain forgets a member's fact with the contract's forget_fact, and an unfinished one is pending", async (t) => {
+  const change = { actor: "admin", now: 1, overlayIds: new Set<string>(), key: emptyMemoryRegistry.key };
+  const brain = { preset: "gbrain-v1", url: "https://brain.acme.example/mcp", clientId: "rw", clientSecret: "y" };
+  const record = putBinding(
+    putBrain(EMPTY_MEMORY_REGISTRY, "jordan-brain", { ...brain, label: "Jordan's brain" }, change),
+    "jordan",
+    { brain: "jordan-brain", scope: JORDAN, capture: "explicit" },
+    change,
+  );
+  const { calls, memory } = await gbrain(
+    t,
+    (_name, args) => ({
+      content: [],
+      structuredContent: { id: args.id, request_id: args.request_id, state: args.id === 41 ? "committed" : "running" },
+    }),
+    [],
+    record,
+  );
+  const forgot = await forgetFacts(
+    memory,
+    JORDAN,
+    ["jordan-brain:41", "jordan-brain:42"],
+    { actorId: "U0JORDAN", context: "conversation", personTurn: true },
+    { audienceScopeId: JORDAN },
+    "session:call",
+  );
+  assert.deepEqual(
+    forgot.outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`),
+    ["jordan-brain:41 committed", "jordan-brain:42 pending running"],
+  );
+  assert.deepEqual(
+    calls.map(({ name }) => name),
+    ["forget_fact", "forget_fact"],
+  );
+  assert.deepEqual(calls.flatMap(violations), []);
+  assert.ok(calls.every(({ actor }) => actor === "U0JORDAN"));
 });
 
 test("an attested gbrain write never speaks for anyone but the turn's member", async (t) => {

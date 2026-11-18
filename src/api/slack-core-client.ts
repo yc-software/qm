@@ -22,7 +22,7 @@ import { buffer } from "node:stream/consumers";
 import type { App } from "./app.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
-import type { Delivery, PendingApproval, ScopeId, TurnRequest, TurnResult } from "../types.ts";
+import type { PendingApproval, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { scopeActor, scopeId } from "../types.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
@@ -31,7 +31,6 @@ import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { TurnStream } from "../runs/turn-stream.ts";
 import { createRunWaiter } from "../surfaces/run-wait.ts";
@@ -44,6 +43,7 @@ import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import type { DeliveryLane, SlackDeliveryJobs } from "../slack/delivery-jobs.ts";
 
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
   createdAt?: number;
@@ -69,6 +69,7 @@ interface DirectoryPush {
   groupIds?: string[];
   groupRosterIds?: string[];
   workspaceUrl?: string;
+  appIconUrl?: string;
   membersSyncedAt?: number;
   channelsSyncedAt?: number;
   partialChannels?: boolean;
@@ -82,6 +83,7 @@ export interface SlackCoreClient {
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
+  invitedExternal(email: string): boolean;
   ackEmojiOverride(): Promise<string[] | null>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
@@ -101,17 +103,15 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
-  claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
+  registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
-  reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<void>;
 
-  holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
+  serveDeliveries(tenant: string, lane: DeliveryLane): () => void;
   holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
-  holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
-  onDeliveryEnqueued(listener: () => void): () => void;
+  holdDirectorySync<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
   onContextRequest(listener: (request: SurfaceContextRequest) => void): () => void;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<void>;
@@ -151,7 +151,7 @@ export interface SlackCoreClientDeps {
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
   blobTransfer: BlobTransferStore;
-  deliveries: DeliveryStore;
+  deliveryJobs: SlackDeliveryJobs;
   errors?: ErrorLog;
   runs: RunStore;
   turnStream: TurnStream;
@@ -172,6 +172,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   const orgScope: ScopeId = scopeId("org", configOrgId());
 
   return {
+    invitedExternal: (email) =>
+      deps.identity.externalMember(email) !== undefined && deps.identity.classify(email).type === "internal",
     decideAppAccess: (value, actor, approve) =>
       decideAppAccess(ambientTenant(), deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
@@ -246,7 +248,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async readFileArtifact(artifactId, viewerId) {
-      const opened = await deps.app.openFileForViewer(ambientTenant(), artifactId, viewerId);
+      const opened = await deps.app.openFileForViewer(ambientTenant(), artifactId, viewerId, false);
       if (!opened) throw new Error(`file artifact ${artifactId} not found (or not visible to ${viewerId})`);
       return buffer(opened.stream);
     },
@@ -317,7 +319,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async pushDirectory(body) {
-      if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
+      if (body.workspaceUrl)
+        await deps.app.setDirectoryWorkspace({ workspaceUrl: body.workspaceUrl, appIconUrl: body.appIconUrl ?? null });
       let applied = true;
       if (body.members) applied = (await deps.app.upsertDirectory(body.members, body.membersSyncedAt)) && applied;
       if (body.channels) {
@@ -339,14 +342,15 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return applied;
     },
 
-    claimDeliveries(type, claimMs) {
-      return deps.app.pendingDeliveries(type, claimMs);
+    registerGroupRoster(groupId, principalIds) {
+      return deps.app.registerGroupRoster(groupId, principalIds);
     },
-    holdDeliveryDispatch(fn) {
-      return lease.hold("slack:delivery-dispatch", fn);
+
+    serveDeliveries(tenant, lane) {
+      return deps.deliveryJobs.serve(tenant, lane);
     },
-    holdDirectorySync(fn) {
-      return lease.hold("slack:directory-sync", fn);
+    holdDirectorySync(account, fn) {
+      return lease.hold(`slack:directory-sync:${account}`, fn);
     },
     holdEnvelopeReplay(account, fn) {
       return lease.hold(`slack:envelope-replay:${account}`, fn);
@@ -378,19 +382,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           `dropped, not retried${failed.destination.commandApprovalId ? `; approval ${failed.destination.commandApprovalId} never reached its requester` : ""}`,
         scopeLabel: "slack:deliveries" as ScopeId,
       });
-    },
-
-    async reportSlowDeliveryDrain(info) {
-      recordDeliveryError({
-        category: "delivery",
-        code: "delivery_drain_slow",
-        message: `drain cycle took ${Math.round(info.durationMs / 1000)}s for ${info.rows} rows`,
-        scopeLabel: "slack:deliveries" as ScopeId,
-      });
-    },
-
-    onDeliveryEnqueued(listener) {
-      return deps.deliveries.onEnqueue(listener);
     },
 
     pendingContextRequests() {

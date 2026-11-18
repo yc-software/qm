@@ -7,7 +7,7 @@ import { sendJson } from "../http.ts";
 import { isObj, livePersonTurn } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import { personAtKeyboard, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 
 async function setAppConnectors(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability, actor } = ctx;
@@ -70,6 +70,7 @@ export async function shareApp(ctx: ApiCtx): Promise<void> {
       error: "forbidden",
       message: "sharing requires a signed-in person or an agent capability token",
     });
+  if (!(await livePersonTurn(ctx))) return;
   const actor = { createdBy: principalId, botActor: ctx.capability?.botActor };
   const b = (isObj(body) ? body : {}) as {
     scope?: unknown;
@@ -83,6 +84,7 @@ export async function shareApp(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
   const notify = { notify: b.notify };
   if (b.public !== undefined) {
+    if (!(await livePersonTurn(ctx))) return;
     if (typeof b.public !== "boolean")
       return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });
     if (b.scope !== undefined || b.recipient !== undefined || b.email !== undefined || b.access !== undefined)
@@ -91,7 +93,10 @@ export async function shareApp(ctx: ApiCtx): Promise<void> {
         message: "public access and person/scope access must be changed separately",
       });
     try {
-      const publishedApp = await app.setAppPublic(params.id!, b.public, actor);
+      const publishedApp = await app.setAppPublic(params.id!, b.public, {
+        ...actor,
+        personAtKeyboard: !ctx.capability || personAtKeyboard(ctx.capability),
+      });
       return sendJson(res, 200, {
         ok: true,
         public: publishedApp.public === true,
@@ -163,6 +168,7 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   external_sharing_disabled: 403,
   public_links_unavailable: 409,
   unknown_connector: 400,
+  human_consent_required: 403,
 };
 
 function sendShareFailure(res: ApiCtx["res"], e: unknown): void {

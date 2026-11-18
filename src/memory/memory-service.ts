@@ -23,6 +23,7 @@ export interface MemoryProviderOutcome {
   provider: string;
   scope: ScopeId;
   outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed" | "disabled";
+  ref?: string;
   ms: number;
   code?: string;
   added?: number;
@@ -50,6 +51,12 @@ export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutco
   idempotencyKey?: string;
 }
 
+export interface MemoryForgetContext extends MemoryOutcomeSink {
+  audienceScopeId?: ScopeId;
+  idempotencyKey?: string;
+  startedAt?: number;
+}
+
 export interface MemoryEdit {
   id: string;
   text: string;
@@ -58,14 +65,27 @@ export interface MemoryEdit {
 export interface MemoryAuthority {
   actorId: string;
   context: "conversation" | "self" | "admin" | "maintenance";
+  personTurn?: true;
 }
 
 export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
   return by?.context !== "conversation" || !by.actorId.trim();
 }
 
-export function turnAuthority(actorId: string, access: { notebookOnly?: true } | undefined): MemoryAuthority {
-  return { actorId, context: access?.notebookOnly ? "maintenance" : "conversation" };
+export function changesBrainAsPerson(by: MemoryAuthority | undefined): boolean {
+  return !changesNotebookOnly(by) && by!.personTurn === true;
+}
+
+export function turnAuthority(
+  actorId: string,
+  access: { notebookOnly?: true } | undefined,
+  personTurn?: boolean,
+): MemoryAuthority {
+  return {
+    actorId,
+    context: access?.notebookOnly ? "maintenance" : "conversation",
+    ...(personTurn ? { personTurn: true } : {}),
+  };
 }
 
 export interface MemoryService {
@@ -83,7 +103,7 @@ export interface MemoryService {
   read(scopeId: ScopeId): Promise<string>;
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
   edit?(scopeId: ScopeId, edits: MemoryEdit[], by?: MemoryAuthority, context?: MemoryCaptureMetadata): Promise<void>;
-  delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority): Promise<void>;
+  delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority, context?: MemoryForgetContext): Promise<void>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
@@ -131,7 +151,7 @@ function sameProvenance(a: MemoryProvenance, b: MemoryProvenance): boolean {
   );
 }
 
-function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): MemoryFact[] {
+export function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): MemoryFact[] {
   const byId = new Map(facts.map((fact) => [fact.id, fact]));
   const wanted = ids.map(parseFactId);
   const missing = [...new Set(wanted.filter((id) => !byId.has(id)))];

@@ -44,6 +44,12 @@ test("classifyUser flags guests, strangers, and other-workspace members as non-i
   assert.equal(classifyUser({ id: "U2", team_id: TEAM, is_restricted: true }, TEAM).isExternalGuest, true);
   assert.equal(classifyUser({ id: "U3", team_id: TEAM, is_ultra_restricted: true }, TEAM).isExternalGuest, true);
   assert.equal(classifyUser({ id: "U4", team_id: "T-OTHER" }, TEAM).isExternalGuest, true);
+  const invited = (email: string) => email === "pat@partner.example";
+  const guest = { id: "U5", team_id: TEAM, is_restricted: true, profile: { email: "Pat@Partner.example" } };
+  assert.equal(classifyUser(guest, TEAM, "email", invited).isExternalGuest, false);
+  for (const other of [{ team_id: "T-OTHER" }, { deleted: true }, { profile: { email: "sam@partner.example" } }])
+    assert.equal(classifyUser({ ...guest, ...other }, TEAM, "email", invited).isExternalGuest, true);
+  assert.equal(classifyUser(guest, TEAM, "slack-id", invited).isExternalGuest, true);
 });
 
 test("classifyUser fails closed when Slack returns no user record", () => {

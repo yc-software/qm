@@ -6,7 +6,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { jsonbStringify } from "../util/text.ts";
-import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
@@ -166,10 +166,10 @@ export function assertSwarmOpen(swarm: Swarm): void {
 
 export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
+  getMany(ids: readonly string[]): Promise<Swarm[]>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
   pending(afterId?: string): Promise<PendingSwarm[]>;
-  claimTenants(): Promise<ClaimedRow[]>;
 }
 
 export type PendingSwarm = Swarm & { tenantId: string };
@@ -258,6 +258,9 @@ export function createSwarmStore(
       const row = await backing.get(id);
       return row ? decode(row) : null;
     },
+    async getMany(ids) {
+      return (await backing.getMany(ids)).map(decode);
+    },
     async create(swarm, fence) {
       const create = (current: SwarmStorage | null) => {
         if (current) return current;
@@ -299,6 +302,5 @@ export function createSwarmStore(
         .sort((a, b) => (a.id < b.id ? -1 : Number(a.id > b.id)))
         .slice(0, SWARM_LIMITS.sweepBatch);
     },
-    claimTenants: () => backing.claimTenants(),
   };
 }

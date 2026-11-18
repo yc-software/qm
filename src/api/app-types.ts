@@ -346,7 +346,7 @@ export interface App {
   withdrawRun(runId: string, viewer?: string): Promise<{ withdrawn: boolean; reason?: string }>;
   signalRun(
     runId: string,
-    signal: RunSignal & { tree?: boolean },
+    signal: RunSignal & { tree?: boolean; remark?: boolean },
     viewer?: string,
   ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
@@ -450,6 +450,7 @@ export interface App {
     principalId: string,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
+    ownScopeBotWork?: boolean,
   ): Promise<FileListPage>;
   uploadFileForViewer(
     tenant: Tenant,
@@ -469,7 +470,12 @@ export interface App {
   authorizesCapabilityScope(
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
-  openFileForViewer(tenant: Tenant, id: string, principalId: string): Promise<OpenedFile | null>;
+  openFileForViewer(
+    tenant: Tenant,
+    id: string,
+    principalId: string,
+    ownScopeBotWork: boolean,
+  ): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(
     tenant: Tenant,
@@ -484,7 +490,10 @@ export interface App {
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
   moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
-  getSoul(scopeId: ScopeId): {
+  getSoul(
+    scopeId: ScopeId,
+    reader: { actorId: string; ownScopeBotWork: boolean },
+  ): {
     scopeId: ScopeId;
     soul: string | null;
     soulVersion: number;
@@ -497,7 +506,7 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string },
+    opts?: { allowSharedScope?: boolean; botActor?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
@@ -575,7 +584,8 @@ export interface App {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  setDirectoryWorkspaceUrl(url: string): Promise<void>;
+  registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
+  setDirectoryWorkspace(meta: DirectoryMeta): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
@@ -611,18 +621,18 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string): Promise<SkillResolution[]>;
-  canManageSkill(skill: Skill, principalId: string): Promise<boolean>;
+  listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
+  canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   updateOwnedSkill(
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
@@ -644,6 +654,7 @@ export interface App {
     principalId: string;
     id: string;
     liveActor?: boolean;
+    botActor?: boolean;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackApp(id: string, version: number, actor?: string): Promise<void>;
   archiveApp(id: string): Promise<void>;
@@ -657,7 +668,11 @@ export interface App {
   setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
   setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
-  setAppPublic(idOrName: string, isPublic: boolean, actor: AppActor): Promise<PublishedApp>;
+  setAppPublic(
+    idOrName: string,
+    isPublic: boolean,
+    actor: AppActor & { personAtKeyboard: boolean },
+  ): Promise<PublishedApp>;
   setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
@@ -722,7 +737,7 @@ export interface AppDeps {
   resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
-  users?: Pick<UserStore, "resolve">;
+  users?: Pick<UserStore, "resolve" | "botSignIns">;
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;

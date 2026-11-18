@@ -1,8 +1,10 @@
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyAppShared } from "../deploy/share-notice.ts";
 import { appShareScope } from "../deploy/email-access.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
 import { sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
@@ -516,8 +518,8 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(tenant, principalId, opts, inScope) {
-      return filesForViewer(tenant, principalId, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork) {
+      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope);
     },
 
     async uploadFileForViewer(tenant, principalId, input) {
@@ -559,10 +561,10 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
       const art = await deps.files.get(id);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId);
+      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
         const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
@@ -943,7 +945,7 @@ export function createSessionMethods(
     async listScopeResources(tenant, principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
       const [page, allCrons, allWebhooks, allApps, allSkills] = await Promise.all([
-        filesForViewer(tenant, principalId, undefined, scope),
+        filesForViewer(tenant, principalId, false, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
         deps.deploy.listApps(),
@@ -952,7 +954,7 @@ export function createSessionMethods(
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
       while (cursor) {
-        const next = await filesForViewer(tenant, principalId, { limit: 200, cursor }, scope);
+        const next = await filesForViewer(tenant, principalId, false, { limit: 200, cursor }, scope);
         files.push(...next.owned, ...next.shared);
         cursor = next.nextCursor;
       }
@@ -1112,9 +1114,6 @@ export function createSessionMethods(
           source.channelName,
           "web",
         );
-        await Promise.all(
-          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
-        );
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
           copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
@@ -1127,6 +1126,9 @@ export function createSessionMethods(
             ...(opts?.sideChat ? { sideChat: { ...opts.sideChat, expanded: false } } : {}),
           });
         }
+        await Promise.all(
+          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
+        );
         const sourceTitle = source.title?.trim();
         if (sourceTitle && projectMembers === undefined)
           await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
@@ -1210,7 +1212,10 @@ export function createSessionMethods(
     },
 
     async grant(tenant, g, opts) {
-      if (parseRef(g.ref).kind === "deploy") {
+      const ref = parseRef(g.ref);
+      const publishedApp = ref.kind === "deploy" ? await deps.deploy.getApp(ref.id) : null;
+      if (ref.kind === "deploy") {
+        if (!publishedApp) throw new DeployAccessError("not_found", `no such app: ${ref.id}`);
         g = {
           ...g,
           granteeScopeId: await appShareScope(
@@ -1221,7 +1226,7 @@ export function createSessionMethods(
               (await h.directoryMember(email))?.type === "internal",
           ),
         };
-        await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
+        await deps.deploy.assertShareAllowed(publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
       }
       await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
@@ -1231,9 +1236,8 @@ export function createSessionMethods(
         resource: g.ref,
         scopeLabel: g.granteeScopeId,
       });
-      const ref = parseRef(g.ref);
-      if (ref.kind === "deploy" && opts?.notify !== false)
-        await notifyAppShared(deps, deps.deploy.getApp(ref.id), g.granteeScopeId, g.permission, g.grantedBy);
+      if (publishedApp && opts?.notify !== false)
+        await notifyAppShared(deps, publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
     },
     async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(
@@ -1326,14 +1330,15 @@ export function createSessionMethods(
       });
     },
 
-    getSoul(scopeIdValue) {
+    getSoul(scopeIdValue, reader) {
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
-      const soul = deps.config.getSoul(scopeIdValue);
+      const readable = loadsScopeContext(reader.actorId, scopeIdValue, reader.ownScopeBotWork);
+      const soul = readable ? deps.config.getSoul(scopeIdValue) : null;
       return {
         scopeId: scopeIdValue,
         soul,
-        soulVersion: deps.config.soulVersion(scopeIdValue),
+        soulVersion: readable ? deps.config.soulVersion(scopeIdValue) : 0,
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
@@ -1343,7 +1348,10 @@ export function createSessionMethods(
 
     async updateSoul(scopeIdValue, content, actorId, opts) {
       const { kind, ref } = parseScopeId(scopeIdValue);
-      const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
+      const allowedPersonal =
+        kind === "personal" &&
+        samePerson(ref, actorId) &&
+        loadsScopeContext(actorId, scopeIdValue, opts?.botActor === true);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();

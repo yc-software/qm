@@ -71,6 +71,15 @@ export const SLACK_TENANTS: PgMigrationDefinition = {
   ],
 };
 
+export const SERVING_SLACK_TENANTS: PgMigrationDefinition = {
+  id: "tenancy/lookups/0008-serving-slack-tenants",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_tenants_with_slack() RETURNS SETOF uuid
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+      AS $lookup$ BEGIN RETURN QUERY SELECT DISTINCT tenant_id FROM slack_installation WHERE ${ACTIVE}${servingTenant("tenant_id")}; END $lookup$`,
+  ],
+};
+
 export const PRINCIPAL_TENANTS: PgMigrationDefinition = {
   id: "tenancy/lookups/0003-principal-tenants",
   statements: [

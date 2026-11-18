@@ -134,6 +134,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           : null;
 
       if (processId) {
+        await deps.assertComputerUsable?.(sandboxId);
         const existingProcessId = processId;
         try {
           const read = await deps.sandbox.readProcess(handle, existingProcessId, {
