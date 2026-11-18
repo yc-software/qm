@@ -428,8 +428,8 @@ test("late session creation remains fenced from cleanup until its side effect se
     assert.partialDeepStrictEqual((await fixture.store.get(fixture.root.id))!.members[1], { state: "reserved" });
     context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
     await sweep;
+    await until(async () => (await fixture.store.get(fixture.root.id))!.members[1]!.cleanupPending === true);
     await createSwarmService(fixture.serviceOptions).sweep();
-    assert.equal((await fixture.store.get(fixture.root.id))!.members[1]!.cleanupPending, true);
     assert.equal((await fixture.records.get(member!.id))!.state, "ready");
     release();
     await until(() => late !== undefined);
