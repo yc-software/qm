@@ -1171,7 +1171,7 @@ export async function boot(): Promise<void> {
   renderList();
   shellMounted = true;
   ensureDeliveryStream();
-  startNotifications();
+  startNotifications((sessionId) => void openSessionAtMessage(sessionId, null, undefined, "push"));
   warmDeferredChunks();
   void refreshInbox({ silent: true });
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;

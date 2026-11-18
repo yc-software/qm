@@ -1,8 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { swallowAs } from "../../chassis/src/errors";
 import { api, withBase } from "./core-bridge";
-import { openSessionAtMessage } from "./open-message";
-import { openConversationIds } from "./sessions";
 import { appState } from "./shell-state";
 import { brandName } from "./ui";
 
@@ -17,6 +15,7 @@ const PROMPT_DISMISSED_KEY = "qm.notifications.prompt-dismissed";
 const OPEN_SESSION_MESSAGE = "qm:open-session";
 
 let pushSubscribed = false;
+let openConversation: (sessionId: string) => void = () => {};
 const listeners = new Set<() => void>();
 
 const supported = (): boolean => typeof Notification !== "undefined";
@@ -61,12 +60,12 @@ function subscribeForPush(): void {
   );
 }
 
-export function startNotifications(): void {
+export function startNotifications(open: (sessionId: string) => void): void {
+  openConversation = open;
   if (!canPush()) return;
   navigator.serviceWorker.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: unknown; sessionId?: unknown } | null;
-    if (data?.type === OPEN_SESSION_MESSAGE && typeof data.sessionId === "string")
-      void openSessionAtMessage(data.sessionId, null, undefined, "push");
+    if (data?.type === OPEN_SESSION_MESSAGE && typeof data.sessionId === "string") openConversation(data.sessionId);
   });
   navigator.serviceWorker.startMessages();
   if (Notification.permission === "granted") subscribeForPush();
@@ -94,15 +93,14 @@ function dismissPrompt(): void {
   changed();
 }
 
-export function showReplyNotice(notice: ReplyNotice): void {
+export function showReplyNotice(notice: ReplyNotice, open: boolean): void {
   if (pushSubscribed || !canNotify() || Notification.permission !== "granted") return;
-  if (document.visibilityState === "visible" && document.hasFocus() && openConversationIds().includes(notice.sessionId))
-    return;
+  if (open && document.visibilityState === "visible" && document.hasFocus()) return;
   const shown = new Notification(notice.title, { body: notice.body, tag: notice.sessionId });
   shown.onclick = () => {
     shown.close();
     window.focus();
-    void openSessionAtMessage(notice.sessionId, null, undefined, "push");
+    openConversation(notice.sessionId);
   };
 }
 

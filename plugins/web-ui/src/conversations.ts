@@ -3,7 +3,14 @@ import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
 import { subscribeDeliveries } from "./core-bridge";
 import { applySessionState } from "./session-list";
-import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
+import {
+  openConversationIds,
+  refreshOpenTrees,
+  refreshSessions,
+  refreshTreesFor,
+  renderList,
+  sessionsState,
+} from "./sessions";
 import { appState } from "./shell-state";
 import { refreshCachedTranscript, resyncTranscriptCache } from "./transcript-cache";
 import { showReplyNotice } from "./notifications";
@@ -108,7 +115,7 @@ export function ensureDeliveryStream(): void {
     },
     (event) => {
       if (event.state === "notify") {
-        if (event.notice) showReplyNotice(event.notice);
+        if (event.notice) showReplyNotice(event.notice, openConversationIds().includes(event.notice.sessionId));
         return;
       }
       if (event.state === "ui") {
