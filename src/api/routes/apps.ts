@@ -58,6 +58,7 @@ function isRedeployInput(b: unknown): b is RedeployInput {
     (b.env === undefined || isStringRecord(b.env)) &&
     b.stampEnv === undefined &&
     b.actor === undefined &&
+    b.context === undefined &&
     (b.alwaysOn === undefined || typeof b.alwaysOn === "boolean")
   );
 }

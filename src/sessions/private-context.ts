@@ -21,6 +21,34 @@ export interface PrivateContext {
 
 type ContextSessions = Pick<SessionStore, "getMany" | "recordContextProvenance">;
 
+export async function refreshPrivateContext(
+  sessions: Pick<SessionStore, "getMany" | "recordContextProvenance">,
+  context: PrivateContext,
+): Promise<PrivateContext> {
+  if (!context.sessionId) return context;
+  const [session] = await sessions.getMany({ ids: [context.sessionId], threadRefs: [] });
+  if (!session || session.scopeId !== context.scopeId) throw new Error("The conversation context no longer exists.");
+  const personalOnly = context.personalOnly || session.personalOnly;
+  if (personalOnly && !privateSourceAllowed(context, session.scopeId))
+    throw new Error("Private context requires its owner's personal scope.");
+  const provenance = mergeProvenance(
+    [
+      ...(context.sourceProvenance ? [context.sourceProvenance] : []),
+      ...(session.sourceProvenance ? [session.sourceProvenance] : []),
+      ...(personalOnly ? [{ sensitivity: "ordinary" as const, sources: [], sourceUnknown: false, personalOnly }] : []),
+    ],
+    "ordinary",
+  );
+  if (context.sourceProvenance || session.sourceProvenance || personalOnly)
+    context.sourceProvenance = mergeSourceProvenance([provenance]);
+  if (personalOnly) {
+    context.personalOnly = true;
+    if (!session.personalOnly)
+      context.sourceProvenance = await sessions.recordContextProvenance(session.id, session.scopeId, provenance);
+  }
+  return context;
+}
+
 export interface ContextSource {
   id: string;
   ownerScopeId: ScopeId;

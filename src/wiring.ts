@@ -1979,6 +1979,7 @@ export function buildApp(
   );
 
   const deployService = createDeployService({
+    sessions,
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
     publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),

@@ -1,3 +1,4 @@
+import type { PrivateContext } from "../sessions/private-context.ts";
 import type { AppSourceReader, DeployService, AppSource, SourceEdit, SourceSaved } from "../deploy/deploy-service.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -14,6 +15,7 @@ export function createAppFiles(deps: {
   actorId: string;
   botActor?: boolean;
   actingScopeId: ScopeId;
+  context?: () => PrivateContext;
 }): AppFiles {
   const { deploy, app } = deps;
   const caller = { actorId: deps.actorId, botActor: deps.botActor };
@@ -38,7 +40,7 @@ export function createAppFiles(deps: {
     },
     async save(edit) {
       await assertMayEdit();
-      return deploy.editSource(app, deps.actorId, edit);
+      return deploy.editSource(app, deps.context?.() ?? deps.actorId, edit);
     },
   };
 }

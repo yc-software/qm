@@ -1270,9 +1270,9 @@ export function createSessionMethods(
               (await h.directoryMember(email))?.type === "internal",
           ),
         };
-        await deps.deploy.assertShareAllowed(publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
+        await deps.deploy.grantAppAccess(g);
       }
-      await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
+      if (ref.kind !== "deploy") await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,

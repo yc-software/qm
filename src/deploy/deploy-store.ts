@@ -1,3 +1,4 @@
+import { mergeSourceProvenance, type SourceProvenance } from "../memory/facts.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
@@ -106,6 +107,8 @@ interface DefaultAudienceSnapshot {
 }
 
 export interface PublishedApp {
+  personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -159,6 +162,8 @@ export interface DeployStore {
       name?: string;
       createdInScope?: ScopeId;
       alwaysOn?: boolean;
+      personalOnly?: true;
+      sourceProvenance?: SourceProvenance;
     } & VersionInput,
   ): Promise<PublishedApp>;
   addVersion(id: string, input: VersionInput): Promise<AppVersion>;
@@ -178,6 +183,7 @@ export interface DeployStore {
   setEmbedAncestors(id: string, embedAncestors: string[]): Promise<void>;
   setConnectors(id: string, connectors: string[] | undefined): Promise<void>;
   setPublic(id: string, isPublic: boolean): Promise<void>;
+  recordContext(id: string, context: { personalOnly?: true; sourceProvenance?: SourceProvenance }): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
   setAppliedVersion(id: string, version: number, placedCommit?: string): Promise<void>;
   touch(id: string, at: number): Promise<void>;
@@ -336,6 +342,8 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         id,
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
+        ...(input.personalOnly ? { personalOnly: true } : {}),
+        ...(input.sourceProvenance ? { sourceProvenance: input.sourceProvenance } : {}),
         ...(input.name ? { name: input.name } : {}),
         ...(input.createdInScope ? { createdInScope: input.createdInScope } : {}),
         ...(input.alwaysOn ? { alwaysOn: true } : {}),
@@ -443,6 +451,20 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     },
     async setConnectors(id, connectors) {
       await backingMap.merge(id, { connectors });
+    },
+    async recordContext(id, context) {
+      await backingMap.update(id, (app) => ({
+        ...app,
+        ...(context.personalOnly ? { personalOnly: true as const } : {}),
+        ...(context.sourceProvenance
+          ? {
+              sourceProvenance: mergeSourceProvenance([
+                ...(app.sourceProvenance ? [app.sourceProvenance] : []),
+                context.sourceProvenance,
+              ]),
+            }
+          : {}),
+      }));
     },
     async setPublic(id, isPublic) {
       await backingMap.merge(id, { public: isPublic ? true : undefined });

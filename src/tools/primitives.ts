@@ -11,7 +11,8 @@ import {
   processCredentialFiles,
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
-import type { MemoryCaptureMetadata } from "../memory/facts.ts";
+import { mergeSourceProvenance, type MemoryCaptureMetadata } from "../memory/facts.ts";
+import type { PrivateContext } from "../sessions/private-context.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -662,6 +663,19 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     }
   };
 
+  const outputContext = (): PrivateContext => {
+    const metadata = deps.memoryCaptureMetadata?.();
+    return {
+      actorId: deps.createdBy,
+      scopeId: writableScopeId,
+      audienceScopeId: deps.audienceScopeId,
+      sessionId: deps.sessionId,
+      botActor: deps.botActor,
+      ...(metadata?.personalOnly ? { personalOnly: true } : {}),
+      ...(metadata?.inheritedFacts?.length ? { sourceProvenance: mergeSourceProvenance(metadata.inheritedFacts) } : {}),
+    };
+  };
+
   const runId = deps.runId;
 
   const trialOn =
@@ -771,6 +785,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             actorId: deps.createdBy,
             botActor: deps.botActor,
             actingScopeId: writableScopeId,
+            context: outputContext,
           }),
         }
       : {}),
@@ -1111,6 +1126,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         : {};
 
       const d = await deps.deploy.deployOrUpdate({
+        context: outputContext(),
         ownerScopeId: owner,
         createdBy: deps.createdBy,
         botActor: deps.botActor,
