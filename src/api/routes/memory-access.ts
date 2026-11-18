@@ -1,3 +1,4 @@
+import { mergeProvenance } from "../../memory/facts.ts";
 import { samePerson } from "../../directory/person.ts";
 import { disclosedMemory } from "../../memory/disclosure.ts";
 import type { MemoryService } from "../../memory/memory-service.ts";
@@ -25,6 +26,7 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
   return disclosedMemory(ctx.deps.memory, {
     actor,
     targetScope,
+    ...(ctx.capability?.audienceScopeId ? { audienceScopeId: ctx.capability.audienceScopeId } : {}),
     nativeScopes,
     audience: personal ? [actor] : (ctx.capability?.members ?? []),
     open: !ctx.capability || livePersonCapability(ctx.capability),
@@ -32,5 +34,18 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
     config: ctx.deps.config,
     isCurrentSharedScopeMember: (person, scope) => ctx.app.isCurrentSharedScopeMember(person, scope),
     currentScopeMembers: (scope) => ctx.app.currentScopeMembers(scope),
+    onDisclosure: async (facts) => {
+      const capability = ctx.capability;
+      if (!capability) return true;
+      const provenance = mergeProvenance(facts, "ordinary");
+      if (!capability.sessionId) return !provenance.personalOnly;
+      ctx.sourceProvenance = await ctx.app.recordContextProvenance(
+        capability.sessionId,
+        capability.scopeId,
+        provenance,
+      );
+      if (provenance.personalOnly) capability.personalOnly = true;
+      return true;
+    },
   });
 }

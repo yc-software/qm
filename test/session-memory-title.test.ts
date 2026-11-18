@@ -30,7 +30,7 @@ async function rig(): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = createSessionMailbox(testMap<SessionMessage>(), sessions);
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,

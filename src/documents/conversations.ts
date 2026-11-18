@@ -224,6 +224,7 @@ export function createDocumentConversations(deps: {
           "web",
         );
         if (session.scopeId !== scopeId) throw new Error("Document session has a different owner");
+        if (mode === "private" && !session.personalOnly) await deps.sessions.markPersonalOnly(session.id, scopeId);
         const groupRef = `${DOCUMENT_GROUP_PREFIX}${documentKey}`;
         const knowledge = await deps.backing.putIfAbsent(key("knowledge", groupRef), {
           kind: "knowledge",

@@ -111,24 +111,45 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("private skills remain personal through authoring, edits, restore, grants and scope changes", async () => {
     const own = scopeId("personal", "U1");
-    const privateHeaders = { "x-agent-capability": await capFor("U1", own, { personalOnly: true, liveActor: true }) };
-    const created = await post("/v1/skills", { name: "private-procedure", description: "private", body: "Private steps" }, privateHeaders);
+    const context = await built.sessions.getOrCreateByThread("web:U1:protected", "dm", own);
+    await built.sessions.addParticipant(context.id, "U1");
+    const privateHeaders = {
+      "x-agent-capability": await capFor("U1", own, { sessionId: context.id, personalOnly: true, liveActor: true }),
+    };
+    const created = await post(
+      "/v1/skills",
+      { name: "private-procedure", description: "private", body: "Private steps" },
+      privateHeaders,
+    );
     assert.equal(created.status, 201);
-    const { skill: { id } } = await created.json() as { skill: { id: string } };
+    const {
+      skill: { id },
+    } = (await created.json()) as { skill: { id: string } };
     const saved = await built.skills.get(id);
     assert.equal(saved?.personalOnly, true);
     assert.equal(saved?.scopeId, own);
     assert.equal((await get(`/v1/skills/${id}`, privateHeaders)).status, 200);
-    const blocked = await post("/v1/skills", { name: "private-shared", description: "d", body: "Private steps", scopeId: "channel:C" }, privateHeaders);
+    const blocked = await post(
+      "/v1/skills",
+      { name: "private-shared", description: "d", body: "Private steps", scopeId: "channel:C" },
+      privateHeaders,
+    );
     assert.equal(blocked.status, 403);
     assert.equal((await get(`/v1/skills/${id}`, { "x-agent-capability": await capChannel("U1") })).status, 404);
     const sharedEdit = await fetch(`${base}/v1/skills/${id}`, {
-      method: "PUT", headers: { "x-agent-capability": await capChannel("U1", { liveActor: true }), "content-type": "application/json" }, body: JSON.stringify({ description: "shared rewrite" }),
+      method: "PUT",
+      headers: {
+        "x-agent-capability": await capChannel("U1", { liveActor: true }),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ description: "shared rewrite" }),
     });
     assert.equal(sharedEdit.status, 404);
     assert.equal((await built.skills.get(id))?.manifest.description, "private");
     const edited = await fetch(`${base}/v1/skills/${id}`, {
-      method: "PUT", headers: { ...privateHeaders, "content-type": "application/json" }, body: JSON.stringify({ body: "Revised private steps" }),
+      method: "PUT",
+      headers: { ...privateHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ body: "Revised private steps" }),
     });
     assert.equal(edited.status, 200);
     const current = await built.skills.get(id);
@@ -136,9 +157,18 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     await built.skills.restore({ ...current, personalOnly: undefined });
     assert.equal((await built.skills.get(id))?.personalOnly, true);
     await assert.rejects(built.skills.restore({ ...current, scopeId: scopeId("personal", "U2") }), /Private skills/);
-    const grant = { ownerScopeId: own, ref: `skill:${id}`, granteeScopeId: scopeId("personal", "U2"), permission: "read" as const, grantedBy: "U1" };
+    const grant = {
+      ownerScopeId: own,
+      ref: `skill:${id}`,
+      granteeScopeId: scopeId("personal", "U2"),
+      permission: "read" as const,
+      grantedBy: "U1",
+    };
     await assert.rejects(built.acl.grant(testTenant, grant), /Private artifacts/);
-    await assert.rejects(built.acl.replaceGrantsIfCurrent(testTenant, own, grant.ref, [], [grant], "U1"), /Private artifacts/);
+    await assert.rejects(
+      built.acl.replaceGrantsIfCurrent(testTenant, own, grant.ref, [], [grant], "U1"),
+      /Private artifacts/,
+    );
     await assert.rejects(built.skills.move(id, scopeId("channel", "C")), /Private skills/);
     await assert.rejects(built.skills.promote(id, scopeId("org", "default-org")), /Private skills/);
     assert.equal((await built.skills.promote(id, own)).personalOnly, true);

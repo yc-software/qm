@@ -1,8 +1,16 @@
-import { MemoryFactsMissing, mergeProvenance, parseFactId, type MemoryCaptureMetadata } from "../memory/facts.ts";
+import {
+  MemoryFactsMissing,
+  mergeProvenance,
+  UNTRACKED_PROVENANCE,
+  parseFactId,
+  type MemoryCaptureMetadata,
+} from "../memory/facts.ts";
 import { writeFacts } from "../memory/provider-outcome.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { ambientTenant } from "../tenants/context.ts";
 import type { DocumentConversations } from "./conversations.ts";
+import { DOCUMENT_GROUP_PREFIX } from "./groups.ts";
+import { projectIdFromGroupRef } from "../projects/project-store.ts";
 import type { MemoryAuthority, MemoryService, MemoryEdit } from "../memory/memory-service.ts";
 import {
   memoryDisclosurePolicy,
@@ -12,11 +20,13 @@ import {
 } from "../memory/disclosure.ts";
 import { parseScopeId, personalScope } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 
 export function createDocumentMemory(
   memory: MemoryService,
   documents: DocumentConversations,
   auditLog: AuditLog,
+  sessions?: Pick<SessionStore, "get">,
 ): MemoryService {
   async function metadata(
     scope: string,
@@ -24,7 +34,19 @@ export function createDocumentMemory(
     context: MemoryCaptureMetadata | undefined,
   ): Promise<MemoryCaptureMetadata | undefined> {
     if (!context?.sessionId || !by?.actorId || by.context !== "conversation") return context;
-    const binding = await documents.knowledgeForSession(context.sessionId, by.actorId);
+    const sessionId = context.sessionId;
+    const session = await sessions?.get(sessionId);
+    if (session?.sourceProvenance)
+      context = {
+        ...context,
+        inheritedFacts: [...(context.inheritedFacts ?? [UNTRACKED_PROVENANCE]), session.sourceProvenance],
+      };
+    if (session?.personalOnly) {
+      const owner = personalScope(by.actorId);
+      if (session.scopeId !== owner || scope !== owner) throw new MemoryDisclosureDenied();
+      context = { ...context, personalOnly: true };
+    }
+    const binding = await documents.knowledgeForSession(sessionId, by.actorId);
     if (!binding) return context;
     if (binding.mode === "private") {
       const target = parseScopeId(scope);
@@ -37,9 +59,33 @@ export function createDocumentMemory(
   }
   return {
     ...memory,
-    ...(memory.withDisclosure
-      ? { withDisclosure: (access) => createDocumentMemory(memory.withDisclosure!(access), documents, auditLog) }
-      : {}),
+    withDisclosure: (access: MemoryDisclosure) => {
+      const nativeSources = async (scopes: readonly string[]) => {
+        const inherited = (await access.nativeSources?.(scopes)) ?? [];
+        const native = new Set(access.nativeScopes);
+        const refs = (items: readonly string[]) =>
+          items.flatMap((scope) => {
+            const parsed = parseScopeId(scope);
+            return parsed.kind === "group" && parsed.ref.startsWith(DOCUMENT_GROUP_PREFIX) ? [parsed.ref] : [];
+          });
+        const foreign = refs(scopes.filter((scope) => !native.has(scope)));
+        if (!foreign.length) return inherited;
+        const groups = await documents.knowledgeGroups([...new Set([...foreign, ...refs(access.nativeScopes)])]);
+        const projects = new Set(
+          access.nativeScopes.flatMap((scope) => {
+            const parsed = parseScopeId(scope);
+            const id = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
+            return id ? [id] : [];
+          }),
+        );
+        for (const group of groups) if (native.has(`group:${group.groupRef}`)) projects.add(group.projectId);
+        return [
+          ...inherited,
+          ...groups.filter((group) => projects.has(group.projectId)).map((group) => `group:${group.groupRef}`),
+        ];
+      };
+      return createDocumentMemory(disclosedMemory(memory, { ...access, nativeSources }), documents, auditLog, sessions);
+    },
     async capture(scope, facts, at, by, context) {
       const bound = await metadata(scope, by, context);
       const added = await memory.capture(scope, facts, at, by, context ? { ...context, ...bound } : undefined);

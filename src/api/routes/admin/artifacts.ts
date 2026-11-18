@@ -1,3 +1,4 @@
+import { inheritRequestSources } from "../../private-context.ts";
 import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -86,9 +87,21 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { scopeId: scope, apps: publishedApps });
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
-  const skills = (await app.listSkills())
-    .filter((skill) => skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId, ctx.capability?.personalOnly))
-    .filter((s) => orgWide || s.scopeId === scope)
+  const skillRows = (await app.listSkills())
+    .filter((skill) => skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId))
+    .filter((s) => orgWide || s.scopeId === scope);
+  const blocked = await inheritRequestSources(
+    ctx,
+    skillRows.map((skill) => ({
+      id: skill.id,
+      ownerScopeId: skill.scopeId,
+      personalOnly: skill.personalOnly,
+      sourceProvenance: skill.sourceProvenance,
+    })),
+    actor.id,
+  );
+  const skills = skillRows
+    .filter((skill) => !blocked.has(skill.id))
     .map((s) => {
       const provenancePack = s.pack ? packsById.get(s.pack.packId) : undefined;
       return {
@@ -193,7 +206,24 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
-  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId, ctx.capability?.personalOnly))
+  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId))
+    return sendJson(res, 404, { error: "not_found" });
+  if (
+    (
+      await inheritRequestSources(
+        ctx,
+        [
+          {
+            id: skill.id,
+            ownerScopeId: skill.scopeId,
+            personalOnly: skill.personalOnly,
+            sourceProvenance: skill.sourceProvenance,
+          },
+        ],
+        actor.id,
+      )
+    ).has(skill.id)
+  )
     return sendJson(res, 404, { error: "not_found" });
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
@@ -226,7 +256,24 @@ export async function archiveAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
-  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId, ctx.capability?.personalOnly))
+  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId))
+    return sendJson(res, 404, { error: "not_found" });
+  if (
+    (
+      await inheritRequestSources(
+        ctx,
+        [
+          {
+            id: skill.id,
+            ownerScopeId: skill.scopeId,
+            personalOnly: skill.personalOnly,
+            sourceProvenance: skill.sourceProvenance,
+          },
+        ],
+        actor.id,
+      )
+    ).has(skill.id)
+  )
     return sendJson(res, 404, { error: "not_found" });
   await app.archiveSkill(id);
   audit(ctx, { principalId: actor.id, action: "skill.archive", resource: id, scopeLabel: skill.scopeId });

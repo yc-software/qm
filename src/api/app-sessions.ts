@@ -1,3 +1,4 @@
+import { inheritSessionContext } from "../sessions/private-context.ts";
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { loadsScopeContext } from "../resolution/context-filter.ts";
@@ -75,6 +76,8 @@ export function createSessionMethods(
   h: AppHelpers,
 ): Pick<
   App,
+  | "getSessionContext"
+  | "recordContextProvenance"
   | "getSession"
   | "getSessionForViewer"
   | "canViewSessionSnapshot"
@@ -398,6 +401,19 @@ export function createSessionMethods(
   }
 
   return {
+    async getSessionContext(sessionId) {
+      const session = await deps.sessions.get(sessionId);
+      return session
+        ? {
+            id: session.id,
+            scopeId: session.scopeId,
+            personalOnly: session.personalOnly,
+            sourceProvenance: session.sourceProvenance,
+          }
+        : null;
+    },
+    recordContextProvenance: (sessionId, scope, provenance) =>
+      deps.sessions.recordContextProvenance(sessionId, scope, provenance),
     async getSession(sessionId, window) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;
@@ -463,6 +479,7 @@ export function createSessionMethods(
       const pins = await decoratedPins(pinRecords, visible, (seqs) =>
         viewerStoredItemsAt(sessionId, principalId, seqs),
       );
+      if ((await inheritSessionContext(deps.sessions, viewer, [sessionId])).has(sessionId)) return null;
       return {
         session,
         items: w.items,
@@ -586,7 +603,16 @@ export function createSessionMethods(
     },
 
     async listSessions(viewer) {
-      return decorateSessions(viewer.actorId, await sessionsForViewer(viewer));
+      const sessions = await sessionsForViewer(viewer);
+      const blocked = await inheritSessionContext(
+        deps.sessions,
+        viewer,
+        sessions.map((session) => session.id),
+      );
+      return decorateSessions(
+        viewer.actorId,
+        sessions.filter((session) => !blocked.has(session.id)),
+      );
     },
 
     async listSessionPage(principalId, query) {
@@ -1106,6 +1132,8 @@ export function createSessionMethods(
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
       if (!source) return null;
+      const document = await deps.documentConversations?.knowledgeForSession(source.id, principalId);
+      if (document?.mode === "private") await deps.sessions.markPersonalOnly(source.id, source.scopeId);
       const parsed = parseScopeId(source.scopeId);
       const fork = async (projectMembers?: readonly string[]) => {
         const visible = (await transcripts.forViewer(sessionId, principalId)).items;
@@ -1124,6 +1152,10 @@ export function createSessionMethods(
           source.channelName,
           "web",
         );
+        const currentSource = await deps.sessions.get(sessionId);
+        if (currentSource?.personalOnly) await deps.sessions.markPersonalOnly(forked.id, currentSource.scopeId);
+        if (currentSource?.sourceProvenance)
+          await deps.sessions.recordContextProvenance(forked.id, forked.scopeId, currentSource.sourceProvenance);
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
           copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),

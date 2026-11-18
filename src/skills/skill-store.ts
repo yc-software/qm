@@ -6,6 +6,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { mergeSourceProvenance, type SourceProvenance } from "../memory/facts.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -54,6 +55,7 @@ export interface Skill {
   status: SkillStatus;
   createdBy: string;
   personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
   version: number;
   grantedCapabilities: string[];
   approvals: string[];
@@ -72,11 +74,10 @@ export function skillAllowedInContext(
   skill: Pick<Skill, "personalOnly" | "scopeId">,
   actorId: string,
   contextScopeId?: ScopeId,
-  personalOnlyContext?: true,
 ): boolean {
-  return !skill.personalOnly || (
-    skill.scopeId === personalScope(actorId) &&
-    (contextScopeId === undefined || (contextScopeId === skill.scopeId && personalOnlyContext === true))
+  return (
+    !skill.personalOnly ||
+    (skill.scopeId === personalScope(actorId) && (contextScopeId === undefined || contextScopeId === skill.scopeId))
   );
 }
 
@@ -98,9 +99,10 @@ export interface SkillStore {
     manifest: SkillManifest;
     createdBy: string;
     personalOnly?: true;
+    sourceProvenance?: SourceProvenance;
     pack?: Skill["pack"];
   }): Promise<Skill>;
-  update(id: string, manifest: SkillManifest): Promise<Skill>;
+  update(id: string, manifest: SkillManifest, sourceProvenance?: SourceProvenance): Promise<Skill>;
   withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
@@ -236,6 +238,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         status: "draft",
         createdBy: input.createdBy,
         ...(input.personalOnly ? { personalOnly: true as const } : {}),
+        ...(input.sourceProvenance ? { sourceProvenance: input.sourceProvenance } : {}),
         version: 1,
         grantedCapabilities: [],
         approvals: [],
@@ -246,12 +249,17 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       await skills.put(skill.id, skill);
       return skill;
     },
-    async update(id, manifest) {
+    async update(id, manifest, sourceProvenance) {
       assertSafeSkillName(manifest.name);
       const s = await skills.get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
       s.manifest = manifest;
+      if (sourceProvenance)
+        s.sourceProvenance = mergeSourceProvenance([
+          ...(s.sourceProvenance ? [s.sourceProvenance] : []),
+          sourceProvenance,
+        ]);
       s.signature = sign(manifest);
       if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
       s.version += 1;
@@ -314,6 +322,11 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         throw new Error("Private skills cannot change audience");
       const restored = structuredClone(skill);
       if (current?.personalOnly) restored.personalOnly = true;
+      if (current?.sourceProvenance)
+        restored.sourceProvenance = mergeSourceProvenance([
+          current.sourceProvenance,
+          ...(restored.sourceProvenance ? [restored.sourceProvenance] : []),
+        ]);
       if (restored.personalOnly && scopeKind(restored.scopeId) !== "personal")
         throw new Error("Private skills require a personal scope");
       await skills.put(skill.id, restored);
@@ -366,6 +379,14 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
           status: "published",
           createdBy: s.createdBy,
           ...(s.personalOnly || existing?.personalOnly ? { personalOnly: true as const } : {}),
+          ...(s.sourceProvenance || existing?.sourceProvenance
+            ? {
+                sourceProvenance: mergeSourceProvenance([
+                  ...(s.sourceProvenance ? [s.sourceProvenance] : []),
+                  ...(existing?.sourceProvenance ? [existing.sourceProvenance] : []),
+                ]),
+              }
+            : {}),
           version: (existing?.version ?? 0) + 1,
           grantedCapabilities: [...s.grantedCapabilities],
           approvals: [...s.approvals],

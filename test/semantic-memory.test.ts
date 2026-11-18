@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { disclosedMemory } from "../src/memory/disclosure.ts";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -248,4 +249,33 @@ test("recall drops index matches for facts changed after the notebook was loaded
     },
   });
   assert.equal(await recall(memory, "personal:a", { query: "verify" }), "- (2026-10-01) browser preference");
+});
+
+test("semantic recall records selected private facts from an undisclosed snapshot", async () => {
+  const { base, memory } = await fixture();
+  await base.capture("personal:a", ["browser preference"], AT, undefined, {
+    mode: "explicit",
+    personalOnly: true,
+    sensitivity: "restricted",
+    inheritedFacts: [{ sensitivity: "restricted", sources: ["personal:a"], sourceUnknown: false }],
+  });
+  const shown: string[] = [];
+  const view = disclosedMemory(memory, {
+    actor: { id: "a", type: "internal" },
+    targetScope: "personal:a",
+    nativeScopes: ["personal:a"],
+    audience: [{ id: "a", type: "internal" }],
+    open: false,
+    onDisclosure: async (facts) => {
+      shown.push(...facts.flatMap((fact) => fact.sources));
+      return true;
+    },
+  });
+  const snapshot = new Map([["personal:a", await view.snapshotFacts!("personal:a")]]);
+  assert.deepEqual(shown, []);
+  assert.match(
+    await recall(view, "personal:a", { query: "verify", disclosedFacts: Promise.resolve(snapshot) }),
+    /browser preference/,
+  );
+  assert.deepEqual(shown, ["personal:a"]);
 });

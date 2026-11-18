@@ -15,6 +15,7 @@ import type { TenantKey } from "../../tenants/lookup.ts";
 import type { Tenant } from "../../tenants/context.ts";
 
 export interface BaseCtx {
+  sourceProvenance?: import("../../memory/facts.ts").SourceProvenance;
   req: IncomingMessage;
   res: ServerResponse;
   app: App;

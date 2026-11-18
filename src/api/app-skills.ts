@@ -265,7 +265,7 @@ export function createSkillMethods(
     archiveSkill(id) {
       return deps.skills.archive(id);
     },
-    async listVisibleSkills(principalId, ownScopeBotWork, contextScopeId, personalOnlyContext) {
+    async listVisibleSkills(principalId, ownScopeBotWork, contextScopeId) {
       const { ordered, granted } = await skillVisibilityContext(
         deps,
         h,
@@ -277,7 +277,7 @@ export function createSkillMethods(
       return deps.skills.visibleFor(
         ordered,
         granted,
-        contextScopeId === undefined || (contextScopeId === personal && personalOnlyContext) ? personal : undefined,
+        contextScopeId === undefined || contextScopeId === personal ? personal : undefined,
       );
     },
     canManageSkill(skill, principalId, botWork) {
@@ -286,17 +286,21 @@ export function createSkillMethods(
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
       if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
-      if (!skillAllowedInContext(skill, principalId, opts?.contextScopeId, opts?.personalOnly)) return null;
+      if (!skillAllowedInContext(skill, principalId, opts?.contextScopeId)) return null;
       if (opts?.personalOnly && !skill.personalOnly) return "private_context";
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
         if (!current || current.status === "archived") return null;
-        const updated = await deps.skills.update(id, {
-          ...current.manifest,
-          description: patch.description ?? current.manifest.description,
-          body: patch.body ?? current.manifest.body,
-        });
+        const updated = await deps.skills.update(
+          id,
+          {
+            ...current.manifest,
+            description: patch.description ?? current.manifest.description,
+            body: patch.body ?? current.manifest.body,
+          },
+          opts?.sourceProvenance,
+        );
         return republishIfShared(updated, principalId);
       });
       if (!live) return null;
@@ -311,7 +315,7 @@ export function createSkillMethods(
     },
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
-      if (skill && !skillAllowedInContext(skill, principalId, opts?.contextScopeId, opts?.personalOnly)) return null;
+      if (skill && !skillAllowedInContext(skill, principalId, opts?.contextScopeId)) return null;
       if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId, opts?.botActor === true)))
         return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
@@ -449,6 +453,7 @@ export function createSkillMethods(
           manifest,
           createdBy: input.principalId,
           ...(input.personalOnly ? { personalOnly: true as const } : {}),
+          ...(input.sourceProvenance ? { sourceProvenance: input.sourceProvenance } : {}),
         });
         await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
         const published = await deps.skills.publish(skill.id);
@@ -462,10 +467,10 @@ export function createSkillMethods(
         return published;
       });
     },
-    async deleteOwnedSkill({ principalId, id, liveActor, botActor, contextScopeId, personalOnly }) {
+    async deleteOwnedSkill({ principalId, id, liveActor, botActor, contextScopeId }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
-      if (!skillAllowedInContext(skill, principalId, contextScopeId, personalOnly)) return "forbidden";
+      if (!skillAllowedInContext(skill, principalId, contextScopeId)) return "forbidden";
       if (!(await canManageSkill(skill, principalId, botActor === true))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);

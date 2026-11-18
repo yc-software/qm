@@ -68,14 +68,19 @@ export async function startMemoryCapture(turn: {
     memoryPolicy.capture !== "off" &&
     (onTurnEnd || enqueueTurnEnd)
   ) {
+    const current = await deps.sessions.get(session.id);
+    if (!current) return;
+    if (current.personalOnly) session.personalOnly = true;
+    session.sourceProvenance = current.sourceProvenance;
     const context = {
       scopeId: memoryScopeId,
+      ...(session.personalOnly ? { personalOnly: true as const } : {}),
       ...(turn.document
         ? { document: turn.document, ...(turn.document.mode === "private" ? { personalOnly: true as const } : {}) }
         : {}),
       conversationScopeId: scopeId,
       ...(audienceScopeId ? { audienceScopeId } : {}),
-      inheritedFacts: captureDependencies(),
+      inheritedFacts: [...captureDependencies(), ...(session.sourceProvenance ? [session.sourceProvenance] : [])],
       input: turnInput,
       reply,
       actorId: actor.id,

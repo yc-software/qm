@@ -3,7 +3,7 @@ import type { SessionOrigin } from "./session-store.ts";
 import { isWebThread } from "./session-store.ts";
 
 export const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat, s.persona_id`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat, s.persona_id, s.personal_only, s.context_provenance`;
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 export const OWN_CHAT = (s: string): string =>
   `${s}.parent_session_id IS NULL AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
@@ -17,6 +17,8 @@ export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<S
 export function rowToSession(r: Record<string, unknown>): Session {
   return {
     id: r.id as string,
+    ...(r.personal_only === true ? { personalOnly: true as const } : {}),
+    ...(r.context_provenance ? { sourceProvenance: r.context_provenance as Session["sourceProvenance"] } : {}),
     type: r.type as SessionType,
     scopeId: r.scope_id as ScopeId,
     threadRef: r.thread_ref as string,

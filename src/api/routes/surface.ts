@@ -1,3 +1,5 @@
+import { inheritRequestSources } from "../private-context.ts";
+import { mergeSourceProvenance, UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
 import { refuseImpersonated } from "../http.ts";
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
@@ -622,8 +624,12 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, result);
 }
 
-export async function memoryFacts(memory: MemoryService, scope: ScopeId) {
-  return ((await memory.facts?.(scope)) ?? []).map(({ id, text, createdAt, updatedAt }) => ({
+export async function memoryFacts(
+  memory: MemoryService,
+  scope: ScopeId,
+  visible: (fact: import("../../memory/facts.ts").MemoryFact) => boolean = () => true,
+) {
+  return ((await memory.facts?.(scope)) ?? []).filter(visible).map(({ id, text, createdAt, updatedAt }) => ({
     id,
     text,
     createdAt,
@@ -817,7 +823,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     return handle(ctx, memory, capability, write);
   });
 
-const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
+const captureFacts = writeMemory(async ({ res, deps, tenant, body, sourceProvenance }, memory, capability, write) => {
   const facts = parseFacts(body);
   if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
   const { added, outcomes, problems } = await writeFacts(
@@ -829,6 +835,8 @@ const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, cap
       mode: "explicit",
       ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       conversationScopeId: capability.scopeId,
+      ...(sourceProvenance ? { inheritedFacts: [UNTRACKED_PROVENANCE, sourceProvenance] } : {}),
+      ...(capability.personalOnly || capability.memory?.personalOnly ? { personalOnly: true as const } : {}),
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     },
     capability.runId,
@@ -846,11 +854,13 @@ const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, cap
   return sendJson(res, 200, { ok: true, added, scopeId: write, ...(outcomes.length ? { outcomes } : {}) });
 });
 
-const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
+const editFacts = writeMemory(async ({ res, deps, tenant, body, sourceProvenance }, memory, capability, write) => {
   const edits = parseEdits(body);
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
   await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
     conversationScopeId: capability.scopeId,
+    ...(sourceProvenance ? { inheritedFacts: [UNTRACKED_PROVENANCE, sourceProvenance] } : {}),
+    ...(capability.personalOnly || capability.memory?.personalOnly ? { personalOnly: true as const } : {}),
     ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
   });
   audit(
@@ -900,12 +910,14 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId, false, ctx.capability?.scopeId, ctx.capability?.personalOnly)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, false, ctx.capability?.scopeId)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
   const archivedChecks = await Promise.all(
     (await app.listSkills())
-      .filter((skill) => skill.status === "archived" && skillAllowedInContext(skill, principalId, ctx.capability?.scopeId, ctx.capability?.personalOnly))
+      .filter(
+        (skill) => skill.status === "archived" && skillAllowedInContext(skill, principalId, ctx.capability?.scopeId),
+      )
       .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId, false) })),
   );
   const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
@@ -913,22 +925,35 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),
   ]);
-  const skills = await Promise.all(
-    [...visible, ...archived].map(async (r) => ({
-      id: r.skill.id,
-      name: r.skill.manifest.name,
-      description: r.skill.manifest.description,
-      scope: parseScopeId(r.skill.scopeId).kind ?? r.skill.scopeId,
-      scopeId: r.skill.scopeId,
-      shadowed: r.shadowed.length > 0,
-      status: r.skill.status,
-      version: r.skill.version,
-      source: r.skill.pack ? "pack" : "native",
-      pack: r.skill.pack,
-      assetCount: r.skill.manifest.files?.length ?? 0,
-      requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId, false),
+  const records = [...visible, ...archived];
+  const blocked = await inheritRequestSources(
+    ctx,
+    records.map(({ skill }) => ({
+      id: skill.id,
+      ownerScopeId: skill.scopeId,
+      personalOnly: skill.personalOnly,
+      sourceProvenance: skill.sourceProvenance,
     })),
+    principalId,
+  );
+  const skills = await Promise.all(
+    records
+      .filter(({ skill }) => !blocked.has(skill.id))
+      .map(async (r) => ({
+        id: r.skill.id,
+        name: r.skill.manifest.name,
+        description: r.skill.manifest.description,
+        scope: parseScopeId(r.skill.scopeId).kind ?? r.skill.scopeId,
+        scopeId: r.skill.scopeId,
+        shadowed: r.shadowed.length > 0,
+        status: r.skill.status,
+        version: r.skill.version,
+        source: r.skill.pack ? "pack" : "native",
+        pack: r.skill.pack,
+        assetCount: r.skill.manifest.files?.length ?? 0,
+        requiredCapabilities: r.skill.manifest.requiredCapabilities,
+        editable: await app.canManageSkill(r.skill, principalId, false),
+      })),
   );
   return sendJson(res, 200, { skills });
 }
@@ -944,14 +969,31 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   const skill = await app.getSkill(ctx.params.id!);
   if (
     !skill ||
-    !skillAllowedInContext(skill, principalId, capability?.scopeId, capability?.personalOnly) ||
+    !skillAllowedInContext(skill, principalId, capability?.scopeId) ||
     (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
-      !(await app.listVisibleSkills(principalId, ownScopeBotWork, capability?.scopeId, capability?.personalOnly))
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork, capability?.scopeId))
         .flatMap((row) => row.shadowed.concat(row.skill ?? []))
         .some((visible) => visible.id === skill.id))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
+  if (
+    (
+      await inheritRequestSources(
+        ctx,
+        [
+          {
+            id: skill.id,
+            ownerScopeId: skill.scopeId,
+            personalOnly: skill.personalOnly,
+            sourceProvenance: skill.sourceProvenance,
+          },
+        ],
+        principalId,
+      )
+    ).has(skill.id)
+  )
+    return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, {
     skill: {
       id: skill.id,
@@ -1028,15 +1070,35 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   if (patch.description?.trim() === "" || patch.body?.trim() === "") {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
+  const target = await app.getSkill(id);
+  if (target && (await app.canManageSkill(target, principalId, capability?.botActor === true))) {
+    const blocked = await inheritRequestSources(
+      ctx,
+      [
+        {
+          id: target.id,
+          ownerScopeId: target.scopeId,
+          personalOnly: target.personalOnly,
+          sourceProvenance: target.sourceProvenance,
+        },
+      ],
+      principalId,
+    );
+    if (blocked.has(id)) return sendJson(res, 404, { error: "not_found" });
+  }
   const liveActor = capability ? personAtKeyboard(capability) : true;
   const updated = await app.updateOwnedSkill(id, principalId, patch, {
     liveActor,
     botActor: capability?.botActor === true,
     ...(capability?.personalOnly ? { personalOnly: true as const } : {}),
     contextScopeId: capability?.scopeId,
+    ...(ctx.sourceProvenance ? { sourceProvenance: ctx.sourceProvenance } : {}),
   });
   if (updated === "private_context")
-    return sendJson(res, 403, { error: "forbidden", message: "Create a private copy before editing this skill from a private conversation." });
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "Create a private copy before editing this skill from a private conversation.",
+    });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1145,6 +1207,9 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   }
   const created = await app.createOwnedSkill({
     principalId,
+    ...(ctx.sourceProvenance
+      ? { sourceProvenance: mergeSourceProvenance([UNTRACKED_PROVENANCE, ctx.sourceProvenance]) }
+      : {}),
     ...(capability?.personalOnly ? { personalOnly: true as const } : {}),
     ...(homeScope ? { homeScope } : {}),
     name: b.name,
@@ -1528,7 +1593,14 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/memory/search", auth: "either", allowedInStrict: true, handle: searchMemory },
   { method: "POST", path: "/v1/grants", actor: "system", auth: "source", handle: createGrant },
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
-  { method: "POST", path: "/v1/skills/:id/share", browser: "embed", actor: "person", auth: "either", handle: publishSkillFromBrowser },
+  {
+    method: "POST",
+    path: "/v1/skills/:id/share",
+    browser: "embed",
+    actor: "person",
+    auth: "either",
+    handle: publishSkillFromBrowser,
+  },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
   { method: "GET", path: "/v1/custom-emoji", browser: true, actor: "person", auth: "source", handle: getCustomEmoji },

@@ -23,6 +23,7 @@ import { createSessionParticipants, participantSessionsSql } from "./session-par
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { authoredUserTurn, TENANT } from "./items.ts";
+import { mergeSourceProvenance, type MemoryProvenance, type SourceProvenance } from "../memory/facts.ts";
 import {
   GENERIC_CHAT_TENANT,
   SERVING_SLACK_TENANTS,
@@ -34,6 +35,42 @@ import {
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
+  const recordContextProvenance = async (
+    sessionId: string,
+    ownerScopeId: ScopeId,
+    provenance: MemoryProvenance,
+  ): Promise<SourceProvenance> => {
+    if (provenance.personalOnly && !ownerScopeId.startsWith("personal:"))
+      throw new Error("Private context requires a personal scope");
+    return withPgTransaction(await pool(), async (client) => {
+      const result = await client.query(
+        "SELECT context_provenance, personal_only FROM sessions WHERE id = $1 AND scope_id = $2 FOR UPDATE",
+        [sessionId, ownerScopeId],
+      );
+      if (!result.rows[0]) throw new Error("Private context owner does not match the session");
+      const merged = mergeSourceProvenance([
+        ...(result.rows[0].context_provenance ? [result.rows[0].context_provenance as SourceProvenance] : []),
+        provenance,
+      ]);
+      if (
+        canonicalJson(merged) !== canonicalJson(result.rows[0].context_provenance) ||
+        (provenance.personalOnly && !result.rows[0].personal_only)
+      )
+        await client.query(
+          "UPDATE sessions SET context_provenance = $3::jsonb, personal_only = personal_only OR $4 WHERE id = $1 AND scope_id = $2",
+          [sessionId, ownerScopeId, JSON.stringify(merged), provenance.personalOnly === true],
+        );
+      return merged;
+    });
+  };
+  const markPersonalOnly = async (sessionId: string, ownerScopeId: ScopeId): Promise<void> => {
+    await recordContextProvenance(sessionId, ownerScopeId, {
+      sensitivity: "ordinary",
+      sources: [],
+      sourceUnknown: false,
+      personalOnly: true,
+    });
+  };
 
   async function getMany({
     ids,
@@ -184,6 +221,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async updateForkProvenance(sessionId, provenance): Promise<void> {
+      const source = await q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE id = $1", [
+        provenance.forkedFrom.sessionId,
+      ]);
+      if (source[0]?.personal_only === true) await markPersonalOnly(sessionId, source[0].scope_id as ScopeId);
+      if (source[0]?.context_provenance)
+        await recordContextProvenance(
+          sessionId,
+          source[0].scope_id as ScopeId,
+          source[0].context_provenance as SourceProvenance,
+        );
       await q(
         "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4, side_chat = $5 WHERE id = $1",
         [
@@ -197,8 +244,22 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async setParentSession(sessionId, parentSessionId): Promise<void> {
+      if (parentSessionId) {
+        const source = await q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE id = $1", [
+          parentSessionId,
+        ]);
+        if (source[0]?.personal_only === true) await markPersonalOnly(sessionId, source[0].scope_id as ScopeId);
+        if (source[0]?.context_provenance)
+          await recordContextProvenance(
+            sessionId,
+            source[0].scope_id as ScopeId,
+            source[0].context_provenance as SourceProvenance,
+          );
+      }
       await q("UPDATE sessions SET parent_session_id = $2 WHERE id = $1", [sessionId, parentSessionId]);
     },
+    markPersonalOnly,
+    recordContextProvenance,
 
     async setSpawnMeta(sessionId, meta): Promise<void> {
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);

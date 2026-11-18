@@ -155,6 +155,7 @@ async function mintControlPlaneTokens(
   const orgMemoryWritable =
     useMemory &&
     memoryPolicy.capture !== "off" &&
+    !turn.personalOnly &&
     !memoryAccess?.personalOnly &&
     resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
@@ -177,7 +178,12 @@ async function mintControlPlaneTokens(
       if (actorIsOrgAdmin && liveTurn && !triggeredTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
     const memoryClaim = memoryAccess
-      ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
+      ? {
+          ...memoryAccess,
+          read: baseRecallScopes,
+          ...(turn.personalOnly ? { personalOnly: true as const } : {}),
+          ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}),
+        }
       : undefined;
     const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
     controlClaims = {

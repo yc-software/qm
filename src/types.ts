@@ -140,6 +140,8 @@ export interface SpawnMeta {
 }
 
 export interface Session {
+  sourceProvenance?: import("./memory/facts.ts").SourceProvenance;
+  personalOnly?: true;
   clientTools?: ClientToolDeclaration[];
   id: string;
   type: SessionType;

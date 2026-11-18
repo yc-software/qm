@@ -626,6 +626,20 @@ export const SESSION_MIGRATIONS = [
   DROP_PARTICIPANT_WINDOWS,
   HUMAN_PROMPT_INDEX,
   BOT_WORK_COLUMN,
+  {
+    id: "sessions/store/0063-personal-only",
+    statements: [
+      "SET LOCAL lock_timeout = '5s'",
+      "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS personal_only BOOLEAN NOT NULL DEFAULT false",
+    ],
+  },
+  {
+    id: "sessions/store/0064-context-provenance",
+    statements: [
+      "SET LOCAL lock_timeout = '5s'",
+      "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_provenance JSONB",
+    ],
+  },
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

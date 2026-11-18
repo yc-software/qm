@@ -131,7 +131,13 @@ export function createRoutedMemoryService(opts: {
               scopeId,
               "recall",
               context,
-              () => providerFor(route).recall(scopeId, context),
+              () =>
+                providerFor(route).recall(
+                  scopeId,
+                  context?.disclosedFacts && providerFor(route) !== managerFor(scopeId)
+                    ? { ...context, disclosedFacts: undefined }
+                    : context,
+                ),
               (rows) => ({ outcome: rows.length ? "ok" : "empty" }),
               [],
             ),
@@ -198,6 +204,10 @@ export function createRoutedMemoryService(opts: {
 
     async facts(scopeId) {
       return (await managerFor(scopeId)?.facts?.(scopeId)) ?? [];
+    },
+    async snapshotFacts(scopeId) {
+      const manager = managerFor(scopeId);
+      return (await (manager?.snapshotFacts ? manager.snapshotFacts(scopeId) : manager?.facts?.(scopeId))) ?? [];
     },
 
     async edit(scopeId, edits, by, context) {

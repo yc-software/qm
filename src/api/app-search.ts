@@ -1,7 +1,8 @@
+import { inheritSearchContext, type PrivateContext } from "../sessions/private-context.ts";
 import { samePerson } from "../directory/person.ts";
 import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { createCoreSearch, type BackendSearchHit, type SearchBackend } from "../search/core-search.ts";
+import { createCoreSearch, type BackendSearchHit, type SearchBackend, type CoreSearch } from "../search/core-search.ts";
 import { createIntersectionBackend } from "../search/backends.ts";
 import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import type { Principal } from "../types.ts";
@@ -167,5 +168,10 @@ export function createSearchMethods(
     options,
   );
   const conversations = createCoreSearch([conversationsBackend], options);
-  return { search: core.search, searchConversations: conversations.search };
+  const contextual =
+    (search: CoreSearch["search"]) => async (input: Parameters<CoreSearch["search"]>[0], context?: PrivateContext) => {
+      const result = await search(input);
+      return context ? inheritSearchContext(deps.sessions, context, result) : result;
+    };
+  return { search: contextual(core.search), searchConversations: contextual(conversations.search) };
 }

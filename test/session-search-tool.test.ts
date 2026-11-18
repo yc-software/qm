@@ -42,7 +42,7 @@ test("session search reuses indexed search with participant intersection and bou
     runs,
     signals,
     steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testMap<SessionMessage>(), sessions),
     maxAttempts: 1,
     advisoryLock: testAdvisoryLock(),
     prepareRequest: async (request) => ({

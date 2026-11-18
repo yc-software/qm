@@ -37,7 +37,7 @@ async function syscallsRig() {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testMap<SessionMessage>(), sessions),
     sessions,
     runs,
     signals,

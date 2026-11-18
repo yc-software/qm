@@ -68,7 +68,7 @@ async function rig(opts?: {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const mailbox = createSessionMailbox(testMap<SessionMessage>(["recipientId", "wake"]));
+  const mailbox = createSessionMailbox(testMap<SessionMessage>(["recipientId", "wake"]), sessions);
   const advisoryLock = testAdvisoryLock();
   const steerRun: SessionSyscallDeps["steerRun"] = async (run, signal) => ({
     sent: await signals.send(run.id, signal),
@@ -2482,10 +2482,12 @@ test("follow-up retries recover the accepted run", async (t) => {
 
 test("mailbox survives recreation and rejects acknowledgements for another recipient", async () => {
   const backing = testMap<SessionMessage>();
-  const mail = createSessionMailbox(backing);
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sender = await sessions.getOrCreateByThread("sender", "dm", scope);
+  const mail = createSessionMailbox(backing, sessions);
   const message: SessionMessage = {
     id: "one",
-    senderId: "sender",
+    senderId: sender.id,
     recipientId: "recipient",
     actor,
     audience: [actor],
@@ -2494,7 +2496,7 @@ test("mailbox survives recreation and rejects acknowledgements for another recip
   };
   await mail.send(message);
   await mail.send({ ...message, text: "replacement" });
-  const restarted = createSessionMailbox(backing);
+  const restarted = createSessionMailbox(backing, sessions);
   await restarted.acknowledge("wrong", [message.id]);
   assert.equal((await restarted.pending("recipient"))[0]!.text, "data");
   await restarted.acknowledge("recipient", [message.id]);
@@ -3419,7 +3421,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testMap<SessionMessage>(), sessions),
     sessions,
     runs,
     signals: createPostgresRunSignalStore(testDatabaseUrl()),
@@ -3476,7 +3478,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
   await sessions.addParticipant(room.id, guest.id);
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testMap<SessionMessage>(), sessions),
     sessions,
     runs,
     signals: createPostgresRunSignalStore(testDatabaseUrl()),
@@ -3657,4 +3659,33 @@ test("detaching an ancestor revokes a descendant's delegated live authority", as
   assert.equal((await delegatedAuthorization(run.request, r))?.origin.kind, "human");
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorization(run.request, r), undefined);
+});
+
+test("mail preserves private source restrictions and refuses another owner's recipient", async () => {
+  const { sessions, mailbox, room } = await rig();
+  await sessions.recordContextProvenance(room.id, scope, {
+    personalOnly: true,
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: false,
+  });
+  const recipient = await sessions.getOrCreateByThread("private-mail-recipient", "dm", scope);
+  const message: SessionMessage = {
+    id: randomUUID(),
+    senderId: room.id,
+    recipientId: recipient.id,
+    actor,
+    text: "Private procedure",
+    audience: [actor],
+    createdAt: Date.now(),
+  };
+  await mailbox.send(message);
+  const delivered = await sessions.get(recipient.id);
+  assert.equal(delivered?.personalOnly, true);
+  assert.equal(delivered?.sourceProvenance?.sensitivity, "restricted");
+  assert.ok(delivered?.sourceProvenance?.sources.includes("group:restricted"));
+  assert.equal((await mailbox.pending(recipient.id))[0]?.personalOnly, true);
+  const other = await sessions.getOrCreateByThread("foreign-mail-recipient", "dm", "personal:U2");
+  await assert.rejects(mailbox.send({ ...message, id: randomUUID(), recipientId: other.id }), /owner does not match/);
+  assert.deepEqual(await mailbox.pending(other.id), []);
 });

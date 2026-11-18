@@ -1,3 +1,4 @@
+import { inheritSessionContext } from "../../../sessions/private-context.ts";
 import type { App } from "../../app.ts";
 import { personLabel } from "../../../identity/person-names.ts";
 import type { ServerDeps } from "../../deps.ts";
@@ -191,8 +192,15 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
         throw error;
       })) ?? [];
   if (disconnected.signal.aborted) return;
-  const summaries = fetched.slice(0, limit);
-  const last = fetched.length > limit ? summaries[summaries.length - 1] : undefined;
+  const blocked = deps.sessions
+    ? await inheritSessionContext(
+        deps.sessions,
+        ctx.capability ?? { actorId: actor.id },
+        fetched.map((session) => session.id),
+      )
+    : new Set<string>();
+  const summaries = fetched.slice(0, limit).filter((session) => !blocked.has(session.id));
+  const last = fetched.length > limit ? fetched[limit - 1] : undefined;
   const fireResults = await cronFireResults(app, summaries);
   const pageCronIds = new Set<string>(cronId ? [cronId] : []);
   for (const s of summaries) {
@@ -248,9 +256,19 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
     else if (Number.isInteger(Number(turnParam))) opts = { turnSeqs: [Number(turnParam)] };
     if (!opts) return sendJson(res, 400, { error: "bad_request", message: 'turnSeq must be an integer or "orphan"' });
     const requests = (await deps.sessions?.listLlmRequests(id, opts)) ?? [];
+    if (
+      deps.sessions &&
+      (await inheritSessionContext(deps.sessions, ctx.capability ?? { actorId: actor.id }, [id])).has(id)
+    )
+      return sendJson(res, 404, { error: "not_found" });
     return sendJson(res, 200, { session, requests });
   }
   const requests = (await deps.sessions?.listLlmRequests(id, { omitRequest: true })) ?? [];
+  if (
+    deps.sessions &&
+    (await inheritSessionContext(deps.sessions, ctx.capability ?? { actorId: actor.id }, [id])).has(id)
+  )
+    return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session, requests });
 }
 
@@ -280,23 +298,32 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     ...[...recipientDeliveries, ...sourceDeliveries].map((d) => d.provenance?.fireKey ?? d.idempotencyKey),
   ]);
   const sidecars = await deliveryProvenanceSidecars(deps, recipientDeliveries, scope);
+  const blocked = deps.sessions
+    ? await inheritSessionContext(deps.sessions, ctx.capability ?? { actorId: actor.id }, [
+        id,
+        ...recipientDeliveries.flatMap((delivery) => delivery.provenance?.sourceSessionId ?? []),
+      ])
+    : new Set<string>();
+  if (blocked.has(id)) return sendJson(res, 404, { error: "not_found" });
   const recipientDeliveryEvents = await Promise.all(
-    recipientDeliveries.map(async (d) => {
-      const provenance = sidecars.get(d.id) ?? null;
-      return {
-        type: "principal_delivery",
-        deliveryId: d.id,
-        text: d.text,
-        attachments: d.attachments ?? [],
-        destination: d.destination,
-        createdAt: d.deliveredAt ?? d.createdAt,
-        idempotencyKey: d.idempotencyKey,
-        provenance: d.provenance ?? null,
-        origin: await deliveryOrigin(app, d, scope, cronLookup),
-        ...(provenance?.sourceSession ? { sourceSession: provenance.sourceSession } : {}),
-        ...(provenance?.llmRequests ? { llmRequests: provenance.llmRequests } : {}),
-      };
-    }),
+    recipientDeliveries
+      .filter((d) => !blocked.has(d.provenance?.sourceSessionId ?? ""))
+      .map(async (d) => {
+        const provenance = sidecars.get(d.id) ?? null;
+        return {
+          type: "principal_delivery",
+          deliveryId: d.id,
+          text: d.text,
+          attachments: d.attachments ?? [],
+          destination: d.destination,
+          createdAt: d.deliveredAt ?? d.createdAt,
+          idempotencyKey: d.idempotencyKey,
+          provenance: d.provenance ?? null,
+          origin: await deliveryOrigin(app, d, scope, cronLookup),
+          ...(provenance?.sourceSession ? { sourceSession: provenance.sourceSession } : {}),
+          ...(provenance?.llmRequests ? { llmRequests: provenance.llmRequests } : {}),
+        };
+      }),
   );
   const sourceDeliveryEvents = await Promise.all(
     sourceDeliveries.map(async (d) => ({

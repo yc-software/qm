@@ -1920,7 +1920,7 @@ export function buildApp(
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     databaseUrl,
     agent,
-    memory: createDocumentMemory(baseMemory, documentConversations, auditLog),
+    memory: createDocumentMemory(baseMemory, documentConversations, auditLog, sessions),
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
     onCaptureError: (e, scope) =>
@@ -2206,7 +2206,10 @@ export function buildApp(
     modelCredentialFetch: overrides.modelCredentialFetch,
     refreshModels,
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId", "wake"]));
+  const sessionMailbox = createSessionMailbox(
+    artifactMap<SessionMessage>("session_mailbox", ["recipientId", "wake"]),
+    sessions,
+  );
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     sessions,
@@ -2456,6 +2459,7 @@ export function buildApp(
     advisoryLock,
   };
   const app = createApp({
+    documentConversations,
     errors,
     settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,

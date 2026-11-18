@@ -405,6 +405,12 @@ export interface SessionStore {
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
+  markPersonalOnly(sessionId: string, ownerScopeId: ScopeId): Promise<void>;
+  recordContextProvenance(
+    sessionId: string,
+    ownerScopeId: ScopeId,
+    provenance: import("../memory/facts.ts").MemoryProvenance,
+  ): Promise<import("../memory/facts.ts").SourceProvenance>;
   getMany(refs: { ids: readonly string[]; threadRefs: readonly string[] }): Promise<Session[]>;
   userItemSeqs(
     ranges: readonly { sessionId: string; sinceSeq: number }[],

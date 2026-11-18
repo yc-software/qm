@@ -16,7 +16,7 @@ import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
-import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
+import { UNTRACKED_PROVENANCE, mergeProvenance } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
@@ -859,7 +859,34 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const document = storedSession
         ? await deps.documentConversations?.knowledgeForSession(storedSession.id, actor.id)
         : null;
+      let personalOnlyContext = storedSession?.personalOnly === true || document?.mode === "private";
+      if (personalOnlyContext && (audienceScopeId ?? scopeId) !== toScopeId("personal", actor.id))
+        return { status: "refused", reason: "This private conversation cannot deliver to another audience." };
+      let privateSession = storedSession ?? undefined;
+      let pendingProvenance: import("../memory/facts.ts").MemoryProvenance | undefined;
+      const protectPersonalContext = async () => {
+        personalOnlyContext = true;
+        if (privateSession && !privateSession.personalOnly) {
+          await deps.sessions.markPersonalOnly(privateSession.id, scopeId);
+          privateSession.personalOnly = true;
+        }
+        return true;
+      };
       const context = await resolveTurnContext({
+        onDisclosure: async (facts) => {
+          const provenance = mergeProvenance([...(pendingProvenance ? [pendingProvenance] : []), ...facts], "ordinary");
+          pendingProvenance = provenance;
+          if (provenance.personalOnly) personalOnlyContext = true;
+          if (privateSession) {
+            privateSession.sourceProvenance = await deps.sessions.recordContextProvenance(
+              privateSession.id,
+              scopeId,
+              provenance,
+            );
+            if (provenance.personalOnly) privateSession.personalOnly = true;
+          }
+          return true;
+        },
         ...(document ? { document } : {}),
         tenant,
         external,
@@ -1027,6 +1054,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
+      personalOnlyContext ||= nativeSkills.some((entry) => entry.skill?.personalOnly);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
@@ -1072,6 +1100,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         },
       );
       screenSession.id = session.id;
+      privateSession = session;
+      personalOnlyContext ||= session.personalOnly === true;
+      if (pendingProvenance) {
+        session.sourceProvenance = await deps.sessions.recordContextProvenance(session.id, scopeId, pendingProvenance);
+        if (pendingProvenance.personalOnly) session.personalOnly = true;
+      }
+      if (personalOnlyContext) await protectPersonalContext();
+
       if (persona?.routedBy) await deps.sessions.setPersona(session.id, persona.persona.id);
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
@@ -1254,7 +1290,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryPolicy,
         memoryScopeId,
         memoryAccess,
-        ...(document?.mode === "private" || nativeSkills.some((entry) => entry.skill?.personalOnly) ? { personalOnly: true as const } : {}),
+        ...(personalOnlyContext ? { personalOnly: true as const } : {}),
         baseRecallScopes,
         ownCredentialsAllowed,
         turnTimezone,
@@ -1423,7 +1459,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const captureDependencies = () => [
-          ...memoryView.facts,
+          ...(session.sourceProvenance ? [session.sourceProvenance] : []),
           ...(!memoryView.complete ||
           memoryWindow.items.length > 0 ||
           toolCalls > 0 ||
@@ -1688,6 +1724,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnSessionSyscalls = sessionSyscalls?.forTurn({
           session,
           scopeId: scopeId as ScopeId,
+          ...(audienceScopeId ? { audienceScopeId } : {}),
           orgScopeId: resolution.orgScopeId,
           liveTurn: liveTurn && !triggeredTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
@@ -1807,6 +1844,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           memoryCaptureMetadata: () => ({
             sessionId: session.id,
+            ...(personalOnlyContext || session.personalOnly ? { personalOnly: true as const } : {}),
             inheritedFacts: captureDependencies(),
             ...(document ? { document, ...(document.mode === "private" ? { personalOnly: true as const } : {}) } : {}),
           }),

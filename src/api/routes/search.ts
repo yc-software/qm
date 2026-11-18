@@ -24,13 +24,16 @@ async function search(ctx: ApiCtx): Promise<void> {
       error: "principal_set_unavailable",
       message: "search requires the complete principal set for a shared conversation",
     });
-  const result = await ctx.app.search({
-    query,
-    principals,
-    limit: typeof body.limit === "number" ? body.limit : undefined,
-    botActor: ctx.capability.botActor,
-    ownScopeBotWork: isOwnScopeBotWork(ctx.capability),
-  });
+  const result = await ctx.app.search(
+    {
+      query,
+      principals,
+      limit: typeof body.limit === "number" ? body.limit : undefined,
+      botActor: ctx.capability.botActor,
+      ownScopeBotWork: isOwnScopeBotWork(ctx.capability),
+    },
+    ctx.capability,
+  );
   ctx.deps.auditLog?.record(tenantOf(ctx), {
     at: Date.now(),
     principalId: ctx.capability.actorId,

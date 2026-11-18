@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
+import { inheritSessionContext, inheritSearchContext } from "./private-context.ts";
 import type {
   ChildIsolation,
   ChildIsolationMode,
@@ -309,6 +310,7 @@ type SessionReadResult =
 export interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
+  audienceScopeId?: ScopeId;
   orgScopeId?: ScopeId;
   liveTurn?: boolean;
   request: Pick<
@@ -363,6 +365,9 @@ export interface SessionSyscallDeps {
   sessions: Pick<
     SessionStore,
     | "get"
+    | "getMany"
+    | "markPersonalOnly"
+    | "recordContextProvenance"
     | "getByThread"
     | "getOrCreateByThread"
     | "setParentSession"
@@ -722,11 +727,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         const missing = `no session matches "${ref}" — use a sessionId from open, read, or list.`;
         const trimmed = ref.trim();
         if (!trimmed) return missing;
-        const visible = (session: Session | null) =>
-          session && sessionVisibleTo(binding.request, session) ? session : null;
+        const visible = async (session: Session | null) => {
+          if (!session || !sessionVisibleTo(binding.request, session)) return null;
+          if (session.personalOnly && (await inheritPrivateContexts([session.id])).has(session.id)) return null;
+          return session;
+        };
         const current = await deps.sessions.get(binding.session.id);
-        const found = (session: Session | null) => {
-          if (!session || visible(session)) return session ?? missing;
+        const found = async (session: Session | null) => {
+          if (!session || await visible(session)) return session ?? missing;
           if (session.id !== current?.parentSessionId) return missing;
           return writing ? session : HIDDEN_PARENT;
         };
@@ -739,9 +747,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         const children = await deps.sessions.childrenOf(binding.session.id);
         const siblings = current?.parentSessionId ? await deps.sessions.childrenOf(current.parentSessionId) : [];
         const named = [...children, ...siblings].filter(
-          (c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase() && visible(c),
+          (c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase() && sessionVisibleTo(binding.request, c),
         );
-        return named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? missing;
+        return found(named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? null);
       }
 
       function sidebarRefusal(): string | null {
@@ -761,6 +769,21 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return null;
       }
 
+      async function inheritPrivateContexts(ids: readonly string[]): Promise<Set<string>> {
+        const context = {
+          actorId: binding.request.actor.id,
+          scopeId: binding.scopeId,
+          audienceScopeId: binding.audienceScopeId,
+          sessionId: binding.session.id,
+          personalOnly: binding.session.personalOnly,
+          botActor: binding.request.botActor,
+        };
+        const blocked = await inheritSessionContext(deps.sessions, context, ids);
+        if (context.personalOnly) binding.session.personalOnly = true;
+        if ("sourceProvenance" in context)
+          binding.session.sourceProvenance = context.sourceProvenance as Session["sourceProvenance"];
+        return blocked;
+      }
       async function visibleHistory(target: Session): Promise<Item[]> {
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
@@ -778,6 +801,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
         if (!current) throw new Error("this session no longer exists; nothing was started or sent.");
+        if (current.personalOnly) binding.session.personalOnly = true;
         if (current.scopeId !== binding.scopeId)
           throw new Error(
             `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
@@ -826,6 +850,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   );
                   if (!readable.every(Boolean)) continue;
                 }
+                if ((await inheritPrivateContexts([sender.id])).has(sender.id)) continue;
                 visible.push(message);
                 if (visible.length >= 4) break;
               } catch {
@@ -1041,6 +1066,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
+              if (binding.session.personalOnly) await deps.sessions.markPersonalOnly(target.id, binding.scopeId);
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               const messageId = input.requestId
                 ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -1168,10 +1194,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await currentCaller();
           if (!input.target?.trim()) {
             const summaries: SessionChildSummary[] = [];
-            for (const { session: child, activity } of await subagentActivity(
+            const children = await subagentActivity(
               deps,
               await visibleChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
-            )) {
+            );
+            for (const { session: child, activity } of children) {
               const said = lastAssistantText((await visibleHistory(child)).slice(-LAST_SAID_SCAN));
               summaries.push({
                 sessionId: child.id,
@@ -1181,7 +1208,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...(child.spawnMeta?.isolation ? { isolation: child.spawnMeta.isolation } : {}),
               });
             }
-            return { ok: true, mode: "children", children: summaries };
+            const blocked = await inheritPrivateContexts(children.map(({ session }) => session.id));
+            return { ok: true, mode: "children", children: summaries.filter((child) => !blocked.has(child.sessionId)) };
           }
           const target = await resolveTarget(input.target);
           if (typeof target === "string") return { ok: false, message: target };
@@ -1205,6 +1233,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           let rendered = lines.join("\n");
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
           const activity = await sessionActivity(deps, target);
+          if ((await inheritPrivateContexts([target.id])).has(target.id))
+            return { ok: false, message: "This private conversation is not available in this context." };
           return {
             ok: true,
             mode: "transcript",
@@ -1216,8 +1246,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           };
         },
         async liveSubagents() {
+          const children = await openChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id));
+          const blocked = await inheritPrivateContexts(children.map(({ session }) => session.id));
           return liveSubagentsNote(
-            await openChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
+            children.filter(({ session }) => !blocked.has(session.id)),
             visibleTitle,
           );
         },
@@ -1231,12 +1263,25 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (caller.conversation.kind !== "dm" && !members?.length)
             throw new Error("search requires the complete principal set for a shared conversation");
           if (!input.query.trim()) throw new Error("search requires a query");
-          return search({
+          const result = await search({
             query: input.query,
             principals: [caller.actor, ...(members ?? caller.conversation.audience)],
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
             botActor: caller.botActor,
           });
+          const context = {
+            actorId: caller.actor.id,
+            scopeId: binding.scopeId,
+            audienceScopeId: binding.audienceScopeId,
+            sessionId: binding.session.id,
+            personalOnly: binding.session.personalOnly,
+            botActor: binding.request.botActor,
+          };
+          const protectedResult = await inheritSearchContext(deps.sessions, context, result);
+          if (context.personalOnly) binding.session.personalOnly = true;
+          if ("sourceProvenance" in context)
+            binding.session.sourceProvenance = context.sourceProvenance as Session["sourceProvenance"];
+          return protectedResult;
         },
         async list() {
           await currentCaller();
@@ -1262,12 +1307,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, SESSION_LIST_LIMIT);
           const active = await deps.runs.activeForThreads(recent.map((session) => session.threadRef));
-          const sessions: SessionSummary[] = recent.map((session) => ({
-            sessionId: session.id,
-            title: session.title?.trim() || "Untitled",
-            status: runState(active.get(session.threadRef)),
-            current: session.id === binding.session.id,
-          }));
+          const blocked = await inheritPrivateContexts(recent.map((session) => session.id));
+          const sessions: SessionSummary[] = recent
+            .filter((session) => !blocked.has(session.id))
+            .map((session) => ({
+              sessionId: session.id,
+              title: session.title?.trim() || "Untitled",
+              status: runState(active.get(session.threadRef)),
+              current: session.id === binding.session.id,
+            }));
           return { ok: true, sessions };
         },
         async start(input) {

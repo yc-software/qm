@@ -357,13 +357,18 @@ export interface App {
     run: Run,
     signal: RunSignal,
   ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
+  getSessionContext(
+    sessionId: string,
+  ): Promise<Pick<Session, "id" | "scopeId" | "personalOnly" | "sourceProvenance"> | null>;
+  recordContextProvenance: SessionStore["recordContextProvenance"];
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
   ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor"> &
+      Partial<Pick<CapabilityClaims, "scopeId" | "sessionId" | "personalOnly">>,
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
@@ -383,7 +388,10 @@ export interface App {
   ): Promise<PinItemResult>;
   listConversationPins(threadRef: string, reader: string): Promise<SessionPinView[] | null>;
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
-  listSessions(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<Session[]>;
+  listSessions(
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor"> &
+      Partial<Pick<CapabilityClaims, "scopeId" | "audienceScopeId" | "sessionId" | "personalOnly">>,
+  ): Promise<Session[]>;
   listSessionPage(principalId: string, query: SessionPageQuery): Promise<SessionPageResult>;
   sideChats(principalId: string, sessionId: string): Promise<Session[] | null>;
   expandSideChat(principalId: string, sessionId: string): Promise<Session | null>;
@@ -394,13 +402,19 @@ export interface App {
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
-  searchConversations: CoreSearch["search"];
+  searchConversations(
+    input: Parameters<CoreSearch["search"]>[0],
+    context?: import("../sessions/private-context.ts").PrivateContext,
+  ): ReturnType<CoreSearch["search"]>;
   searchSessions(
     viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
     query: string,
     limit?: number,
   ): Promise<SessionSearchHit[]>;
-  search: CoreSearch["search"];
+  search(
+    input: Parameters<CoreSearch["search"]>[0],
+    context?: import("../sessions/private-context.ts").PrivateContext,
+  ): ReturnType<CoreSearch["search"]>;
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(
     sessionId: string,
@@ -624,13 +638,23 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string, ownScopeBotWork: boolean, contextScopeId?: ScopeId, personalOnlyContext?: true): Promise<SkillResolution[]>;
+  listVisibleSkills(
+    principalId: string,
+    ownScopeBotWork: boolean,
+    contextScopeId?: ScopeId,
+  ): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   updateOwnedSkill(
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean; botActor?: boolean; personalOnly?: true; contextScopeId?: ScopeId },
+    opts?: {
+      liveActor?: boolean;
+      botActor?: boolean;
+      personalOnly?: true;
+      contextScopeId?: ScopeId;
+      sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
+    },
   ): Promise<Skill | "trigger_blocked" | "private_context" | null>;
   restoreOwnedSkill(
     id: string,
@@ -647,6 +671,7 @@ export interface App {
   removeSkillPack(id: string): Promise<{ removed: number }>;
   createOwnedSkill(input: {
     principalId: string;
+    sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
     personalOnly?: true;
     homeScope?: ScopeId;
     name: string;
@@ -735,6 +760,7 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
+  documentConversations?: Pick<import("../documents/conversations.ts").DocumentConversations, "knowledgeForSession">;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;

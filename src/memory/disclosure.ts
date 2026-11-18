@@ -10,6 +10,7 @@ import { swallow, swallowAs } from "../util/errors.ts";
 export interface MemoryDisclosure {
   actor: Principal;
   targetScope: ScopeId;
+  audienceScopeId?: ScopeId;
   nativeScopes: readonly ScopeId[];
   audience: readonly Principal[];
   open: boolean;
@@ -17,6 +18,8 @@ export interface MemoryDisclosure {
   config?: Pick<ScopedConfigStore, "resolveSharingPostureDurable">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: CurrentScopeMembers;
+  onDisclosure?: (facts: readonly MemoryProvenance[]) => Promise<boolean>;
+  nativeSources?: (scopes: readonly ScopeId[]) => Promise<readonly ScopeId[]>;
 }
 
 export function memoryDisclosurePolicy(input: MemoryDisclosure) {
@@ -30,7 +33,10 @@ export function memoryDisclosurePolicy(input: MemoryDisclosure) {
     return decision;
   };
   const target = parseScopeId(input.targetScope);
-  const personalTarget = target.kind === "personal" && samePerson(target.ref, input.actor.id);
+  const personalTarget =
+    target.kind === "personal" &&
+    samePerson(target.ref, input.actor.id) &&
+    (input.audienceScopeId === undefined || input.audienceScopeId === input.targetScope);
   let currentAudience: Promise<readonly Principal[]> | undefined;
   const audience = () =>
     (currentAudience ??= personalTarget
@@ -101,7 +107,9 @@ export function memoryDisclosurePolicy(input: MemoryDisclosure) {
     },
     allows(home: ScopeId, record: MemoryProvenance): Promise<boolean> {
       const { sensitivity, sourceUnknown, sources, personalOnly } = record;
-      if (personalOnly && !personalTarget) return Promise.resolve(false);
+      const owner = parseScopeId(home);
+      if (personalOnly && (!personalTarget || owner.kind !== "personal" || !samePerson(owner.ref, input.actor.id)))
+        return Promise.resolve(false);
       return once(`allows:${home}:${JSON.stringify([sensitivity, sourceUnknown, sources, personalOnly])}`, async () => {
         const homeAllowed = async () => (await narrow(home)) || (await sourceAllowed(home, "unknown"));
         if ((sourceUnknown || sensitivity === "unknown") && !(await homeAllowed())) return false;
@@ -141,20 +149,39 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       ...memory,
       recall: async (scope, context) => {
         await withheld(scope);
-        return memory.recall(scope, context);
+        const rows = await memory.recall(scope, context);
+        if (rows.length)
+          await access.onDisclosure?.([{ sensitivity: "unknown", sources: [scope], sourceUnknown: true }]);
+        return rows;
       },
       query: async (scope, query, limit, context) => {
         await withheld(scope);
-        return memory.query(scope, query, limit, context);
+        const rows = await memory.query(scope, query, limit, context);
+        if (rows.length)
+          await access.onDisclosure?.([{ sensitivity: "unknown", sources: [scope], sourceUnknown: true }]);
+        return rows;
       },
-      read: async (scope) => ((await narrow(scope)) ? memory.read(scope) : ""),
+      read: async (scope) => {
+        if (!(await narrow(scope))) return "";
+        const text = await memory.read(scope);
+        if (text) await access.onDisclosure?.([{ sensitivity: "unknown", sources: [scope], sourceUnknown: true }]);
+        return text;
+      },
     };
   }
   async function visible(scope: ScopeId): Promise<MemoryFact[]> {
     const facts = await listed!(scope);
-    const policy = memoryDisclosurePolicy(access);
+    const aliases = await access.nativeSources?.([...new Set(facts.flatMap((fact) => fact.sources))]);
+    const policy = memoryDisclosurePolicy(
+      aliases?.length ? { ...access, nativeScopes: [...access.nativeScopes, ...aliases] } : access,
+    );
     const allowed = await Promise.all(facts.map((fact) => policy.allows(scope, fact)));
     return facts.filter((_, index) => allowed[index]);
+  }
+  async function disclose(facts: MemoryFact[]): Promise<MemoryFact[]> {
+    if (facts.length && (await access.onDisclosure?.(facts)) === false)
+      return facts.filter((fact) => !fact.personalOnly);
+    return facts;
   }
   async function editable(scope: ScopeId, ids: readonly string[]): Promise<void> {
     if (!(await memoryDisclosurePolicy(access).narrow(scope))) throw new MemoryDisclosureDenied();
@@ -164,7 +191,8 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
   }
   return {
     ...memory,
-    facts: visible,
+    snapshotFacts: visible,
+    facts: async (scope) => disclose(await visible(scope)),
     async edit(scope, edits, by, context) {
       await editable(
         scope,
@@ -176,12 +204,21 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       await editable(scope, ids);
       await memory.delete!(scope, ids, by, context);
     },
-    read: async (scope) => renderFacts(await visible(scope)),
+    read: async (scope) => renderFacts(await disclose(await visible(scope))),
     async recall(scope, context) {
-      const shown = new Set((await visible(scope)).map((fact) => fact.id));
-      return (await memory.recall(scope, context)).filter((row) => row.id !== undefined && shown.has(row.id));
+      const facts = await visible(scope);
+      const shown = new Set(facts.map((fact) => fact.id));
+      const rows = (await memory.recall(scope, context)).filter((row) => row.id !== undefined && shown.has(row.id));
+      const selected = new Set(rows.map((row) => row.id));
+      const permitted = new Set((await disclose(facts.filter((fact) => selected.has(fact.id)))).map((fact) => fact.id));
+      return rows.filter((row) => row.id !== undefined && permitted.has(row.id));
     },
-    query: async (scope, query, limit = 20, context) =>
-      queryFacts(await visible(scope), query, limit, context?.sessionId),
+    async query(scope, query, limit = 20, context) {
+      const facts = await visible(scope);
+      const rows = queryFacts(facts, query, limit, context?.sessionId);
+      const selected = new Set(rows.map((row) => row.id));
+      const permitted = new Set((await disclose(facts.filter((fact) => selected.has(fact.id)))).map((fact) => fact.id));
+      return rows.filter((row) => row.id !== undefined && permitted.has(row.id));
+    },
   };
 }

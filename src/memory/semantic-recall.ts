@@ -49,7 +49,7 @@ export function createSemanticMemoryService(
   function view(notebook: MemoryService): MemoryService {
     return {
       ...notebook,
-      withDisclosure: (access) => view(disclosedMemory(notebook, access)),
+      withDisclosure: (access) => disclosedMemory({ ...view(notebook), withDisclosure: undefined }, access),
       async recall(scope: string, context: MemoryRecallContext = {}): Promise<MemoryCandidate[]> {
         const pending = index && context.query?.trim() ? queryFor(context) : undefined;
         void pending?.catch(() => undefined);
