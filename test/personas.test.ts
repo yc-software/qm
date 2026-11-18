@@ -206,6 +206,8 @@ test("skills written into a persona show for everyone with a role on it, and nob
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);
+  await built.app.updateOwnedSkill(skill!.id, ALICE, { body: "Check tests last." }, { liveActor: true });
+  assert.equal(await sees(BOB), true);
 });
 
 test("a persona's page lists its skills and the crons from conversations with it or channels it is pinned in, to people who can see them", async () => {

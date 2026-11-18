@@ -7,7 +7,7 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
-import { triggerBlocksSharedSkill } from "./artifact-share.ts";
+import { authorPublishesSkill, triggerBlocksSharedSkill } from "./artifact-share.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -418,8 +418,7 @@ export function createSkillMethods(
       const body = input.body.trim();
       if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
       const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
-      const homeKind = parseScopeId(homeScope).kind;
-      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group" && homeKind !== "persona") {
+      if (!authorPublishesSkill(homeScope)) {
         throw new Error(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
