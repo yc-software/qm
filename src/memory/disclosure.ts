@@ -58,7 +58,7 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
   function sourceAllowed(source: ScopeId, sensitivity: MemoryProvenance["sensitivity"]): Promise<boolean> {
     return once(`source:${source}:${sensitivity}`, async () => {
       if (!(await entitled(input.actor, source))) return false;
-      if (source === input.targetScope || (native(source) && ["org", "team"].includes(parseScopeId(source).kind ?? "")))
+      if (sameScope(source, input.targetScope) || (native(source) && ["org", "team"].includes(parseScopeId(source).kind ?? "")))
         return allEntitled(source);
       if (!input.open || !input.config) return false;
       const personal = personalScope(input.actor.id);
