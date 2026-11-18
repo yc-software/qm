@@ -90,6 +90,7 @@ export function createSideChatController(ctx: ConvCtx) {
   let glideFrame: number | null = null;
   let pinned: { card: HTMLElement; top: number } | null = null;
   const settledHeights = new Map<string, number>();
+  const slots = new Map<string, number>();
   let glideUntil = 0;
   const held = new WeakSet<HTMLElement>();
   let pressedOutside: number | null = null;
@@ -115,7 +116,13 @@ export function createSideChatController(ctx: ConvCtx) {
     card.style.height = "";
     const to = card.getBoundingClientRect().height;
     settledHeights.set(key, to);
-    if (from === undefined || Math.abs(to - from) < 1 || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const note = card.classList.contains("collapsed") && card.parentElement.offsetHeight === 0;
+    if (
+      note ||
+      from === undefined ||
+      Math.abs(to - from) < 1 ||
+      matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
       glides.delete(card);
       return running?.done?.();
     }
@@ -147,10 +154,12 @@ export function createSideChatController(ctx: ConvCtx) {
     else pinned = null;
   }
   function cover(card: HTMLElement) {
-    const height = card.getBoundingClientRect().height;
+    const before = card.getBoundingClientRect();
+    const height = before.height;
+    let reshaped = false;
     for (const stale of card.querySelectorAll(":scope > .side-chat-ghost")) stale.remove();
     const ghost = document.createElement("div");
-    ghost.className = "side-chat-ghost";
+    ghost.className = `side-chat-ghost${card.classList.contains("collapsed") ? " note" : ""}`;
     ghost.inert = true;
     ghost.append(...[...card.children].map((part) => part.cloneNode(true)));
     const copies = [...ghost.querySelectorAll("*")];
@@ -168,6 +177,13 @@ export function createSideChatController(ctx: ConvCtx) {
     held.add(card);
     queueMicrotask(() => {
       card.append(ghost);
+      const after = card.getBoundingClientRect();
+      reshaped = Math.abs(after.width - before.width) > 1;
+      if (reshaped) {
+        ghost.style.inset = `${-card.clientTop}px auto auto ${before.left - after.left - card.clientLeft}px`;
+        ghost.style.width = `${before.width}px`;
+        ghost.style.height = `${before.height}px`;
+      }
       for (const [copy, top] of scrolled) if (copy) copy.scrollTop = top;
     });
     return (keep: boolean) => {
@@ -177,10 +193,10 @@ export function createSideChatController(ctx: ConvCtx) {
       moving();
       glide(card);
       const shrinking = keep && glides.get(card);
-      const delay = shrinking ? shrinking.duration * 0.6 : 0;
+      const delay = shrinking && !reshaped ? shrinking.duration * 0.6 : 0;
       ghost.classList.add("fading");
       const faded = ghost
-        .animate?.({ opacity: [1, 0] }, { delay, duration: 80, endDelay: 160, fill: "both" })
+        .animate?.({ opacity: [1, 0] }, { delay, duration: reshaped ? 140 : 80, endDelay: 160, fill: "both" })
         .finished.catch(() => {});
       card.style.setProperty("--side-chat-reveal", `${delay + 40}ms`);
       const settled = shrinking ? new Promise<void>((resolve) => (shrinking.done = resolve)) : null;
@@ -193,6 +209,7 @@ export function createSideChatController(ctx: ConvCtx) {
   }
   function paintHighlights() {
     let railBottom = Number.NEGATIVE_INFINITY;
+    let reach = Number.NEGATIVE_INFINITY;
     let stack: HTMLElement | null = null;
     const hosts = [...anchors.keys()].sort((a, b) =>
       a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
@@ -244,11 +261,19 @@ export function createSideChatController(ctx: ConvCtx) {
         },
       );
       for (const { card, top, height, marginBottom } of cards) {
-        const offset = Math.max(0, Math.max(top - origin.top, floor) - nextCardTop);
+        const id = card.dataset.sideChatId ?? "";
+        card.classList.toggle("hovered", Boolean(hovered) && id === hovered);
+        if (rail && card.classList.contains("collapsed") && !card.style.height) slots.set(id, height);
+        const slot = rail ? Math.min(height, slots.get(id) ?? 0) : height;
+        const tuck = `${height - slot}px`;
+        if (card.style.getPropertyValue("--side-chat-tuck") !== tuck) card.style.setProperty("--side-chat-tuck", tuck);
+        const wanted = Math.max(top - origin.top, floor) - nextCardTop;
+        const offset = rail && !id ? wanted : Math.max(0, wanted);
         const value = `${offset}px`;
         if (card.style.getPropertyValue("--side-chat-offset") !== value)
           card.style.setProperty("--side-chat-offset", value);
-        nextCardTop += offset + height + marginBottom + gap;
+        reach = Math.max(reach, origin.top + nextCardTop + offset + height);
+        nextCardTop += offset + (rail ? slot : height + marginBottom) + gap;
       }
       railBottom = Math.max(railBottom, rail ? origin.top + nextCardTop : origin.bottom);
       stack = host.parentElement;
@@ -275,7 +300,8 @@ export function createSideChatController(ctx: ConvCtx) {
     }
     if (!stack) return;
     const previous = Number.parseFloat(stack.style.getPropertyValue("--side-chat-overhang")) || 0;
-    const overhang = `${Math.max(0, Math.ceil(railBottom - stack.getBoundingClientRect().bottom + previous))}px`;
+    const bottom = Math.max(railBottom, reach) - stack.getBoundingClientRect().bottom;
+    const overhang = `${Math.max(0, Math.ceil(bottom + previous))}px`;
     if (stack.style.getPropertyValue("--side-chat-overhang") !== overhang)
       stack.style.setProperty("--side-chat-overhang", overhang);
   }
@@ -521,6 +547,7 @@ export function createSideChatController(ctx: ConvCtx) {
     highlightResize?.disconnect();
     glideResize?.disconnect();
     settledHeights.clear();
+    slots.clear();
     observedRows.clear();
     for (const host of anchors.keys())
       host.querySelectorAll(":scope > .side-chat-highlight").forEach((element) => element.remove());
@@ -697,7 +724,9 @@ export function createSideChatController(ctx: ConvCtx) {
         redraw();
         conv.drawActiveChat();
         reveal();
-        conv.composer.focusComposerEnd();
+        const focus = () => conversation === conv && conv.composer.focusComposerEnd();
+        if (release) requestAnimationFrame(focus);
+        else focus();
         if (send) void conv.composer.submit();
       }
     } catch (cause) {
@@ -835,6 +864,7 @@ export function createSideChatController(ctx: ConvCtx) {
       highlightResize?.disconnect();
       glideResize?.disconnect();
       settledHeights.clear();
+      slots.clear();
     },
     hover(event: MouseEvent) {
       const card = (event.target as Element).closest<HTMLElement>(".side-chat-card");

@@ -50,6 +50,11 @@ test("clicking outside an open side chat collapses it, clicking inside keeps it 
     await h.boot();
     await h.sessionsReady();
     await until(() => Boolean(document.querySelector(".side-chat-preview")));
+    const note = document.querySelector<HTMLElement>(".side-chat-card")!;
+    note.dispatchEvent(new window.FocusEvent("focusin", { bubbles: true }));
+    assert.ok(note.classList.contains("hovered"), "a focused note is marked so it lights up with its passage");
+    note.dispatchEvent(new window.FocusEvent("focusout", { bubbles: true }));
+    assert.ok(!note.classList.contains("hovered"));
     document.querySelector<HTMLElement>(".side-chat-preview")!.click();
     await until(() => open()?.textContent?.includes("Jobs survive restarts.") === true);
     press(open()!.querySelector(".message-row")!);
