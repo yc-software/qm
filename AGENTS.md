@@ -141,6 +141,9 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
   covered by tests.
+  For web UI and admin portal changes, `npm run qa:web` and `npm run qa:portal` drive the
+  running instance in Chromium and WebKit, and `npm run qa:event` triggers cron, approval,
+  background-run and Slack-originated states on demand; see `docs/qa/browser/README.md`.
   Leave review instances running until the PR merges, unless the user asks to stop
   earlier. After merge, tear down that worktree's instance and verify its processes
   and lease are gone before removing the worktree. Preserve shared Postgres and
