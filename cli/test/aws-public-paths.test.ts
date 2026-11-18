@@ -7,7 +7,14 @@ import { assertAwsPublicRouting } from "../src/backends/aws.ts";
 import { loadConfigAt } from "../src/config.ts";
 import { terraformVars } from "../src/terraform.ts";
 
-function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2") {
+type Rule = { RuleArn: string; IsDefault: false; Priority: string; Actions: unknown[]; Conditions: unknown[] };
+
+function fixture(
+  paths: unknown = ["/hooks/*"],
+  blueGreen = false,
+  priority = "2",
+  extra: { rule: Rule; tags: Array<{ Key: string; Value: string }> } | undefined = undefined,
+) {
   const dir = mkdtempSync(join(tmpdir(), "qm-public-paths-"));
   const configPath = join(dir, "qm.config.jsonc");
   const service = (name: string) => ({
@@ -93,7 +100,13 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
       ],
     },
     "describe-target-groups": { TargetGroups: groups },
-    "describe-rules": { Rules: rules },
+    "describe-rules": { Rules: extra ? [extra.rule, ...rules] : rules },
+    "describe-tags": {
+      TagDescriptions: [
+        ...rules.map((rule) => ({ ResourceArn: rule.RuleArn, Tags: [] })),
+        ...(extra ? [{ ResourceArn: extra.rule.RuleArn, Tags: extra.tags }] : []),
+      ],
+    },
   };
   const bin = join(dir, "aws");
   writeFileSync(
@@ -207,3 +220,28 @@ test("the egress proxy may sit behind its own load balancer while other private 
     f.close();
   }
 });
+
+for (const blueGreen of [false, true]) {
+  test(`${blueGreen ? "blue/green" : "rolling"} routing leaves out only rules tagged as operator-managed`, () => {
+    const rule: Rule = {
+      RuleArn: "relay-rule",
+      IsDefault: false,
+      Priority: "1",
+      Actions: [{ Type: "forward", TargetGroupArn: "relay" }],
+      Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/relay/*"] } }],
+    };
+    for (const [tags, accepted] of [
+      [[{ Key: "qm:operator-managed", Value: "model relay" }], true],
+      [[{ Key: "Name", Value: "model relay" }], false],
+    ] as const) {
+      const f = fixture(undefined, blueGreen, "2", { rule, tags: [...tags] });
+      try {
+        const config = loadConfigAt(f.configPath).config;
+        if (accepted) assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
+        else assert.throws(() => assertAwsPublicRouting(config, f.services));
+      } finally {
+        f.close();
+      }
+    }
+  });
+}

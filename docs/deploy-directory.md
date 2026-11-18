@@ -222,6 +222,12 @@ and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
 
+Preflight rejects any other listener rule unless it carries the
+`qm:operator-managed` tag. Tag a rule only when you run the service behind it
+and keep it correct yourself; qm does not check what a tagged rule matches or
+where it sends traffic. Shared ALBs never skip rules. The deploy role needs
+`elasticloadbalancing:DescribeTags`.
+
 ### Sandbox egress proxy
 
 Add `"egress-proxy"` to `services` to deploy the sandbox egress proxy
