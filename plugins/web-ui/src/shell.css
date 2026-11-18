@@ -2751,50 +2751,6 @@ qm-markdown .tok-in {
   border-radius: 8px;
   object-fit: contain;
 }
-.file-html-unfurl {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  padding-left: 12px;
-  border-left: 4px solid var(--border);
-}
-.file-html-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 24px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 600;
-}
-.file-html-header button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-.file-html-header button:hover {
-  background: var(--muted);
-  color: var(--foreground);
-}
-.file-html-unfurl iframe {
-  width: 100%;
-  height: 360px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #fff;
-}
-.file-html-unfurl .file-chip {
-  align-self: flex-start;
-}
 .chip-open {
   display: inline-flex;
   align-items: center;
@@ -3140,17 +3096,21 @@ qm-markdown .tok-in {
   flex: 0 0 auto;
 }
 .thinking-row[open] > .thinking-summary > .icon:last-child,
-.thinking-row[open] > .thinking-summary > .activity-chevron {
+.thinking-row[open] > .thinking-summary > .activity-chevron,
+.file-html-card[open] > .file-html-bar > .activity-chevron {
   transform: rotate(90deg);
 }
-.thinking-row > .thinking-summary > .activity-chevron {
+.thinking-row > .thinking-summary > .activity-chevron,
+.file-html-card > .file-html-bar > .activity-chevron {
   transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
 }
-.thinking-row[data-closing] > .thinking-summary > .activity-chevron {
+.thinking-row[data-closing] > .thinking-summary > .activity-chevron,
+.file-html-card[data-closing] > .file-html-bar > .activity-chevron {
   transform: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .thinking-row > .thinking-summary > .activity-chevron {
+  .thinking-row > .thinking-summary > .activity-chevron,
+  .file-html-card > .file-html-bar > .activity-chevron {
     transition: none;
   }
 }
@@ -6612,13 +6572,15 @@ a.file-card:hover {
   color: var(--destructive);
 }
 .project-dialog-backdrop,
-.project-dialog {
+.project-dialog,
+.file-html-layer {
   --dialog-pad-top: max(20px, env(safe-area-inset-top));
   --dialog-pad-right: max(20px, env(safe-area-inset-right));
   --dialog-pad-bottom: max(20px, env(safe-area-inset-bottom));
   --dialog-pad-left: max(20px, env(safe-area-inset-left));
 }
-.project-dialog-backdrop {
+.project-dialog-backdrop,
+.file-html-layer:popover-open {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -11821,7 +11783,9 @@ h3.ambient-field-label {
 .playground-header,
 .playground-title,
 .playground-actions,
-.playground-actions a {
+.playground-actions a,
+.file-html-actions,
+.file-html-actions > * {
   display: flex;
   align-items: center;
 }
@@ -11841,10 +11805,12 @@ h3.ambient-field-label {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.playground-actions {
+.playground-actions,
+.file-html-actions {
   gap: 4px;
 }
-.playground-actions a {
+.playground-actions a,
+.file-html-actions > * {
   gap: 4px;
   padding: 5px 7px;
   border-radius: 6px;
@@ -11852,7 +11818,8 @@ h3.ambient-field-label {
   font-size: 12px;
   text-decoration: none;
 }
-.playground-actions a:hover {
+.playground-actions a:hover,
+.file-html-actions > :hover {
   color: var(--foreground);
   background: var(--muted);
 }
