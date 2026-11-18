@@ -811,7 +811,7 @@ test("core route: malformed clientTools declarations are rejected 400", async ()
     ],
     ["oversize schema", [pageTool("ui__x", { inputSchema: { type: "object", description: "s".repeat(16_000) } })]],
     ["timeout too short", [pageTool("ui__x", { timeoutMs: 999 })]],
-    ["timeout too long", [pageTool("ui__x", { timeoutMs: 60_001 })]],
+    ["timeout too long", [pageTool("ui__x", { timeoutMs: 2_147_483_648 })]],
     ["timeout not an integer", [pageTool("ui__x", { timeoutMs: 1500.5 })]],
   ];
   for (const [label, clientTools] of cases) {

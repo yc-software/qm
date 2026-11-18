@@ -277,7 +277,7 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
 async function getRun(ctx: ApiCtx): Promise<void> {
   const { res, app, actor } = ctx;
   const id = ctx.params.id!;
-  const run = await app.getRun(id, actor?.p);
+  const run = await app.getRun(id, actor?.p, { clientTools: Boolean(actor && !actor.imp) });
   if (!run) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, run);
 }
@@ -287,7 +287,7 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   const threadRef = url.searchParams.get("threadRef") ?? "";
   if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
-  const run = active && (await app.getRun(active.runId, actor?.p));
+  const run = active && (await app.getRun(active.runId, actor?.p, { clientTools: Boolean(actor && !actor.imp) }));
   const live = active && run && !isTerminal(run.status) ? { runId: active.runId, run } : { runId: null, run: null };
   return sendJson(res, 200, { ...live, ...(active?.queued ? { queued: active.queued } : {}) });
 }

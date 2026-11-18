@@ -36,7 +36,7 @@ function toolEvent(item: Item): { id: string; data: Record<string, unknown> } | 
 async function streamRun(ctx: ApiCtx): Promise<void> {
   const { app, req, res, actor } = ctx;
   const runId = ctx.params.id!;
-  const initial = await app.getRun(runId, actor?.p);
+  const initial = await app.getRun(runId, actor?.p, { clientTools: Boolean(actor && !actor.imp) });
   if (!initial) return sendJson(res, 404, { error: "not_found" });
   if (res.destroyed) return;
   let closed = false;
@@ -117,7 +117,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     try {
       do {
         refreshAgain = false;
-        const run = hydrated ?? (await app.getRun(runId, actor?.p));
+        const run = hydrated ?? (await app.getRun(runId, actor?.p, { clientTools: Boolean(actor && !actor.imp) }));
         hydrated = undefined;
         if (closed) return;
         if (!run) {

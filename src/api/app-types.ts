@@ -306,7 +306,9 @@ export interface App {
   getRun(
     runId: string,
     viewer?: string,
+    options?: { clientTools?: boolean },
   ): Promise<{
+    clientToolsFor?: string | null;
     status: Run["status"];
     attempt: number;
     result: TurnResult | null;
