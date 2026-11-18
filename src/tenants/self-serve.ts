@@ -15,9 +15,9 @@ export const externalOrgSchema = z
   })
   .strip();
 
-export type ExternalOrg = z.infer<typeof externalOrgSchema>;
+type ExternalOrg = z.infer<typeof externalOrgSchema>;
 
-export interface ExternalOrgTenant {
+interface ExternalOrgTenant {
   tenant: string;
   created: boolean;
   provisioned: boolean;
@@ -78,7 +78,7 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
 const PROVISION_TIMEOUT_MS = 30_000;
 const PROVISION_REPLY_BYTES_MAX = 65_536;
 
-export async function selfServeTenant(
+async function selfServeTenant(
   pg: Pick<PgPool, "q">,
   issuer: string,
   org: ExternalOrg,
@@ -97,11 +97,7 @@ export async function selfServeTenant(
   };
 }
 
-export async function markSelfServeProvisioned(
-  pg: Pick<PgPool, "q">,
-  tenant: string,
-  modelGatewayKey: string,
-): Promise<void> {
+async function markSelfServeProvisioned(pg: Pick<PgPool, "q">, tenant: string, modelGatewayKey: string): Promise<void> {
   await pg.q("SELECT qm_self_serve_provisioned($1, $2)", [tenant, modelGatewayKey]);
 }
 
