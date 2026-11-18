@@ -46,6 +46,7 @@ export function createSideChatController(ctx: ConvCtx) {
   let pendingAnchor: SelectionAnchor | null = null;
   let pendingQuote: string | null = null;
   let pendingDraft = "";
+  let sendOnOpen = false;
   let maximized = false;
   let includeExcerpt = true;
   const previews = new Map<string, { text: string }>();
@@ -205,6 +206,14 @@ export function createSideChatController(ctx: ConvCtx) {
     void discuss(false, event.key);
   }
 
+  function pendingKeydown(event: KeyboardEvent) {
+    if (event.isComposing || event.keyCode === 229 || event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    if (!pendingDraft.trim()) return;
+    sendOnOpen = true;
+    redraw();
+  }
+
   function panelKeydown(event: KeyboardEvent) {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     event.preventDefault();
@@ -275,6 +284,7 @@ export function createSideChatController(ctx: ConvCtx) {
     pendingQuote = null;
     pendingAnchor = null;
     pendingDraft = "";
+    sendOnOpen = false;
     epoch++;
     busy = false;
     choices.clear();
@@ -431,15 +441,19 @@ export function createSideChatController(ctx: ConvCtx) {
       if (conversation === conv) {
         if (!loaded) throw new Error("Could not load side chat. Try again.");
         if (creating) conv.composer.state.draft = pendingDraft;
+        const send = creating && sendOnOpen;
         pendingQuote = null;
         pendingDraft = "";
+        sendOnOpen = false;
         redraw();
         conv.drawActiveChat();
         conv.composer.focusComposerEnd();
+        if (send) void conv.composer.submit();
       }
     } catch (cause) {
       reportHandledError("web:side_chat_open", cause);
       if (opening !== epoch) return;
+      sendOnOpen = false;
       error = errMessage(cause, "Could not open side chat.");
       redraw();
     }
@@ -492,7 +506,10 @@ export function createSideChatController(ctx: ConvCtx) {
       await show(result.session, true);
     } catch (cause) {
       reportHandledError("web:side_chat_create", cause);
-      if (opening === epoch) error = errMessage(cause, "Could not start side chat.");
+      if (opening === epoch) {
+        error = errMessage(cause, "Could not start side chat.");
+        sendOnOpen = false;
+      }
     } finally {
       if (opening === epoch) {
         busy = false;
@@ -762,6 +779,8 @@ export function createSideChatController(ctx: ConvCtx) {
                           aria-label="Ask about"
                           placeholder="Ask about…"
                           .value=${pendingDraft}
+                          ?readonly=${sendOnOpen}
+                          @keydown=${pendingKeydown}
                           @input=${(event: Event) => {
                             pendingDraft = (event.target as HTMLTextAreaElement).value;
                           }}
