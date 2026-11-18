@@ -458,3 +458,25 @@ test("human turns are always traced while other runs follow the configured rate"
   assert.equal(human.attributes["qm.surface"], "slack");
   assert.match(human.attributes["messaging.message.id"], /^run-\d+$/);
 });
+
+test("execute stages keep their diagnostic attributes and the command's own run time", async () => {
+  const { spans } = await runReporting(
+    `
+    const { tracePhase, traceElapsed } = await import('./plugins/chassis/src/error-reporting.ts');
+    await traceQueued(undefined, 'run', { 'qm.origin': 'human' }, () =>
+      tracePhase('exec.run', async () => { traceElapsed('exec.command', 250); return { code: 3 }; }, {
+        attributes: (ran) => ({ 'qm.exec.provider': 'sprites', 'qm.exec.exit_code': ran.code }),
+      }),
+    );
+    await flushErrorReporting();
+  `,
+    true,
+    { SENTRY_TRACES_SAMPLE_RATE: "1" },
+  );
+  const run = spans.find((span) => span.name === "exec.run")!;
+  assert.equal(run.attributes["qm.exec.provider"], "sprites");
+  assert.equal(run.attributes["qm.exec.exit_code"], 3);
+  const command = spans.find((span) => span.name === "exec.command")!;
+  assert.equal(command.parent_span_id, run.span_id);
+  assert.ok(Math.abs(command.end_timestamp - command.start_timestamp - 0.25) < 0.01);
+});

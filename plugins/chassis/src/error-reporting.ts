@@ -44,6 +44,12 @@ const KEPT_TRACE_DATA = new Set([
   "qm.facts",
   "qm.recalled",
   "qm.skills",
+  "qm.exec.provider",
+  "qm.exec.background",
+  "qm.exec.exit_code",
+  "qm.exec.timed_out",
+  "qm.exec.stdout_bytes",
+  "qm.exec.stderr_bytes",
   "service.name",
   "deployment",
   "time_to_model_request",
@@ -355,14 +361,18 @@ export type Phase = Sentry.Span;
 export function tracePhase<T>(
   op: string,
   work: () => Promise<T>,
-  opts: { counts?: (result: T) => Record<string, number>; name?: string; parent?: Phase } = {},
+  opts: {
+    attributes?: (result: T) => Record<string, string | number | boolean | undefined>;
+    name?: string;
+    parent?: Phase;
+  } = {},
 ): Promise<T> {
   if (!client || !tracing || !(opts.parent ?? client.getActiveSpan())) return work();
   return client.startSpan(
     { op, name: opts.name ?? op, onlyIfParent: true, ...(opts.parent ? { parentSpan: opts.parent } : {}) },
     async (span) => {
       const result = await work();
-      if (opts.counts) span.setAttributes(opts.counts(result));
+      if (opts.attributes) span.setAttributes(opts.attributes(result));
       return result;
     },
   );
@@ -371,6 +381,16 @@ export function tracePhase<T>(
 export function startPhase(op: string): Phase | undefined {
   if (!client || !tracing || !client.getActiveSpan()) return undefined;
   return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
+}
+
+export function traceElapsed(op: string, ms: number): void {
+  if (!client || !tracing || !client.getActiveSpan()) return;
+  try {
+    const end = Date.now() / 1000;
+    client.startInactiveSpan({ op, name: op, startTime: end - ms / 1000, onlyIfParent: true }).end(end);
+  } catch (error) {
+    swallow("tracing", error);
+  }
 }
 
 export function untraced<T>(work: () => T): T {
