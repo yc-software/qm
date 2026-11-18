@@ -553,7 +553,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
   );
 });
 
-test("a chat with any member neither the deployment nor the host vouches for, or that is deactivated, is neither mirrored nor answered", async () => {
+test("a chat with any member neither the deployment nor the host vouches for, or that is deactivated by hand, is neither mirrored nor answered, while a Slack sync deactivation does not override the host", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
     const withGuest = event({ body: "!post hi", mentions: true, eventId: "ev-guest", messageId: "1040" });
@@ -578,6 +578,10 @@ test("a chat with any member neither the deployment nor the host vouches for, or
     vouched.message.user = founder;
     vouched.chat.members.push(vouched.message.user);
     assert.equal((await deliver(vouched)).body.ignored, undefined);
+    await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev", "directory-sync"));
+    const synced = { ...vouched, event_id: "ev-vouched-sync", message: { ...vouched.message, id: "1044" } };
+    assert.equal((await deliver(synced)).body.ignored, undefined);
+    await withTenant(TEST_TENANT, () => built.identity.reactivate("founder@startup.dev"));
     await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev"));
     const again = { ...vouched, event_id: "ev-vouched-2", message: { ...vouched.message, id: "1043" } };
     assert.equal((await deliver(again)).body.ignored, "unvouched_participants");
