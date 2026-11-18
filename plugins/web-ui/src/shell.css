@@ -6020,6 +6020,8 @@ a.connector-widget:focus-visible {
   font-size: var(--font-14);
   line-height: 1.55;
   text-align: start;
+}
+.cron-task-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -6128,8 +6130,14 @@ a.connector-widget:focus-visible {
   font-size: var(--font-12-5);
 }
 .cron-next-runs span:first-child {
+  flex-basis: 100%;
   color: var(--foreground);
   font-weight: 500;
+}
+.cron-next-runs span + span:not(:nth-child(2))::before {
+  content: "·";
+  margin-right: 14px;
+  color: var(--border);
 }
 .cron-schedule-form .cron-card-actions {
   margin: 14px -16px 0;
@@ -6278,6 +6286,11 @@ a.connector-widget:focus-visible {
 @media (max-width: 560px) {
   .cron-heading {
     flex-wrap: wrap;
+  }
+  .cron-heading > .cron-title,
+  .cron-heading > h2,
+  .cron-heading > .cron-title-form {
+    flex-basis: 100%;
   }
   .cron-heading > .actions {
     flex-wrap: wrap;
