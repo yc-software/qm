@@ -174,9 +174,10 @@ async function enqueue(text: string): Promise<string> {
     headers: signedHeaders(sharedEnv.CORE_SIGNING_SECRET, "POST", path, body),
     body,
   });
-  const queued = (await res.json()) as { runId?: string };
-  if (res.status !== 202 || !queued.runId) throw new Error(`enqueue: HTTP ${res.status} ${JSON.stringify(queued)}`);
-  return queued.runId;
+  const reply = await res.text();
+  const runId = res.status === 202 ? (JSON.parse(reply) as { runId?: string }).runId : undefined;
+  if (!runId) throw new Error(`enqueue: HTTP ${res.status} ${reply}`);
+  return runId;
 }
 
 async function runRow(runId: string) {
