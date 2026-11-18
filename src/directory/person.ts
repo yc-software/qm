@@ -95,6 +95,25 @@ export function rosterIds(id: string): string[] {
   return [...new Set(ids.flatMap((x) => [x, foldPrincipalId(x)]))];
 }
 
+export function pickForPerson<T>(
+  id: string,
+  recordOf: (principalId: string) => T | null | undefined,
+  recency: (rec: T) => number,
+): T | undefined {
+  const ids = rosterIds(id);
+  const canonical = canonicalPerson(id);
+  for (const preferred of [id.trim(), foldPrincipalId(id), canonical, foldPrincipalId(canonical)]) {
+    const rec = recordOf(preferred);
+    if (rec) return rec;
+  }
+  let best: T | undefined;
+  for (const other of ids) {
+    const rec = recordOf(other);
+    if (rec && (best === undefined || recency(rec) > recency(best))) best = rec;
+  }
+  return best;
+}
+
 export function personKey(id: string | null | undefined): string {
   const key = foldPrincipalId(id);
   if (!key) return "";

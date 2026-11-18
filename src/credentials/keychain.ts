@@ -6,7 +6,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SurfaceUser } from "../surfaces/contract.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personIds, personKey, pickForPerson, rosterIds, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { mergeCredentialFiles, type CredentialFileMerge } from "./file-merge.ts";
@@ -793,10 +793,20 @@ export function createKeychain(deps: {
     token: OAuthToken,
     accountType?: string,
   ): Promise<KeychainCredential> {
-    const id = oauthId(host, principalId, accountType);
-    const rec = connectorRec(id, host, principalId, token, accountType, await deps.creds.get(id));
+    const prior = await connectorRecord(host, principalId, accountType);
+    const owner = prior?.ownerId ?? canonicalPerson(principalId);
+    const id = prior?.id ?? oauthId(host, owner, accountType);
+    const rec = connectorRec(id, host, owner, token, accountType, prior);
     await deps.creds.put(id, rec);
     return rec;
+  }
+
+  async function personConnectorRecords(
+    host: string,
+    principalId: string,
+    accountType?: string,
+  ): Promise<KeychainCredential[]> {
+    return deps.creds.getMany([...new Set(rosterIds(principalId).map((p) => oauthId(host, p, accountType)))]);
   }
 
   async function connectorRecord(
@@ -804,7 +814,14 @@ export function createKeychain(deps: {
     principalId: string,
     accountType?: string,
   ): Promise<KeychainCredential | null> {
-    return deps.creds.get(oauthId(host, principalId, accountType));
+    const byId = new Map((await personConnectorRecords(host, principalId, accountType)).map((r) => [r.id, r]));
+    return (
+      pickForPerson(
+        principalId,
+        (p) => byId.get(oauthId(host, p, accountType)),
+        (r) => r.updatedAt,
+      ) ?? null
+    );
   }
 
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
@@ -1268,9 +1285,9 @@ export function createKeychain(deps: {
     createGrant: mintGrant,
 
     async grantConnectorToScope({ host, principalId, accountType, audienceScopeId, purpose }) {
-      const id = oauthId(host, principalId, accountType);
-      const cred = await deps.creds.get(id);
+      const cred = await connectorRecord(host, principalId, accountType);
       if (!cred) return null;
+      const id = cred.id;
       for (const g of await deps.grants.all()) {
         if (
           g.credentialId === id &&
@@ -1281,7 +1298,7 @@ export function createKeychain(deps: {
           return g;
         }
       }
-      return mintGrant({ credentialId: id, ownerId: principalId, audienceScopeId, mode: "standing", purpose });
+      return mintGrant({ credentialId: id, ownerId: cred.ownerId, audienceScopeId, mode: "standing", purpose });
     },
 
     async getGrant(id) {
@@ -1516,7 +1533,7 @@ export function createKeychain(deps: {
     },
 
     async deleteConnectorToken(host, principalId, accountType) {
-      await deleteCredential(oauthId(host, principalId, accountType));
+      for (const rec of await personConnectorRecords(host, principalId, accountType)) await deleteCredential(rec.id);
     },
 
     async connectorTokenStatus(host, principalId, accountType) {
