@@ -117,6 +117,27 @@ test("document HTTP routes enforce signed identity and admin configuration rathe
     assert.equal(resolved.status, 200);
     const result = (await resolved.json()) as { conversation: { scopeId: string } };
     assert.equal(result.conversation.scopeId, "personal:owner");
+    const copied = await request("/v1/web/documents/resolve", "owner", {
+      surface,
+      documentId: "http-copy",
+      copyFromDocumentId: "document-a",
+      mode: "private",
+    });
+    assert.equal(copied.status, 200);
+    assert.equal(((await copied.json()) as { copiedFromDocumentId: string }).copiedFromDocumentId, "document-a");
+    for (const invalid of [
+      { copyFromDocumentId: 7 },
+      { copyFromDocumentId: "invalid-copy" },
+      {
+        copyFromDocumentId: "document-a",
+        previous: { scopeId: projectScopeId(project.id), threadRef: "web:owner:old" },
+      },
+    ])
+      assert.equal(
+        (await request("/v1/web/documents/resolve", "owner", { surface, documentId: "invalid-copy", ...invalid }))
+          .status,
+        400,
+      );
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -278,6 +299,111 @@ test("a run's client-tool authority is bound to its authenticated actor rather t
     assert.equal((await built.app.getRun(aliased.run.id, "member", { clientTools: true }))?.clientToolsFor, "member");
     await built.projects.removeMember(project.id, "owner", "member");
     assert.equal(await built.app.getRun(run.id, "member", { clientTools: true }), null);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+for (const mode of ["shared", "private"] as const)
+  test(`separating a ${mode} copy retains its source audience after the surface default changes`, async () => {
+    const built = buildApp(testConfig());
+    try {
+      const sourceTeam = await built.projects.create({ name: "Original team", ownerId: "owner" });
+      const defaultTeam = await built.projects.create({ name: "New default", ownerId: "owner" });
+      await built.documentConversations.configure(surface, sourceTeam.id);
+      const source = await built.documentConversations.resolve({ surface, documentId: "source", principalId: "owner" });
+      const originalPrivate = await built.documentConversations.resolve({
+        surface,
+        documentId: "source",
+        principalId: "owner",
+        mode: "private",
+      });
+      assert.ok(source.status === "ok" && originalPrivate.status === "ok");
+      await built.sessions.append(
+        { sessionId: source.conversation.sessionId },
+        { kind: "UserMessage", text: "Original history" },
+      );
+      await built.documentConversations.configure(surface, defaultTeam.id);
+      const copy = await built.documentConversations.resolve({
+        surface,
+        documentId: "copy",
+        copyFromDocumentId: "source",
+        principalId: "owner",
+        mode,
+      });
+      assert.equal(copy.status, "ok");
+      if (copy.status !== "ok") throw new Error("Copy missing");
+      assert.equal(copy.copiedFromDocumentId, "source");
+      const knowledge = await built.documentConversations.knowledgeForSession(copy.conversation.sessionId, "owner");
+      assert.equal(knowledge?.teamScopeId, projectScopeId(sourceTeam.id));
+      assert.deepEqual(await built.sessions.getItems(copy.conversation.sessionId), []);
+      const sharedCopy = await built.documentConversations.resolve({
+        surface,
+        documentId: "copy",
+        principalId: "owner",
+        mode: "shared",
+      });
+      assert.ok(sharedCopy.status === "ok");
+      assert.equal(sharedCopy.conversation.scopeId, source.conversation.scopeId);
+      assert.notEqual(sharedCopy.conversation.threadRef, source.conversation.threadRef);
+      assert.deepEqual(
+        await built.documentConversations.resolve({ surface, documentId: "source", principalId: "owner" }),
+        originalPrivate,
+      );
+      assert.equal((await built.sessions.getItems(source.conversation.sessionId))[0]?.text, "Original history");
+    } finally {
+      await built.runtime.stop();
+    }
+  });
+
+test("copy resolution refuses unknown sources, removed members and a destination owned by another team", async () => {
+  const built = buildApp(testConfig());
+  try {
+    const team = await built.projects.create({ name: "Original team", ownerId: "owner" });
+    await built.projects.addMember(team.id, "owner", "member");
+    await built.documentConversations.configure(surface, team.id);
+    assert.equal(
+      (
+        await built.documentConversations.resolve({
+          surface,
+          documentId: "source",
+          principalId: "member",
+          mode: "private",
+        })
+      ).status,
+      "ok",
+    );
+    const input = { surface, documentId: "copy", principalId: "member", copyFromDocumentId: "source" };
+    assert.deepEqual(await built.documentConversations.resolve({ ...input, copyFromDocumentId: "missing" }), {
+      status: "forbidden",
+    });
+    assert.deepEqual(await built.documentConversations.resolve({ ...input, documentId: "source" }), {
+      status: "forbidden",
+    });
+    assert.deepEqual(
+      await built.documentConversations.resolve({
+        ...input,
+        previous: { scopeId: projectScopeId(team.id), threadRef: "web:member:old" },
+      }),
+      { status: "forbidden" },
+    );
+    await built.projects.removeMember(team.id, "owner", "member");
+    assert.deepEqual(await built.documentConversations.resolve(input), { status: "forbidden" });
+    const other = await built.projects.create({ name: "Other team", ownerId: "owner" });
+    await built.documentConversations.configure(surface, other.id);
+    const destination = await built.documentConversations.resolve({
+      surface,
+      documentId: "copy",
+      principalId: "owner",
+    });
+    assert.ok(destination.status === "ok");
+    assert.deepEqual(await built.documentConversations.resolve({ ...input, principalId: "owner" }), {
+      status: "conflict",
+    });
+    assert.deepEqual(
+      await built.documentConversations.resolve({ surface, documentId: "copy", principalId: "owner" }),
+      destination,
+    );
   } finally {
     await built.runtime.stop();
   }

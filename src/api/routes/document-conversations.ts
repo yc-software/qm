@@ -26,7 +26,12 @@ async function resolve(ctx: ApiCtx): Promise<void> {
     !surface ||
     typeof body.documentId !== "string" ||
     !body.documentId.trim() ||
-    (body.mode !== undefined && body.mode !== "shared" && body.mode !== "private")
+    (body.mode !== undefined && body.mode !== "shared" && body.mode !== "private") ||
+    (body.copyFromDocumentId !== undefined &&
+      (typeof body.copyFromDocumentId !== "string" ||
+        !body.copyFromDocumentId.trim() ||
+        body.copyFromDocumentId === body.documentId ||
+        body.previous !== undefined))
   )
     return sendJson(ctx.res, 400, { error: "bad_request" });
   let previous: { scopeId: string; threadRef: string } | undefined;
@@ -44,6 +49,7 @@ async function resolve(ctx: ApiCtx): Promise<void> {
     documentId: body.documentId,
     principalId: user,
     ...(previous ? { previous } : {}),
+    ...(typeof body.copyFromDocumentId === "string" ? { copyFromDocumentId: body.copyFromDocumentId } : {}),
     ...(body.mode ? { mode: body.mode as "private" | "shared" } : {}),
   });
   if (result.status !== "ok") {

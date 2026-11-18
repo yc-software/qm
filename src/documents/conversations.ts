@@ -158,13 +158,32 @@ export function createDocumentConversations(deps: {
       principalId: string;
       mode?: DocumentMode;
       previous?: { scopeId: string; threadRef: string };
+      copyFromDocumentId?: string;
     }): Promise<
-      { status: "ok"; conversation: DocumentConversation } | { status: "unconfigured" | "forbidden" | "conflict" }
+      | { status: "ok"; conversation: DocumentConversation; copiedFromDocumentId?: string }
+      | { status: "unconfigured" | "forbidden" | "conflict" }
     > {
       const configured = await deps.backing.get(key("surface", input.surface));
       if (configured?.kind !== "surface") return { status: "unconfigured" };
       const documentKey = key("document", input.surface, input.documentId);
       let document = await deps.backing.get(documentKey);
+      if (input.copyFromDocumentId !== undefined) {
+        if (!input.copyFromDocumentId.trim() || input.copyFromDocumentId === input.documentId || input.previous)
+          return { status: "forbidden" };
+        const source = await deps.backing.get(key("document", input.surface, input.copyFromDocumentId));
+        if (source?.kind !== "document") return { status: "forbidden" };
+        const inherited = await deps.projects.withRosterLock(source.projectId, async (project) => {
+          const members = await deps.projects.members(projectGroupRef(project.id));
+          if (!members?.some((member) => samePerson(member, input.principalId)))
+            return { status: "forbidden" as const };
+          const destination = await deps.backing.putIfAbsent(documentKey, { kind: "document", projectId: project.id });
+          if (destination.kind !== "document" || destination.projectId !== project.id)
+            return { status: "conflict" as const };
+          return { status: "ok" as const, document: destination };
+        });
+        if (!inherited || inherited.status !== "ok") return inherited ?? { status: "forbidden" };
+        document = inherited.document;
+      }
       if (!document) {
         let projectId = configured.projectId;
         let threadRef: string | undefined;
@@ -255,6 +274,7 @@ export function createDocumentConversations(deps: {
         return {
           status: "ok" as const,
           conversation: { scopeId, threadRef: binding.threadRef, sessionId: session.id, mode },
+          ...(input.copyFromDocumentId ? { copiedFromDocumentId: input.copyFromDocumentId } : {}),
         };
       });
       return result ?? { status: "forbidden" };
