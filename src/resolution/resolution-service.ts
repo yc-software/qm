@@ -5,6 +5,7 @@ import type { ScopedConfigStore } from "./config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
 import { entitledScopes } from "./context-filter.ts";
+import { personScopes } from "../directory/person.ts";
 import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
 import type { Tenant } from "../tenants/context.ts";
 
@@ -57,9 +58,13 @@ export function createResolutionService(
     async resolve(tenant, conversation, actor, external, ownScopeBotWork): Promise<Resolution> {
       const scope = scopeFor(conversation, actor);
       const isDm = conversation.kind === "dm";
-      const liveConfigScopes = new Set<ScopeId>([orgScope, scope, scopeId("personal", actor.id)]);
+      const liveConfigScopes = new Set<ScopeId>([
+        orgScope,
+        ...personScopes(scope),
+        ...personScopes(scopeId("personal", actor.id)),
+      ]);
       for (const principal of conversation.audience) {
-        liveConfigScopes.add(scopeId("personal", principal.id));
+        for (const own of personScopes(scopeId("personal", principal.id))) liveConfigScopes.add(own);
         for (const team of principal.teamIds ?? []) liveConfigScopes.add(scopeId("team", team));
       }
       await config.refreshSecurity([...liveConfigScopes]);

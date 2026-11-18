@@ -180,7 +180,7 @@ export function createProjectStore(
         outcome.status = "ok";
         const memberIds = add
           ? [...new Set([...project.memberIds, memberId])]
-          : project.memberIds.filter((member) => member !== memberId);
+          : project.memberIds.filter((member) => !samePerson(member, memberId));
         if (
           memberIds.length === project.memberIds.length &&
           memberIds.every((member, i) => member === project.memberIds[i])
@@ -231,7 +231,7 @@ export function createProjectStore(
             project.orgId === configOrgId() &&
             isActiveMember(project.ownerId) &&
             isActiveMember(principalId) &&
-            effectiveMemberIds(project).includes(principalId),
+            effectiveMemberIds(project).some((member) => samePerson(member, principalId)),
         )
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .map(visible);
@@ -373,7 +373,7 @@ export function createProjectStore(
       return project
         ? isActiveMember(project.ownerId) &&
             isActiveMember(principalId) &&
-            effectiveMemberIds(project).includes(principalId)
+            effectiveMemberIds(project).some((member) => samePerson(member, principalId))
         : undefined;
     },
     async membersMany(groupRefs) {
