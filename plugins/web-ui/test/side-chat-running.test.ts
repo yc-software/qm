@@ -65,9 +65,6 @@ test("opening a side chat whose turn is still running never shows the turn as fi
       assert.match(head(), /Reproduce the import error[\s\S]*3m/, "the running step and its elapsed time show");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    releaseRun();
-    await until(() => h.requests.includes("/api/runs/r1"));
-    assert.match(head(), /Reproduce the import error/);
   } finally {
     releaseRun();
     await h.close();

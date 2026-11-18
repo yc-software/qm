@@ -110,7 +110,7 @@ import {
   makeCoreStreamFn,
   makeOpenerStreamFn,
   makeRunResumeStreamFn,
-  makeLiveTurnStreamFn,
+  type LocatedRun,
   resolveApproval,
   unresolvedApprovals,
   runApprovalTurn,
@@ -694,8 +694,8 @@ export function createChatSurface(
 
     container.replaceChildren(chatState.host);
     const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
-    const resuming =
-      !opening && session?.working === true && startLiveTurn(agent, threadRef, normalStreamFn, onWork, session);
+    const runningSince = !opening && session?.working ? session.workingSince : undefined;
+    if (runningSince !== undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork, runningSince);
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
     if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
@@ -705,57 +705,8 @@ export function createChatSurface(
     }
     ctx.composer.focusComposerEnd();
     ctx.ensureDeliveryStream();
-    if (!opening && !resuming) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
+    if (!opening && runningSince === undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
     consumeBackgroundPanelRequest();
-  }
-
-  function startLiveTurn(
-    agent: Agent,
-    threadRef: string,
-    normalStreamFn: Agent["streamFn"],
-    onWork: (work: WorkBlock) => void,
-    session: CoreSession,
-  ): boolean {
-    if ((ctx.inbox ? !ctx.visible() : appState.currentView !== "chats") || agent.state.isStreaming) return false;
-    const { messages, popped } = continuableMessages(agent.state.messages);
-    const seedText = popped
-      .map((m) => messageText(m).trim())
-      .filter(Boolean)
-      .join("\n\n");
-    const activity = popped.flatMap((m) => (m as AssistantWork).work?.activity ?? []);
-    const startedAt = session.workingSince ?? (popped[0] as AssistantWork | undefined)?.work?.startedAt;
-    agent.state.messages = messages;
-    const locate = activeRunForThread(threadRef).then(
-      (active) => {
-        if (agent === chatState.agent && threadRef === chatState.threadRef)
-          ctx.composer.setQueuedRuns(threadRef, active.queued);
-        if (!active.runId || !active.run || runIsTerminal(active.run)) return null;
-        if (agent === chatState.agent)
-          agent.state.messages = continuableMessages(agent.state.messages, active.run.input).messages;
-        return { runId: active.runId, run: active.run };
-      },
-      (error: unknown) => {
-        reportHandledError("web:resume_active_run", error);
-        return null;
-      },
-    );
-    agent.streamFn = makeLiveTurnStreamFn(locate, { startedAt, activity }, onWork, runSlot, seedText);
-    void (async () => {
-      try {
-        await agent.continue();
-      } catch (err) {
-        if (agent === chatState.agent)
-          ctx.composer.state.error = err instanceof Error ? err.message : "Could not reconnect to the running task.";
-      } finally {
-        if (agent === chatState.agent) {
-          agent.streamFn = normalStreamFn;
-          await refreshTranscriptFromItems(agent).catch((error: unknown) =>
-            reportHandledError("web:transcript_refresh", error),
-          );
-        }
-      }
-    })();
-    return true;
   }
 
   function startProactiveOpenerIfNew(
@@ -1206,18 +1157,25 @@ export function createChatSurface(
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
+    runningSince?: number,
   ): Promise<boolean> {
-    let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
-    try {
-      activeRun = await activeRunForThread(threadRef);
-    } catch (error) {
-      reportHandledError("web:resume_active_run", error);
-      return false;
-    }
-    if (agent === chatState.agent && threadRef === chatState.threadRef)
-      ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
-    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) return false;
-    return resumeRun(agent, threadRef, normalStreamFn, onWork, activeRun.runId, activeRun.run);
+    const lookup = activeRunForThread(threadRef).then(
+      (activeRun) => {
+        if (agent === chatState.agent && threadRef === chatState.threadRef)
+          ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
+        return activeRun.runId && activeRun.run && !runIsTerminal(activeRun.run)
+          ? { runId: activeRun.runId, run: activeRun.run }
+          : null;
+      },
+      (error: unknown) => {
+        reportHandledError("web:resume_active_run", error);
+        return null;
+      },
+    );
+    if (runningSince !== undefined)
+      return resumeRun(agent, threadRef, normalStreamFn, onWork, lookup, undefined, undefined, runningSince);
+    const located = await lookup;
+    return located ? resumeRun(agent, threadRef, normalStreamFn, onWork, located.runId, located.run) : false;
   }
 
   async function resumeRun(
@@ -1225,9 +1183,10 @@ export function createChatSurface(
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
-    runId: string,
+    target: string | Promise<LocatedRun | null>,
     initialRun?: RunPoll,
     onStarted?: () => void,
+    runningSince?: number,
   ): Promise<boolean> {
     if (
       agent !== chatState.agent ||
@@ -1235,17 +1194,31 @@ export function createChatSurface(
       agent.state.isStreaming
     )
       return false;
-    await refreshTranscriptFromItems(agent);
-    if (agent !== chatState.agent || agent.state.isStreaming) return false;
-    if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(runId)}`);
-    if (agent !== chatState.agent || agent.state.isStreaming) return false;
-    const { messages: msgs, popped } = continuableMessages(agent.state.messages, initialRun.input);
+    if (typeof target === "string") {
+      await refreshTranscriptFromItems(agent);
+      if (agent !== chatState.agent || agent.state.isStreaming) return false;
+      if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(target)}`);
+      if (agent !== chatState.agent || agent.state.isStreaming) return false;
+    }
+    const { messages: msgs, popped } = continuableMessages(agent.state.messages, initialRun?.input);
     agent.state.messages = msgs;
     const seedText = popped
       .map((m) => messageText(m).trim())
       .filter(Boolean)
       .join("\n\n");
-    agent.streamFn = makeRunResumeStreamFn(runId, initialRun, onWork, runSlot, seedText);
+    const run =
+      typeof target === "string"
+        ? target
+        : target.then((located) => {
+            if (located && agent === chatState.agent)
+              agent.state.messages = continuableMessages(agent.state.messages, located.run.input).messages;
+            return located;
+          });
+    const seed =
+      runningSince === undefined
+        ? undefined
+        : { startedAt: runningSince, activity: popped.flatMap((m) => (m as AssistantWork).work?.activity ?? []) };
+    agent.streamFn = makeRunResumeStreamFn(run, initialRun, onWork, runSlot, seedText, seed);
     try {
       const completion = agent.continue();
       if (agent.state.isStreaming) onStarted?.();

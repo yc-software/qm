@@ -128,8 +128,8 @@ test("a stranger cannot fork someone else's conversation", async () => {
   assert.equal(await app.forkSession("does-not-exist", "U1"), null);
 });
 
-test("side chats preserve their anchor, stay out of session pages, and expand in place", async () => {
-  const { app, sessions } = freshApp();
+test("side chats preserve their anchor, stay out of session pages, expand in place, and flag a running turn", async () => {
+  const { app, sessions, runs } = freshApp();
   const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat"));
   const source = (await app.getSession(result.sessionId!))!;
   const entry = source.items[0]!;
@@ -160,31 +160,13 @@ test("side chats preserve their anchor, stay out of session pages, and expand in
     (await app.listSessionPage("U1", { limit: 50 })).sessions.some((session) => session.id === fork.session.id),
   );
   assert.equal((await app.sideChats("U1", source.session.id))![0]!.sideChat?.expanded, true);
-});
-
-test("side chats with a running turn are flagged working with the run's start time", async () => {
-  const { app, runs } = freshApp();
-  const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat-working"));
-  const source = (await app.getSession(result.sessionId!))!;
-  const fork = (await app.forkSession(source.session.id, "U1", {
-    upToSeq: source.items.at(-1)!.seq,
-    sideChat: { entrySeq: source.items[0]!.seq, quote: "shared queues", occurrence: 0 },
-  }))!;
-  await app.turn(dm("Explain that passage", fork.session.threadRef));
   assert.equal((await app.sideChats("U1", source.session.id))![0]!.working, undefined);
-  const principal = { id: "internal:U1", type: "internal" as const };
-  const { run } = await runs.enqueue({
-    sessionId: fork.session.threadRef,
-    request: {
-      actor: principal,
-      conversation: { kind: "dm", threadRef: fork.session.threadRef, audience: [principal] },
-      origin: { kind: "direct" },
-      text: "Keep going",
-    },
-  });
+  const actor = { id: "internal:U1", type: "internal" as const };
+  const conversation = { kind: "dm" as const, threadRef: fork.session.threadRef, audience: [actor] };
+  const request = { actor, conversation, origin: { kind: "direct" as const }, text: "Keep going" };
+  const { run } = await runs.enqueue({ sessionId: fork.session.threadRef, request });
   const [row] = (await app.sideChats("U1", source.session.id))!;
-  assert.equal(row!.working, true);
-  assert.equal(row!.workingSince, run.startedAt ?? run.createdAt);
+  assert.deepEqual([row!.working, row!.workingSince], [true, run.startedAt ?? run.createdAt]);
 });
 
 test("side chats reject missing anchors and anchors beyond the fork boundary", async () => {

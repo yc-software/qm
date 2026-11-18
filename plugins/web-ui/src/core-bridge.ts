@@ -1162,11 +1162,12 @@ export async function withdrawRun(runId: string): Promise<boolean> {
 }
 
 export function makeRunResumeStreamFn(
-  runId: string,
+  run: string | Promise<LocatedRun | null>,
   initialRun?: RunPoll,
   onWork?: WorkObserver,
   slot?: RunSlot,
   seedText?: string,
+  seedWork?: Pick<WorkBlock, "startedAt" | "activity">,
 ): StreamFn {
   const fn = (
     model: Model<Api>,
@@ -1174,7 +1175,7 @@ export function makeRunResumeStreamFn(
     options?: { signal?: AbortSignal },
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    void resumeDrive(stream, model, runId, initialRun, options?.signal, onWork, slot, seedText);
+    void resumeDrive(stream, model, run, initialRun, options?.signal, onWork, slot, seedText, seedWork);
     return stream;
   };
   return fn as unknown as StreamFn;
@@ -1183,25 +1184,6 @@ export function makeRunResumeStreamFn(
 export interface LocatedRun {
   runId: string;
   run: RunPoll;
-}
-
-export function makeLiveTurnStreamFn(
-  locate: Promise<LocatedRun | null>,
-  seedWork: Pick<WorkBlock, "startedAt" | "activity">,
-  onWork?: WorkObserver,
-  slot?: RunSlot,
-  seedText?: string,
-): StreamFn {
-  const fn = (
-    model: Model<Api>,
-    _context: Context,
-    options?: { signal?: AbortSignal },
-  ): AssistantMessageEventStream => {
-    const stream = createAssistantMessageEventStream();
-    void resumeDrive(stream, model, locate, undefined, options?.signal, onWork, slot, seedText, seedWork);
-    return stream;
-  };
-  return fn as unknown as StreamFn;
 }
 
 export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
@@ -1490,12 +1472,9 @@ async function resumeDrive(
 ): Promise<void> {
   const gen = beginSubmit(slot);
   const partial = baseAssistant(model);
-  const setBaseline = (run: RunPoll | undefined): void => {
-    const snapshotText = run?.partial ?? "";
-    (partial as AssistantWork).streamingBaseline =
-      snapshotText.length > (seedText?.length ?? 0) ? snapshotText : (seedText ?? "");
-  };
-  setBaseline(knownRun);
+  const baseline = (run: RunPoll | undefined): string =>
+    (run?.partial?.length ?? 0) > (seedText?.length ?? 0) ? run!.partial! : (seedText ?? "");
+  (partial as AssistantWork).streamingBaseline = baseline(knownRun);
   const work: WorkBlock = seedWork
     ? { status: "working", startedAt: seedWork.startedAt, activity: seedWork.activity }
     : { status: "thinking", activity: [] };
@@ -1516,7 +1495,7 @@ async function resumeDrive(
       return;
     }
     const initialRun = located.run;
-    if (typeof target !== "string") setBaseline(initialRun);
+    (partial as AssistantWork).streamingBaseline = baseline(initialRun);
     if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
     await followRun(stream, partial, located.runId, signal, notify, st, slot, gen);
   } catch (e) {
