@@ -783,6 +783,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               people: shownPeople,
               blocksInput: true,
               kind: "input",
+              classifiedAttachments: flaggedScreenedInput.classifiedAttachments,
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
               ...(flaggedScreenedInput.onceOnly ? { grantModes: { session: false, always: false } } : {}),
             });
@@ -1836,7 +1837,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
         }
-        const fileScreenTurn = { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit };
+        const fileScreenTurn = {
+          deps,
+          session,
+          securityPolicy,
+          enforceScreen,
+          classifyAs,
+          turnAbort,
+          audit,
+          released: new Set(replaysHeldInput ? approvalRecord?.classifiedAttachments : undefined),
+        };
         const screenInboundFile = createInboundFileScreen(fileScreenTurn);
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,

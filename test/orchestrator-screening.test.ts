@@ -786,6 +786,43 @@ test("an approved replay of held input goes through when it resends its file not
   assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
 });
 
+test("allowing held input lets in only the attachments the hold's screen classified", async () => {
+  const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
+  const file = async (name: string) => {
+    const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK " + name));
+    return { attachments: [{ name, mimetype: "text/plain", ...blob }] };
+  };
+  const hold = async (request: TurnRequest, scope: "once" | "session" | "always" = "once") => {
+    const requestId = (await built.app.turn(request)).pendingApprovals![0]!.requestId;
+    return async () => {
+      const turn = await built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
+      return JSON.stringify(await built.sessions.listLlmRequests(turn.sessionId!));
+    };
+  };
+  const text = "y".repeat(MAX_DOCUMENT_TEXT_CHARS + 1);
+  const overheard = [{ ts: "1700000000.000100", role: "user" as const, name: "Pat", speakerId: "U9", text }];
+  const tooLong = await hold(channel("summarize", { ...(await file("long.txt")), overheard }));
+  await (
+    await hold(channel("thanks", { overheard }))
+  )();
+  assert.doesNotMatch(await tooLong(), /inbox\/long\.txt/);
+  const partial = [{ ...overheard[0]!, ts: "1700000000.000200", text: "y".repeat(40_000) }];
+  const partly = await hold(channel("summarize", { ...(await file("partly.txt")), overheard: partial }));
+  assert.doesNotMatch(await partly(), /inbox\/partly\.txt/);
+  const open = built.blobTransfer.open;
+  built.blobTransfer.open = async () => {
+    built.blobTransfer.open = open;
+    throw new Error("blob store unavailable");
+  };
+  const unopened = await hold(dm("summarize", await file("SCREENING_FIXTURE_BLOCK.txt")));
+  assert.doesNotMatch(await unopened(), /inbox\/SCREENING_FIXTURE_BLOCK\.txt/);
+  for (const scope of ["once", "session", "always"] as const) {
+    const conversation = { kind: "dm" as const, threadRef: "dm:U1:" + scope };
+    const classified = await hold(dm("summarize", { conversation, ...(await file(scope + ".txt")) }), scope);
+    assert.match(await classified(), new RegExp("inbox/" + scope + "\\.txt"));
+  }
+});
+
 for (const failure of ["error", "timeout"] as const) {
   test(`deployment screening preserves marked fail-open on proxy ${failure}`, async () => {
     const built = freshApp(
