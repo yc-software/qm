@@ -150,6 +150,7 @@
   min-width: 0;
 }
 .side-chat-card {
+  overflow: clip;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--background);
@@ -172,6 +173,7 @@
   overflow: hidden;
 }
 .side-chat-preview {
+  animation: side-chat-appear 140ms ease-out;
   padding: 0 14px;
   max-height: 260px;
   overflow: hidden;
@@ -328,7 +330,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .side-chat-panel {
+  .side-chat-panel,
+  .side-chat-preview {
     animation: none;
     transition: none;
   }
