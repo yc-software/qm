@@ -16,25 +16,38 @@ export function linkedChanges(before: Cron, patch: CronPatch): CronPatch {
   );
 }
 
+export function copyStatus(c: Cron): CronCopy["status"] {
+  if (c.forkedAt) return "edited";
+  return c.enabled ? "on" : "paused";
+}
+
+function asCopy(c: Cron): CronCopy {
+  return {
+    id: c.id,
+    owner: c.owner,
+    status: copyStatus(c),
+    ...(c.destination ? { deliversTo: c.destination.type } : {}),
+  };
+}
+
+function sharingOf(cron: VisibleCron, copies: readonly Cron[], sharedBy: string | undefined): VisibleCron {
+  return {
+    ...cron,
+    ...(copies.length ? { copies: copies.map(asCopy) } : {}),
+    ...(sharedBy ? { sharedBy } : {}),
+  };
+}
+
 export function withSharing(all: readonly Cron[]): (cron: VisibleCron) => VisibleCron {
   const owners = new Map(all.map((c) => [c.id, c.owner]));
-  const copies = new Map<string, CronCopy[]>();
-  for (const c of all) {
-    if (!c.sharedFrom) continue;
-    const copy = {
-      id: c.id,
-      owner: c.owner,
-      enabled: c.enabled,
-      ...(c.forkedAt ? { forkedAt: c.forkedAt } : {}),
-      ...(c.destination ? { deliversTo: c.destination.type } : {}),
-    };
-    copies.set(c.sharedFrom, [...(copies.get(c.sharedFrom) ?? []), copy]);
-  }
-  return (cron) => {
-    const mine = copies.get(cron.id);
-    const sharedBy = cron.sharedFrom ? owners.get(cron.sharedFrom) : undefined;
-    return { ...cron, ...(mine ? { copies: mine } : {}), ...(sharedBy ? { sharedBy } : {}) };
-  };
+  const copies = new Map<string, Cron[]>();
+  for (const c of all) if (c.sharedFrom) copies.set(c.sharedFrom, [...(copies.get(c.sharedFrom) ?? []), c]);
+  return (cron) => sharingOf(cron, copies.get(cron.id) ?? [], cron.sharedFrom && owners.get(cron.sharedFrom));
+}
+
+export async function sharingFor(crons: AppDeps["crons"], cron: VisibleCron): Promise<VisibleCron> {
+  const source = cron.sharedFrom ? await crons.get(cron.sharedFrom) : null;
+  return sharingOf(cron, await crons.copiesOf(cron.id), source?.owner);
 }
 
 function scheduleText(s: CronSchedule): string {
@@ -53,12 +66,11 @@ export async function propagateCronEdit(crons: AppDeps["crons"], id: string, cha
 
 export function createCronShareMethods(deps: AppDeps, app: App): Pick<App, "shareCron" | "cronCopies" | "unshareCron"> {
   return {
-    cronCopies: (id) => deps.crons.copiesOf(id),
+    cronCopies: async (id) => (await deps.crons.copiesOf(id)).map(asCopy),
+    cronSharing: (cron) => sharingFor(deps.crons, cron),
     async unshareCron(id, recipient) {
       const copy = (await deps.crons.copiesOf(id)).find((c) => samePerson(c.owner, recipient));
-      if (!copy) return;
-      if (copy.enabled || copy.forkedAt) await deps.crons.update(copy.id, { sharedFrom: null });
-      else await deps.crons.delete(copy.id);
+      if (copy) await deps.crons.update(copy.id, { sharedFrom: null });
     },
     async shareCron(tenant, id, recipient, by) {
       const source = await deps.crons.get(id);

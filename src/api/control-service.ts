@@ -205,11 +205,6 @@ function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
   return "soul_update_failed";
 }
 
-const copyStatus = (c: Cron): "pending" | "on" | "edited" => {
-  if (c.forkedAt) return "edited";
-  return c.enabled ? "on" : "pending";
-};
-
 async function mayShare(
   app: App,
   home: ArtifactHome,
@@ -543,8 +538,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async getCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (await canAdministerCron(app, cron, capability))
-        return { ok: true, cron: withSharing(await app.listCrons())(cron) };
+      if (await canAdministerCron(app, cron, capability)) return { ok: true, cron: await app.cronSharing(cron) };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
       return { ok: false, code: "forbidden", message: "not your cron" };
@@ -837,7 +831,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           ...(cron ? await app.cronCopies(cron.id) : []).map((c) => ({
             scope: scopeId("personal", c.owner),
             permission: "read" as const,
-            status: copyStatus(c),
+            status: c.status,
           })),
         ],
       };

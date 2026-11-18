@@ -46,7 +46,7 @@ export interface CronView {
   sharedFrom?: string;
   sharedBy?: string;
   forkedAt?: number;
-  copies?: Array<{ id: string; owner: string; enabled: boolean; forkedAt?: number; deliversTo?: string }>;
+  copies?: Array<{ id: string; owner: string; status: "on" | "paused" | "edited"; deliversTo?: string }>;
 }
 
 interface CronRunView {

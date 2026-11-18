@@ -35,12 +35,7 @@ interface CronLike {
   sharedFrom?: string;
   sharedBy?: string;
   forkedAt?: number;
-  copies?: Array<{ id: string; owner: string; enabled: boolean; forkedAt?: number }>;
-}
-
-function copyState(copy: { enabled: boolean; forkedAt?: number }): string {
-  if (copy.forkedAt) return "edited their copy";
-  return copy.enabled ? "on" : "paused";
+  copies?: Array<{ id: string; owner: string; status: string }>;
 }
 
 function fmtSharing(c: CronLike): string {
@@ -49,7 +44,7 @@ function fmtSharing(c: CronLike): string {
     out += c.forkedAt
       ? `\n    shared copy of ${c.sharedFrom}${c.sharedBy ? ` (${c.sharedBy})` : ""}, since edited here: the original's edits no longer reach it`
       : `\n    linked copy of ${c.sharedFrom}${c.sharedBy ? ` (${c.sharedBy})` : ""}: the original's edits reach it until it is edited here${c.enabled ? "" : "; paused until its owner turns it on"}`;
-  if (c.copies?.length) out += `\n    shared with: ${c.copies.map((k) => `${k.owner} (${copyState(k)})`).join(", ")}`;
+  if (c.copies?.length) out += `\n    shared with: ${c.copies.map((k) => `${k.owner} (${k.status})`).join(", ")}`;
   return out;
 }
 

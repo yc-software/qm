@@ -21,10 +21,10 @@ import { appState } from "./shell-state";
 interface Grant {
   scope: string;
   permission: "read" | "write";
-  status?: "pending" | "on" | "edited";
+  status?: "on" | "paused" | "edited";
 }
 
-const STATUS = { pending: "Pending", on: "On", edited: "Edited their copy" };
+const STATUS = { on: "On", paused: "Paused", edited: "Edited their copy" };
 
 const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
 
