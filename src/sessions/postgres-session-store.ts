@@ -150,15 +150,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async sideChatsOf(sessionId, principalId) {
-      const asked = `EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
-           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage')`;
-      const condition = `s.forked_from_session_id = $${principalId === undefined ? 1 : 2} AND s.side_chat IS NOT NULL`;
+      const condition = `s.forked_from_session_id = $${principalId === undefined ? 1 : 2} AND s.side_chat IS NOT NULL
+         AND EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
+           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage'
+           UNION ALL SELECT 1 FROM runs r WHERE r.tenant_id = ${TENANT} AND r.session_id = s.thread_ref
+           AND r.status IN ('pending', 'running')) ORDER BY s.created_at`;
       const rows = await q(
         principalId === undefined
-          ? `SELECT s.* FROM sessions s WHERE ${condition} AND ${asked} ORDER BY s.created_at`
-          : participantSessionsSql(
-              ` AND ${condition} AND (${asked} OR EXISTS (SELECT 1 FROM runs r WHERE r.tenant_id = ${TENANT} AND r.session_id = s.thread_ref)) ORDER BY s.created_at`,
-            ),
+          ? `SELECT s.* FROM sessions s WHERE ${condition}`
+          : participantSessionsSql(` AND ${condition}`),
         principalId === undefined ? [sessionId] : [principalId, sessionId],
       );
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);

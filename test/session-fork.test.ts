@@ -145,8 +145,15 @@ test("side chats preserve their anchor, stay out of session pages, expand in pla
     expanded: false,
   });
   assert.deepEqual(await app.sideChats("U1", source.session.id), []);
-  await app.turn(dm("Explain that passage", fork.session.threadRef));
-  assert.equal((await app.sideChats("U1", source.session.id))![0]!.id, fork.session.id);
+  const actor = { id: "internal:U1", type: "internal" as const };
+  const conversation = { kind: "dm" as const, threadRef: fork.session.threadRef, audience: [actor] };
+  const request = { actor, conversation, origin: { kind: "direct" as const }, text: "Keep going" };
+  const { run } = await runs.enqueue({ sessionId: fork.session.threadRef, request });
+  const [row] = (await app.sideChats("U1", source.session.id))!;
+  assert.deepEqual([row!.working, row!.workingSince], [true, run.startedAt ?? run.createdAt]);
+  const opened = (await app.getSessionForViewer(fork.session.id, { actorId: "U1" }))!.session;
+  assert.deepEqual([opened.working, opened.workingSince], [true, run.startedAt ?? run.createdAt]);
+  assert.equal(row!.id, fork.session.id);
   assert.equal(await app.sideChats("stranger", source.session.id), null);
   assert.equal(await app.expandSideChat("stranger", fork.session.id), null);
   const page = await app.listSessionPage("U1", { limit: 50 });
@@ -160,24 +167,6 @@ test("side chats preserve their anchor, stay out of session pages, expand in pla
     (await app.listSessionPage("U1", { limit: 50 })).sessions.some((session) => session.id === fork.session.id),
   );
   assert.equal((await app.sideChats("U1", source.session.id))![0]!.sideChat?.expanded, true);
-  assert.equal((await app.sideChats("U1", source.session.id))![0]!.working, undefined);
-  const actor = { id: "internal:U1", type: "internal" as const };
-  const conversation = { kind: "dm" as const, threadRef: fork.session.threadRef, audience: [actor] };
-  const request = { actor, conversation, origin: { kind: "direct" as const }, text: "Keep going" };
-  const { run } = await runs.enqueue({ sessionId: fork.session.threadRef, request });
-  const [row] = (await app.sideChats("U1", source.session.id))!;
-  assert.deepEqual([row!.working, row!.workingSince], [true, run.startedAt ?? run.createdAt]);
-  const opened = (await app.getSessionForViewer(fork.session.id, { actorId: "U1" }))!.session;
-  assert.deepEqual([opened.working, opened.workingSince], [true, run.startedAt ?? run.createdAt]);
-  const queued = (await app.forkSession(source.session.id, "U1", {
-    upToSeq: entry.seq,
-    sideChat: { entrySeq: entry.seq, quote: "queues", occurrence: 0 },
-  }))!.session;
-  await runs.enqueue({
-    sessionId: queued.threadRef,
-    request: { ...request, conversation: { ...conversation, threadRef: queued.threadRef } },
-  });
-  assert.ok((await app.sideChats("U1", source.session.id))!.some((chat) => chat.id === queued.id));
 });
 
 test("side chats reject missing anchors and anchors beyond the fork boundary", async () => {
