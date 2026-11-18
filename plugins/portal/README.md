@@ -85,8 +85,8 @@ single-use, purpose-bound assertion for the chosen organization; with one organi
 is chosen automatically, with several the workspace picker lists them. Core creates the
 organization's workspace on first use, keyed by issuer and organization id so concurrent
 sign-ins share one workspace, or joins the existing one, then records the person (and
-links their verified email) and grants them organization admin. Every person who joins
-this way is an admin. The name becomes the workspace brand; the handle is used only when
+links their verified email) and, the first time they join, grants them organization admin.
+The name becomes the workspace brand; the handle is used only when
 it is valid and free, and is never part of the key. A person an admin removed from the
 workspace is refused. Self-serve never creates a deployment's first workspace, never
 reopens a workspace an operator switched off, and never runs on a deployment with a boot
@@ -98,8 +98,8 @@ externalOrg, nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
 `{ "settings": { "modelGatewayKey": "…" } }` (nothing else) gives the workspace its own
 model gateway key and switches it on, once. Until a call succeeds sign-in fails and the
 next sign-in retries, so the provisioner must answer repeated calls for a tenant with the
-same key. A workspace whose `serving` setting is present never falls back to the
-deployment's model key: without a key of its own its model calls fail.
+same key. A self-served workspace carries `deploymentModelKey: false`, so it never falls
+back to the deployment's model key: without a key of its own its model calls fail.
 
 When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a

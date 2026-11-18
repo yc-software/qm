@@ -108,7 +108,7 @@ describe("tenant settings and operator commands", () => {
     lines.length = 0;
     await run("create");
     const keyless = lines[0]!;
-    await run("settings", "set", keyless, "serving", "true");
+    await run("settings", "set", keyless, "deploymentModelKey", "false");
     await assert.rejects(read(keyless), /this workspace has no model gateway key of its own/);
   });
 

@@ -22,6 +22,10 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { provisionerSigningKey } from "../src/tenants/self-serve.ts";
 import { APP_HANDLE_MAX } from "../plugins/chassis/src/dns-label.ts";
+import { orgId } from "../src/config.ts";
+import { randomUUID } from "node:crypto";
+import { gatewayKey } from "../src/model/provider-endpoints.ts";
+import { scopeId } from "../src/types.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
@@ -149,6 +153,7 @@ test("cofounders signing in at once share one new workspace and every one of the
     handle: "acme",
     modelGatewayKey: "own-key",
     serving: true,
+    deploymentModelKey: false,
   });
   for (const subject of founders) assert.equal(await isAdmin(tenant, subject), true, subject);
   await withoutTenant(async () => {
@@ -262,6 +267,27 @@ test("a founder removed from the workspace cannot self-serve back in", async (t)
   assert.equal(await isAdmin(tenant, "leaver"), false);
 });
 
+test("a member an admin demoted does not regain admin by self-serving again", async (t) => {
+  const { s, isAdmin } = await shared(t);
+  const org = { id: "78", name: "Demoted Inc" };
+  const signIn = (subject: string) => withoutTenant(() => selfServeWorkspace(s.config, { subject, email: null }, org));
+  const tenant = await signIn("keeper");
+  await signIn("demoted");
+  await withTenant(tenant, async (bound) => {
+    const actor = { id: trustedPrincipal(issuer, "keeper"), type: "internal" as const };
+    await s.built.admin.revokeGrant(
+      bound,
+      actor,
+      trustedPrincipal(issuer, "demoted"),
+      scopeId("org", orgId()),
+      "org_admin",
+    );
+  });
+  assert.equal(await isAdmin(tenant, "demoted"), false);
+  assert.equal(await signIn("demoted"), tenant);
+  assert.equal(await isAdmin(tenant, "demoted"), false);
+});
+
 test("a deployment with a boot tenant never self-serves another workspace", async (t) => {
   const db = await twoTenants();
   t.after(() => db.close());
@@ -280,7 +306,12 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
   const tenant = row!.tenant as string;
   const settingsOf = async () =>
     (await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]))[0]?.settings;
-  assert.deepEqual(await settingsOf(), { brandName: "Gated Co", handle: "gated", serving: false });
+  assert.deepEqual(await settingsOf(), {
+    brandName: "Gated Co",
+    handle: "gated",
+    serving: false,
+    deploymentModelKey: false,
+  });
   assert.deepEqual(await withoutTenant(() => directory.tenantsForPrincipal!(trustedPrincipal(issuer, "g1"))), []);
   assert.equal(await isAdmin(tenant, "g1"), false);
   provision.state.failing = false;
@@ -290,6 +321,7 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
     handle: "gated",
     modelGatewayKey: "own-key",
     serving: true,
+    deploymentModelKey: false,
   });
   const { nonce, ...body } = provision.state.calls[0]!.body;
   assert.equal(typeof nonce, "string");
@@ -319,13 +351,22 @@ test("a provisioner reply without the workspace's own model gateway key leaves i
   const [row] = await db.owner.q(
     "SELECT t.settings FROM tenant_external_orgs o JOIN tenants t ON t.id = o.tenant WHERE o.org_id = '66'",
   );
-  assert.deepEqual(row, { settings: { brandName: "No Key Co", serving: false } });
+  assert.deepEqual(row, { settings: { brandName: "No Key Co", serving: false, deploymentModelKey: false } });
   assert.equal(
     await isAdmin(
       String((await db.owner.q("SELECT tenant FROM tenant_external_orgs WHERE org_id = '66'"))[0]!.tenant),
       "n1",
     ),
     false,
+  );
+});
+
+test("a multitenant deployment never uses its own model key for a workspace whose settings are not loaded", async (t) => {
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
+  assert.throws(
+    () => withTenant(randomUUID(), () => gatewayKey({ apiKey: "sk-deployment" })),
+    /this workspace's settings are not loaded/,
   );
 });
 

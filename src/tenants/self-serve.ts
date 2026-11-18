@@ -39,7 +39,7 @@ const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, or
       IF NOT EXISTS (SELECT 1 FROM tenants) THEN
         RETURN;
       END IF;
-      INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3, 'serving', false))
+      INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3, 'serving', false, 'deploymentModelKey', false))
         RETURNING id INTO found;
       IF $4 <> '' AND qm_tenant_handle(jsonb_build_object('handle', $4)) IS NOT DISTINCT FROM $4 THEN
         BEGIN
