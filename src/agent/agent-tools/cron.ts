@@ -98,7 +98,7 @@ export function cronTools(kit: ToolKit) {
     name: "cron",
     label: "cron",
     description:
-      "Schedule future or recurring work and manage it. Confirm the timing with the user before creating. One job = one cron: list first and patch an existing one rather than creating a second.\n" +
+      "Schedule future or recurring work and manage it. Confirm the timing with the user before creating. Right after setting one up, make a reasonable effort to test it with them (a sample run or a preview of what a fire would post, with anything consequential stubbed) so they don't first learn at a real fire hours later that it isn't what they wanted. One job = one cron: list first and patch an existing one rather than creating a second.\n" +
       'create: always set `title`, a distinctive 2-5 word label for what the cron is FOR (e.g. "Gmail unread digest"), never the command or a generic word. ' +
       "Give either `task` (a prompt re-evaluated at each fire) or `text` (exact words to relay). " +
       "When a task runs a script, first run that exact command once end to end, including what it posts or writes, without marking the work done by other means, so the first fire is not its first real run. " +
