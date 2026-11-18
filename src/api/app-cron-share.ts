@@ -64,7 +64,10 @@ export async function propagateCronEdit(crons: AppDeps["crons"], id: string, cha
   }
 }
 
-export function createCronShareMethods(deps: AppDeps, app: App): Pick<App, "shareCron" | "cronCopies" | "unshareCron"> {
+export function createCronShareMethods(
+  deps: AppDeps,
+  app: App,
+): Pick<App, "shareCron" | "cronCopies" | "cronSharing" | "unshareCron"> {
   return {
     cronCopies: async (id) => (await deps.crons.copiesOf(id)).map(asCopy),
     cronSharing: (cron) => sharingFor(deps.crons, cron),
