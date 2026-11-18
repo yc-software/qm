@@ -232,7 +232,7 @@ export function computerTools(kit: ToolKit) {
             template: Type.Optional(
               Type.String({
                 minLength: 1,
-                description: `create: provider template to boot from; ${templateBackends.join(", ")} only. Omit for the default image.`,
+                description: `create: provider template built on the default image to boot from; ${templateBackends.join(", ")} only. Omit for the default image.`,
               }),
             ),
           }
