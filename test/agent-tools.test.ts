@@ -1191,6 +1191,42 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.body.count, 0);
 });
 
+test("surface post/edit results carry the delivered ts and the ref they acted on", async () => {
+  const emitted: Emitted[] = [];
+  const ctx = fakeToolContext();
+  ctx.post = async () => ({ ok: true, deliveryId: "d1", ts: "1795030226.902129" });
+  ctx.edit = async () => ({ ok: true, deliveryId: "e1", ts: "777.888" });
+  const ref: ToolContextRef = {
+    current: ctx,
+    emit: sink(emitted),
+    scopeLabel: "channel:C1",
+  };
+  const slack = surfaceTool(ref);
+  const posted = (await call(slack, { action: "post", text: "hello there" })) as {
+    content: Array<{ text: string }>;
+  };
+  assert.equal(posted.content[0]!.text, "[sent ts=1795030226.902129]");
+  const stored = emitted.find((e) => e.kind === "ToolResult" && e.body.action === "post")!;
+  assert.equal(stored.body.ts, "1795030226.902129", "the ts is recorded for replay and inspection");
+
+  const edited = (await call(slack, { action: "edit", ref: "777.888", text: "hello again" })) as {
+    content: Array<{ text: string }>;
+  };
+  assert.equal(edited.content[0]!.text, "[edited ref=777.888]");
+  const editStored = emitted.find((e) => e.kind === "ToolResult" && e.body.action === "edit")!;
+  assert.equal(editStored.body.ref, "777.888");
+
+  const flagged = { ...ctx, async post() { return { ok: true, deliveryId: "d2", ts: "1.2", notes: ["mention(s) @U999 aren't in this conversation — sent as plain text, nobody was pinged"] }; } };
+  const noted = (await call(surfaceTool({ current: flagged, emit: sink([]), scopeLabel: "channel:C1" }), {
+    action: "post",
+    text: "hi",
+  })) as { content: Array<{ text: string }> };
+  assert.equal(
+    noted.content[0]!.text,
+    "[sent ts=1.2] mention(s) @U999 aren't in this conversation — sent as plain text, nobody was pinged",
+  );
+});
+
 test("surface reads fail closed without persisting blocked content", async () => {
   const emitted: Emitted[] = [];
   const external = {
@@ -1320,8 +1356,8 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
     tool: "slack",
     callId: "t",
     isError: false,
-    text: "[edited]",
-    body: { action: "edit", ok: true, deliveryId: "e1" },
+    text: "[edited ref=173.4]",
+    body: { action: "edit", ok: true, ref: "173.4", deliveryId: "e1" },
   });
   assert.deepEqual(columns(result("delete")), {
     tool: "slack",

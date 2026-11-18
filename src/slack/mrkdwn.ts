@@ -22,6 +22,19 @@ export function mentionedUserIds(text: string): string[] {
   return [...text.matchAll(SLACK_MENTION)].map((m) => m[1]!);
 }
 
+export function stripUnresolvedMentions(
+  text: string,
+  resolves: (id: string) => boolean,
+): { text: string; stripped: string[] } {
+  const stripped: string[] = [];
+  const out = text.replace(SLACK_MENTION, (m, id: string) => {
+    if (resolves(id)) return m;
+    stripped.push(id);
+    return `@${id}`;
+  });
+  return { text: out, stripped };
+}
+
 export function resolveMentions(text: string, nameById: ReadonlyMap<string, string> | undefined): string {
   if (!nameById || !text.includes("<@")) return text;
   return text.replace(SLACK_MENTION, (m, id) => {

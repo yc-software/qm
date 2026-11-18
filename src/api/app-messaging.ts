@@ -411,8 +411,8 @@ export function createMessagingMethods(
       );
       return merged != null;
     },
-    async ackDelivery(id, slackApiMs) {
-      await deps.deliveries.ack(id, Date.now(), slackApiMs);
+    async ackDelivery(id, slackApiMs, messageTs) {
+      await deps.deliveries.ack(id, Date.now(), slackApiMs, messageTs);
     },
     async failDelivery(id, reason) {
       const approvalId = (await deps.deliveries.get(id))?.destination.commandApprovalId;
