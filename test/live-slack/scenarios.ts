@@ -1,3 +1,4 @@
+import { sharingScenarios } from "./scenarios-sharing.ts";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { assert, type Scenario } from "./harness.ts";
@@ -468,4 +469,5 @@ export const scenarios: Scenario[] = [
   ...twinScenarios,
   ...deployAccessScenarios,
   ...credentialApprovalScenarios,
+  ...sharingScenarios,
 ];

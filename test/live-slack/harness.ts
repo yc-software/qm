@@ -111,7 +111,7 @@ export interface WaitOpts {
   record?: (msgTs: string, text: string) => void;
 }
 
-async function waitForFinalBotMessage(
+export async function waitForFinalBotMessage(
   fetchMessages: () => Promise<SlackMessage[]>,
   botUserId: string,
   afterTs: string,

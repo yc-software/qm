@@ -35,8 +35,8 @@ export class SlackClient {
     return { userId: r.user_id as string, user: r.user as string, teamId: r.team_id as string, url: r.url as string };
   }
 
-  async createChannel(name: string): Promise<string> {
-    const r = await this.web.conversations.create({ name });
+  async createChannel(name: string, isPrivate = false): Promise<string> {
+    const r = await this.web.conversations.create({ name, ...(isPrivate ? { is_private: true } : {}) });
     return r.channel?.id as string;
   }
 

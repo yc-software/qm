@@ -7,7 +7,7 @@ import qaManifest from "./qa-driver.manifest.json" with { type: "json" };
 const ARGA_API_BASE = process.env.ARGA_API_BASE ?? "https://api.argalabs.com";
 
 const BOT_SCOPES = slackManifest.oauth_config.scopes.bot;
-const USER_SCOPES = [...qaManifest.oauth_config.scopes.user, "channels:manage"];
+const USER_SCOPES = [...qaManifest.oauth_config.scopes.user, "channels:manage", "groups:write"];
 
 export interface TwinSession {
   runId: string;
