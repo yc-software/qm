@@ -73,7 +73,7 @@ export interface McpToolDescriptor {
   catalog?: true;
 }
 
-export interface McpAppConnection extends ConnectorApp {
+interface McpAppConnection extends ConnectorApp {
   connected: boolean;
 }
 
