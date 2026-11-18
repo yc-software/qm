@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import type { QmConfig } from "../../cli/src/config.ts";
-import { errMessage } from "../../src/util/errors.ts";
 
 export interface CoreTaskFacts {
   cluster: string;
@@ -238,7 +237,7 @@ async function waitForOneOff(
             .filter(Boolean)
             .join("\n") ?? "";
       } catch (error) {
-        tail = `log tail unavailable: ${errMessage(error)}`;
+        tail = `log tail unavailable: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
     throw new Error(
@@ -284,7 +283,9 @@ export async function runCoreOneOff(config: QmConfig, facts: CoreTaskFacts, opti
     try {
       awsText(config, ["ecs", "deregister-task-definition", "--task-definition", taskDefinition]);
     } catch (error) {
-      console.warn(`warning: could not deregister ${taskDefinition}: ${errMessage(error)}`);
+      console.warn(
+        `warning: could not deregister ${taskDefinition}: ${error instanceof Error ? error.message : error}`,
+      );
     }
   }
 }

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { errMessage } from "../src/util/errors.ts";
 
 export const CI_JOBS = [
   "Select tests",
@@ -226,7 +225,7 @@ async function main() {
         queuedPull(GITHUB_REF),
       );
   } catch (error) {
-    console.log(`No reusable CI proof: ${errMessage(error)}`);
+    console.log(`No reusable CI proof: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (proof) console.log(`QM_CI_REUSE=${JSON.stringify(proof)}`);
   appendFileSync(GITHUB_OUTPUT, `reusable=${Boolean(proof)}\n`);

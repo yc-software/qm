@@ -1,6 +1,5 @@
 import { loadConfigAt, type QmConfig } from "../../cli/src/config.ts";
 import { assertAwsCaller, awsJson, awsText, discoverCoreTask, requireAwsConfig, runCoreOneOff } from "./deployment.ts";
-import { errMessage } from "../../src/util/errors.ts";
 
 const POSTGRES_IMAGE = "public.ecr.aws/docker/library/postgres:16";
 
@@ -262,7 +261,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
-    console.error(errMessage(error));
+    console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   });
 }

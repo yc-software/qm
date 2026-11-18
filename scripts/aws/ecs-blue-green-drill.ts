@@ -1,6 +1,5 @@
 import { loadConfigAt, type QmConfig } from "../../cli/src/config.ts";
 import { assertAwsCaller, awsJson, awsText, discoverCoreTask, requireAwsConfig } from "./deployment.ts";
-import { errMessage } from "../../src/util/errors.ts";
 
 interface Args {
   configPath: string;
@@ -226,7 +225,7 @@ async function waitForHealthyService(
       assertSettledHealthyBlueGreen(describeService(config, cluster, service), expectedTaskDefinition);
       return;
     } catch (error) {
-      lastError = errMessage(error);
+      lastError = error instanceof Error ? error.message : String(error);
     }
     await pause();
   }
@@ -334,9 +333,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
             await waitForRollback(config, active, deadline);
           } catch (error) {
             console.warn(
-              `automatic rollback did not recover the service; restoring the original task definition: ${errMessage(
-                error,
-              )}`,
+              `automatic rollback did not recover the service; restoring the original task definition: ${
+                error instanceof Error ? error.message : error
+              }`,
             );
           }
         }
@@ -355,20 +354,20 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
         }
         await waitForHealthyService(config, facts.cluster, facts.service, originalTask, deadline);
       } catch (error) {
-        console.error(`emergency rollback failed: ${errMessage(error)}`);
+        console.error(`emergency rollback failed: ${error instanceof Error ? error.message : error}`);
       }
     }
     try {
       awsText(config, ["ecs", "deregister-task-definition", "--task-definition", brokenTask]);
     } catch (error) {
-      console.warn(`warning: could not deregister ${brokenTask}: ${errMessage(error)}`);
+      console.warn(`warning: could not deregister ${brokenTask}: ${error instanceof Error ? error.message : error}`);
     }
   }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
-    console.error(errMessage(error));
+    console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   });
 }
