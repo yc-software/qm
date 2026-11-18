@@ -135,7 +135,8 @@ export function createFileRegistration(turn: {
     seed: input.runId ?? `${session.id}:${Date.now()}`,
     ...(fileGrantees.length
       ? {
-          onRegistered: async ({ ownerScopeId, id }) => {
+          onRegistered: async ({ ownerScopeId, id, personalOnly }) => {
+            if (personalOnly) return;
             for (const granteeScopeId of fileGrantees) {
               await deps.acl.grant(tenant, {
                 ownerScopeId,

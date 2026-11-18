@@ -27,6 +27,17 @@ export interface ContextSource {
   sourceProvenance?: SourceProvenance;
 }
 
+export function privateSourceAllowed(context: PrivateContext, ownerScopeId: ScopeId): boolean {
+  const owner = personalScope(context.actorId);
+  return (
+    context.botActor !== true &&
+    ownerScopeId === owner &&
+    (context.scopeId === undefined || context.scopeId === owner) &&
+    (context.audienceScopeId ?? owner) === owner &&
+    (context.scopeId === undefined || Boolean(context.sessionId))
+  );
+}
+
 export async function inheritContextSources(
   sessions: Pick<ContextSessions, "recordContextProvenance">,
   context: PrivateContext,
@@ -34,16 +45,8 @@ export async function inheritContextSources(
 ): Promise<Set<string>> {
   const blocked = new Set<string>();
   const accepted: ContextSource[] = [];
-  const owner = personalScope(context.actorId);
   for (const source of sources) {
-    if (
-      source.personalOnly &&
-      (context.botActor === true ||
-        source.ownerScopeId !== owner ||
-        (context.scopeId !== undefined && context.scopeId !== owner) ||
-        (context.audienceScopeId ?? owner) !== owner ||
-        (context.scopeId !== undefined && !context.sessionId))
-    ) {
+    if (source.personalOnly && !privateSourceAllowed(context, source.ownerScopeId)) {
       blocked.add(source.id);
       continue;
     }
@@ -58,7 +61,16 @@ export async function inheritContextSources(
       })),
       "ordinary",
     );
-    context.sourceProvenance = await sessions.recordContextProvenance(context.sessionId, context.scopeId, provenance);
+    const current = context.sourceProvenance;
+    const merged = mergeProvenance([...(current ? [current] : []), provenance], "ordinary");
+    const covered =
+      current &&
+      merged.sensitivity === current.sensitivity &&
+      merged.sourceUnknown === current.sourceUnknown &&
+      merged.sources.every((source) => current.sources.includes(source)) &&
+      (!provenance.personalOnly || context.personalOnly);
+    if (!covered)
+      context.sourceProvenance = await sessions.recordContextProvenance(context.sessionId, context.scopeId, provenance);
     if (provenance.personalOnly) context.personalOnly = true;
   }
   return blocked;

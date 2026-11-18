@@ -663,6 +663,10 @@ export function buildApp(
     resolveFiles: (refs) => files.resolveByIds(refs),
     isPersonalOnly: async (ownerScopeId, ref) => {
       const parsed = parseRef(ref);
+      if (parsed.kind === "file") {
+        const file = await files.get(parsed.id);
+        return file?.ownerScopeId === ownerScopeId && file.personalOnly === true;
+      }
       if (parsed.kind !== "skill") return false;
       const skill = await skills.get(parsed.id);
       return skill?.scopeId === ownerScopeId && skill.personalOnly === true;
@@ -864,7 +868,9 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalDurableByteStore(join(config.dataDir, "docstore"));
-  const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
+  const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes, {
+    getMany: (query, transaction) => sessions.getMany(query, transaction),
+  });
   const fileUploads =
     config.snapshotStore === "s3" && config.s3Bucket
       ? createDirectFileUploads({

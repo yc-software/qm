@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
@@ -88,17 +89,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
   }
 
-  async function getMany({
-    ids,
-    threadRefs,
-  }: {
-    ids: readonly string[];
-    threadRefs: readonly string[];
-  }): Promise<Session[]> {
+  async function getMany(
+    { ids, threadRefs }: { ids: readonly string[]; threadRefs: readonly string[] },
+    transaction?: PoolClient,
+  ): Promise<Session[]> {
     if (!ids.length && !threadRefs.length) return [];
-    return (
-      await q("SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])", [ids, threadRefs])
-    ).map(rowToSession);
+    if (transaction) await pool();
+    const sql = "SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])";
+    const rows = transaction ? (await transaction.query(sql, [ids, threadRefs])).rows : await q(sql, [ids, threadRefs]);
+    return rows.map(rowToSession);
   }
 
   const descendantsOf = async (rootIds: readonly string[]): Promise<SessionDescendant[]> => {

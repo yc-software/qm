@@ -43,6 +43,12 @@ test(
     }
     const accepted = uploads[results.findIndex((r) => r.status === "fulfilled")]!;
     assert.deepEqual(await second.get(accepted.id), accepted);
+    await Promise.all([
+      first.addContext(accepted.id, "private-context-a"),
+      second.addContext(accepted.id, "private-context-b"),
+    ]);
+    const restored = await createPostgresFileUploadStore(url!).get(accepted.id);
+    assert.deepEqual(restored?.contextSessionIds?.sort(), ["private-context-a", "private-context-b"]);
     const claims = await Promise.all([
       first.transition(accepted.id, ["pending"], "completing"),
       second.transition(accepted.id, ["pending"], "aborting"),

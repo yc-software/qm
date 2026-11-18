@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import type { TenantLookup } from "../tenants/lookup.ts";
 import type { Tenant } from "../tenants/context.ts";
@@ -412,7 +413,10 @@ export interface SessionStore {
     ownerScopeId: ScopeId,
     provenance: import("../memory/facts.ts").MemoryProvenance,
   ): Promise<import("../memory/facts.ts").SourceProvenance>;
-  getMany(refs: { ids: readonly string[]; threadRefs: readonly string[] }): Promise<Session[]>;
+  getMany(
+    refs: { ids: readonly string[]; threadRefs: readonly string[] },
+    transaction?: PoolClient,
+  ): Promise<Session[]>;
   userItemSeqs(
     ranges: readonly { sessionId: string; sinceSeq: number }[],
   ): Promise<Array<{ sessionId: string; seq: number }>>;

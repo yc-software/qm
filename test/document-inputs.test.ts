@@ -257,6 +257,8 @@ function storeFor(data = Buffer.from("QUARTZ-731")) {
   let opens = 0;
   const store = {
     get: async () => artifact,
+    getMany: async (ids: readonly string[]) =>
+      (await Promise.all(ids.map((id) => store.get(id)))).filter((file): file is FileArtifact => file !== null),
     open: async () => {
       opens++;
       return { artifact, sizeBytes: data.length, stream: Readable.from(data) };
@@ -433,9 +435,11 @@ test("Bedrock fallback uses its actual provider request shape", async () => {
 test("one failed historical document does not prevent loading another document", async () => {
   const { store, meta } = storeFor();
   const get = store.get.bind(store);
-  store.get = async (id) => {
+  const open = store.open.bind(store);
+  store.get = async (id) => (id === "broken" ? { ...(await get(id))!, id, name: "broken.txt" } : get(id));
+  store.open = async (id) => {
     if (id === "broken") throw new Error("storage unavailable");
-    return get(id);
+    return open(id);
   };
   const result = await loadDocumentInputs(store, [meta, { ...meta, artifactId: "broken" }], () => true);
   assert.equal(result.documents.length, 1);

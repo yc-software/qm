@@ -207,6 +207,7 @@ import {
   loadConversationKeychain,
   shownNames,
 } from "./orchestrator/turn-prompt.ts";
+import { contextualFiles } from "../files/context-files.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
@@ -863,6 +864,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (personalOnlyContext && (audienceScopeId ?? scopeId) !== toScopeId("personal", actor.id))
         return { status: "refused", reason: "This private conversation cannot deliver to another audience." };
       let privateSession = storedSession ?? undefined;
+      const fileContext = {
+        actorId: actor.id,
+        scopeId,
+        sessionId: storedSession?.id,
+        ...(storedSession?.personalOnly ? { personalOnly: true as const } : {}),
+        ...(storedSession?.sourceProvenance ? { sourceProvenance: storedSession.sourceProvenance } : {}),
+        ...(audienceScopeId ? { audienceScopeId } : {}),
+        ...(input.botActor ? { botActor: true } : {}),
+      };
+      const files = contextualFiles(deps.files, deps.sessions, fileContext);
       let pendingProvenance: import("../memory/facts.ts").MemoryProvenance | undefined;
       const protectPersonalContext = async () => {
         personalOnlyContext = true;
@@ -908,7 +919,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ownScopeBotWork,
         notebookOnly,
         memory: deps.memory,
-        files: deps.files,
+        files,
         skills: deps.skills,
         auditLog: deps.auditLog,
         directory: deps.directory,
@@ -1102,6 +1113,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       screenSession.id = session.id;
       privateSession = session;
       personalOnlyContext ||= session.personalOnly === true;
+      fileContext.sessionId = session.id;
       if (pendingProvenance) {
         session.sourceProvenance = await deps.sessions.recordContextProvenance(session.id, scopeId, pendingProvenance);
         if (pendingProvenance.personalOnly) session.personalOnly = true;
@@ -1642,7 +1654,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let spineAckText: string | undefined;
         const fileRegistration = createFileRegistration({
           tenant,
-          deps,
+          deps: { ...deps, files },
           input,
           actor,
           conversation,
@@ -1682,7 +1694,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         const { mayReadArtifact, provisionOutbound, openStoredOutbound } = createArtifactAccess({
           tenant,
-          deps,
+          deps: { ...deps, files },
           conversation,
           scopeId,
           resolution,
@@ -1765,7 +1777,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deploy: deps.deploy,
           ...(editingApp ? { editingApp } : {}),
           acl: deps.acl,
-          files: deps.files,
+          files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
           botActor: input.botActor,
@@ -2020,7 +2032,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ) => {
           const loaded = strictReadOnly
             ? { documents: [], notices: [], tokens: 0 }
-            : await loadDocumentInputs(deps.files, metas, mayReadArtifact, {
+            : await loadDocumentInputs(files, metas, mayReadArtifact, {
                 ...documentRoom,
                 signal: turnAbort.signal,
                 existingDocuments,
@@ -2391,7 +2403,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           dispatchTrace ??= startDispatchTrace();
           const turnRun = deps.agent.runTurn({
             session,
-            loadImage: artifactImageLoader(deps.files, mayReadArtifact),
+            loadImage: artifactImageLoader(files, mayReadArtifact),
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
             resolveSteeredApproval: (request) =>
               resolveLiveApproval(request, {

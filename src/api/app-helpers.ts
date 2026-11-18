@@ -1,3 +1,5 @@
+import { contextualFiles } from "../files/context-files.ts";
+import { type PrivateContext } from "../sessions/private-context.ts";
 import { recordAuditInBinding, type AuditEvent } from "../audit/audit-log.ts";
 import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
@@ -419,10 +421,16 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ownScopeBotWork: boolean,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
+    context?: PrivateContext,
   ): Promise<FileListPage> {
     const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
     const handles = await deps.acl.handlesFor(tenant, myScopes);
-    const page = await deps.files.listDocuments(
+    const files = contextualFiles(
+      deps.files,
+      deps.sessions,
+      context ?? { actorId: principalId, botActor: ownScopeBotWork },
+    );
+    const page = await files.listDocuments(
       myScopes,
       handles.map((h) => ({ ownerScopeId: h.ownerScopeId, id: h.fileId })),
       {

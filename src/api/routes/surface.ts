@@ -387,6 +387,7 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
     },
     scope ? (scope as ScopeId) : undefined,
     isOwnScopeBotWork(capability),
+    capability ?? undefined,
   );
   return sendJson(res, 200, page);
 }

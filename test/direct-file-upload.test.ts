@@ -1,3 +1,7 @@
+import { createPgPool, withPgTransaction } from "../src/persistence/pg-pool.ts";
+import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import type { SessionStore } from "../src/sessions/session-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -10,12 +14,29 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
-function fixture() {
+function fixture(sessions?: SessionStore, persisted?: FileUploadStore, databaseUrl = testDatabaseUrl()) {
   const rows = new Map<string, FileUpload>();
-  const store: FileUploadStore = {
+  const transactions = createPgPool(databaseUrl);
+  const store: FileUploadStore = persisted ?? {
     async insert(row) {
       if (rows.has(row.id)) throw new Error("duplicate");
       rows.set(row.id, structuredClone(row));
+    },
+    async complete(id, publish) {
+      return withPgTransaction(await transactions.pool(), async (transaction) => {
+        const row = rows.get(id);
+        if (!row || !["completing", "complete"].includes(row.state))
+          throw new FileUploadError("upload cannot be published", 409);
+        const artifact = await publish(structuredClone(row), transaction);
+        row.state = "complete";
+        return artifact;
+      });
+    },
+    async addContext(id, sessionId) {
+      const row = rows.get(id);
+      if (!row || !["pending", "completing"].includes(row.state)) return false;
+      row.contextSessionIds = [...new Set([...(row.contextSessionIds ?? []), sessionId])];
+      return true;
     },
     async get(id) {
       const row = rows.get(id);
@@ -50,7 +71,7 @@ function fixture() {
       return rows.has(id) ? [{ tenantId: TEST_TENANT, id }] : [];
     },
   };
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore(), sessions);
   const calls: Array<{ name: string; input: Record<string, any> }> = [];
   let head: Record<string, unknown> | undefined;
   let parts: Array<Record<string, unknown>> = [];
@@ -68,7 +89,7 @@ function fixture() {
         case "ListPartsCommand":
           return { Parts: parts };
         case "CompleteMultipartUploadCommand": {
-          const row = [...rows.values()].find((r) => command.input.Key.endsWith(r.id))!;
+          const row = (await store.get(command.input.Key.split("/").at(-1)!))!;
           head = {
             ContentLength: row.sizeBytes,
             ChecksumSHA256: multipartChecksum(row.checksums),
@@ -200,18 +221,31 @@ test("completion recovers a lost S3 response and is idempotent", async () => {
 });
 
 test("a new core recovers after S3 completion but before metadata publication", async () => {
-  const f = fixture();
+  const databaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const source = await sessions.getOrCreateByThread("private-upload-completion", "dm", "personal:U1");
+  await sessions.recordContextProvenance(source.id, source.scopeId, {
+    personalOnly: true,
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: false,
+  });
+  const f = fixture(sessions, undefined, databaseUrl);
   const row = await f.service.begin(f.input);
   f.uploadParts(row);
   const publish = f.files.publish.bind(f.files);
   f.files.publish = async () => {
     throw new Error("database disconnected");
   };
-  await assert.rejects(f.service.complete(row.id), /database/);
+  await assert.rejects(f.service.complete(row.id, source.id), /database/);
   assert.equal((await f.store.get(row.id))!.state, "completing");
   f.files.publish = publish;
   const restarted = createDirectFileUploads(f.options);
-  assert.equal((await restarted.complete(row.id)).id, row.id);
+  const artifact = await restarted.complete(row.id);
+  assert.equal(artifact.id, row.id);
+  assert.equal(artifact.personalOnly, true);
+  assert.equal(artifact.sourceProvenance?.sensitivity, "restricted");
+  assert.ok(artifact.sourceProvenance?.sources.includes("group:restricted"));
   assert.equal(f.calls.filter((c) => c.name === "CompleteMultipartUploadCommand").length, 1);
 });
 
@@ -294,31 +328,33 @@ test("an upload cannot reuse an unrelated artifact ID", async () => {
   assert.equal(f.calls.length, 0);
 });
 
-test("recovery cannot resurrect a deleted file when the upload state update failed", async () => {
-  const f = fixture();
+test("failed completion rolls back publication before a private retry, and deletion stays final", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const source = await sessions.getOrCreateByThread("private-upload-rollback", "dm", "personal:U1");
+  await sessions.markPersonalOnly(source.id, source.scopeId);
+  const f = fixture(sessions, createPostgresFileUploadStore(databaseUrl), databaseUrl);
   const row = await f.service.begin(f.input);
   f.uploadParts(row);
-  const transition = f.store.transition.bind(f.store);
-  f.store.transition = async (id, from, to) => {
-    if (to === "complete") throw new Error("database acknowledgement lost");
-    return transition(id, from, to);
+  const publish = f.files.publish.bind(f.files);
+  f.files.publish = async (input, transaction) => {
+    await publish(input, transaction);
+    throw new Error("database acknowledgement lost");
   };
   await assert.rejects(f.service.complete(row.id), /acknowledgement lost/);
-  assert.ok(await f.files.get(row.id));
+  assert.equal(await f.files.get(row.id), null);
   assert.equal((await f.store.get(row.id))!.state, "completing");
+  f.files.publish = publish;
+  assert.equal((await f.service.complete(row.id, source.id)).personalOnly, true);
   await f.files.delete(row.id);
-  f.store.transition = transition;
   const restarted = createDirectFileUploads(f.options);
-  await assert.rejects(
-    restarted.complete(row.id),
-    (error: unknown) => error instanceof FileUploadError && error.status === 410 && /deleted/.test(error.message),
-  );
+  for (let attempt = 0; attempt < 2; attempt++)
+    await assert.rejects(
+      restarted.complete(row.id),
+      (error: unknown) => error instanceof FileUploadError && error.status === 410 && /deleted/.test(error.message),
+    );
   assert.equal(await f.files.get(row.id, { includeDisabled: true }), null);
   assert.equal((await f.store.get(row.id))!.state, "complete");
-  await assert.rejects(
-    restarted.complete(row.id),
-    (error: unknown) => error instanceof FileUploadError && error.status === 410 && /deleted/.test(error.message),
-  );
 });
 
 test("missing multipart upload and object become terminal instead of retrying forever", async () => {
@@ -338,4 +374,49 @@ test("missing multipart upload and object become terminal instead of retrying fo
   assert.equal(await f.files.get(row.id), null);
   await f.service.abort(row.id);
   await assert.rejects(f.service.complete(row.id), /no longer available/);
+});
+
+test("concurrent completions publish the durable private context rather than an earlier snapshot", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const source = await sessions.getOrCreateByThread("private-concurrent-upload", "dm", "personal:U1");
+  await sessions.recordContextProvenance(source.id, source.scopeId, {
+    personalOnly: true,
+    sensitivity: "restricted",
+    sources: [source.scopeId],
+    sourceUnknown: false,
+  });
+  const f = fixture(sessions, createPostgresFileUploadStore(databaseUrl), databaseUrl);
+  const row = await f.service.begin(f.input);
+  f.uploadParts(row);
+  const send = f.options.client.send.bind(f.options.client);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let heads = 0;
+  let firstReady!: () => void, secondReady!: () => void;
+  const firstEntered = new Promise<void>((resolve) => {
+    firstReady = resolve;
+  });
+  const secondEntered = new Promise<void>((resolve) => {
+    secondReady = resolve;
+  });
+  f.options.client.send = async (command) => {
+    if (command.constructor.name === "HeadObjectCommand" && heads < 2) {
+      if (++heads === 1) firstReady();
+      else secondReady();
+      await gate;
+    }
+    return send(command);
+  };
+  const first = f.service.complete(row.id);
+  await firstEntered;
+  const second = f.service.complete(row.id, source.id);
+  await secondEntered;
+  release();
+  const completed = await Promise.all([first, second]);
+  assert.ok(completed.every((artifact) => artifact.personalOnly));
+  assert.equal((await f.files.get(row.id))?.personalOnly, true);
+  assert.equal((await f.files.get(row.id))?.sourceProvenance?.sensitivity, "restricted");
 });

@@ -1,3 +1,4 @@
+import { contextualFiles } from "../../files/context-files.ts";
 import { randomUUID } from "node:crypto";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
@@ -163,7 +164,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     const envScope = await resolveEnvironmentId(deps.environments, capability.scopeId);
     const register: ArtifactRegistration | undefined = deps.files
       ? {
-          store: deps.files,
+          store: contextualFiles(deps.files, ctx.app, { ...capability, sourceProvenance: ctx.sourceProvenance }),
           ownerScopeId: scopeId("personal", capability.actorId),
           createdBy: capability.actorId,
           createdInScope: capability.scopeId,
@@ -225,7 +226,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         : sandbox!.provision(envScope));
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
-        app.openFileForViewer(tenantOf(ctx), id, capability.actorId, isOwnScopeBotWork(capability)),
+        app.openFileForViewer(tenantOf(ctx), id, capability.actorId, isOwnScopeBotWork(capability), capability),
       );
       const bad = [
         ...r.missing.map((p) => `${p} (not found)`),

@@ -468,11 +468,18 @@ export interface App {
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
     ownScopeBotWork?: boolean,
+    context?: import("../sessions/private-context.ts").PrivateContext,
   ): Promise<FileListPage>;
   uploadFileForViewer(
     tenant: Tenant,
     principalId: string,
-    input: { scopeId?: ScopeId; name: string; mimetype?: string; data: AsyncIterable<Uint8Array> },
+    input: {
+      scopeId?: ScopeId;
+      name: string;
+      mimetype?: string;
+      data: AsyncIterable<Uint8Array>;
+      contextSessionId?: string;
+    },
   ): Promise<FileListItem | null>;
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   loopAdministration(
@@ -492,6 +499,7 @@ export interface App {
     id: string,
     principalId: string,
     ownScopeBotWork: boolean,
+    context?: import("../sessions/private-context.ts").PrivateContext,
   ): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(

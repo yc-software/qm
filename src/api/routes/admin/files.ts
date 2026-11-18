@@ -1,3 +1,4 @@
+import { inheritRequestSources } from "../../private-context.ts";
 import { parseScopeId } from "../../../types.ts";
 import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../files/file-artifact-store.ts";
@@ -23,6 +24,23 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, art.ownerScopeId);
   if (!actor) return;
   audit(ctx, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
+  if (
+    (
+      await inheritRequestSources(
+        ctx,
+        [
+          {
+            id: art.id,
+            ownerScopeId: art.ownerScopeId,
+            personalOnly: art.personalOnly,
+            sourceProvenance: art.sourceProvenance,
+          },
+        ],
+        actor.id,
+      )
+    ).has(art.id)
+  )
+    return sendJson(res, 404, { error: "not_found" });
   const opened = await deps.files.open(id);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   const chunks: Buffer[] = [];
@@ -68,6 +86,23 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
     resource: art.path,
     scopeLabel: art.ownerScopeId,
   });
+  if (
+    (
+      await inheritRequestSources(
+        ctx,
+        [
+          {
+            id: art.id,
+            ownerScopeId: art.ownerScopeId,
+            personalOnly: art.personalOnly,
+            sourceProvenance: art.sourceProvenance,
+          },
+        ],
+        actor.id,
+      )
+    ).has(art.id)
+  )
+    return sendJson(res, 404, { error: "not_found" });
   const opened = await deps.files.open(id);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, {
@@ -109,7 +144,17 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
       ...(nameQuery ? { nameQuery } : {}),
       ...(cursor ? { cursor } : {}),
     });
-    for (const a of page.files) {
+    const blocked = await inheritRequestSources(
+      ctx,
+      page.files.map((file) => ({
+        id: file.id,
+        ownerScopeId: file.ownerScopeId,
+        personalOnly: file.personalOnly,
+        sourceProvenance: file.sourceProvenance,
+      })),
+      actor.id,
+    );
+    for (const a of page.files.filter((file) => !blocked.has(file.id))) {
       files.push({
         id: a.id,
         scopeId: a.ownerScopeId,
@@ -128,7 +173,7 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
 }
 
 export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
+  const { res, deps, body, capability } = ctx;
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return;
   if (!deps.files) return sendJson(res, 404, { error: "not_found", message: "file store not wired" });
@@ -159,6 +204,7 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
     const { artifact } = await deps.files.put({
       id,
       ownerScopeId: scope,
+      ...(capability?.sessionId ? { contextSessionIds: [capability.sessionId] } : {}),
       createdBy: actor.id,
       name,
       path,

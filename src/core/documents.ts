@@ -175,6 +175,9 @@ export async function loadDocumentInputs(
       ]),
     ),
   );
+  const artifacts = new Map(
+    (await files.getMany([...new Set(metas.flatMap((meta) => meta.artifactId ?? []))])).map((file) => [file.id, file]),
+  );
   let remaining = maxBytes;
   let usedTokens = 0;
   for (const meta of [...metas].reverse()) {
@@ -182,7 +185,7 @@ export async function loadDocumentInputs(
     try {
       if (!meta.artifactId || !isDocumentAttachment(meta) || seen.has(meta.artifactId)) continue;
       seen.add(meta.artifactId);
-      const artifact = await files.get(meta.artifactId);
+      const artifact = artifacts.get(meta.artifactId);
       if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
       const contentKey = JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]);
       if (loadedContent.has(contentKey)) continue;

@@ -87,23 +87,13 @@ function handlePath(path: string): string {
 
 export async function carriedFileHandles(
   sourceScopes: readonly ScopeId[],
-  files: Pick<FileArtifactStore, "listOwnedByScopes">,
+  files: Pick<FileArtifactStore, "listContext">,
 ): Promise<GrantedHandle[]> {
-  const handles = new Map<string, GrantedHandle>();
-  for (const sourceScope of sourceScopes) {
-    const remaining = MAX_OPEN_FILES - handles.size;
-    if (remaining <= 0) break;
-    const page = await files.listOwnedByScopes([sourceScope], { limit: remaining });
-    for (const file of page.files) {
-      if (handles.size >= MAX_OPEN_FILES) break;
-      handles.set(file.id, {
-        carried: true,
-        handlePath: `shared/open-${handleSource(sourceScope)}/${file.id}/${handlePath(file.name)}`,
-        ownerScopeId: sourceScope,
-        fileId: file.id,
-        permission: "read",
-      });
-    }
-  }
-  return [...handles.values()];
+  return (await files.listContext(sourceScopes, { limit: MAX_OPEN_FILES })).map((file) => ({
+    carried: true,
+    handlePath: `shared/open-${handleSource(file.ownerScopeId)}/${file.id}/${handlePath(file.name)}`,
+    ownerScopeId: file.ownerScopeId,
+    fileId: file.id,
+    permission: "read",
+  }));
 }

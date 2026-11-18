@@ -1,12 +1,16 @@
+import type { PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import type { ScopeId } from "../types.ts";
+import type { SourceProvenance } from "../memory/facts.ts";
 import type { ByteSource } from "./durable-byte-store.ts";
 
 export type FileDirection = "in" | "out";
 export type FileSource = "live" | "backfill";
 
 export interface FileArtifact {
+  personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -25,6 +29,7 @@ export interface FileArtifact {
 }
 
 export interface PutFileInput {
+  contextSessionIds?: readonly string[];
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -51,6 +56,7 @@ export interface FilePage {
 }
 
 export interface ListOwnedOptions {
+  excludePersonalOnly?: boolean;
   limit?: number;
   cursor?: string;
   includeDisabled?: boolean;
@@ -69,12 +75,17 @@ export class FileArtifactDeletedError extends Error {
 
 export interface FileArtifactStore {
   put(input: PutFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
-  publish(input: PublishFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
+  publish(input: PublishFileInput, transaction?: PoolClient): Promise<{ artifact: FileArtifact; created: boolean }>;
 
   get(id: string, opts?: { includeDisabled?: boolean }): Promise<FileArtifact | null>;
+  getMany(ids: readonly string[], opts?: { includeDisabled?: boolean }): Promise<FileArtifact[]>;
 
   open(id: string): Promise<{ artifact: FileArtifact; sizeBytes: number; stream: Readable } | null>;
 
+  listContext(
+    scopes: readonly ScopeId[],
+    opts?: Pick<ListOwnedOptions, "limit" | "excludePersonalOnly">,
+  ): Promise<FileArtifact[]>;
   listOwnedByScopes(scopes: readonly ScopeId[], opts?: ListOwnedOptions): Promise<FilePage>;
 
   listDocuments(

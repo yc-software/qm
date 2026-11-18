@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { FILE_ARTIFACT_MIGRATIONS } from "../src/files/postgres-file-artifact-store.ts";
+import { fileArtifactId } from "../src/files/file-artifact-store.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import pg from "pg";
@@ -20,6 +23,7 @@ test("private document capability and skill privacy survive memory opt-out and a
   let token: string | undefined;
   let privateId = "";
   let copiedId = "";
+  let privateFileId = "";
   let copies = 0;
   let sourceSessionId = "";
   let extractions = 0;
@@ -69,6 +73,9 @@ test("private document capability and skill privacy survive memory opt-out and a
           const body = JSON.stringify(recalled.body);
           assert.ok(body.includes("Late private memory"));
           assert.equal((await input.tools.memoryAdd(["Late native: Late private memory"]))?.added, 1);
+          privateFileId = (
+            await input.tools.createPlayground({ title: "Private procedure", html: "<p>Late private memory</p>" })
+          ).artifactId;
           const saved = await input.tools.selfApi("POST", "/v1/skills", {
             name: "late-memory-copy",
             description: "derived",
@@ -78,6 +85,30 @@ test("private document capability and skill privacy survive memory opt-out and a
           copiedId = (saved.body as { skill: { id: string } }).skill.id;
           await input.emit({ kind: "AgentMessage", text: "Late private memory" });
           return { reply: "Late private memory", modelCalls: 0 };
+        }
+        if (input.input.includes("Read private file search")) {
+          assert.equal((await built.sessions.get(input.session.id))?.personalOnly, undefined);
+          const read = await input.tools.selfApi("POST", "/v1/search", { query: "Late private memory" });
+          assert.equal(read.status, 200);
+          const hits = (read.body as { hits: Array<{ id: string; backend: string; snippet: string }> }).hits;
+          const file = hits.find((hit) => hit.id === privateFileId && hit.backend === "files");
+          assert.ok(file);
+          assert.ok(file.snippet.includes("Late private memory"));
+          const saved = await input.tools.selfApi("POST", "/v1/skills", {
+            name: "file-search-copy",
+            description: "derived",
+            body: file.snippet,
+          });
+          assert.equal(saved.status, 201);
+          copiedId = (saved.body as { skill: { id: string } }).skill.id;
+          await input.emit({ kind: "AgentMessage", text: "Saved file procedure" });
+          return { reply: "Saved file procedure", modelCalls: 0 };
+        }
+        if (input.input.includes("Attach private file from shared context")) {
+          const attached = await input.tools.attach([{ file_id: privateFileId }]);
+          assert.equal(attached.ok, false);
+          await input.emit({ kind: "AgentMessage", text: "Private file withheld" });
+          return { reply: "Private file withheld", modelCalls: 0 };
         }
         if (input.input.includes("Read restricted admin memory")) {
           const read = await input.tools.selfApi("GET", "/v1/admin/memory?scope=group:restricted");
@@ -264,6 +295,22 @@ test("private document capability and skill privacy survive memory opt-out and a
     lateFacts.map((fact) => fact.id),
     { actorId, context: "self" },
   );
+  const privateFile = await built.files.get(privateFileId);
+  assert.equal(privateFile?.personalOnly, true);
+  assert.equal(privateFile?.sourceProvenance?.sensitivity, "restricted");
+  assert.ok(privateFile?.sourceProvenance?.sources.includes("group:restricted"));
+  const readFile = (path: string, capability: string) =>
+    fetch(base + path, { headers: { "x-agent-capability": capability } });
+  assert.equal((await readFile("/v1/files/" + privateFileId + "/content", shared)).status, 404);
+  assert.equal((await readFile("/v1/admin/files/read?id=" + privateFileId, shared)).status, 404);
+  assert.equal((await readFile("/v1/files/" + privateFileId + "/content", protectedOwn)).status, 200);
+  const shareFile = await fetch(base + "/v1/share", {
+    method: "POST",
+    headers: { "x-agent-capability": protectedOwn, "content-type": "application/json" },
+    body: JSON.stringify({ type: "file", id: privateFileId, toScope: "org" }),
+  });
+  assert.equal(shareFile.status, 400);
+  assert.equal(((await shareFile.json()) as { message: string }).message, "Private artifacts cannot change audience");
   await built.skills.archive(copiedId);
   await built.skills.review(privateId, actorId, []);
   await built.skills.publish(privateId);
@@ -341,6 +388,37 @@ test("private document capability and skill privacy survive memory opt-out and a
   const restrictedCopy = await built.skills.get(copiedId);
   assert.equal(restrictedCopy?.sourceProvenance?.sensitivity, "restricted");
   assert.ok(restrictedCopy?.sourceProvenance?.sources.includes("group:restricted"));
+  const fileRead = await built.app.turn({
+    ...normal,
+    conversation: { kind: "dm", threadRef: "web:admin-alice:private-file-reader" },
+    text: "Read private file search",
+    skipMemory: true,
+  });
+  assert.equal(fileRead.status, "ok");
+  assert.equal((await built.skills.get(copiedId))?.personalOnly, true);
+  assert.equal((await built.skills.get(copiedId))?.sourceProvenance?.sensitivity, "restricted");
+  await built.skills.archive(copiedId);
+  const attachDenied = await built.app.turn({
+    ...normal,
+    conversation: { kind: "channel", threadRef: "channel:C1", channelRef: "C1" },
+    text: "Attach private file from shared context",
+    skipMemory: true,
+  });
+  assert.equal(attachDenied.status, "ok");
+  await assert.rejects(
+    built.files.put({
+      id: "forbidden-private-file",
+      ownerScopeId: "org:default-org",
+      createdBy: actorId,
+      name: "private.txt",
+      path: "private.txt",
+      mimetype: "text/plain",
+      data: Buffer.from("Private procedure"),
+      direction: "out",
+      contextSessionIds: [late.sessionId!],
+    }),
+    /Private files must remain/,
+  );
   const child = await built.sessions.getOrCreateByThread("private-child", "dm", personal);
   await built.sessions.setParentSession(child.id, forked.session.id);
   assert.equal((await built.sessions.get(child.id))?.personalOnly, true);
@@ -370,4 +448,63 @@ test("private document capability and skill privacy survive memory opt-out and a
   );
   assert.equal((await built.sessions.get(sharedChild.id))?.personalOnly, undefined);
   await assert.rejects(built.sessions.inheritContextFrom(child.id, "missing-source"), /no longer exists/);
+  const legacyTurn = randomUUID();
+  const createdId = fileArtifactId(legacyTurn + ":attach:0", "out", 0);
+  const exportedId = "ordinary-reexport-" + randomUUID();
+  for (const id of [createdId, exportedId])
+    await built.files.put({
+      id,
+      ownerScopeId: personal,
+      createdBy: actorId,
+      name: id + ".txt",
+      path: id + ".txt",
+      mimetype: "text/plain",
+      data: Buffer.from("Legacy file"),
+      direction: "out",
+      createdInScope: personal,
+    });
+  await built.sessions.appendMany({ sessionId: binding.conversation.sessionId }, [
+    {
+      kind: "ToolCall",
+      tool: "attach",
+      turnId: legacyTurn,
+      callId: "legacy-created",
+      body: { files: ["private.txt"] },
+    },
+    {
+      kind: "ToolResult",
+      tool: "attach",
+      turnId: legacyTurn,
+      callId: "legacy-created",
+      body: { files: [{ artifactId: createdId }] },
+    },
+    {
+      kind: "ToolCall",
+      tool: "attach",
+      turnId: legacyTurn,
+      callId: "legacy-reexported",
+      body: { files: [{ file_id: exportedId }] },
+    },
+    {
+      kind: "ToolResult",
+      tool: "attach",
+      turnId: legacyTurn,
+      callId: "legacy-reexported",
+      body: { files: [{ artifactId: exportedId }] },
+    },
+  ]);
+  const migration = new pg.Client({ connectionString: config.databaseUrl });
+  await migration.connect();
+  try {
+    for (const statement of FILE_ARTIFACT_MIGRATIONS.find(
+      (migration) => migration.id === "files/artifacts/0005-recorded-origin",
+    )!.statements)
+      await migration.query(statement);
+  } finally {
+    await migration.end();
+  }
+  assert.equal((await built.files.get(createdId))?.personalOnly, true);
+  assert.equal((await built.files.get(createdId))?.sourceProvenance?.sensitivity, "restricted");
+  assert.equal((await built.files.get(exportedId))?.personalOnly, undefined);
+  assert.equal((await built.files.get(exportedId))?.sourceProvenance?.sourceUnknown, true);
 });

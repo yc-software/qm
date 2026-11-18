@@ -1,3 +1,4 @@
+import { contextualFiles } from "../files/context-files.ts";
 import { inheritSessionContext } from "../sessions/private-context.ts";
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
@@ -544,8 +545,8 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork) {
-      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork, context) {
+      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope, context);
     },
 
     async uploadFileForViewer(tenant, principalId, input) {
@@ -564,6 +565,7 @@ export function createSessionMethods(
         path,
         mimetype,
         data: input.data,
+        ...(input.contextSessionId ? { contextSessionIds: [input.contextSessionId] } : {}),
         direction: "in",
         createdInScope,
         maxBytes: MAX_ATTACHMENT_BYTES,
@@ -587,7 +589,7 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork, context) {
       const art = await deps.files.get(id);
       if (!art) return null;
       const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
@@ -597,7 +599,12 @@ export function createSessionMethods(
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
-      const opened = await deps.files.open(id);
+      const files = contextualFiles(
+        deps.files,
+        deps.sessions,
+        context ?? { actorId: principalId, botActor: ownScopeBotWork },
+      );
+      const opened = await files.open(id);
       if (!opened) return null;
       return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
     },
