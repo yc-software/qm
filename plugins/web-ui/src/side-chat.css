@@ -522,6 +522,16 @@
   margin-bottom: 0;
 }
 
+.side-chat-preview.draft {
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+}
+.side-chat-preview.draft em {
+  margin-right: 4px;
+  color: var(--foreground);
+  font-style: normal;
+  font-weight: 600;
+}
 .side-chat-card.collapsed {
   padding-bottom: 12px;
   cursor: pointer;

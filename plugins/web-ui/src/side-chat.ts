@@ -59,7 +59,9 @@ export function createSideChatController(ctx: ConvCtx) {
   let sendOnOpen = false;
   let maximized = false;
   let includeExcerpt = true;
-  const previews = new Map<string, { text: string; state: keyof typeof PREVIEW_NOTE }>();
+  const previews = new Map<string, { text: string; state: keyof typeof PREVIEW_NOTE; draft?: boolean }>();
+  const unsent = new Map<string, CoreSession>();
+  const listedIds = new Set<string>();
   let previewFrame: number | null = null;
   let error = "";
   let epoch = 0;
@@ -398,6 +400,7 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function collapsedBody(chat: CoreSession) {
     const preview = previews.get(chat.id);
+    if (preview?.draft) return html`<div class="side-chat-preview draft"><em>Draft</em> ${preview.text}</div>`;
     const state = preview?.state ?? "loading";
     const text = preview?.text || (chat.working && state !== "failed" ? "" : PREVIEW_NOTE[state]);
     return html`${text ? html` <div class="side-chat-preview">${markdown(text)}</div> ` : nothing}${
@@ -429,7 +432,17 @@ export function createSideChatController(ctx: ConvCtx) {
         if (loaded.length) await new Promise((resolve) => window.requestAnimationFrame(resolve));
         if (sourceId !== id) return;
         const order = new Map(chats.map((chat, position) => [chat.id, position]));
-        chats = listed.toSorted((left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity));
+        listedIds.clear();
+        for (const chat of listed) {
+          unsent.delete(chat.id);
+          listedIds.add(chat.id);
+        }
+        const kept = [...unsent.values(), ...(active ? [active] : [])].filter(
+          (chat) => !listed.some((row) => row.id === chat.id),
+        );
+        chats = [...listed, ...new Map(kept.map((chat) => [chat.id, chat])).values()].toSorted(
+          (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
+        );
         redraw();
       },
       (cause) => {
@@ -449,14 +462,35 @@ export function createSideChatController(ctx: ConvCtx) {
       queueMicrotask(() => release(true));
     }
     if (active) {
-      const chat = active;
+      const leaving = active;
       const id = sourceId;
       const state = conversation?.state;
       const live = state && liveTurnOf(state);
-      if (live) chats = markWorking(chats, live);
-      void Promise.resolve(state?.agent?.waitForIdle())
-        .catch((cause) => reportHandledError("web:side_chat_close", cause))
-        .then(() => sourceId === id && refreshHighlights([chat.id]));
+      const draft = conversation?.composer.state.draft.trim() ?? "";
+      const sent =
+        !conversation ||
+        !!live ||
+        listedIds.has(leaving.id) ||
+        (state?.agent?.state.messages ?? []).some(
+          (message) => message.role === "user" || message.role === "user-with-attachments",
+        );
+      unsent.delete(leaving.id);
+      if (sent) {
+        if (previews.get(leaving.id)?.draft) previews.delete(leaving.id);
+        if (live) chats = markWorking(chats, live);
+        void Promise.resolve(state?.agent?.waitForIdle())
+          .catch((cause) => reportHandledError("web:side_chat_close", cause))
+          .then(() => sourceId === id && refreshHighlights([leaving.id]));
+      } else {
+        if (draft) {
+          unsent.set(leaving.id, leaving);
+          previews.set(leaving.id, { text: draft, state: "ready", draft: true });
+        } else {
+          previews.delete(leaving.id);
+          chats = chats.filter((chat) => chat.id !== leaving.id);
+        }
+        refreshHighlights();
+      }
     }
     pendingQuote = null;
     pendingAnchor = null;
@@ -494,6 +528,8 @@ export function createSideChatController(ctx: ConvCtx) {
     paintHighlights();
     chats = [];
     previews.clear();
+    unsent.clear();
+    listedIds.clear();
     error = "";
     busy = false;
     refreshHighlights();
