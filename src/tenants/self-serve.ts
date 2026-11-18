@@ -49,8 +49,7 @@ async function selfServeTenant(
 const provisionedSettings = z.object({
   settings: tenantSettingsSchema
     .pick({ modelGatewayKey: true, partnerChatAccount: true })
-    .required({ modelGatewayKey: true })
-    .strip(),
+    .required({ modelGatewayKey: true }),
 });
 
 type ProvisionedSettings = z.infer<typeof provisionedSettings>["settings"];
@@ -60,12 +59,11 @@ async function markSelfServeProvisioned(
   tenant: string,
   settings: ProvisionedSettings,
 ): Promise<void> {
-  const rows = await pg.q("SELECT qm_self_serve_provisioned($1, $2)::text AS holder", [tenant, settings]);
-  const holder = rows[0]?.holder;
-  if (typeof holder === "string")
+  const rows = await pg.q("SELECT qm_self_serve_provisioned($1, $2) AS held", [tenant, settings]);
+  if (typeof rows[0]?.held === "string")
     reportFailure(
       "self-serve workspace provisioning",
-      new Error(`partner chat account ${settings.partnerChatAccount} already belongs to workspace ${holder}`),
+      new Error(`partner chat account ${settings.partnerChatAccount} already belongs to another workspace`),
       tenant,
     );
 }

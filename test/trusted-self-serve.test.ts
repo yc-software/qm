@@ -346,7 +346,7 @@ test("a provisioner can hand a new workspace its partner chat account, but never
   const partnerOf = async (tenant: string) =>
     (await db.owner.q("SELECT settings->>'partnerChatAccount' AS account FROM tenants WHERE id = $1", [tenant]))[0]
       ?.account;
-  provision.state.reply = { settings: { modelGatewayKey: "own-key", partnerChatAccount: "acct-1", brandName: "x" } };
+  provision.state.reply = { settings: { modelGatewayKey: "own-key", partnerChatAccount: "acct-1" } };
   const first = await signIn("81");
   provision.state.reply = { settings: { modelGatewayKey: "own-key", partnerChatAccount: "acct-1" } };
   const second = await signIn("82");
@@ -358,7 +358,7 @@ test("a provisioner can hand a new workspace its partner chat account, but never
   });
   assert.ok(
     errors.mock.calls.some((call) =>
-      String(call.arguments[0]).includes(`partner chat account acct-1 already belongs to workspace ${first}`),
+      String(call.arguments[0]).includes("partner chat account acct-1 already belongs to another workspace"),
     ),
   );
   const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [second]);

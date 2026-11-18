@@ -52,19 +52,27 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
 };
 
 const provisionedSettingsDefiner = `CREATE FUNCTION qm_self_serve_provisioned(tenant uuid, settings jsonb)
-  RETURNS uuid LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  RETURNS text LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE holder uuid;
+  DECLARE violated text;
   BEGIN
     UPDATE tenant_external_orgs o SET provisioned_at = now() WHERE o.tenant = $1 AND o.provisioned_at IS NULL;
     IF NOT FOUND THEN
       RETURN NULL;
     END IF;
-    SELECT t.id INTO holder FROM tenants t WHERE t.settings->>'partnerChatAccount' = $2->>'partnerChatAccount';
-    UPDATE tenants t SET settings = t.settings || ($2 - CASE WHEN holder IS NULL THEN '' ELSE 'partnerChatAccount' END)
-      || jsonb_build_object('serving', true)
+    UPDATE tenants t SET settings = t.settings || ($2 - 'partnerChatAccount') || jsonb_build_object('serving', true)
       WHERE t.id = $1;
-    RETURN holder;
+    BEGIN
+      UPDATE tenants t SET settings = t.settings || jsonb_build_object('partnerChatAccount', $2->'partnerChatAccount')
+        WHERE t.id = $1 AND $2 ? 'partnerChatAccount';
+    EXCEPTION WHEN unique_violation THEN
+      GET STACKED DIAGNOSTICS violated = CONSTRAINT_NAME;
+      IF violated IS DISTINCT FROM 'tenants_partner_chat_account' THEN
+        RAISE;
+      END IF;
+      RETURN $2->>'partnerChatAccount';
+    END;
+    RETURN NULL;
   END $f$`;
 
 export const TENANT_EXTERNAL_ORG_SETTINGS: PgMigrationDefinition = {
