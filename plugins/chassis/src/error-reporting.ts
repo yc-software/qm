@@ -351,13 +351,12 @@ export function traceQueued<T>(
     : sdk.startNewTrace(begin);
 }
 
-export function tagRun(key: string, value: string | undefined): void {
+export function setRunAttribute(key: string, value: string | undefined): void {
   if (!client || !tracing || value === undefined) return;
   try {
     const active = client.getActiveSpan();
     if (!active) return;
     client.getRootSpan(active).setAttribute(key, value);
-    client.getCurrentScope().setTag(key, value);
   } catch (error) {
     swallow("tracing", error);
   }

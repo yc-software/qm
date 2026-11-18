@@ -14,7 +14,7 @@ import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import {
   startDispatchTrace,
-  tagRun,
+  setRunAttribute,
   tracePhase,
   type DispatchTrace,
 } from "../../plugins/chassis/src/error-reporting.ts";
@@ -1072,7 +1072,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, botRequest);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
-      tagRun("qm.started_by", runStarter(input, delegatedTask));
+      setRunAttribute("qm.started_by", runStarter(input, delegatedTask));
       const wakingChild =
         input.sessionSenderId && !input.approval && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
           ? await deps.sessions.get(input.sessionSenderId)
