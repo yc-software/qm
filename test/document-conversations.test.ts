@@ -123,3 +123,47 @@ test("document HTTP routes enforce signed identity and admin configuration rathe
     await built.runtime.stop();
   }
 });
+
+test("adopting an existing document preserves its audience and thread while new documents use the configured team", async () => {
+  const built = buildApp(testConfig());
+  try {
+    const original = await built.projects.create({ name: "Existing document", ownerId: "owner" });
+    const team = await built.projects.create({ name: "Team", ownerId: "owner" });
+    await built.projects.addMember(team.id, "owner", "member");
+    await built.documentConversations.configure(surface, team.id);
+    const old = await built.sessions.getOrCreateByThread(
+      "web:owner:existing-document",
+      "group",
+      projectScopeId(original.id),
+    );
+    const previous = { scopeId: old.scopeId, threadRef: old.threadRef };
+    const input = { surface, documentId: "existing", principalId: "owner", previous };
+    assert.deepEqual(await built.documentConversations.resolve({ ...input, principalId: "member" }), {
+      status: "forbidden",
+    });
+    const adopted = await built.documentConversations.resolve(input);
+    assert.equal(adopted.status, "ok");
+    if (adopted.status !== "ok") throw new Error("missing adopted binding");
+    assert.equal(adopted.conversation.sessionId, old.id);
+    assert.equal(adopted.conversation.scopeId, old.scopeId);
+    assert.deepEqual(
+      await built.documentConversations.resolve({ surface, documentId: "existing", principalId: "member" }),
+      { status: "forbidden" },
+    );
+    const fresh = await built.documentConversations.resolve({ surface, documentId: "fresh", principalId: "member" });
+    assert.equal(fresh.status, "ok");
+    if (fresh.status !== "ok") throw new Error("missing fresh binding");
+    assert.equal(fresh.conversation.scopeId, projectScopeId(team.id));
+    const personal = await built.sessions.getOrCreateByThread("web:owner:personal", "dm", "personal:owner");
+    assert.deepEqual(
+      await built.documentConversations.resolve({
+        ...input,
+        documentId: "forged",
+        previous: { scopeId: old.scopeId, threadRef: personal.threadRef },
+      }),
+      { status: "forbidden" },
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});

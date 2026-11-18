@@ -29,10 +29,21 @@ async function resolve(ctx: ApiCtx): Promise<void> {
     (body.mode !== undefined && body.mode !== "shared" && body.mode !== "private")
   )
     return sendJson(ctx.res, 400, { error: "bad_request" });
+  let previous: { scopeId: string; threadRef: string } | undefined;
+  if (body.previous !== undefined) {
+    if (
+      !isObj(body.previous) ||
+      typeof body.previous.scopeId !== "string" ||
+      typeof body.previous.threadRef !== "string"
+    )
+      return sendJson(ctx.res, 400, { error: "bad_request" });
+    previous = { scopeId: body.previous.scopeId, threadRef: body.previous.threadRef };
+  }
   const result = await service.resolve({
     surface,
     documentId: body.documentId,
     principalId: user,
+    ...(previous ? { previous } : {}),
     ...(body.mode ? { mode: body.mode as "private" | "shared" } : {}),
   });
   if (result.status !== "ok")
