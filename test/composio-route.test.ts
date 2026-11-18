@@ -1366,7 +1366,7 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   const f = fixture();
   await f.own();
   const apps = [
-    { toolkit: "gmail", name: "Gmail", connectUrl: "https://host.example/google", tool: "gmail" },
+    { toolkit: "gmail", name: "Gmail", connectUrl: "https://host.example/google" },
     { toolkit: "granola", name: "Granola", connectUrl: "https://host.example/integrations" },
   ];
   f.deps.mcpServers = {

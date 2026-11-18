@@ -706,19 +706,14 @@ test("a connector set to attest in any audience acts as the signed-in person who
   service.close();
 });
 
-test("an app a connector serves is connected for a person only when that person's tool list carries its tool", async (t) => {
+test("an app a connector serves is connected for a person only when that person's tool list carries a tool named for it", async (t) => {
   const mcp = await startMcpTestServer(t, {
     tools: [{ name: "inbox", description: "Read mail", inputSchema: { type: "object" } }],
   });
   const store = createMcpServerStore(testMap<McpServer>());
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
-  const app = (toolkit: string, tool?: string) => ({
-    toolkit,
-    name: toolkit,
-    connectUrl: `https://host.example/${toolkit}`,
-    ...(tool ? { tool } : {}),
-  });
-  const apps = [app("mail", "inbox"), app("calendar", "events"), app("notes")];
+  const app = (toolkit: string) => ({ toolkit, name: toolkit, connectUrl: `https://host.example/${toolkit}` });
+  const apps = [app("inbox"), app("calendar")];
   await store.put(server({ id: "host", url: mcp.url, catalog: true, attestActor: true, apps }));
   const status = async (person: string) =>
     (await service.appConnections(person, await store.list())).map((entry) => [
@@ -727,7 +722,7 @@ test("an app a connector serves is connected for a person only when that person'
       entry.connected,
     ]);
   assert.deepEqual(await status("alice@example.com"), [
-    ["mail", "host", true],
+    ["inbox", "host", true],
     ["calendar", "host", false],
   ]);
   assert.deepEqual(

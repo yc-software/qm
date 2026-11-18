@@ -29,10 +29,8 @@ function parseApps(value: unknown): McpServerApp[] | null {
     if (!isObj(app)) return null;
     const connectUrl = httpsUrl(app.connectUrl);
     const name = typeof app.name === "string" ? app.name.trim() : "";
-    const tool = app.tool;
     if (!isToolkitId(app.toolkit) || !name || !connectUrl) return null;
-    if (tool !== undefined && (typeof tool !== "string" || !tool)) return null;
-    return { toolkit: app.toolkit, name, connectUrl, ...(tool ? { tool } : {}) };
+    return { toolkit: app.toolkit, name, connectUrl };
   });
   return apps.every((app) => app !== null) ? apps : null;
 }
@@ -159,7 +157,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (!apps) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
-      message: "apps must be a list of { toolkit, name, connectUrl (HTTPS), tool? }",
+      message: "apps must be a list of { toolkit, name, connectUrl (HTTPS) }",
     });
   }
   const credentialHost = b.credentialHost ?? (oauthUser ? parsed.hostname : undefined);

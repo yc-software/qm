@@ -10,7 +10,6 @@ export interface McpServerApp {
   toolkit: string;
   name: string;
   connectUrl: string;
-  tool?: string;
 }
 
 export interface McpServer {
