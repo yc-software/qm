@@ -1,3 +1,4 @@
+import type { DocumentConversations } from "../documents/conversations.ts";
 import type { WebEvents } from "./routes/web-events.ts";
 import type { WebShell } from "../web/shell.ts";
 import type { WebMeConfig } from "./routes/web-me.ts";
@@ -171,6 +172,7 @@ export interface ServerDeps {
   slackAllowFrom?: readonly string[];
   budget?: BudgetTracker;
   sessions?: SessionStore;
+  documentConversations?: DocumentConversations;
   auditLog?: AuditLog;
   errors?: ErrorLog;
   crons?: CronStore;

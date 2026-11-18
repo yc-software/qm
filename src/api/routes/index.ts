@@ -1,3 +1,4 @@
+import { documentConversationRoutes } from "./document-conversations.ts";
 import { bootTenant, inBootTenant } from "../../tenants/boot.ts";
 import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
@@ -147,6 +148,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...surfaceRoutes,
   ...fileUploadRoutes,
   ...projectRoutes,
+  ...documentConversationRoutes,
   ...contextPolicyRoutes,
   ...reachRoutes,
   ...closedToNotebookOnly([...cronRoutes, ...loopItemRoutes, ...loopRoutes, ...webhookRoutes, ...loopIngressRoutes]),

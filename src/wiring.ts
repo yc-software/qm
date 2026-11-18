@@ -1,3 +1,8 @@
+import {
+  createDocumentConversations,
+  type DocumentConversations,
+  type DocumentRecord,
+} from "./documents/conversations.ts";
 import type { LoadSample } from "./sandbox/load-probe.ts";
 import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
@@ -572,6 +577,7 @@ export interface BuiltApp {
   brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
   projects: ProjectStore;
+  documentConversations: DocumentConversations;
   environments: EnvironmentStore;
   processes?: ProcessRegistry;
   appPageViews?: AppPageViewLog;
@@ -1902,6 +1908,11 @@ export function buildApp(
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember,
     advisoryLock,
+  });
+  const documentConversations = createDocumentConversations({
+    backing: artifactMap<DocumentRecord>("document_conversations"),
+    projects,
+    sessions,
   });
   const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
@@ -3321,6 +3332,7 @@ export function buildApp(
     ...(brokerSessions ? { brokerSessions } : {}),
     directory,
     projects,
+    documentConversations,
     environments,
     ...(processes ? { processes } : {}),
     ...(appPageViews ? { appPageViews } : {}),
@@ -3423,6 +3435,7 @@ export function serverDeps(
     ...(built.teams ? { teams: built.teams } : {}),
     egressAudit: built.egressAudit,
     sessions: built.sessions,
+    documentConversations: built.documentConversations,
     auditLog: built.auditLog,
     errors: built.errors,
     crons: built.crons,

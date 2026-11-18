@@ -9,6 +9,7 @@ const PREFLIGHT_MAX_AGE_S = 600;
 const CHAT_API_ROUTES = [
   { method: "GET", path: "/me" },
   { method: "POST", path: "/api/turn" },
+  { method: "POST", path: "/api/documents/resolve" },
   { method: "GET", path: "/api/contexts" },
   { method: "POST", path: "/api/projects" },
   { method: "POST", path: "/api/skills" },
