@@ -396,7 +396,7 @@ export const keychainCard = () => {
     <div class="head">
       <h2>Personal keychains</h2>
     </div>
-    <div class="body">
+    <div class="body settings-card">
       <div class="keychain-summary">
         <strong id="keychain-user-count">${ready ? String(keychain!.users) : "—"}</strong> users with keychain entries ·
         <strong id="keychain-standing-count">${ready ? String(keychain!.standing) : "—"}</strong> standing grants
@@ -482,7 +482,7 @@ function credentialRows() {
             <h3>${title}</h3>
             <span>${hint}</span>
           </div>
-          <div class="cred-group">${repeat(rows, (c) => c.slug, credentialRow)}</div>
+          <div class="settings-card cred-group">${repeat(rows, (c) => c.slug, credentialRow)}</div>
         </div>`
       : null;
   });

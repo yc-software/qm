@@ -949,43 +949,6 @@
 #app-view .sc-form-head .hint {
   margin: 0;
 }
-#app-view .editor-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(250px, 34%);
-  gap: 18px;
-  align-items: start;
-}
-#app-view .editor-panel {
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--secondary);
-}
-#app-view .editor-panel h3 {
-  margin: 0 0 8px;
-  font-size: var(--font-12-5);
-  font-weight: 500;
-}
-#app-view .capability-summary {
-  display: grid;
-  gap: 9px;
-}
-#app-view .capability-summary div {
-  display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 8px;
-}
-#app-view .capability-summary dt {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 650;
-}
-#app-view .capability-summary dd {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: var(--font-12-5);
-}
 #app-view .identity-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1009,28 +972,6 @@
   color: var(--muted-foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-#app-view .sc-semantics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 10px 0 14px;
-}
-#app-view .sc-semantics div {
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--card);
-}
-#app-view .sc-semantics strong {
-  display: block;
-  margin-bottom: 2px;
-  font-size: 11px;
-}
-#app-view .sc-semantics span {
-  display: block;
-  color: var(--muted-foreground);
-  font-size: 11px;
 }
 #app-view .soul-meta {
   display: flex;
@@ -1409,11 +1350,6 @@
   padding: 13px 22px 18px;
   border-top: 1px solid var(--border);
 }
-@media (max-width: 900px) {
-  #app-view .editor-grid {
-    grid-template-columns: 1fr;
-  }
-}
 @media (max-width: 560px) {
   #app-view .pill {
     max-width: 30vw;
@@ -1433,7 +1369,6 @@
   #app-view .credential-actions {
     justify-content: flex-start;
   }
-  #app-view .sc-semantics,
   #app-view .soul-diff {
     grid-template-columns: 1fr;
   }
@@ -1867,23 +1802,6 @@
 }
 #app-view[data-subview="credentials"] #view-governance .keychain-summary strong {
   color: var(--foreground);
-}
-#app-view[data-subview="credentials"] #view-governance .editor-grid {
-  grid-template-columns: minmax(0, 1fr);
-}
-#app-view[data-subview="credentials"] #view-governance .editor-panel {
-  padding: 16px 0 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  background: transparent;
-}
-#app-view[data-subview="credentials"] #view-governance .sc-semantics strong,
-#app-view[data-subview="credentials"] #view-governance .sc-semantics span,
-#app-view[data-subview="credentials"] #view-governance .capability-summary dt,
-#app-view[data-subview="credentials"] #view-governance .capability-summary dd {
-  font-size: var(--font-13);
-  font-weight: 400;
 }
 #app-view[data-subview="credentials"] #view-governance input[type="checkbox"] {
   min-width: 18px;
@@ -2747,13 +2665,7 @@
   font-size: var(--font-12-5, 12.5px);
 }
 #app-view .cred-group {
-  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
-  background: var(--background);
-  border-radius: 14px;
   overflow: hidden;
-}
-html.dark #app-view .cred-group {
-  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
 }
 #app-view .cred-row {
   all: unset;
@@ -3175,12 +3087,6 @@ html.dark #app-view dialog.custom-provider-dialog.cd::backdrop {
 #app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .body {
   margin: 0;
   padding: 14px 18px;
-  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
-  border-radius: 14px;
-  background: var(--background);
-}
-html.dark #app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .body {
-  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
 }
 #app-view[data-subview="credentials"] #view-governance #card-service-credentials > .body {
   margin: 0;
