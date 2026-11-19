@@ -2638,7 +2638,7 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 #app-view button.cred-row:focus-visible {
-  outline: 2px solid var(--ring, var(--foreground));
+  outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
 #app-view .cred-row.is-locked {
@@ -2828,16 +2828,8 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   color: color-mix(in srgb, var(--muted-foreground) 75%, transparent);
 }
 
-/* Grouped inset list: same treatment as the credential list on the page. */
-#app-view .form-group {
-  margin: 0;
-  border: 1px solid var(--cd-hairline, color-mix(in srgb, var(--foreground) 10%, var(--background)));
-  border-radius: 10px;
-  background: var(--background);
+#app-view .settings-card:has(> .switch-row, > div) {
   overflow: hidden;
-}
-html.dark #app-view .form-group {
-  background: var(--cd-fill, color-mix(in srgb, var(--foreground) 3%, var(--background)));
 }
 #app-view .switch-row {
   position: relative;
@@ -2898,7 +2890,7 @@ html.dark #app-view .form-group {
     0 0 0 0.5px rgb(0 0 0 / 0.06);
 }
 #app-view dialog.cd .cd-segmented input:focus-visible + span {
-  outline: 2px solid var(--ring, #3b82f6);
+  outline: 2px solid var(--ring);
 }
 
 /* Summary: key/value rows in a grouped list. */

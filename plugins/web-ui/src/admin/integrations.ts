@@ -271,7 +271,7 @@ function connectorsCard() {
                 : "(write-only)",
           },
         )}
-        <div class="form-group">
+        <div class="settings-card">
           ${switchField("conn-enabled", "Enabled", "", s.draft.enabled, (on) => s.change("enabled", on))}
         </div>
       </div>

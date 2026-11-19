@@ -216,7 +216,7 @@ function providerDialog() {
           <h3>Connection</h3>
           ${input("url", "Base URL", "", { placeholder: "https://gateway.internal/v1" })}
           ${input("key", "API key", provider.editing ? "Write-only. Leave blank to keep the stored key." : "Write-only. It can't be viewed after saving.", { type: "password", placeholder: provider.editing ? "••••••••  (unchanged)" : "Paste the key" })}
-          <div class="form-group">
+          <div class="settings-card">
             ${switchField("custom-provider-validate", "Validate the key", "Checks it against the endpoint before saving.", !!provider.draft.validate, (on) => changeProvider("validate", on))}
           </div>
         </section>

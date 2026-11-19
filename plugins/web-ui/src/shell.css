@@ -14055,7 +14055,7 @@ input:checked + .qm-switch::after {
 }
 input:focus-visible + .qm-switch,
 button:focus-visible .qm-switch {
-  outline: 2px solid var(--ring, var(--cta));
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 input:disabled + .qm-switch,
@@ -14115,7 +14115,7 @@ button:disabled .qm-switch {
   font-size: var(--font-13);
 }
 .settings-number:focus-within {
-  border-color: var(--ring, var(--cta));
+  border-color: var(--ring);
 }
 #app-view .settings-number input[type="number"] {
   flex: 1;
