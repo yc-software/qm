@@ -110,7 +110,7 @@ function slackCookies(storageStateJson: string): SlackCookie[] | null {
       !!c &&
       typeof c.name === "string" &&
       typeof c.value === "string" &&
-      /(^|\.)slack\.com$/.test(String(c.domain ?? "")),
+      (c.domain === "slack.com" || String(c.domain ?? "").endsWith(".slack.com")),
   );
   return slack.some((c) => c.name === "d") ? slack : null;
 }
@@ -132,8 +132,11 @@ async function mintApiToken(
     signal: AbortSignal.timeout(timeoutMs),
   });
   const html = await r.text();
-  const m = html.match(/"api_token":"(xoxc-[A-Za-z0-9-]+)"/);
-  return m ? m[1]! : null;
+  const key = '"api_token":"';
+  const start = html.indexOf(`${key}xoxc-`);
+  if (start < 0) return null;
+  const end = html.indexOf('"', start + key.length);
+  return end < 0 ? null : html.slice(start + key.length, end);
 }
 
 async function callEmojiAdd(
