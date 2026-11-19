@@ -1137,3 +1137,25 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
   assert.ok(own.ok, JSON.stringify(own));
   assert.ok((await control.disableWebhook(hook.webhook.id, chanClaims("U2"))).ok);
 });
+
+test("a persona holder makes a cron wear it from any conversation, and anyone else is refused", async () => {
+  const { built, control } = setup();
+  for (const who of ["U1", "U2"]) await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+  const created = await built.app.personas!.create("U1", { name: "Ada" });
+  assert.equal(created.status, "ok");
+  const personaId = (created as { value: { id: string } }).value.id;
+  const cron = { schedule: { everyMs: 60_000 }, action: "digest" };
+
+  const mine = await control.createCron({ ...cron, title: "mine" }, claims("U1"));
+  assert.ok(mine.ok, JSON.stringify(mine));
+  const worn = await control.patchCron(mine.cron.id, { persona: "ada" }, claims("U1", scopeId("channel", "C9")));
+  assert.ok(worn.ok, JSON.stringify(worn));
+  assert.deepEqual(await built.app.cronOrigin(worn.cron), { personaId });
+
+  const theirs = await control.createCron({ ...cron, title: "theirs", persona: personaId }, claims("U2"));
+  assert.equal(theirs.ok ? "created" : theirs.code, "forbidden");
+
+  const cleared = await control.patchCron(mine.cron.id, { persona: null }, claims("U1"));
+  assert.ok(cleared.ok, JSON.stringify(cleared));
+  assert.deepEqual(await built.app.cronOrigin(cleared.cron), {});
+});

@@ -95,7 +95,9 @@ persona is unchanged and the context names the rule, the persona and who can fix
 
 A cron set up in a conversation with a persona fires as that persona: when it fires, the
 scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
-under the same role check.
+under the same role check. A cron can also wear a persona of its own: anyone with access to
+the persona sets `persona` on the cron from any conversation, and that wins over the home
+conversation's.
 
 Whatever a turn wearing a persona posts carries the persona's id and name on its delivery
 destination: replies, posts to other conversations, and cron output. Slack posts and

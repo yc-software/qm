@@ -19,7 +19,7 @@ import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
-import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
+import { deployRef, encodeRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
@@ -634,14 +634,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function canManageSkill(
-    skill: Pick<Skill, "scopeId" | "createdBy">,
+    skill: Pick<Skill, "id" | "scopeId" | "createdBy">,
     principalId: string,
     botWork: boolean,
   ): Promise<boolean> {
-    return (
-      loadsScopeContext(principalId, skill.scopeId, botWork) &&
-      principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)
-    );
+    if (!loadsScopeContext(principalId, skill.scopeId, botWork)) return false;
+    if (await principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)) return true;
+    return (await artifactGrantPermission(skill.scopeId, encodeRef(skillRef(skill.id)), principalId)) === "write";
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {

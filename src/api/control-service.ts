@@ -55,6 +55,7 @@ export interface CronCreateRequest {
   unfurlLinks?: boolean;
   session?: boolean;
   script?: CronScript;
+  persona?: string;
 }
 
 export type CronCreateResult =
@@ -105,6 +106,7 @@ export interface CronPatchRequest {
   unfurlLinks?: boolean;
   session?: boolean;
   script?: CronScript | null;
+  persona?: string | null;
 }
 
 export interface CronRunsRequest {
@@ -118,7 +120,7 @@ export interface CronRunsResult {
 }
 
 export const CRON_PATCH_NOTHING_TO_CHANGE =
-  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, session, or script";
+  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, session, script, or persona";
 
 export const CRON_FIRE_NOTE_MAX_CHARS = 400;
 
@@ -306,8 +308,25 @@ function hasCronPatchField(req: CronPatchRequest): boolean {
     req.archived !== undefined ||
     req.unfurlLinks !== undefined ||
     req.session !== undefined ||
-    req.script !== undefined
+    req.script !== undefined ||
+    req.persona !== undefined
   );
+}
+
+async function cronPersona(app: App, actorId: string, ref: string): Promise<string | ControlErr<"forbidden">> {
+  const listed = await app.personas?.list(actorId);
+  if (listed?.status !== "ok")
+    return { ok: false, code: "forbidden", message: "personas are not enabled for you, so a cron can't wear one" };
+  const named = listed.value.filter((p) => p.name.trim().toLowerCase() === ref.trim().toLowerCase());
+  const persona = listed.value.find((p) => p.id === ref) ?? (named.length === 1 ? named[0] : undefined);
+  if (persona) return persona.id;
+  return {
+    ok: false,
+    code: "forbidden",
+    message: named.length
+      ? `more than one of your personas is named "${ref}" — pass one id: ${named.map((p) => p.id).join(", ")}`
+      : `you have no access to a persona "${ref}" — its owner can share it with you on its page`,
+  };
 }
 
 function liveSessionRef(
@@ -494,6 +513,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (destination) destination = withSlackUnfurlOption(destination, req.unfurlLinks);
       if (script && ownerScopeId !== capability.scopeId)
         return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
+      const personaId = req.persona === undefined ? undefined : await cronPersona(app, capability.actorId, req.persona);
+      if (typeof personaId === "object") return personaId;
 
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
@@ -508,6 +529,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(script ? { script } : {}),
+        ...(personaId ? { personaId } : {}),
       };
       const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
@@ -572,6 +594,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
+      if (req.persona !== undefined) {
+        const personaId = req.persona === null ? null : await cronPersona(app, capability.actorId, req.persona);
+        if (personaId !== null && typeof personaId === "object") return personaId;
+        patch.personaId = personaId;
+      }
       const rewritesTask = req.action !== undefined || req.text !== undefined;
       if (rewritesTask || patch.script)
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
@@ -589,6 +616,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         if (req.archived !== undefined) changeSummary.push(`archived=${req.archived}`);
         if (req.unfurlLinks !== undefined) changeSummary.push(`unfurlLinks=${req.unfurlLinks}`);
         if (patch.script !== undefined) changeSummary.push("script");
+        if (req.persona !== undefined) changeSummary.push("persona");
         if (req.session !== undefined)
           changeSummary.push(req.session ? "tied to a session" : "untied from its session");
         const detail: CronEditDetail =
