@@ -524,10 +524,9 @@ function drawConnectors(): void {
       "Linked accounts",
       accountCards.length,
       html`${
-        composioAvailable
+        composioAvailable && pickingApp
           ? html`<qm-onboarding-welcome
               class="kc-app-picker"
-              ?hidden=${!pickingApp}
               .me=${appState.me}
               .setupOnly=${true}
               .embedded=${true}
