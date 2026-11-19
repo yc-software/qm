@@ -2763,6 +2763,11 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   font-weight: 600;
   line-height: 1.3;
 }
+#app-view .form-stack {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 16px;
+}
 #app-view .form-field {
   display: grid;
   gap: 6px;
@@ -2824,15 +2829,15 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 }
 
 /* Grouped inset list: same treatment as the credential list on the page. */
-#app-view dialog.cd .cd-group {
+#app-view .form-group {
   margin: 0;
-  border: 1px solid var(--cd-hairline);
+  border: 1px solid var(--cd-hairline, color-mix(in srgb, var(--foreground) 10%, var(--background)));
   border-radius: 10px;
   background: var(--background);
   overflow: hidden;
 }
-html.dark #app-view dialog.cd .cd-group {
-  background: var(--cd-fill);
+html.dark #app-view .form-group {
+  background: var(--cd-fill, color-mix(in srgb, var(--foreground) 3%, var(--background)));
 }
 #app-view .switch-row {
   position: relative;

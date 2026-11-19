@@ -252,25 +252,29 @@ function connectorsCard() {
         </select></label
       >
       <div id="conn-guide" class="hint" style="margin: 0 0 12px">${connectorGuide()}</div>
-      ${formField("Client ID", "", "conn-client-id", s.draft.clientId, (v) => s.change("clientId", v), { placeholder: "OAuth client ID" })}
-      ${formField(
-        "Client secret",
-        s.editing
-          ? "Saving requires the client secret. Re-enter it to keep this connector working."
-          : "Secret values are write-only and will not be displayed after saving.",
-        "conn-client-secret",
-        s.draft.clientSecret,
-        (v) => s.change("clientSecret", v),
-        {
-          type: "password",
-          helpId: "conn-secret-hint",
-          placeholder:
-            s.editing && s.list.find((c) => c.provider === s.editing)?.hasSecret
-              ? "•••• set (re-enter to replace)"
-              : "(write-only)",
-        },
-      )}
-      ${switchField("conn-enabled", "Enabled", "", s.draft.enabled, (on) => s.change("enabled", on))}
+      <div class="form-stack">
+        ${formField("Client ID", "", "conn-client-id", s.draft.clientId, (v) => s.change("clientId", v), { placeholder: "OAuth client ID" })}
+        ${formField(
+          "Client secret",
+          s.editing
+            ? "Saving requires the client secret. Re-enter it to keep this connector working."
+            : "Secret values are write-only and will not be displayed after saving.",
+          "conn-client-secret",
+          s.draft.clientSecret,
+          (v) => s.change("clientSecret", v),
+          {
+            type: "password",
+            helpId: "conn-secret-hint",
+            placeholder:
+              s.editing && s.list.find((c) => c.provider === s.editing)?.hasSecret
+                ? "•••• set (re-enter to replace)"
+                : "(write-only)",
+          },
+        )}
+        <div class="form-group">
+          ${switchField("conn-enabled", "Enabled", "", s.draft.enabled, (on) => s.change("enabled", on))}
+        </div>
+      </div>
     </div>
     <div class="foot">
       <button type="button" id="add-oauth-app" class=${s.editor ? "btn hidden" : "btn"} @click=${() => openConnector()}>

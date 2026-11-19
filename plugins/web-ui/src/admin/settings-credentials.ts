@@ -629,7 +629,7 @@ export function credentialsCard() {
         </section>
         <section class="cd-section">
           <h3>Access</h3>
-          <div class="cd-group">
+          <div class="form-group">
             ${switchField("sc-enabled", "Enabled", "", s.draft.enabled !== false, (on) => s.change("enabled", on))}
             ${
               env
@@ -711,7 +711,7 @@ export function credentialsCard() {
         </section>
         <section class="cd-section" aria-live="polite">
           <h3>Summary</h3>
-          <dl class="cd-group cd-summary">
+          <dl class="form-group cd-summary">
             ${capabilityRows.map(
               ([label, key]) =>
                 html`<div>

@@ -12721,19 +12721,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   align-items: flex-end;
   gap: 8px;
 }
-.mc-simple-flow {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 16px;
-}
-.mc-simple-flow > .settings-theme-link {
-  align-self: flex-start;
-  font-size: 12px;
-  text-decoration: none;
-  color: var(--muted-foreground);
-}
-
 .mc-overlay .mc-panel h1 {
   font-family: var(--app-font);
   font-size: var(--font-20);
@@ -12747,21 +12734,217 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   line-height: 1.5;
   margin: 0 0 24px;
 }
-.mc-simple-flow .mc-steps {
-  gap: 16px;
+
+/* Connect sheet: the credential editor's values (8pt rhythm after Apple's HIG).
+   24 outer padding · 16 between fields · 6 label→control · 6 control→help · 36 controls.
+   One primary action trailing with Cancel beside it; the alternative path leads, quiet. */
+.mc-overlay:has(.mc-sheet) {
+  background: color-mix(in srgb, var(--scrim, #0a0a0a) 36%, transparent);
 }
-.mc-simple-flow .mc-steps .btn {
+html.dark .mc-overlay:has(.mc-sheet) {
+  background: color-mix(in srgb, var(--scrim, #050a14) 64%, transparent);
+}
+.mc-overlay .signin.mc-sheet-wrap {
+  width: min(560px, 100%);
+  overflow: visible;
+}
+.mc-overlay .signin-panel.mc-sheet {
+  --mc-pad: 24px;
+  --mc-hairline: color-mix(in srgb, var(--foreground) 10%, var(--background));
+  --mc-fill: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  width: 100%;
+  gap: 0;
+  padding: 0;
+  overflow: clip;
+  border: 1px solid var(--mc-hairline);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.16);
+  outline: none;
+}
+html.dark .mc-overlay .signin-panel.mc-sheet {
+  box-shadow: none;
+}
+.mc-sheet-head {
+  padding: var(--mc-pad) var(--mc-pad) 20px;
+}
+.mc-sheet-head h2 {
+  margin: 0;
+  font-size: var(--font-20);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.mc-sheet-head p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+  line-height: 1.45;
+}
+.mc-sheet-body {
+  display: grid;
+  gap: 16px;
+  padding: 4px var(--mc-pad) var(--mc-pad);
+}
+.mc-sheet-body .mc-error,
+.mc-sheet-body .mc-notice {
+  margin: 0;
+}
+.mc-sheet-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+.mc-sheet-label {
+  color: var(--foreground);
+  font-size: var(--font-13);
+  font-weight: 500;
+  line-height: 1.3;
+}
+.mc-sheet-help {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  line-height: 1.45;
+}
+.mc-sheet-help a {
+  color: inherit;
+}
+.mc-sheet-field input {
+  box-sizing: border-box;
   width: 100%;
   min-height: 36px;
-  justify-content: center;
-}
-.mc-simple-flow .mc-field > span {
-  font-weight: 400;
-  margin-bottom: 2px;
-}
-.mc-simple-flow > .settings-theme-link:hover {
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--mc-hairline);
+  border-radius: 8px;
+  background: var(--background);
   color: var(--foreground);
-  text-decoration: underline;
+  font: inherit;
+  font-size: var(--font-13);
+}
+.mc-sheet-field input::placeholder {
+  color: color-mix(in srgb, var(--muted-foreground) 75%, transparent);
+}
+/* Focus is a darker border only: no ring or outline around the field. */
+.mc-sheet-field input:focus,
+.mc-sheet-field input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--foreground) 40%, var(--mc-hairline));
+}
+/* A step that happens elsewhere: one grouped row, the action trailing. */
+.mc-sheet-step {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+  padding: 10px 10px 10px 14px;
+  border: 1px solid var(--mc-hairline);
+  border-radius: 10px;
+}
+html.dark .mc-sheet-step {
+  background: var(--mc-fill);
+}
+.mc-sheet-step-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--font-13);
+}
+.mc-sheet-step-text strong {
+  font-weight: 500;
+}
+.mc-sheet-step-text small {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+.mc-sheet-step .btn {
+  height: 32px;
+  padding: 0 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.mc-sheet-code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 1px solid var(--mc-hairline);
+  border-radius: 10px;
+  background: var(--mc-fill);
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mc-sheet-code:hover {
+  border-color: color-mix(in srgb, var(--foreground) 24%, var(--mc-hairline));
+}
+.mc-sheet-code:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--foreground) 40%, var(--mc-hairline));
+}
+.mc-sheet-code .mc-code {
+  font-size: var(--font-20);
+  letter-spacing: 2px;
+  padding: 0;
+}
+.mc-sheet-code .mc-copy-hint {
+  font-size: var(--font-12-5);
+  font-weight: 500;
+}
+.mc-sheet-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px var(--mc-pad);
+  border-top: 1px solid var(--mc-hairline);
+  background: var(--background);
+}
+.mc-sheet-spacer {
+  flex: 1;
+}
+.mc-sheet-foot .btn {
+  height: 32px;
+  min-width: 80px;
+  padding: 0 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.mc-sheet-foot .btn.primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.mc-sheet-foot .btn.mc-sheet-quiet {
+  min-width: 0;
+  margin-inline-start: -10px;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.mc-sheet-foot .btn.mc-sheet-quiet:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.mc-sheet-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-inline-end: 8px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+@media (max-width: 520px) {
+  .mc-sheet-foot {
+    flex-wrap: wrap;
+  }
+  .mc-sheet-status {
+    order: -1;
+    width: 100%;
+  }
 }
 .settings-ai-controls .settings-choice {
   flex-wrap: wrap;
