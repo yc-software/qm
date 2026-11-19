@@ -19,8 +19,7 @@ def static_candidates(img):
     for dim in DIMS:
         small = img.resize(fit(img.width, img.height, dim), Image.LANCZOS)
         yield small
-        for colors in (256, 64, 16):
-            yield small.quantize(colors=colors, method=Image.FASTOCTREE, dither=Image.NONE)
+        yield small.quantize(colors=64, method=Image.FASTOCTREE, dither=Image.NONE)
 
 
 def encode_static(im) -> bytes:
@@ -32,7 +31,7 @@ def encode_static(im) -> bytes:
 def gif_candidates(img):
     from PIL import Image
     n = img.n_frames
-    plan = [(dim, step) for dim in DIMS for step in (1, 2, 3, 4, 6, 8) if step == 1 or n // step >= 2]
+    plan = [(dim, step) for dim in DIMS for step in (1, 2, 4) if step == 1 or n // step >= 2]
     for dim, step in plan + [(DIMS[-1], max(1, n // 2))]:
         frames, durations = [], []
         size = fit(img.width, img.height, dim)

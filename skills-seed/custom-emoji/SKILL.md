@@ -20,39 +20,12 @@ The flow, cheapest first:
    plain HTML — grep the image URL out), then download it with
    `curl -L -o /tmp/<name>.png "<url>"`. Step 4 sizes it for Slack.
 
-3. **Generate one.** When nothing existing fits and no known meme/image is out there to fetch
-   — an original or specific picture ("our logo on fire", "a cartoon of _this_ person shrugging")
-   — or when someone explicitly asks you to _make / draw / generate / animate_ an emoji, build it.
-   This is a small composable pipeline, not a static-vs-animated fork: **content** comes from an
-   image model, **motion** (optional) comes from code, and both feed the same uploader below.
-
-   **Content (image API).** If an `OPENAI_API_KEY` is available, `curl` OpenAI's image API to make
-   the picture — and/or _edit_ one to get the look you want:
-
-   ```bash
-   curl -s https://api.openai.com/v1/images/generations \
-     -H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json" \
-     -d '{"model":"gpt-image-1","prompt":"a flat sticker of a happy blob, transparent background","size":"1024x1024","n":1}' \
-     | python3 -c "import sys,json,base64;open('/tmp/blob.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
-
-   curl -s https://api.openai.com/v1/images/edits \
-     -H "Authorization: Bearer $OPENAI_API_KEY" \
-     -F model=gpt-image-1 -F 'image[]=@/tmp/logo.png' -F prompt="engulf this in cartoon flames" \
-     | python3 -c "import sys,json,base64;open('/tmp/onfire.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
-   ```
-
-   A square image with a transparent or simple background works best as an emoji.
-
-   **Motion (optional, in code).** If the emoji should move, animate the generated image in code
-   with Pillow (in `/opt/browser-engine/venv`): pan, zoom, pulse, shake, spin or fade it, or
-   composite a couple of generated layers, and save the frames as a looping 128×128 GIF.
-
-   **Hard rule: never generate frame-by-frame.** Use 1–few image-API calls for the _content_, then
-   do ALL per-frame motion in code. Asking the image model for ~60 images for ~60 frames is the
-   anti-pattern — slow, expensive, and visually incoherent (frames won't line up).
-
-   The result (PNG or GIF) feeds the uploader in step 4, where you normalize it to Slack's size
-   limits first.
+3. **Generate one.** For an original or specific picture ("our logo on fire"), or when someone
+   asks you to make, draw or animate an emoji, make the picture with an image model you have
+   access to (for example OpenAI's image generation or edit API when `OPENAI_API_KEY` is set),
+   asking for a square image on a transparent or simple background. If it should move, animate
+   that one image in code with Pillow (pan, zoom, pulse, shake, spin, fade) and save a looping
+   GIF; don't ask the image model for one picture per frame, since the frames won't line up.
 
 4. **Size it for Slack, then add it to the workspace.** Slack caps a custom emoji at 128×128 and
    128KB, so first normalize the image (this preserves aspect ratio and keeps GIFs animated):
@@ -137,9 +110,7 @@ next time this usually needs no one.
 
 5. **Clean up** per the provider doc so the sign-in is kept, then **retry the upload**. It now runs as them.
 
-Only the person whose turn it is can save their own session, so if someone else (or a
-fallback account) was signed in before, this replaces nothing of theirs. Before you save,
-check the Slack account shown on the live view is the person's own; stop on a mismatch.
+The session is saved under the person whose turn it is, so it never replaces anyone else's.
 
 Taste matters more than coverage: add a custom emoji when it makes the moment better, not on every
 message. Adding an emoji is a real, visible change to the workspace — so one per moment, and don't
