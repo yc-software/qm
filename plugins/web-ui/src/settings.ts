@@ -1,4 +1,3 @@
-import { settingsSection as titledSection } from "./settings-layout.ts";
 import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
@@ -18,7 +17,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
-import { ADMIN_SECTIONS, NAV_VIEWS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
+import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -558,6 +557,7 @@ let adminHost: HTMLElement | null = null;
 let adminView = "";
 
 const PERSONAL_SECTIONS = ["general", "my-spend"];
+const NAV_VIEWS = new Set([...PERSONAL_SECTIONS, ...ADMIN_SECTIONS.flatMap((group) => group.views)]);
 
 function settingsSection(): string {
   const view = settingsRoute(SETTINGS_BASE).view;
@@ -615,14 +615,6 @@ function navItem(view: string, section: string): TemplateResult {
   `;
 }
 
-function settingsTip(variant = ""): TemplateResult | typeof nothing {
-  if (!can("admin")) return nothing;
-  return html`<p class=${variant ? `settings-tip ${variant}` : "settings-tip"}>
-    The easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for you and
-    confirm what changed.
-  </p>`;
-}
-
 function settingsNav(section: string): TemplateResult {
   return html`
     <nav class="settings-nav" aria-label="Settings sections">
@@ -633,18 +625,25 @@ function settingsNav(section: string): TemplateResult {
           ${group.views.map((view) => navItem(view, section))}
         `,
       )}
-      ${settingsTip()}
     </nav>
   `;
 }
 
+const titledSection = (title: string, body: TemplateResult): TemplateResult =>
+  html`<section class="settings-section">
+    <h3 class="settings-section-head">${title}</h3>
+    ${body}
+  </section>`;
+
 function generalPane(): TemplateResult {
+  const card = (rows: TemplateResult) => html`<div class="settings-card">${rows}</div>`;
   return html`
     <div class="settings-general">
-      ${titledSection("Account", html`${accountRow()} ${aiAccountsRow()}`)} ${titledSection("Appearance", themeRow())}
-      ${titledSection("Chat", html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`)}
-      ${titledSection("Sidebar", html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`)}
-      ${titledSection("Desktop", desktopRow())}
+      ${titledSection("Account", card(html`${accountRow()} ${aiAccountsRow()}`))}
+      ${titledSection("Appearance", card(themeRow()))}
+      ${titledSection("Chat", card(html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`))}
+      ${titledSection("Sidebar", card(html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`))}
+      ${titledSection("Desktop", card(desktopRow()))}
       ${titledSection(
         "Connections",
         html`<div class="settings-connections">
@@ -659,7 +658,6 @@ function generalPane(): TemplateResult {
             .base=${withBase("")}
           ></qm-onboarding-welcome>
         </div>`,
-        { card: false },
       )}
     </div>
   `;
@@ -671,9 +669,18 @@ function settingsPane(): TemplateResult {
   const titled = NAV_VIEWS.has(section) && !settingsRoute(SETTINGS_BASE).session;
   return html`
     <h1 class="settings-page-title">Settings</h1>
-    ${settingsTip("settings-tip-top")}
     <div class="settings-layout with-nav">
-      ${settingsNav(section)}
+      <div class="settings-side">
+        ${settingsNav(section)}
+        ${
+          can("admin")
+            ? html`<p class="settings-tip">
+                The easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for
+                you and confirm what changed.
+              </p>`
+            : nothing
+        }
+      </div>
       <div class="settings-content" @click=${followSettingsLink}>
         ${titled ? html`<h2 class="settings-page-head">${VIEW_TITLE[section]}</h2>` : nothing}
         ${general ? generalPane() : (adminHost ?? nothing)}

@@ -1184,8 +1184,6 @@ a.chat-row-open {
   align-items: start;
 }
 .settings-nav {
-  position: sticky;
-  top: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -1212,28 +1210,17 @@ a.chat-row-open {
 .settings-content {
   min-width: 0;
 }
+.settings-side {
+  position: sticky;
+  top: 0;
+}
 .settings-tip {
   max-width: 200px;
   margin: 24px 8px 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--font-12-5);
   line-height: 1.45;
   text-wrap: pretty;
-}
-.settings-tip-top {
-  display: none;
-}
-@media (max-width: 720px) {
-  .settings-nav .settings-tip {
-    display: none;
-  }
-  .settings-tip.settings-tip-top {
-    display: block;
-    max-width: 1180px;
-    margin: 0 auto;
-    font-size: var(--font-13);
-    line-height: inherit;
-  }
 }
 .settings-page-title {
   position: absolute;
@@ -1250,8 +1237,21 @@ a.chat-row-open {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
-  .settings-nav {
+  .settings-side {
     position: static;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .settings-tip {
+    order: -1;
+    max-width: none;
+    margin: 0;
+    font-size: var(--font-13);
+    line-height: inherit;
+  }
+  .settings-nav {
     flex-direction: row;
     overflow-x: auto;
   }
@@ -14024,26 +14024,16 @@ html.app-share-embed body {
     max-width: 960px;
     margin: 0 auto;
   }
-  #app-view #view-governance .governance-content > :nth-child(1 of section.card:not(.hidden)),
-  #app-view #view-connectors :nth-child(1 of section.card:not(.hidden)) {
-    padding-top: 0;
-  }
   .settings-page-head {
     max-width: 960px;
     margin: 0 auto 28px;
-    font-size: 24px;
+    font-size: var(--font-24);
     font-weight: 600;
     letter-spacing: -0.01em;
     line-height: 1.2;
   }
   .settings-section-head {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
     margin: 0 0 10px;
-  }
-  .settings-section-head h3 {
-    margin: 0;
     font-size: var(--font-14);
     font-weight: 500;
     color: var(--foreground);
@@ -14067,7 +14057,6 @@ html.app-share-embed body {
     display: grid;
     gap: 12px;
   }
-  /* Connection cards span the column and share the settings-card surface. */
   .settings-connections .welcome-slack,
   .settings-connections .welcome-content {
     max-width: none;
@@ -14088,7 +14077,7 @@ html.app-share-embed body {
 }
 @media (max-width: 720px) {
   .settings-page-head,
-  .settings-general .settings-section-head {
+  .settings-section-head {
     display: none;
   }
   .settings-general .settings-section:not(:last-child) .settings-row:last-child,
