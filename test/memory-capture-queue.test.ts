@@ -267,13 +267,14 @@ test(
         (seen.length === 1 ? one : two).resolve(result);
       },
     });
+    const lookedUp = Promise.withResolvers<void>();
+    const releaseLookup = Promise.withResolvers<void>();
     t.after(async () => {
       fail.resolve();
+      releaseLookup.resolve();
       await Promise.all([first.stop(), replacement.stop()]);
     });
     await first.enqueue(testTenant, turn(1));
-    const lookedUp = Promise.withResolvers<void>();
-    const releaseLookup = Promise.withResolvers<void>();
     const findJobs = PgBoss.prototype.findJobs;
     let pause = true;
     t.mock.method(PgBoss.prototype, "findJobs", async function (this: PgBoss, ...args: Parameters<PgBoss["findJobs"]>) {
@@ -285,16 +286,15 @@ test(
       }
       return jobs;
     });
-    t.after(() => releaseLookup.resolve());
     const enqueue = replacement.enqueue(testTenant, turn(2));
     await lookedUp.promise;
     await first.start();
     await attempted.promise;
     await first.stopClaims();
     fail.resolve();
-    await first.stop();
     releaseLookup.resolve();
     await enqueue;
+    await first.stop();
     await replacement.start();
     const [a, b] = await Promise.all([one.promise, two.promise]);
     assert.deepEqual([a, b].map((batch) => batch.turns.map((ctx) => ctx.idempotencyKey)).sort(), [
