@@ -141,7 +141,7 @@ export function createSelfServe(
 
   const enrollMember = async (tenant: string, issuer: string, raw: unknown) => {
     const member = provisionedMember.safeParse(raw);
-    if (!member.success) throw new Error(`invalid member: ${member.error.issues[0]?.message ?? "rejected"}`);
+    if (!member.success) throw new Error(`invalid member: ${z.prettifyError(member.error)}`);
     const { subject, email, name } = member.data;
     await enroll(tenant, issuer, subject, email ?? null, name);
   };
@@ -174,9 +174,9 @@ export function createSelfServe(
           reportFailure("self-serve workspace provisioning", error, workspace.tenant);
           throw new AdminError(502, "the new workspace could not be set up; try signing in again", { cause: error });
         });
-        for (const member of provisioned.members)
+        for (const [index, member] of provisioned.members.entries())
           await enrollMember(workspace.tenant, issuer, member).catch((error: unknown) =>
-            reportFailure("self-serve member setup", error, workspace.tenant),
+            reportFailure("self-serve member setup", error, `${workspace.tenant} member ${index}`),
           );
         await markSelfServeProvisioned(pg, workspace.tenant, provisioned.settings.modelGatewayKey);
       }
