@@ -2806,10 +2806,11 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   line-height: 20px;
   resize: vertical;
 }
+/* Focus is a darker border only: no ring or outline around the field. */
+#app-view dialog.cd :is(input, select, textarea):focus,
 #app-view dialog.cd :is(input, select, textarea):focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--ring, #3b82f6) 35%, transparent);
-  outline-offset: 0;
-  border-color: color-mix(in srgb, var(--ring, #3b82f6) 70%, var(--cd-hairline));
+  outline: none;
+  border-color: color-mix(in srgb, var(--foreground) 40%, var(--cd-hairline));
 }
 #app-view dialog.cd input:disabled {
   background: var(--cd-fill);
