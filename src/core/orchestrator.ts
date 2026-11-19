@@ -133,6 +133,7 @@ import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
   recordedMessageTimestamps,
+  seedPriorTurns,
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
@@ -812,6 +813,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               continueTurn: (input.attempt ?? 1) > 1,
               scopeLabel: scopeId,
               conversation: conversation.kind,
+              context: [input.conversationHeader?.trim(), ...seedPriorTurns(input.priorTurns ?? []).map((m) => m.text)]
+                .filter(Boolean)
+                .join("\n\n"),
             }),
             {
               tenant,
