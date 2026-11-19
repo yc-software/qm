@@ -76,10 +76,8 @@ The flow, cheapest first:
 
    Pick a clean, lowercase short name (letters, digits, `_ - +`). On success you get
    `{"ok":true,"name":"<name>",...}`; if the emoji already exists that's still success — it's ready
-   to use. **A `{"ok":false,"error":...}` (or an HTTP error) is a real result to relay to the
-   user — say what went wrong; it is NOT a reason to fall back to telling them to upload it
-   manually.**
-   If the error says the Slack session expired or there's no saved session, don't stop there:
+   to use. An `{"ok":false,"error":...}` says what went wrong in plain words; fix what you can and
+   tell the person the rest. If it says the Slack session expired or there's no saved session,
    follow **When the upload says the Slack session expired** below, then retry.
 
 5. **Use it.** React with `[[react: <name>]]`, or write `:<name>:` in a message.
@@ -89,7 +87,7 @@ The flow, cheapest first:
 The uploader adds emoji as a real Slack user, using a browser sign-in QM keeps for that person.
 Slack has no emoji API outside Enterprise Grid, so when that sign-in expires the fix is for the
 person you're helping to sign in to Slack once more, and for you to save it. It takes them about
-a minute; you do everything else. Don't hand them the image to upload by hand instead.
+a minute; you do everything else.
 
 Use the **browse** skill's browser with the person's own profile (read it and its provider doc
 first; same `sandbox_id` and `credentials` throughout). The sign-in lands in their profile too, so
@@ -120,10 +118,6 @@ next time this usually needs no one.
    CDP_URL="$CDP_URL" /opt/browser-engine/venv/bin/python /tmp/slack-export.py "$WS"
    ```
 
-   On a sandbox whose traffic goes through `$HTTPS_PROXY`, the CDP websocket may not connect
-   directly; run a small local CONNECT tunnel through the proxy to the CDP host and point
-   `CDP_URL` at it.
-
 3. **If it says `signed_out`**, the browser is on Slack's sign-in page. Send the person
    `$LIVE_VIEW` in one short line, e.g. "Slack needs you to sign in once so I can add the emoji:
    <link> — sign in to <WS> there and tell me when you're in." It's single-use bearer material:
@@ -146,9 +140,6 @@ next time this usually needs no one.
 Only the person whose turn it is can save their own session, so if someone else (or a
 fallback account) was signed in before, this replaces nothing of theirs. Before you save,
 check the Slack account shown on the live view is the person's own; stop on a mismatch.
-
-Routing, cheapest first: **reuse** what's here → **fetch** a known meme → **generate** an original
-or specific image → **animate** when motion is wanted. Use taste at each step.
 
 Taste matters more than coverage: add a custom emoji when it makes the moment better, not on every
 message. Adding an emoji is a real, visible change to the workspace — so one per moment, and don't
