@@ -128,6 +128,10 @@ export interface ServerDeps {
     signature: string | undefined,
     rawBody: string,
   ) => Promise<{ status: number; body: Record<string, unknown> }>;
+  teamsActivities?: (
+    authorization: string | undefined,
+    rawBody: string,
+  ) => Promise<{ status: number; body: Record<string, unknown> }>;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;

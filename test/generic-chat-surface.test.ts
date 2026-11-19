@@ -444,7 +444,12 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
   const genericChat = await fakeGenericChat();
   const { deliveries, mirrored, settled } = outboundFor(`${genericChat.url}/`);
   try {
-    const surface = createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
+    const surface = createGenericChatSurface({
+      kind: "partner-chat",
+      label: "Chat",
+      deliveries,
+      surfaceCache: { readMessages: async () => [] },
+    });
     assert.ok(surface.promptHints.linkSyntax.includes(NON_WEB_PATHS));
     assert.match(surface.promptHints.linkSyntax, /tables break/);
     await surface.post(
@@ -516,22 +521,24 @@ test("generic-chat rejections fail the delivery with the chat's reason while aut
 });
 
 test("generic-chat principals are internal only when vouched for, otherwise external guests", async () => {
-  assert.deepEqual(genericChatPrincipal({ id: "5", email: " Ada@Example.com ", name: "Ada" }, true), {
+  assert.deepEqual(genericChatPrincipal("partner-chat", { id: "5", email: " Ada@Example.com ", name: "Ada" }, true), {
     externalId: "ada@example.com",
     displayName: "Ada",
   });
-  assert.deepEqual(genericChatPrincipal({ id: "5", email: "ada@startup.dev", name: "Ada" }, false), {
+  assert.deepEqual(genericChatPrincipal("partner-chat", { id: "5", email: "ada@startup.dev", name: "Ada" }, false), {
     externalId: "ada@startup.dev",
     isExternalGuest: true,
     displayName: "Ada",
   });
-  assert.deepEqual(genericChatPrincipal({ id: "6", name: "Guest" }, true), {
+  assert.deepEqual(genericChatPrincipal("partner-chat", { id: "6", name: "Guest" }, true), {
     externalId: "partner-chat:6",
     isExternalGuest: true,
     displayName: "Guest",
   });
   const reply = "1793649600.00000000000000001003";
   const surface = createGenericChatSurface({
+    kind: "partner-chat",
+    label: "Chat",
     deliveries: createDeliveryStore(),
     surfaceCache: {
       readMessages: async (container, opts) =>
@@ -540,7 +547,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
           : [],
     },
   });
-  const principal = genericChatPrincipal({ id: "5", name: "Ada Lovelace" }, false);
+  const principal = genericChatPrincipal("partner-chat", { id: "5", name: "Ada Lovelace" }, false);
   assert.equal(surface.mention({ surface: "partner-chat", account: "7001", id: "5", principal }), "@Ada Lovelace");
   assert.equal(
     await surface.threadTarget?.("partner-chat:7001:group:42", "1793649600.00000000000000001001"),
@@ -636,7 +643,7 @@ test("a direct run that ends refused or waiting on an approval, or a message ans
     run(7, { result: { status: "pending_approval", reason: "Waiting on approval to run it." } }),
   ];
   for (const r of ran) {
-    const d = runResultDelivery(r, undefined, genericChatRunNotice);
+    const d = runResultDelivery(r, undefined, (run) => genericChatRunNotice(new Set(["partner-chat"]), run));
     if (d) await deliveries.enqueue(d);
   }
   notices.unanswered(
@@ -1000,7 +1007,7 @@ test("a run-end notice lost before its enqueue is recovered by the run-result sw
     deliveries,
     undefined,
     undefined,
-    genericChatRunNotice,
+    (run) => genericChatRunNotice(new Set(["partner-chat"]), run),
   );
   assert.equal(await recovery.sweep(), 1);
   assert.equal(await recovery.sweep(), 0);
@@ -1187,6 +1194,7 @@ test("a card names no allowed clicker when the owner's chat identity is unknown 
     const keychainApprovals = { card: async () => ({ ask, service: "github", conversation: "c" }) as never };
     const destination = { type: "partner-chat", target: `${CONTAINER}:1002`, keychainAskId: "a" };
     return genericChatCard(
+      "partner-chat",
       { app: { getApproval: async () => null }, keychainApprovals },
       { destination, idempotencyKey: "k" },
     );
@@ -1203,7 +1211,7 @@ test("a status post becomes the final reply in place, and the agent can revise o
     app: built.app,
   };
   const send = genericChatSender({ ...ops, app: built.app, blobs: NO_BLOBS });
-  const thread = { account: "7001", kind: "group" as const, chat: "88", thread: "1009" };
+  const thread = { surface: "partner-chat", account: "7001", kind: "group" as const, chat: "88", thread: "1009" };
   const status = () =>
     withTenant(TEST_TENANT, () => postGenericChatMessage(ops, thread, { text: "On it", idempotencyKey: "status:r1" }));
   const deliver = async (destination: Record<string, unknown>, text: string, idempotencyKey: string) => {

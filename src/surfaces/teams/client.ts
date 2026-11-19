@@ -1,0 +1,177 @@
+import {
+  Client,
+  MessageActivityInput,
+  PUBLIC,
+  TypingActivityInput,
+  cardAttachment,
+  type TeamsChannelAccount,
+} from "@microsoft/teams.api";
+import { EMOJI_CHAR_BY_NAME } from "../../slack/emoji-map.ts";
+import { tenantSettings } from "../../tenants/settings.ts";
+import { GenericChatHttpError, type GenericChatClient } from "../generic-chat/client.ts";
+import type { GenericChatAction } from "../generic-chat/protocol.ts";
+import { UnknownGenericChatReaction } from "../generic-chat/reactions.ts";
+import { decodeTeamsChat, decodeTeamsUser, TEAMS, TEAMS_ACTION_KEY, type TeamsBot } from "./ids.ts";
+
+const SERVICE_URL = "https://smba.trafficmanager.net/teams/";
+const TOKEN_SKEW_MS = 60_000;
+
+const REACTIONS: Record<string, string> = {
+  "👍": "like",
+  "❤️": "heart",
+  "😆": "laugh",
+  "😮": "surprised",
+  "😢": "sad",
+  "😡": "angry",
+  "👀": "1f440_eyes",
+  "✅": "2705_whiteheavycheckmark",
+  "👋": "1f44b_wavinghand",
+  "📌": "1f4cc_pushpin",
+  "🚀": "launch",
+};
+
+const REACTION_NAMES = Object.keys(EMOJI_CHAR_BY_NAME).filter((name) => EMOJI_CHAR_BY_NAME[name]! in REACTIONS);
+
+type TokenFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+const BUTTON_STYLE = { primary: "positive", danger: "destructive", default: "default" } as const;
+
+function card(body: string, actions: readonly GenericChatAction[]) {
+  return cardAttachment("adaptive", {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [{ type: "TextBlock", text: body, wrap: true }],
+    actions: actions.map((a) => ({
+      type: "Action.Submit",
+      title: a.label,
+      style: BUTTON_STYLE[a.style],
+      data: { [TEAMS_ACTION_KEY]: a.id },
+    })),
+  });
+}
+
+function message(body: string, actions: readonly GenericChatAction[] | undefined): MessageActivityInput {
+  if (actions?.length) return new MessageActivityInput().addAttachments(card(body, actions));
+  return new MessageActivityInput(body).withTextFormat("markdown");
+}
+
+function failure(e: unknown): never {
+  const status = (e as { response?: { status?: unknown } }).response?.status;
+  if (typeof status === "number")
+    throw new GenericChatHttpError(status, (e as { message?: string }).message ?? `HTTP ${status}`);
+  throw e;
+}
+
+function teamsBot(): TeamsBot {
+  const bot = tenantSettings().teams;
+  if (!bot) throw new GenericChatHttpError(404, "teams: this workspace has no Teams bot configured");
+  return bot;
+}
+
+export function createTeamsClient(deps: { fetch?: TokenFetch; serviceUrl?: string } = {}) {
+  const send = deps.fetch ?? fetch;
+  const tokens = new Map<string, { value: string; expires: number }>();
+
+  async function token({ tenantId, appId, appSecret }: TeamsBot): Promise<string> {
+    const key = `${tenantId}:${appId}:${appSecret}`;
+    const cached = tokens.get(key);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    const res = await send(`${PUBLIC.loginEndpoint}/${tenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: appId,
+        client_secret: appSecret,
+        scope: PUBLIC.botScope,
+      }).toString(),
+    });
+    const reply = (await res.json().catch(() => ({}))) as {
+      access_token?: unknown;
+      expires_in?: unknown;
+      error_description?: unknown;
+    };
+    if (!res.ok || typeof reply.access_token !== "string")
+      throw new GenericChatHttpError(
+        res.status === 400 ? 401 : res.status,
+        `teams: token request failed: ${typeof reply.error_description === "string" ? reply.error_description : `HTTP ${res.status}`}`,
+      );
+    const lifetime = typeof reply.expires_in === "number" ? reply.expires_in * 1000 : 0;
+    tokens.set(key, { value: reply.access_token, expires: Date.now() + lifetime - TOKEN_SKEW_MS });
+    return reply.access_token;
+  }
+
+  function api(): Client {
+    const bot = teamsBot();
+    return new Client(deps.serviceUrl ?? SERVICE_URL, { token: () => token(bot) });
+  }
+
+  async function members(conversationId: string): Promise<TeamsChannelAccount[]> {
+    const client = api();
+    const all: TeamsChannelAccount[] = [];
+    let continuationToken: string | undefined;
+    do {
+      const page = await client.conversations.members(conversationId).getPaged(500, continuationToken).catch(failure);
+      all.push(...page.members);
+      continuationToken = page.continuationToken || undefined;
+    } while (continuationToken);
+    return all;
+  }
+
+  const client: GenericChatClient & { members: typeof members } = {
+    surface: TEAMS,
+    tenantKey: "teams_tenant",
+    reactions: REACTION_NAMES,
+    members,
+    async post(_account, m) {
+      const chat = decodeTeamsChat(m.chat_id);
+      const activity = message(m.body, m.actions);
+      const conversations = api().conversations;
+      if (m.recipient_user_id) {
+        const res = await conversations
+          .activities(chat.id)
+          .createTargeted(
+            activity.withRecipient({ id: decodeTeamsUser(m.recipient_user_id), name: "", role: "user" }, true),
+          )
+          .catch(failure);
+        return { message_id: res.id };
+      }
+      const target = m.thread_id && chat.type === "channel" ? `${chat.id};messageid=${m.thread_id}` : chat.id;
+      const res = await conversations.activities(target).create(activity).catch(failure);
+      return { message_id: res.id };
+    },
+    async update(_account, m) {
+      const chat = decodeTeamsChat(m.chat_id);
+      await api().conversations.activities(chat.id).update(m.message_id, message(m.body, m.actions)).catch(failure);
+      return {};
+    },
+    async delete(_account, m) {
+      await api().conversations.activities(decodeTeamsChat(m.chat_id).id).delete(m.message_id).catch(failure);
+      return {};
+    },
+    async typing(_account, state) {
+      if (!state.typing) return {};
+      const chat = decodeTeamsChat(state.chat_id);
+      const target = state.thread_id && chat.type === "channel" ? `${chat.id};messageid=${state.thread_id}` : chat.id;
+      await api().conversations.activities(target).create(new TypingActivityInput()).catch(failure);
+      return {};
+    },
+    async react(_account, reaction, { on, emoji }) {
+      const type = REACTIONS[emoji];
+      if (!type) throw new UnknownGenericChatReaction(reaction.name);
+      const chat = decodeTeamsChat(reaction.chat_id);
+      const reactions = api().reactions;
+      await (on ? reactions.add : reactions.delete).call(reactions, chat.id, reaction.message_id, type).catch(failure);
+      return {};
+    },
+    async fileUrl() {
+      throw new GenericChatHttpError(501, "teams: files are not supported yet");
+    },
+    async upload() {
+      throw new GenericChatHttpError(501, "teams: files are not supported yet");
+    },
+  };
+  return client;
+}
+
+export type TeamsClient = ReturnType<typeof createTeamsClient>;

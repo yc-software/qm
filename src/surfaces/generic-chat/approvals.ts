@@ -27,7 +27,7 @@ import {
 import type { SurfaceAction } from "../contract.ts";
 import type { GenericChatClient } from "./client.ts";
 import { editGenericChatMessage, postGenericChatMessage } from "./messages.ts";
-import { GENERIC_CHAT, genericChatUserIds, parseGenericChatRef } from "./protocol.ts";
+import { genericChatUserIds, parseGenericChatRef } from "./protocol.ts";
 
 type ApprovalSubject = Pick<PendingApproval, "command" | "summary" | "kind">;
 
@@ -129,39 +129,40 @@ function commandDecisionBody(p: ApprovalSubject, decision: ApprovalDecision, by?
   return `${decision === "deny" ? "" : "✅ "}${APPROVAL_DECISION_LABEL[decision]}${who} · ${subject}`;
 }
 
-function keychainCard(view: KeychainApprovalView, account: string | undefined): Card {
+function keychainCard(surface: string, view: KeychainApprovalView, account: string | undefined): Card {
   const { pending, duration, status } = keychainCardWording(view);
   const summary = `Use your **${view.service}** credential in ${view.conversation}${duration}.`;
   return {
     body: `${pending ? "🔒 **Approval needed.**" : `**${status}**`}\n\n${summary}`,
     actions: pending
       ? keychainButtons(view.ask).map((b) =>
-          surfaceAction(b, account ? genericChatUserIds(view.ask.ownerSurfaceUser, account) : undefined),
+          surfaceAction(b, account ? genericChatUserIds(surface, view.ask.ownerSurfaceUser, account) : undefined),
         )
       : [],
   };
 }
 
-export function genericChatApprovalCardRoute(request: TurnRequest): Destination | undefined {
-  const ref = request.deliveryTarget ? parseGenericChatRef(request.deliveryTarget) : null;
+export function genericChatApprovalCardRoute(surface: string, request: TurnRequest): Destination | undefined {
+  const ref = request.deliveryTarget ? parseGenericChatRef(surface, request.deliveryTarget) : null;
   if (!ref || !request.liveReplies || isSystemActor(request.actor.externalId)) return undefined;
   return {
-    type: GENERIC_CHAT,
+    type: surface,
     target: request.deliveryTarget!,
     account: { id: ref.account, workspace: ref.account },
   };
 }
 
 export async function genericChatCard(
+  surface: string,
   deps: { app: Pick<App, "getApproval">; keychainApprovals?: Pick<KeychainApprovals, "card"> },
   d: Pick<Delivery, "destination" | "idempotencyKey">,
 ): Promise<GenericChatCard | null | undefined> {
   const { commandApprovalId, keychainAskId } = d.destination;
-  const account = parseGenericChatRef(d.destination.target)?.account;
+  const account = parseGenericChatRef(surface, d.destination.target)?.account;
   if (commandApprovalId) {
     const record = await deps.app.getApproval(commandApprovalId);
     if (!record || d.idempotencyKey !== approvalDeliveryKey(commandApprovalId, record)) return null;
-    const userIds = account ? genericChatUserIds(record.request?.surfaceOrigin?.author, account) : undefined;
+    const userIds = account ? genericChatUserIds(surface, record.request?.surfaceOrigin?.author, account) : undefined;
     return {
       ...commandApprovalCard(
         { ...record, requestId: commandApprovalId, reason: record.reason ?? "Approval required" },
@@ -174,7 +175,11 @@ export async function genericChatCard(
     const view = await deps.keychainApprovals?.card(keychainAskId);
     if (!view) return null;
     const key = `ask:${keychainAskId}:notice`;
-    return { ...keychainCard(view, account), key, ...(d.idempotencyKey === key ? {} : { resolved: true as const }) };
+    return {
+      ...keychainCard(surface, view, account),
+      key,
+      ...(d.idempotencyKey === key ? {} : { resolved: true as const }),
+    };
   }
   return undefined;
 }
@@ -184,10 +189,11 @@ export function createGenericChatApprovals(deps: {
   app: Pick<App, "turn" | "getApproval" | "ingestSurfaceEvents" | "readSurfaceMessages">;
   keychainApprovals?: Pick<KeychainApprovals, "decide">;
 }) {
+  const { surface } = deps.client;
   async function invoke(click: GenericChatActionClick): Promise<void> {
     const parsed = parseAction(click.actionId);
     if (!parsed) return;
-    const where = { account: click.account, kind: click.kind, chat: click.chat };
+    const where = { surface, account: click.account, kind: click.kind, chat: click.chat };
     const settle = (card: Card): Promise<void> =>
       editGenericChatMessage(deps, where, click.messageId, card.body, card.actions);
     const tell = async (text: string): Promise<void> => {
@@ -202,14 +208,14 @@ export function createGenericChatApprovals(deps: {
     if (command) {
       const record = await deps.app.getApproval(parsed.value);
       const request = record?.request;
-      const ref = request?.deliveryTarget ? parseGenericChatRef(request.deliveryTarget) : null;
+      const ref = request?.deliveryTarget ? parseGenericChatRef(surface, request.deliveryTarget) : null;
       if (!record || !request || ref?.account !== click.account || ref.chat !== click.chat)
         return settle({ body: `_${APPROVAL_EXPIRED}_`, actions: [] });
       if (!samePerson(request.actor.externalId, click.actor.externalId)) return tell(APPROVAL_REQUESTER_ONLY);
       const decision = approvalDecision(command);
       const queued = await deps.app.turn({
         ...replayableTurn(request),
-        surface: GENERIC_CHAT,
+        surface,
         actor: click.actor,
         approval: {
           requestId: parsed.value,
@@ -217,7 +223,7 @@ export function createGenericChatApprovals(deps: {
           ...(decision !== "deny" ? { scope: decision } : {}),
         },
         async: true,
-        idempotencyKey: `${GENERIC_CHAT}:action:${click.eventId}`,
+        idempotencyKey: `${surface}:action:${click.eventId}`,
       });
       if (!queued.runId && queued.status === "pending_approval")
         return tell(
@@ -240,7 +246,7 @@ export function createGenericChatApprovals(deps: {
     } catch (error) {
       return tell(`Couldn't complete this approval: ${errMessage(error)} You can try the button again.`);
     }
-    return settle(keychainCard(view, click.account));
+    return settle(keychainCard(surface, view, click.account));
   }
 
   return { invoke };

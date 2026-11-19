@@ -35,7 +35,7 @@ export function inboundTenancy(table: string): PgMigrationDefinition[] {
   return [...durableMapTenancy(table), inboundIndexes(table)];
 }
 
-export type TenantKey = keyof typeof KEYS | "slack_bridge" | "partner_chat" | "app_host";
+export type TenantKey = keyof typeof KEYS | "slack_bridge" | "partner_chat" | "teams_tenant" | "app_host";
 
 const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}
@@ -174,6 +174,19 @@ export const GENERIC_CHAT_TENANT: PgMigrationDefinition = {
       "qm_tenant_for_partner_chat",
       "uuid",
       `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1${servingTenant("id")}`,
+    ),
+  ],
+};
+
+export const TEAMS_TENANT: PgMigrationDefinition = {
+  id: "tenancy/lookups/0009-teams-tenant",
+  statements: [
+    `SET LOCAL check_function_bodies = off`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS tenants_teams_tenant ON tenants ((settings->'teams'->>'tenantId'))`,
+    definer(
+      "qm_tenant_for_teams_tenant",
+      "uuid",
+      `SELECT id FROM tenants WHERE settings->'teams'->>'tenantId' = $1${servingTenant("id")}`,
     ),
   ],
 };

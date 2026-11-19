@@ -20,6 +20,27 @@ export interface OidcConfig {
 }
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
+const MICROSOFT_HOST = "login.microsoftonline.com";
+const VERIFIED_FLAGS: readonly unknown[] = [true, "true", 1, "1"];
+
+function isMicrosoftIssuer(issuer: string): boolean {
+  try {
+    return new URL(issuer).hostname === MICROSOFT_HOST;
+  } catch {
+    return false;
+  }
+}
+
+export function issuerUserinfo(
+  cfg: Pick<OidcConfig, "issuer">,
+  claims: Record<string, unknown>,
+  userinfo: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isMicrosoftIssuer(cfg.issuer) || userinfo.email_verified !== undefined) return userinfo;
+  const email = typeof userinfo.email === "string" ? userinfo.email.trim().toLowerCase() : undefined;
+  const claimed = typeof claims.email === "string" ? claims.email.trim().toLowerCase() : undefined;
+  return { ...userinfo, email_verified: VERIFIED_FLAGS.includes(claims.xms_edov) && !!email && email === claimed };
+}
 
 export function hostedDomainHint(issuer: string, allowedEmailDomain: string | undefined): string | undefined {
   return issuer === GOOGLE_ISSUER && allowedEmailDomain ? allowedEmailDomain : undefined;

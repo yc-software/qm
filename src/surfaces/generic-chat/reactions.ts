@@ -11,11 +11,11 @@ export class UnknownGenericChatReaction extends Error {
   }
 }
 
-function genericChatReactionName(raw: string): { name: string; skin_tone?: number } | null {
+function genericChatReactionName(raw: string): { name: string; char: string; skin_tone?: number } | null {
   const [alias, tone] = (normalizeReaction(raw) ?? "").split(SKIN_TONE);
   const char = alias ? EMOJI_CHAR_BY_NAME[alias] : undefined;
   if (!alias || !char) return null;
-  return { name: emojiNameOf(char) ?? alias, ...(tone ? { skin_tone: Number(tone) } : {}) };
+  return { name: emojiNameOf(char) ?? alias, char, ...(tone ? { skin_tone: Number(tone) } : {}) };
 }
 
 export async function setGenericChatReaction(
@@ -27,9 +27,10 @@ export async function setGenericChatReaction(
 ): Promise<void> {
   const reaction = genericChatReactionName(name);
   if (!reaction) throw new UnknownGenericChatReaction(name);
-  await client.call(where.account, on ? "/agent_app/reactions/add" : "/agent_app/reactions/remove", {
-    chat_id: where.chat,
-    message_id: genericChatMessageId(ref),
-    ...reaction,
-  });
+  const { char, ...named } = reaction;
+  await client.react(
+    where.account,
+    { chat_id: where.chat, message_id: genericChatMessageId(ref), ...named },
+    { on, emoji: char },
+  );
 }

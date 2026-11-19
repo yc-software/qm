@@ -28,11 +28,12 @@ export function genericChatSender(
   },
 ): Send {
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
-    const ref = parseGenericChatRef(d.destination.target);
+    const { surface, tenantKey } = deps.client;
+    const ref = parseGenericChatRef(surface, d.destination.target);
     if (!ref) throw new UnsupportedDelivery(`generic-chat: unroutable target ${d.destination.target}`);
-    if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
+    if ((await deps.app.tenantFor(tenantKey, ref.account)) !== tenant.id)
       throw new UnsupportedDelivery(`generic-chat: account ${ref.account} is not bound to this workspace`);
-    const card = await genericChatCard(deps, d);
+    const card = await genericChatCard(surface, deps, d);
     if (card === null) return;
     let body = card?.body ?? d.text.trim();
     const { react, delete: del, pin, edit, editRef } = d.destination;
@@ -70,7 +71,7 @@ export function genericChatSender(
     if (!body && !fileIds.length) throw new UnsupportedDelivery("generic-chat: only text or file posts are supported");
     const posted = await postGenericChatMessage(
       deps,
-      { account: ref.account, kind: ref.kind, chat: ref.chat, ...(thread ? { thread } : {}) },
+      { surface, account: ref.account, kind: ref.kind, chat: ref.chat, ...(thread ? { thread } : {}) },
       {
         text: body,
         idempotencyKey: card?.key ?? d.idempotencyKey,

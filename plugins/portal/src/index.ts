@@ -69,6 +69,7 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
+  issuerUserinfo,
   resolvePrincipal,
   AdmissionRefusedError,
   verifyIdToken,
@@ -973,6 +974,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
+  if (pathname === "/v1/surfaces/teams/activities" && method === "POST") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, [
+      "authorization",
+      "content-type",
+      "content-length",
+    ]);
+  }
+
   if (method === "POST" && pathname === "/slack/events") {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
       ...FORWARD_WEBHOOK_HEADERS,
@@ -1537,7 +1546,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
       const team = claims["https://slack.com/team_id"];
       if (team !== OIDC.expectedTeamId) throw new Error("workspace not permitted");
     }
-    const info = await fetchUserinfo(OIDC, accessToken);
+    const info = issuerUserinfo(OIDC, claims, await fetchUserinfo(OIDC, accessToken));
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { App } from "../src/api/app-types.ts";
 import { createGenericChatClient } from "../src/surfaces/generic-chat/client.ts";
-import { createGenericChatInbound } from "../src/surfaces/generic-chat/inbound.ts";
+import { createGenericChatInbound, signedGenericChatHandler } from "../src/surfaces/generic-chat/inbound.ts";
 import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
 import { signGenericChat } from "../src/surfaces/generic-chat/protocol.ts";
 import { createGenericChatTransport } from "../src/surfaces/generic-chat/transport.ts";
@@ -36,7 +36,6 @@ test("files attached to a chat message reach the turn as staged attachments, and
   const turns: TurnRequest[] = [];
   const inbound = createGenericChatInbound({
     registerGroup: async () => {},
-    secret: SECRET,
     client,
     onAction: async () => {},
     stageBlob: async (bytes) => ({ blobId: `blob-${Buffer.from(bytes).toString()}` }),
@@ -54,6 +53,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
     guestReply: async () => {},
     turns: { start: async (turn) => void turns.push(turn.body as TurnRequest) },
   });
+  const handle = signedGenericChatHandler(SECRET, inbound.dispatch);
   const ada = { id: "5", email: "ada@example.com", name: "Ada Lovelace" };
   const event = (protocol?: 2) => ({
     ...(protocol ? { protocol } : {}),
@@ -74,7 +74,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
   });
   const ts = String(Math.floor(Date.now() / 1000));
   for (const raw of [JSON.stringify(event()), JSON.stringify(event(2))])
-    assert.equal((await inbound.handle(ts, signGenericChat(SECRET, ts, raw), raw)).status, 200);
+    assert.equal((await handle(ts, signGenericChat(SECRET, ts, raw), raw)).status, 200);
   assert.deepEqual(calls.slice(2), [
     { path: "/agent_app/files/url", body: { file_id: "31" } },
     { path: "/agent_app/files/url", body: { file_id: "32" } },
@@ -211,7 +211,11 @@ test("a live turn shows typing, posts its status, then posts the reply with its 
       blobs: { readBlob: async () => Buffer.from("chart bytes"), readFileArtifact: async () => Buffer.alloc(0) },
       storageFetch: async () => new Response(null, { status: 204 }),
     },
-    { where: { account: "7001", kind: "dm", chat: "88" }, authorId: "5", trigger: "1793649600.00000000000000001001" },
+    {
+      where: { surface: "partner-chat", account: "7001", kind: "dm", chat: "88" },
+      authorId: "5",
+      trigger: "1793649600.00000000000000001001",
+    },
   );
   const acked: string[] = [];
   const editRefs: string[][] = [];

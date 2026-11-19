@@ -4,7 +4,6 @@ import type { ActorAssertion } from "../../types.ts";
 import { NON_WEB_PATHS, type Surface, type SurfacePromptHints } from "../contract.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import {
-  GENERIC_CHAT,
   genericChatContainer,
   genericChatMessageIdSchema,
   genericChatMessageId,
@@ -13,22 +12,22 @@ import {
   type GenericChatUser,
 } from "./protocol.ts";
 
-const DEFAULT_LABEL = "Generic chat";
+function promptHints(kind: string): SurfacePromptHints {
+  return {
+    mentionSyntax:
+      "To @-mention someone here, write `@` followed by their name exactly as it appears in the chat roster, e.g. `@Jane Doe`.",
+    linkSyntax: `Use Markdown links: \`[label](https://example.com)\`. This chat shows ordinary Markdown, not web widgets or \`::name{}\` directives, so ${NON_WEB_PATHS}. People read it in a narrow chat pane, often on a phone, where wide tables break, so prefer short, compact lists where appropriate.`,
+    autonomousStyle: `You're in a group chat: keep each posted message to at most two sentences unless asked for more. You see only a recent window here; use the \`${kind}\` tool's read actions (or \`POST $AGENT_API_URL/v1/surface-context\`) to reach further back.`,
+    conversationStyle:
+      "- This is a group chat: keep each reply to a couple of sentences unless they ask for more.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",
+  };
+}
 
-const DEFAULT_PROMPT_HINTS: SurfacePromptHints = {
-  mentionSyntax:
-    "To @-mention someone here, write `@` followed by their name exactly as it appears in the chat roster, e.g. `@Jane Doe`.",
-  linkSyntax: `Use Markdown links: \`[label](https://example.com)\`. This chat shows ordinary Markdown, not web widgets or \`::name{}\` directives, so ${NON_WEB_PATHS}. People read it in a narrow chat pane, often on a phone, where wide tables break, so prefer short, compact lists where appropriate.`,
-  autonomousStyle: `You're in a group chat: keep each posted message to at most two sentences unless asked for more. You see only a recent window here; use the \`${GENERIC_CHAT}\` tool's read actions (or \`POST $AGENT_API_URL/v1/surface-context\`) to reach further back.`,
-  conversationStyle:
-    "- This is a group chat: keep each reply to a couple of sentences unless they ask for more.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",
-};
-
-export function genericChatPrincipal(user: GenericChatUser, internal: boolean): ActorAssertion {
+export function genericChatPrincipal(surface: string, user: GenericChatUser, internal: boolean): ActorAssertion {
   const email = user.email?.trim().toLowerCase();
   const name = user.name?.trim();
   return {
-    externalId: email?.includes("@") ? email : `${GENERIC_CHAT}:${user.id}`,
+    externalId: email?.includes("@") ? email : `${surface}:${user.id}`,
     ...(internal && email?.includes("@") ? {} : { isExternalGuest: true }),
     ...(user.bot ? { isBot: true } : {}),
     ...(name ? { displayName: name } : {}),
@@ -36,14 +35,16 @@ export function genericChatPrincipal(user: GenericChatUser, internal: boolean): 
 }
 
 export function createGenericChatSurface(deps: {
+  kind: string;
   deliveries: DeliveryStore;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
-  label?: string;
+  label: string;
   mark?: string;
 }): Surface<null> {
+  const { kind } = deps;
   return {
-    kind: GENERIC_CHAT,
-    label: deps.label ?? DEFAULT_LABEL,
+    kind,
+    label: deps.label,
     ...(deps.mark ? { mark: deps.mark } : {}),
     capabilities: {
       mirrored: true,
@@ -52,15 +53,16 @@ export function createGenericChatSurface(deps: {
       externalParticipants: false,
       textOnly: true,
     },
-    promptHints: DEFAULT_PROMPT_HINTS,
+    promptHints: promptHints(kind),
     async post(ref, message, idempotencyKey) {
       if (idempotencyKey.startsWith("run:"))
         throw new Error(`generic-chat surface post: reserved idempotency key ${idempotencyKey}`);
       await reachEnqueue({
         deliveries: deps.deliveries,
         destination: {
-          type: GENERIC_CHAT,
+          type: kind,
           target: genericChatRef({
+            surface: kind,
             account: ref.account,
             kind: ref.kind === "dm" ? "dm" : "group",
             chat: ref.container,
@@ -74,19 +76,19 @@ export function createGenericChatSurface(deps: {
       });
     },
     async threadTarget(target, threadTs) {
-      const ref = parseGenericChatRef(target);
+      const ref = parseGenericChatRef(kind, target);
       const id = genericChatMessageId(threadTs);
       if (!ref || !genericChatMessageIdSchema.safeParse(id).success)
         throw new Error(`can't reply under ${threadTs} in ${target}`);
-      const [parent] = await deps.surfaceCache.readMessages(genericChatContainer(target), {
-        surface: GENERIC_CHAT,
+      const [parent] = await deps.surfaceCache.readMessages(genericChatContainer(kind, target), {
+        surface: kind,
         timestamps: [threadTs],
         limit: 1,
         noFallback: true,
       });
       return genericChatRef({ ...ref, thread: parent?.sub ?? id });
     },
-    containerOf: genericChatContainer,
+    containerOf: (target) => genericChatContainer(kind, target),
     principalFor: (user) => user.principal,
     mention: (user) => `@${user.principal.displayName ?? user.id}`,
     native: () => null,

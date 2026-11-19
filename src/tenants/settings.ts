@@ -29,6 +29,7 @@ export const tenantSettingsSchema = z
     handle: appHandleSchema,
     slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
     partnerChatAccount: text,
+    teams: z.object({ tenantId: z.uuid(), appId: z.uuid(), appSecret: text }).strict(),
     spritesToken: text,
     spritesNamePrefix: namePrefix,
     modalAppName: text,

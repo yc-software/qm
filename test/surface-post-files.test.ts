@@ -450,7 +450,14 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
   const tools = createSurfaceToolDeps({
     deps: {
       surfaces: createSurfaceRegistry({
-        surfaces: [createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } })],
+        surfaces: [
+          createGenericChatSurface({
+            kind: "partner-chat",
+            label: "Chat",
+            deliveries,
+            surfaceCache: { readMessages: async () => [] },
+          }),
+        ],
       }),
       deliveries,
     },

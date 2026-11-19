@@ -4,7 +4,7 @@ import { constantTimeEqual } from "../../util/crypto.ts";
 import type { CachedMessage, SurfaceCache } from "../../surface-cache/types.ts";
 import type { SurfaceAction, SurfaceUser } from "../contract.ts";
 
-export const GENERIC_CHAT = "partner-chat";
+export const PARTNER_CHAT = "partner-chat";
 
 const MAX_CLOCK_SKEW_S = 300;
 const MESSAGE_ID_WIDTH = 20;
@@ -61,7 +61,7 @@ export type GenericChatFile = z.infer<typeof file>;
 export type GenericChatReactionEvent = z.infer<typeof reactionEventSchema>;
 export type GenericChatActionEvent = z.infer<typeof actionEventSchema>;
 
-interface GenericChatAction {
+export interface GenericChatAction {
   id: string;
   label: string;
   style: SurfaceAction["style"];
@@ -73,13 +73,15 @@ export function genericChatAction({ userIds, ...action }: SurfaceAction): Generi
 }
 
 export function genericChatUserIds(
+  surface: string,
   author: Pick<SurfaceUser, "surface" | "account" | "id"> | undefined,
   account: string,
 ): string[] | undefined {
-  return author?.surface === GENERIC_CHAT && author.account === account && author.id ? [author.id] : undefined;
+  return author?.surface === surface && author.account === account && author.id ? [author.id] : undefined;
 }
 
 export interface GenericChatRef {
+  surface: string;
   account: string;
   kind: "group" | "dm";
   chat: string;
@@ -123,13 +125,13 @@ export function parseGenericChatEvent(raw: unknown) {
 }
 
 export function genericChatRef(c: GenericChatRef): string {
-  return [GENERIC_CHAT, c.account, c.kind, c.chat, ...(c.thread ? [c.thread] : [])].join(":");
+  return [c.surface, c.account, c.kind, c.chat, ...(c.thread ? [c.thread] : [])].join(":");
 }
 
-export function parseGenericChatRef(ref: string): GenericChatRef | null {
+export function parseGenericChatRef(expected: string, ref: string): GenericChatRef | null {
   const [surface, account, kind, chat, thread, ...rest] = ref.split(":");
   if (
-    surface !== GENERIC_CHAT ||
+    surface !== expected ||
     !account ||
     !chat ||
     !ID.test(account) ||
@@ -138,15 +140,15 @@ export function parseGenericChatRef(ref: string): GenericChatRef | null {
     (kind !== "group" && kind !== "dm")
   )
     return null;
-  return { account, kind, chat, ...(thread ? { thread } : {}) };
+  return { surface, account, kind, chat, ...(thread ? { thread } : {}) };
 }
 
-export function chatContainer(c: Pick<GenericChatRef, "account" | "kind" | "chat">): string {
-  return genericChatRef({ account: c.account, kind: c.kind, chat: c.chat });
+export function chatContainer(c: Pick<GenericChatRef, "surface" | "account" | "kind" | "chat">): string {
+  return genericChatRef({ surface: c.surface, account: c.account, kind: c.kind, chat: c.chat });
 }
 
-export function genericChatContainer(target: string): string {
-  const ref = parseGenericChatRef(target);
+export function genericChatContainer(surface: string, target: string): string {
+  const ref = parseGenericChatRef(surface, target);
   return ref ? chatContainer(ref) : target;
 }
 
@@ -165,13 +167,14 @@ export function genericChatMessageId(ref: string): string {
 
 export async function findMessage(
   cache: Pick<SurfaceCache, "readMessages">,
+  surface: string,
   container: string,
   messageId: string,
   opts: { self?: true; includeDeleted?: true } = {},
 ): Promise<CachedMessage | undefined> {
   if (!genericChatMessageIdSchema.safeParse(messageId).success) return undefined;
   const [hit] = await cache.readMessages(container, {
-    surface: GENERIC_CHAT,
+    surface,
     tsSuffix: messageIdSuffix(messageId),
     ...(opts.self ? { self: true } : {}),
     ...(opts.includeDeleted ? { includeDeleted: true } : {}),
