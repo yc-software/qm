@@ -34,13 +34,13 @@ export async function loopAdministration(
       identity: deps.identity,
       ...(deps.projects ? { managedGroups: deps.projects } : {}),
       ...(deps.personas ? { personas: deps.personas } : {}),
+      ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
     },
     actorId,
     loops.map((loop) => loop.ownerScopeId),
     loops.map((loop) => loop.owner),
   );
-  const admin = actor.botActor !== true && (await deps.isOrgAdmin?.(actorId)) === true;
-  const manages = createCanManageScope({ ...snapshot, isOrgAdmin: async () => admin });
+  const manages = createCanManageScope(snapshot);
   const policy = {
     membershipControlsScope: createMembershipControlsScope(snapshot),
     managesScope: (_actor: string, scope: ScopeId) => manages(actorId, scope),

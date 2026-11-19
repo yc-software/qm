@@ -32,7 +32,7 @@ credential, grant it to this conversation with
 `POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?,"mode"?:"standing"|"once"}`
 (ids from `GET /v1/admin/keychain`; scope defaults to this conversation), then name its
 handle in `execute.credentials`. Every change is audited and the owner is notified of edits.
-Keep changes attributed to the admin, and still confirm mutations with them first. Check the provider
+Confirm mutations with the admin first. Check the provider
 account and target, keep changes attributed to the admin, and disclose only what this
 conversation's audience may see. For cloud operations, also load cloud-cli.
 

@@ -746,15 +746,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...publishedApps.flatMap((d) => [d.ownerScopeId, ...(d.createdInScope ? [d.createdInScope] : [])]),
       ...grants.map((g) => g.granteeScopeId),
     ];
-    const admin = (await deps.isOrgAdmin?.(principalId)) === true;
-    const rules = scopeRules({
-      isOrgAdmin: async () => admin,
-      ...(await scopeMembershipSnapshot(
+    const rules = scopeRules(
+      await scopeMembershipSnapshot(
         {
           directory: deps.directory,
           ...(deps.identity ? { identity: deps.identity } : {}),
           ...(deps.projects ? { managedGroups: deps.projects } : {}),
           ...(deps.personas ? { personas: deps.personas } : {}),
+          ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
           ...(deps.teams
             ? {
                 teams: {
@@ -765,8 +764,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         },
         principalId,
         scopes,
-      )),
-    });
+      ),
+    );
     const byResource = Map.groupBy(grants, resourceKey);
     return Promise.all(
       publishedApps.map((d) =>
