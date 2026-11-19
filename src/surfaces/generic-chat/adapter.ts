@@ -1,7 +1,7 @@
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { reachEnqueue } from "../../reach/reach.ts";
 import type { ActorAssertion } from "../../types.ts";
-import type { Surface, SurfacePromptHints } from "../contract.ts";
+import { NON_WEB_PATHS, type Surface, type SurfacePromptHints } from "../contract.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import {
   GENERIC_CHAT,
@@ -18,8 +18,7 @@ const DEFAULT_LABEL = "Generic chat";
 const DEFAULT_PROMPT_HINTS: SurfacePromptHints = {
   mentionSyntax:
     "To @-mention someone here, write `@` followed by their name exactly as it appears in the chat roster, e.g. `@Jane Doe`.",
-  linkSyntax:
-    "Use Markdown links: `[label](https://example.com)`. This chat shows ordinary Markdown only: web widgets and `::name{}` directives do not render here, so follow skills' non-web paths, such as an ordinary authorization link.",
+  linkSyntax: `Use Markdown links: \`[label](https://example.com)\`. This chat shows ordinary Markdown, not web widgets or \`::name{}\` directives, so ${NON_WEB_PATHS}.`,
   autonomousStyle: `You're in a group chat: keep each posted message to at most two sentences unless asked for more. You see only a recent window here; use the \`${GENERIC_CHAT}\` tool's read actions (or \`POST $AGENT_API_URL/v1/surface-context\`) to reach further back.`,
   conversationStyle:
     "- This is a group chat: keep each reply to a couple of sentences unless they ask for more.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",

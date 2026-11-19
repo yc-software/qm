@@ -1,6 +1,5 @@
 import type { App } from "../../api/app-types.ts";
 import { refusedStatus, type Send } from "../../delivery/relay.ts";
-import { extractDirectives } from "../reply-directives.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { KeychainApprovals } from "../../credentials/keychain-approval.ts";
 import type { Delivery } from "../../types.ts";
@@ -12,17 +11,6 @@ import { genericChatMessageId, genericChatMessageIdSchema, parseGenericChatRef }
 import { UnknownGenericChatReaction, setGenericChatReaction } from "./reactions.ts";
 
 class UnsupportedDelivery extends Error {}
-
-const WEB_DIRECTIVE_LINE = /^[ \t]*::[a-z][\w-]*\{[^\n]*\}[ \t]*$/gim;
-
-export function stripWebDirectives(text: string): string {
-  return extractDirectives(
-    text,
-    WEB_DIRECTIVE_LINE,
-    (t) => t,
-    () => undefined,
-  ).text;
-}
 
 function refusal(e: unknown): e is GenericChatHttpError {
   return e instanceof GenericChatHttpError && refusedStatus(e.status);
@@ -46,7 +34,7 @@ export function genericChatSender(
       throw new UnsupportedDelivery(`generic-chat: account ${ref.account} is not bound to this workspace`);
     const card = await genericChatCard(deps, d);
     if (card === null) return;
-    let body = card?.body ?? stripWebDirectives(d.text).trim();
+    let body = card?.body ?? d.text.trim();
     const { react, delete: del, pin, edit, editRef } = d.destination;
     if (react) {
       const messageId = genericChatMessageId(react.messageTs);
