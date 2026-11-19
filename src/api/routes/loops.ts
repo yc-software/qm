@@ -22,7 +22,7 @@ import { collectVitals } from "../../loops/governor.ts";
 import { buildShipGrant } from "../../loops/ship-gate.ts";
 import { agentSourcePayload, consolidates, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { settleGroup } from "../../loops/triage.ts";
-import type { CronStore } from "../../cron/cron-store.ts";
+import { withCronAccess, type CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
@@ -163,7 +163,7 @@ async function prepareLoopWrite(
         ? ((await deps.store.update(next.id, { ...patch, ...privacy })) ?? current)
         : current;
     };
-    return next.cronId && deps.lock ? deps.lock.withLock(`cron-access:${next.cronId}`, save) : save();
+    return next.cronId && deps.lock && deps.crons ? withCronAccess(deps.crons, deps.lock, next.cronId, save) : save();
   };
   return deps.lock ? deps.lock.withLock(`loop-access:${loop.id}`, write) : write();
 }

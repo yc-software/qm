@@ -583,3 +583,67 @@ Six new monitor cases fail on the previous poller (output, lost process, unavail
 Native disposable QA: /tmp/qm-private-scratch-native-proof.json verifies a real model execute(scope=scratch), private grant, private API200, an asserted ephemeral disk canary, and production cleanup deleting both exact scratch container/network. The isolated host's exhausted default Docker pools were handled by preallocating exactly one labeled, overlap-checked QA /28 network for that run; no product config or unrelated resource changed. The provider removed it at turn end. Actual screenshot: /tmp/excel-qm-native-private-scratch-boundary.png.
 
 Native background QA: /tmp/qm-private-background-native-proof.json verifies a private job started, Shared polling refused, and a later Private turn listed/polled/sent stdin/received the exact acknowledgment/stopped it. The registry is exited with no pending credentials; neither private canary occurs in nonpersonal sessions. Native watch QA: /tmp/qm-private-monitor-native-proof.json verifies a real private watch/model wake with sourceUnknown/personalOnly provenance and owner principal delivery, exact reply, no wake tools, exited process and disabled watch. The reply appeared in the native pane. This preceded only the unchanged-write optimization; its dedicated second-poll regression passes afterward. Screenshots: /tmp/excel-qm-native-shared-background-refusal.png, /tmp/excel-qm-native-private-background-resume.png and /tmp/excel-qm-native-private-monitor-boundary.png. Private mode and the workbook formula result were checked unchanged. Full-head checks, remaining resource/source audit and final rollout remain open.
+
+## Integration with current main — linked copies and unified sharing
+
+Merged upstream main7d552d9 into cf1eee6 without rebasing published history. The resolution retains upstream unified sharing, linked personal cron copies, persona routing and name-screening removal while preserving the document/private context hooks. Private source edits cannot propagate into linked recipients. Private edits to an owned linked copy detach it before mutation. A linked update retains provenance and rechecks the current link/fork before applying.
+
+withCronAccess(crons:get,lock:withLock,id,work):Promise<T> resolves the canonical unedited root, acquires that root's existing cron-access lock, rereads the relationship and retries if a detach changed it. App mutations/sharing/unsharing, ACL writes and loop updates use this owner. Source edits batch-load source/copy ACLs, resolve actual web destinations, and check each owner's destination/grants against merged provenance. Slack destinations include their channel scope; other providers require declared audience scope. No new settings, provider or arbitrary retry limit is introduced.
+
+Unified share views derive canonical request privacy and inherit the selected artifact's provenance before returning private permissions. ArtifactHome changes only internally; HTTP share-view shapes remain upstream's shapes. Complete affected before/new type:
+
+```typescript
+type OldArtifactHome = {
+  id: string;
+  ownerScopeId: ScopeId;
+  createdBy: string;
+  grantRef: string;
+  privateRevision?: string;
+};
+type ArtifactHome = OldArtifactHome & { personalOnly?: true; sourceProvenance?: SourceProvenance };
+```
+
+Every old key remains; the extra values come directly from the same canonical file/app/skill/cron record. No database field or migration is added for this projection.
+
+### Delivery context contract
+
+Invitations retain the authorized selected source provenance in their copy, destination web session and queued delivery. Generated replies with a canonical source session acquire its existing private/provenance context at enqueue. Trigger output retains configured plus actual execution context for every destination, including exact text/error notices; a late private execution cannot use an incompatible scheduled destination. Web transcript writes inherit context before content is exposed. Provenance-write failure cannot fall through to the older raw nudge fallback. Principal delivery prepares recipient context after resolving the actual DM/thread and before posting, so delayed/failed acknowledgement cannot expose an unclassified message. Acknowledgement and delivered_at remain after successful posting. Recent-principal-delivery notes inherit/filter context before entering the model; current durable context is refreshed afterward.
+
+DeliveryProvenance is existing JSON; complete before/new shapes follow. Delivery's other fields, SQL tables/columns/keys/indexes/constraints, existing enum values, idempotency keys and expiry behavior remain unchanged. The new optional nested field is not reconstructed for already completed historical deliveries.
+
+```typescript
+export interface OldDeliveryProvenance {
+  sourceRequestId?: string;
+  sourceRunId?: string;
+  sourceTitle?: string;
+  trigger: BackgroundWakeTrigger;
+  surface: string;
+  fireKey: string;
+  sourceScopeId: ScopeId;
+  sourceThreadRef: string;
+  sourceSessionId?: string;
+  sourceUserSeq?: number;
+  sourceAssistantEntrySeq?: number;
+}
+type MemoryProvenance = {
+  sensitivity: "ordinary" | "unknown" | "sensitive" | "restricted";
+  sources: ScopeId[];
+  sourceUnknown: boolean;
+  personalOnly?: true;
+};
+type DeliveryProvenance = OldDeliveryProvenance & { contextProvenance?: MemoryProvenance };
+```
+
+Invented before: {trigger:"cron",surface:"cron",fireKey:"share:copy",sourceScopeId:"personal:alice",sourceThreadRef:"cron:source"}. After: exactly those fields plus contextProvenance:{sensitivity:"restricted",sources:["group:source"],sourceUnknown:false}. Private generated replies additionally carry personalOnly:true in that nested tuple. Optional original source IDs/title/ordinals remain unchanged. There is no new SQL migration or new provider/configuration; drain old producer/delivery workers before enabling the boundary.
+
+New source-authenticated endpoint POST /v1/deliveries/:id/prepare accepts exactly the consumed body {recipientThreadRef:string}, rejects blank/missing values with existing bad_request shape and returns {ok:true}. Actor is system, auth is source; model capabilities cannot invoke it. It creates/joins the expected recipient personal session and persists context/participant membership. It does not associate the receipt or set delivered_at. App.preparePrincipalDelivery(deliveryId,recipientThreadRef):Promise<void> and SlackCoreClient.prepareDelivery(id,recipientThreadRef):Promise<void> expose the same step internally. Existing ack request {recipientThreadRef?:string,slackApiMs?:number} and response {ok:true} remain unchanged. Ack repeats idempotent preparation before recording association/status. Producer/consumer rollout must be coordinated; no legacy mode or second contract is added.
+
+### Merged verification
+
+Final seven-file batch /tmp/qm-private-merge-final-tests.log passes trigger, cron share/publication, private trigger, actual computer HTTP, principal delivery and web transcript cases; typecheck and changed-file ESLint pass. Earlier broader sharing/browser batch /tmp/qm-private-computer-merged-sharing-final.log passes6/6, including private app/file/skill and actual browser auth/discovery. A stale test filename caused an earlier command not to start; that command is not counted as validation.
+
+The linked-audience tests use known ordinary initial provenance and open posture, prove an entitled recipient succeeds, then prove an unauthorized destination/grant refuses without mutating either schedule. A pure queued-lock barrier verifies child/root serialization and relationship recheck during detachment. Restoring the previous cronPrivacy function fromcf1eee6 while retaining merged code/tests fails private-copy detachment and both audience cases (/tmp/qm-linked-policy-baseline-red.log). This is a targeted old-function reproduction, not a full old-head run.
+
+Restoring the previous web-transcript module fromcf1eee6 and Slack deliverer fromupstream main with current merged tests fails all three new delivery assertions: pre-post provenance with failed ack, no post on failed preparation, and private generated-reply context before exposure (/tmp/qm-delivery-context-baseline-red.log). Again, these are targeted module baselines. The test-only roster fixture initially replaced its directory with only its new third member; seeding all three together corrected that fixture. No directory implementation was changed.
+
+Independent merge reviews before final delivery additions: /root/qm_head_historylessness integration Accept95 and Historylessness Accept99; /root/private_outputs_plan_review final canonical lock/audience/web/principal preparation corrections Accept95. Native persistent/scratch/background/watch proofs above are pre-merge checkpoints. Merged-head native QA, final full-head reviews/CI and remaining requirements audit are not yet claimed.

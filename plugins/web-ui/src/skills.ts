@@ -22,6 +22,7 @@ import {
   type SkillStatusFilter,
 } from "./skill-registry";
 import { listBackLink, listPageTpl } from "./list-page";
+import { shareButton } from "./share-dialog";
 import { scopeTitle } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
@@ -271,6 +272,11 @@ function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
       <div class="resource-heading">
         <h2 dir="auto">/${s.name}</h2>
         ${archived ? html`<span class="badge">Archived</span>` : nothing}
+        ${
+          s.id && s.scopeId && !archived && skillActions(s).edit
+            ? shareButton({ type: "skill", id: s.id, title: `/${s.name}`, owner: s.scopeId })
+            : nothing
+        }
       </div>
       <div class="field">
         <label>Description</label>

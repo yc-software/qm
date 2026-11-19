@@ -1,6 +1,7 @@
 import { inheritRequestSources, requestPrivateContext } from "../private-context.ts";
 import { captureProvenance, UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
 import { refuseImpersonated } from "../http.ts";
+import { atLeast } from "../../personas/persona-schema.ts";
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
@@ -22,6 +23,7 @@ import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeConfigBody, userRuntimeConfigBody, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
+import { SHARE_ERROR_STATUS } from "./sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import { skillAllowedInContext, type Skill, type SkillResolution } from "../../skills/skill-store.ts";
@@ -56,6 +58,7 @@ import { selfSpend } from "./admin/spend.ts";
 import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
+  authorPublishesSkill,
   isArtifactType,
   personAtKeyboard,
   splitToScope,
@@ -1186,7 +1189,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
       homeScope = b.scopeId as ScopeId;
     }
   }
-  if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team")) {
+  if (homeScope && !authorPublishesSkill(homeScope)) {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
@@ -1266,16 +1269,6 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
   }
 }
 
-const SHARE_ERROR_STATUS: Record<string, number> = {
-  bad_request: 400,
-  not_found: 404,
-  forbidden: 403,
-  human_consent_required: 403,
-  recipient_not_found: 404,
-  ambiguous_recipient: 409,
-  share_failed: 400,
-};
-
 async function publishSkillFromBrowser(ctx: ApiCtx): Promise<void> {
   if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
   const claims = personalCapability(ctx);
@@ -1330,8 +1323,8 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       message: 'toScope required ("org", a scope id, or a teammate\'s name)',
     });
   }
-  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write") {
-    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read" or "write"' });
+  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write" && b.permission !== "none") {
+    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read", "write" or "none"' });
   }
   if (b.notify !== undefined && typeof b.notify !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
@@ -1341,7 +1334,9 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       id: b.id,
       ...(typeof b.toScope === "string" ? splitToScope(b.toScope) : {}),
       ...(typeof b.email === "string" ? { email: b.email } : {}),
-      ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
+      ...(b.permission === "read" || b.permission === "write" || b.permission === "none"
+        ? { permission: b.permission }
+        : {}),
       ...(b.move === true ? { move: true } : {}),
       ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },
@@ -1428,10 +1423,14 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
   };
   const actorId = ctx.capability?.actorId ?? param("principalId");
   if (!actorId) return null;
-  const scope = ctx.capability?.scopeId ?? (param("scopeId") || makeScopeId("personal", actorId));
+  const scope = param("scopeId") || ctx.capability?.scopeId || makeScopeId("personal", actorId);
   const parsed = parseScopeId(scope);
   if (parsed.kind === "personal" && parsed.ref === actorId) return { actorId, scope: scope as ScopeId };
-  if (ctx.capability && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
+  if (parsed.kind === "persona") {
+    const role = await ctx.app.personas?.role(actorId, parsed.ref!);
+    return atLeast(role, ctx.method === "GET" ? "read" : "write") ? { actorId, scope: scope as ScopeId } : null;
+  }
+  if (ctx.capability?.scopeId === scope && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
   if (parsed.kind !== "org" && (await ctx.app.belongsToScope(actorId, scope as ScopeId)))
     return { actorId, scope: scope as ScopeId };
   return null;

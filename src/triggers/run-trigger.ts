@@ -205,21 +205,27 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
   const threadRef = spec.threadRef ?? spec.fireKey;
   const enqueue = async (input: Parameters<typeof reachEnqueue>[0], result?: TurnResult) => {
+    const source = result?.sessionId && deps.sessions ? await deps.sessions.get(result.sessionId) : undefined;
+    const inherited = mergeProvenance(
+      [
+        artifactProvenance(spec.ownerScopeId, spec.sourceProvenance, spec.personalOnly),
+        ...(source ? [artifactProvenance(source.scopeId, source.sourceProvenance, source.personalOnly)] : []),
+      ],
+      "ordinary",
+    );
+    if (!privateTriggerAllowed({ ...spec, personalOnly: inherited.personalOnly }))
+      throw new Error("Private scheduled output cannot use this scope or destination.");
     if (input.destination.type === "web" && deps.sessions) {
       const target = await deps.sessions.getByThread(input.destination.target);
-      if (target) {
-        const source = result?.sessionId ? await deps.sessions.get(result.sessionId) : undefined;
-        const inherited = mergeProvenance(
-          [
-            artifactProvenance(spec.ownerScopeId, spec.sourceProvenance, spec.personalOnly),
-            ...(source ? [artifactProvenance(source.scopeId, source.sourceProvenance, source.personalOnly)] : []),
-          ],
-          "ordinary",
-        );
-        await deps.sessions.recordContextProvenance(target.id, target.scopeId, inherited);
-      }
+      if (target) await deps.sessions.recordContextProvenance(target.id, target.scopeId, inherited);
     }
-    return reachEnqueue(input);
+    return reachEnqueue({
+      ...input,
+      provenance: {
+        ...(input.provenance ?? deliveryProvenance(spec, threadRef, result)),
+        contextProvenance: inherited,
+      },
+    });
   };
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
   let roster: DirectoryMember[] | undefined;
@@ -286,7 +292,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let scriptVerdict: string | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
     if (!spec.errorNotice || !spec.destination || !deliverable) return;
-    await deps.deliveries.enqueue({
+    await enqueue({
+      deliveries: deps.deliveries,
       destination: spec.destination,
       text: spec.errorNotice(reason),
       idempotencyKey: `${spec.fireKey}:err`,

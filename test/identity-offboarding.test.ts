@@ -82,6 +82,19 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
+  it("a message to a person no chat surface knows lands in a web conversation of their own", async () => {
+    await built.app.upsertDirectory([member("U-stay")]);
+    const send = (recipient: string) =>
+      built.app.reachNow({ senderId: "U-stay", senderScope: scopeId("personal", "U-stay"), recipient, text: "hi" });
+    const offChat = await send("allowed@example.com");
+    assert.ok(offChat.ok, JSON.stringify(offChat));
+    assert.equal(offChat.delivery.destination.type, "web");
+    assert.equal(offChat.delivery.destination.target, "web:allowed@example.com:direct");
+    const onChat = await send("U-stay");
+    assert.ok(onChat.ok, JSON.stringify(onChat));
+    assert.equal(onChat.delivery.destination.type, "principal");
+  });
+
   it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
     await built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]);
     await built.app.upsertDirectory([member("U-stay")]);

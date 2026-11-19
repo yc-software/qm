@@ -254,6 +254,7 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  contextProvenance?: import("./memory/facts.ts").MemoryProvenance;
   sourceRequestId?: string;
   sourceRunId?: string;
   sourceTitle?: string;
@@ -491,7 +492,6 @@ export interface PendingApprovalRecord {
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
   homeChannel?: string;
-  people?: string[];
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

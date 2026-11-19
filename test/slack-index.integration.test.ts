@@ -336,6 +336,7 @@ class FakeCore implements SlackCoreClient {
     return fn(new Promise<void>(() => {}));
   }
 
+  async prepareDelivery(): Promise<void> {}
   async ackDelivery(): Promise<void> {}
   async failDelivery(): Promise<void> {}
   deliverySubscriptions = 0;

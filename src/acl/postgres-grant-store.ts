@@ -147,6 +147,11 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       await db.forTenant(tenant).transaction(async (client) => {
         await lockResource(client, g.ownerScopeId, g.ref);
         await client.query(
+          `DELETE FROM acl_grants
+           WHERE tenant_id = $1 AND owner_scope_id = $2 AND path = $3 AND grantee_scope_id = $4 AND permission <> $5`,
+          [tenant.id, g.ownerScopeId, g.ref, g.granteeScopeId, g.permission],
+        );
+        await client.query(
           `INSERT INTO acl_grants (tenant_id, owner_scope_id, path, grantee_scope_id, permission, granted_by)
            VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (tenant_id, owner_scope_id, path, grantee_scope_id, permission)

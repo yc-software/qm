@@ -318,6 +318,14 @@ async function listDeliveries(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { deliveries: await app.pendingDeliveries(type, claimMs) });
 }
 
+async function prepareDelivery(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  if (!isObj(body) || typeof body.recipientThreadRef !== "string" || !body.recipientThreadRef.trim())
+    return sendJson(res, 400, { error: "bad_request", message: "recipientThreadRef required" });
+  await app.preparePrincipalDelivery(ctx.params.id!, body.recipientThreadRef);
+  return sendJson(res, 200, { ok: true });
+}
+
 async function ackDelivery(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -371,6 +379,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/runs/:id", browser: true, actor: "person", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", browser: true, actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
+  { method: "POST", path: "/v1/deliveries/:id/prepare", actor: "system", auth: "source", handle: prepareDelivery },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

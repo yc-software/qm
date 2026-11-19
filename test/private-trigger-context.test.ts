@@ -129,6 +129,7 @@ test("scheduled execution stores privacy and restricted provenance before the mo
   assert.ok(observedSession);
   assert.equal((await built.crons.get(cron.id))!.lastFireNote?.text, "Next private fire");
   assert.equal((await built.sessions.get(observedSession))!.personalOnly, true);
+  assert.equal((await built.deliveries.pending("principal"))[0]?.provenance?.contextProvenance?.personalOnly, true);
   assert.deepEqual(
     (await built.deliveries.pending("principal")).map((delivery) => [delivery.destination.target, delivery.text]),
     [["U1", "Private scheduled reply"]],

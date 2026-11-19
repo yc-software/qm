@@ -133,6 +133,7 @@ export function createSessionMethods(
   | "forkSession"
   | "grant"
   | "revokeGrant"
+  | "grantees"
   | "promoteSkill"
   | "belongsToScope"
   | "canManageArtifactHome"
@@ -1342,6 +1343,12 @@ export function createSessionMethods(
       if (publishedApp && opts?.notify !== false)
         await notifyAppShared(deps, publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
     },
+    async grantees(tenant, ownerScopeId, ref) {
+      return (await deps.acl.grantsFor(tenant, ownerScopeId, ref)).map((g) => ({
+        scope: g.granteeScopeId,
+        permission: g.permission,
+      }));
+    },
     async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(
         tenant,
@@ -1408,7 +1415,8 @@ export function createSessionMethods(
               ownerScopeId: s.scopeId,
               createdBy: s.createdBy,
               grantRef: encodeRef(skillRef(s.id)),
-              ...(s.personalOnly ? { privateRevision: skillSharingRevision(s) } : {}),
+              ...(s.sourceProvenance ? { sourceProvenance: s.sourceProvenance } : {}),
+              ...(s.personalOnly ? { personalOnly: true as const, privateRevision: skillSharingRevision(s) } : {}),
             }
           : null;
       }
@@ -1420,7 +1428,8 @@ export function createSessionMethods(
               ownerScopeId: c.ownerScopeId,
               createdBy: c.createdBy,
               grantRef: encodeRef(cronRef(c.id)),
-              ...(c.personalOnly ? { privateRevision: cronSharingRevision(c) } : {}),
+              ...(c.sourceProvenance ? { sourceProvenance: c.sourceProvenance } : {}),
+              ...(c.personalOnly ? { personalOnly: true as const, privateRevision: cronSharingRevision(c) } : {}),
             }
           : null;
       }
@@ -1432,7 +1441,8 @@ export function createSessionMethods(
               ownerScopeId: f.ownerScopeId,
               createdBy: f.createdBy,
               grantRef: encodeRef(fileRef(f.id)),
-              ...(f.personalOnly ? { privateRevision: fileSharingRevision(f) } : {}),
+              ...(f.sourceProvenance ? { sourceProvenance: f.sourceProvenance } : {}),
+              ...(f.personalOnly ? { personalOnly: true as const, privateRevision: fileSharingRevision(f) } : {}),
             }
           : null;
       }
@@ -1443,8 +1453,12 @@ export function createSessionMethods(
             ownerScopeId: d.ownerScopeId,
             createdBy: d.createdBy,
             grantRef: encodeRef(deployRef(d.id)),
+            ...(d.sourceProvenance ? { sourceProvenance: d.sourceProvenance } : {}),
             ...(d.personalOnly
-              ? { privateRevision: appSharingRevision(d, (await deps.deploy.liveEditOf(d.id))?.draft) }
+              ? {
+                  personalOnly: true as const,
+                  privateRevision: appSharingRevision(d, (await deps.deploy.liveEditOf(d.id))?.draft),
+                }
               : {}),
           }
         : null;

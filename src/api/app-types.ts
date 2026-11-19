@@ -92,7 +92,7 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { PublishedApp, AppDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
-import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
+import { type ArtifactHome, type ArtifactType, type ShareAccess } from "./artifact-share.ts";
 import type {
   DeployService,
   DeployInput,
@@ -203,7 +203,14 @@ export type ReachNowResult =
       candidates?: Array<Record<string, string>>;
     };
 
-export type VisibleCron = Cron & { scopeName?: string };
+export interface CronCopy {
+  id: string;
+  owner: string;
+  status: "on" | "paused" | "edited";
+  deliversTo?: string;
+}
+
+export type VisibleCron = Cron & { scopeName?: string; copies?: CronCopy[]; sharedBy?: string };
 
 export type CronEditor = PrivateContext & Pick<CapabilityClaims, "runId">;
 
@@ -519,6 +526,7 @@ export interface App {
     granteeScopeId: ScopeId,
     revokedBy: string,
   ): Promise<void>;
+  grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
@@ -547,7 +555,11 @@ export interface App {
   publishPrivateCron(id: string, revision: string, target: ScopeId, by: CronEditor): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
-  listCronsForViewer(principalId: string | PrivateContext): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
+  listCronsForViewer(principalId: string | PrivateContext): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
+  shareCron(tenant: Tenant, id: string, recipient: string, by: string): Promise<{ copy: Cron; existed: boolean }>;
+  cronCopies(id: string): Promise<CronCopy[]>;
+  cronSharing(cron: VisibleCron): Promise<VisibleCron>;
+  unshareCron(id: string, recipient: string): Promise<void>;
   updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean, by?: CronEditor): Promise<void>;
@@ -636,6 +648,7 @@ export interface App {
   directoryChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
+  preparePrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
   recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
   reachNow(input: ReachNowInput): Promise<ReachNowResult>;
   resolveReachTarget(target: ReachTarget, authorityId: string, opts?: ReachOpts): Promise<ReachResolution>;

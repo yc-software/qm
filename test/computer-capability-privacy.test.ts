@@ -123,6 +123,7 @@ test("ordinary computer credentials cannot read private managed data or gain acc
   for (const path of [
     `/v1/files/${artifact.id}/content`,
     `/v1/skills/${skill.id}`,
+    `/v1/shares/skill/${skill.id}`,
     `/v1/conversations/${source.id}`,
     `/v1/crons/${cron.id}/runs`,
   ]) {
@@ -153,6 +154,7 @@ test("ordinary computer credentials cannot read private managed data or gain acc
     assert.equal(response.status, 200);
     assert.ok((await response.text()).includes("Cedar7301"));
   }
+  assert.equal((await call(`/v1/shares/skill/${skill.id}`, privateToken)).status, 200);
   const privateMemory = await call("/v1/memory/search", privateToken, {
     query: "PrivateMemoryCedar7301",
     scope: owner,

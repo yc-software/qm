@@ -411,6 +411,7 @@ export function createSlackDeliverer(deps: {
           const blocks = card?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
           let uploadError: unknown;
           let reused = false;
+          if (d.provenance?.contextProvenance) await core.prepareDelivery(d.id, dmThreadRef(channel, threadTs));
           if (text.trim() || blocks) {
             const posted = await postWithVerify(
               client,

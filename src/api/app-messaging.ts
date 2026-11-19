@@ -1,5 +1,5 @@
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
-import { cronSharingRevision, cronPublicationId } from "../cron/cron-store.ts";
+import { cronSharingRevision, cronPublicationId, withCronAccess } from "../cron/cron-store.ts";
 import { ambientTenant } from "../tenants/context.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import { refreshPrivateContext, inheritContextSources, privateSourceAllowed } from "../sessions/private-context.ts";
@@ -34,13 +34,13 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
-import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
-import { externalMemberActive } from "../identity/external-members.ts";
+import { signInMembers } from "../directory/sign-in-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
+import { linkedChanges, withSharing } from "./app-cron-share.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 import { editableIn, SLACK } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
@@ -49,7 +49,6 @@ import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-import { personLabel } from "../identity/person-names.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -144,6 +143,7 @@ export function createMessagingMethods(
   | "cronAdminUrl"
   | "channelName"
   | "ambientJudge"
+  | "preparePrincipalDelivery"
   | "recordPrincipalDelivery"
   | "reachNow"
   | "resolveReachTarget"
@@ -157,32 +157,13 @@ export function createMessagingMethods(
   );
   const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
-  const identityMembers = async (): Promise<DirectoryMember[]> => {
-    const [externals, participants] = await Promise.all([
-      deps.identity.listExternalMembers(),
-      deps.sessions?.distinctParticipants() ?? [],
-    ]);
-    const users = await deps.users?.resolve(participants).catch(() => undefined);
-    const candidates: DirectoryMember[] = [
-      ...(deps.emailAuthMembers ?? []),
-      ...externals
-        .filter((member) => externalMemberActive(member))
-        .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
-      ...participants
-        .filter((principalId) => deps.identity.classify(principalId).type === "internal")
-        .map((principalId) => ({
-          principalId,
-          displayName: personLabel(principalId, { user: users?.get(principalId) }),
-          type: "internal" as const,
-        })),
-    ];
-    const byKey = new Map<string, DirectoryMember>();
-    for (const member of candidates) {
-      const key = personKey(member.principalId);
-      if (key && !byKey.has(key)) byKey.set(key, member);
-    }
-    return [...byKey.values()];
-  };
+  const identityMembers = () =>
+    signInMembers({
+      identity: deps.identity,
+      sessions: deps.sessions,
+      ...(deps.users ? { users: deps.users } : {}),
+      ...(deps.emailAuthMembers ? { emailAuthMembers: deps.emailAuthMembers } : {}),
+    });
   const mergedDirectoryMembers = async () => {
     const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
     const seen = new Set(stored.map((member) => personKey(member.principalId)));
@@ -240,33 +221,75 @@ export function createMessagingMethods(
     if ((await inheritContextSources(deps.sessions, by, [before])).has(before.id))
       throw new Error("This scheduled output is private to its owner.");
     const desired = await triggerInput({ ...before, ...patch, context: by });
-    if (
-      desired.personalOnly &&
-      (await deps.acl.grantsFor(ambientTenant(), before.ownerScopeId, encodeRef(cronRef(before.id)))).length
-    )
-      throw new Error("Private context cannot update a shared schedule. Create a personal schedule instead.");
-    if (!desired.personalOnly && desired.sourceProvenance) {
-      const grants = await deps.acl.grantsFor(ambientTenant(), before.ownerScopeId, encodeRef(cronRef(before.id)));
-      const destinationScope =
-        desired.destination?.audienceScopeId ??
-        (desired.destination?.type === "principal" ? personalScope(desired.destination.target) : undefined);
-      const audiences = new Set([
-        desired.ownerScopeId,
-        ...grants.map((grant) => grant.granteeScopeId),
-        ...(destinationScope ? [destinationScope] : []),
-      ]);
-      audiences.delete(personalScope(by.actorId));
-      for (const audience of audiences) {
-        if (!deps.discloseArtifact) throw new Error("Schedule source authorization is unavailable.");
-        await deps.discloseArtifact(desired, audience, by.actorId);
+    if (desired.personalOnly || desired.sourceProvenance) {
+      const copies = (await deps.crons.copiesOf(before.id)).filter((copy) => !copy.forkedAt);
+      const related = [desired, ...copies];
+      const grants = await deps.acl.find(ambientTenant(), {
+        resources: related.map((cron) => ({ ownerScopeId: cron.ownerScopeId, ref: encodeRef(cronRef(cron.id)) })),
+      });
+      if (desired.personalOnly && (copies.length || grants.length))
+        throw new Error("Private context cannot update a shared schedule. Create a personal schedule instead.");
+      if (!desired.personalOnly && desired.sourceProvenance) {
+        const targets = await deps.sessions.getMany({
+          ids: [],
+          threadRefs: [
+            ...new Set(related.flatMap((cron) => (cron.destination?.type === "web" ? [cron.destination.target] : []))),
+          ],
+        });
+        const webScopes = new Map(targets.map((session) => [session.threadRef, session.scopeId]));
+        for (const cron of related) {
+          const audiences = new Set([
+            cron.ownerScopeId,
+            ...grants
+              .filter((grant) => grant.ownerScopeId === cron.ownerScopeId && grant.ref === encodeRef(cronRef(cron.id)))
+              .map((grant) => grant.granteeScopeId),
+          ]);
+          const destination = cron.destination;
+          if (destination) {
+            if (destination.audienceScopeId) audiences.add(destination.audienceScopeId);
+            let actual = destination.audienceScopeId;
+            if (destination.type === "principal") actual = personalScope(destination.target);
+            else if (destination.type === "web") actual = webScopes.get(destination.target);
+            else if (destination.type === "slack") actual = scopeId("channel", destination.target);
+            if (!actual) throw new Error("Schedule destination context cannot be verified.");
+            audiences.add(actual);
+          }
+          audiences.delete(personalScope(by.actorId));
+          const output = { ...cron, ...triggerPrivacy(cron, desired) };
+          for (const audience of audiences) {
+            if (!deps.discloseArtifact) throw new Error("Schedule source authorization is unavailable.");
+            await deps.discloseArtifact(output, audience, by.actorId);
+          }
+        }
       }
     }
-    return triggerPrivacy(before, desired);
+    return {
+      ...triggerPrivacy(before, desired),
+      ...(desired.personalOnly && before.sharedFrom ? { sharedFrom: null, forkedAt: Date.now() } : {}),
+    };
+  };
+
+  const preparePrincipalDelivery = async (deliveryId: string, recipientThreadRef: string) => {
+    const delivery = await deps.deliveries.get(deliveryId);
+    if (!delivery || delivery.destination.type !== "principal") return null;
+    const recipientId = delivery.destination.target;
+    const recipientScope = scopeId("personal", recipientId);
+    const session = await deps.sessions.getOrCreateByThread(
+      recipientThreadRef,
+      "dm",
+      recipientScope,
+      undefined,
+      "slack",
+    );
+    if (delivery.provenance?.contextProvenance)
+      await deps.sessions.recordContextProvenance(session.id, recipientScope, delivery.provenance.contextProvenance);
+    await deps.sessions.addParticipant(session.id, recipientId);
+    return delivery;
   };
 
   return {
     async publishPrivateCron(id, revision, target, by) {
-      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const context = await refreshPrivateContext(deps.sessions, by);
         const selected = await deps.crons.get(id);
         if (
@@ -342,19 +365,20 @@ export function createMessagingMethods(
       principalId = context.actorId;
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
-      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c));
+      const sharing = withSharing(all);
+      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c)).map(sharing);
       const visible = all
         .filter((c) => !viewersOwn(c.owner))
         .filter(canSee)
         .map((c) => {
           const name = scopeNames.get(c.ownerScopeId);
-          return name ? { ...c, scopeName: name } : c;
+          return sharing(name ? { ...c, scopeName: name } : c);
         });
       const blocked = await inheritContextSources(deps.sessions, context, [...owned, ...visible]);
       return { owned: owned.filter((c) => !blocked.has(c.id)), visible: visible.filter((c) => !blocked.has(c.id)) };
     },
     async updateCron(id, patch, by, trial) {
-      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return null;
         await cronPrivacy(before, by, patch);
@@ -362,18 +386,30 @@ export function createMessagingMethods(
         if (patch.schedule) validateUserSchedule(patch.schedule);
         await trialBeforeSave(patch.script, patch.schedule, trial);
         const privacy = await cronPrivacy(before, by, patch);
-        const updated = await deps.crons.update(id, { ...patch, ...privacy });
+        const linked = linkedChanges(before, patch);
+        const edited = Object.keys(linked).length > 0;
+        const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
+        const own = {
+          ...patch,
+          ...privacy,
+          ...(forks ? { forkedAt: Date.now() } : {}),
+        };
+        const updated = edited
+          ? ((await deps.crons.updateLinked(id, own, { ...linked, ...privacy }))[0] ?? null)
+          : await deps.crons.update(id, own);
         auditCron("cron_update", before, by);
         return updated;
       });
     },
     async deleteCron(id, by) {
-      const before = await deps.crons.get(id);
-      await deps.crons.delete(id);
-      if (before) auditCron("cron_delete", before, by);
+      await withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const before = await deps.crons.get(id);
+        await deps.crons.delete(id);
+        if (before) auditCron("cron_delete", before, by);
+      });
     },
     async setCronEnabled(id, enabled, by) {
-      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return;
         if (by) await deps.crons.update(id, await cronPrivacy(before, by));
@@ -381,7 +417,7 @@ export function createMessagingMethods(
       });
     },
     async setCronFireNote(id, note, by) {
-      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return "missing";
         const privacy = await cronPrivacy(before, by);
@@ -392,7 +428,7 @@ export function createMessagingMethods(
       });
     },
     async setCronRuntime(id, runtime, by) {
-      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return null;
         await validateRuntime({ ...before, runtime });
@@ -401,7 +437,7 @@ export function createMessagingMethods(
       });
     },
     async setCronDestination(id, destination, by) {
-      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return null;
         const privacy = await cronPrivacy(before, by, { destination });
@@ -661,18 +697,8 @@ export function createMessagingMethods(
         ...(isPrivate !== undefined ? { isPrivate } : {}),
       });
     },
-    async resolveRecipient(query) {
-      const stored = await deps.directory.resolve(query);
-      if (stored.kind !== "none") return stored;
-      const match = pickMatch(
-        await identityMembers(),
-        query,
-        (member) => member.principalId,
-        (member) => member.displayName,
-      );
-      if (match.kind === "one") return { kind: "one", member: match.item };
-      if (match.kind === "ambiguous") return { kind: "ambiguous", candidates: match.items };
-      return { kind: "none" };
+    resolveRecipient(query) {
+      return deps.directory.resolve(query);
     },
     resolveChannel(query) {
       return deps.directory.resolveChannel(query);
@@ -713,20 +739,12 @@ export function createMessagingMethods(
       return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;
     },
     ...(deps.ambientJudge ? { ambientJudge: deps.ambientJudge } : {}),
+    async preparePrincipalDelivery(deliveryId, recipientThreadRef) {
+      await preparePrincipalDelivery(deliveryId, recipientThreadRef);
+    },
     async recordPrincipalDelivery(deliveryId, recipientThreadRef) {
-      const delivery = await deps.deliveries.get(deliveryId);
-      if (!delivery || delivery.destination.type !== "principal") return;
-      const recipientId = delivery.destination.target;
-      const recipientScope = scopeId("personal", recipientId);
-      const session = await deps.sessions.getOrCreateByThread(
-        recipientThreadRef,
-        "dm",
-        recipientScope,
-        undefined,
-        "slack",
-      );
-      await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
-      await deps.sessions.addParticipant(session.id, recipientId);
+      const delivery = await preparePrincipalDelivery(deliveryId, recipientThreadRef);
+      if (delivery) await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
     },
 
     async reachNow(input): Promise<ReachNowResult> {

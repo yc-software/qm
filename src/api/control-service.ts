@@ -32,14 +32,19 @@ import {
   personAtKeyboard,
   resolveShareTarget,
   SHARED_SKILL_TRIGGER_REFUSAL,
+  shareOffers,
+  type ArtifactHome,
+  type ArtifactType,
+  type ShareAccessResult,
   type ShareArtifactRequest,
   type ShareArtifactResult,
   isMultiMemberSkillScope,
 } from "./artifact-share.ts";
-import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
+import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
+import { withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
 import { PERSON_REQUIRED } from "./http.ts";
 
@@ -196,6 +201,7 @@ export interface ControlService {
     expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<SoulWriteFailureCode>>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
+  shareAccess(type: ArtifactType, id: string, claims: PrivateContext, tenant: Tenant): Promise<ShareAccessResult>;
 }
 
 type SoulWriteFailureCode = "soul_update_denied" | "soul_version_conflict" | "soul_update_failed";
@@ -204,6 +210,18 @@ function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
   if (e instanceof SoulUpdateDeniedError) return "soul_update_denied";
   if (e instanceof SoulVersionConflictError) return "soul_version_conflict";
   return "soul_update_failed";
+}
+
+async function mayShare(
+  app: App,
+  home: ArtifactHome,
+  cron: Cron | null,
+  capability: Pick<CapabilityClaims, "actorId" | "botActor">,
+): Promise<boolean> {
+  if (!(await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)))
+    return false;
+  if (cron) return ownsCron(app, cron, capability.actorId);
+  return app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId);
 }
 
 async function ownsCron(
@@ -537,7 +555,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
       const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
-      const administered = all.filter((_, i) => admits[i]);
+      const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       const blocked = await inheritContextSources(app, capability, administered);
       return { crons: administered.filter((c) => !blocked.has(c.id)), visible: visible.filter((c) => !ids.has(c.id)) };
@@ -549,7 +567,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (await canAdministerCron(app, cron, capability)) {
         if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
           return { ok: false, code: "forbidden", message: "not your cron" };
-        return { ok: true, cron };
+        return { ok: true, cron: await app.cronSharing(cron) };
       }
       const { visible } = await app.listCronsForViewer(capability);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
@@ -861,10 +879,46 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
     },
 
+    async shareAccess(type, id, capability, tenant): Promise<ShareAccessResult> {
+      await refreshPrivateContext(
+        { get: app.getSessionContext, recordContextProvenance: app.recordContextProvenance },
+        capability,
+      );
+      const home = await app.getArtifactHome(type, id);
+      if (!home) return { ok: false, code: "not_found", message: `no ${type} "${id}"` };
+      const cron = type === "cron" ? await app.getCron(home.id) : null;
+      if (!(await mayShare(app, home, cron, capability)))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: `only the ${type}'s owner can see and change who it is shared with`,
+        };
+      if ((await inheritContextSources(app, capability, [home])).has(home.id))
+        return { ok: false, code: "forbidden", message: "This output is private to its owner." };
+      return {
+        ok: true,
+        type,
+        id: home.id,
+        owner: home.ownerScopeId,
+        offers: shareOffers(type, home),
+        access: [
+          ...(type === "deploy"
+            ? await app.appGrantees(home.id)
+            : await app.grantees(tenant, home.ownerScopeId, home.grantRef)),
+          ...(cron ? await app.cronCopies(cron.id) : []).map((c) => ({
+            scope: scopeId("personal", c.owner),
+            permission: "read" as const,
+            status: c.status,
+          })),
+        ],
+      };
+    },
+
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
       if (req.type === "deploy" && !personAtKeyboard(capability))
         return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
+      const remove = req.permission === "none";
       const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
       if (!home)
@@ -906,33 +960,30 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const toKind = parseScopeId(toScope).kind;
 
       const isOrg = toKind === "org";
-      const orgSkillCede = isOrg && req.type === "skill";
+      const orgSkillCede = isOrg && req.type === "skill" && !remove;
 
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
-      if (cron && permission === "write" && cron.ownerScopeId.startsWith("personal:"))
+      const copyTo =
+        cron && toKind === "personal" && permission === "read" && !req.move ? parseScopeId(toScope).ref : undefined;
+      if (!remove && permission === "write" && !shareOffers(req.type, home).manage)
         return {
           ok: false,
           code: "bad_request",
           message: "a personal cron runs with your whole keychain, so it can't be shared for editing",
         };
-      if (
-        !orgSkillCede &&
-        !(
-          (await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)) &&
-          (cron
-            ? await ownsCron(app, cron, capability.actorId)
-            : await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
-        )
-      ) {
+      if (!orgSkillCede && !(await mayShare(app, home, cron, capability))) {
+        const who = {
+          cron: "only the cron's owner can share it",
+          deploy: "only the owner can change who can reach this app",
+        }[req.type as string];
         return {
           ok: false,
           code: "forbidden",
-          message: cron
-            ? "only the cron's owner can share it"
-            : `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
+          message: who ?? `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
         };
       }
       if (
+        !remove &&
         (toKind === "channel" || toKind === "group" || toKind === "team") &&
         !(await app.belongsToScope(capability.actorId, toScope))
       ) {
@@ -994,7 +1045,16 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           message: "The private output or destination changed. Read it again before sharing.",
         };
 
+      const tenant = ambientTenant();
+      const shared = { type: req.type, id: home.id, target: { scope: toScope, label: target.label }, permission };
       try {
+        if (copyTo && remove) await app.unshareCron(home.id, copyTo);
+        if (copyTo && !remove && !req.privateRevision) {
+          if (await app.samePerson(copyTo, capability.actorId))
+            return { ok: false, code: "bad_request", message: "that cron is already yours" };
+          const { copy, existed } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
+          return { ok: true, verb: "share", ...shared, copy: { id: copy.id, enabled: copy.enabled, existed } };
+        }
         if (req.type === "cron" && req.privateRevision) {
           const published = await app.publishPrivateCron(home.id, req.privateRevision, toScope, capability);
           return {
@@ -1051,18 +1111,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
           await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId);
-          return {
-            ok: true,
-            verb: "move",
-            type: req.type,
-            id: home.id,
-            target: { scope: toScope, label: target.label },
-            permission,
-          };
+          return { ok: true, verb: "move", ...shared };
         }
 
+        const verb = remove ? "unshare" : "share";
         const invite =
-          req.type === "deploy" && req.email !== undefined && permission === "read"
+          req.type === "deploy" && req.email !== undefined && permission === "read" && !remove
             ? await app.inviteToApp(
                 home.id,
                 req.email,
@@ -1070,9 +1124,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
                 notify,
               )
             : undefined;
-        if (!invite)
+        if (invite) return { ok: true, verb, ...shared, invitation: invite.invitation };
+        if (remove) await app.revokeGrant(tenant, home.ownerScopeId, home.grantRef, toScope, capability.actorId);
+        else
           await app.grant(
-            ambientTenant(),
+            tenant,
             {
               ownerScopeId: home.ownerScopeId,
               ref: home.grantRef,
@@ -1085,15 +1141,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
               ...(req.privateRevision ? { privateRevision: req.privateRevision, context: capability } : {}),
             },
           );
-        return {
-          ok: true,
-          verb: "share",
-          ...(invite ? { invitation: invite.invitation } : {}),
-          type: req.type,
-          id: home.id,
-          target: { scope: toScope, label: target.label },
-          permission,
-        };
+        return { ok: true, verb, ...shared };
       } catch (e) {
         if (
           e instanceof MemoryDisclosureDenied ||
@@ -1102,6 +1150,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         ) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
+        if (e instanceof DeployAccessError) return { ok: false, code: e.code, message: errMessage(e) };
         return { ok: false, code: "share_failed", message: errMessage(e) };
       }
     },

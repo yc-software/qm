@@ -2046,6 +2046,12 @@
 #app-view #view-connectors section.card:last-child {
   border-bottom: 0;
 }
+@media (min-width: 721px) {
+  #app-view #view-governance .governance-content > :nth-child(1 of section.card:not(.hidden)),
+  #app-view #view-connectors :nth-child(1 of section.card:not(.hidden)) {
+    padding-top: 0;
+  }
+}
 #app-view #view-connectors .card > .head {
   padding: 0;
   border: 0;

@@ -185,7 +185,7 @@ export interface OrchestratorDeps {
   deliveries: DeliveryStore;
   directory: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
-  personas?: Pick<PersonaService, "forTurn">;
+  personas?: Pick<PersonaService, "forTurn" | "startOnDefaultModel" | "adopt">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
@@ -197,7 +197,7 @@ export interface OrchestratorDeps {
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   replyCheck?: import("../../decisions/hooks.ts").ReplyCheckFactory;
-  routePersona?: import("../../decisions/hooks.ts").PersonaRouter;
+  decide?: ReturnType<typeof import("../../decisions/hooks.ts").createDecisionHooks>;
   surfaceDebugFooter?: boolean;
 }
 

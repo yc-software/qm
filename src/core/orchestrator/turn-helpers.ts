@@ -1,4 +1,5 @@
 import type {
+  Delivery,
   CandidateDestination,
   CommandApprovalGrant,
   Destination,
@@ -152,12 +153,16 @@ export async function recentPrincipalDeliveryNote(
   deliveries: DeliveryStore,
   threadRef: string,
   since = 0,
+  disclose?: (deliveries: readonly Delivery[]) => Promise<Set<string>>,
 ): Promise<string> {
   const recent = (await deliveries.listByRecipientThread(threadRef, { limit: 5 })).filter(
     (d) => (d.deliveredAt ?? d.createdAt) > since,
   );
   if (!recent.length) return "";
-  const lines = recent.map((d) => {
+  const blocked = await disclose?.(recent);
+  const visible = recent.filter((delivery) => !blocked?.has(delivery.id));
+  if (!visible.length) return "";
+  const lines = visible.map((d) => {
     const from = d.destination.onBehalfOf ? ` from ${d.destination.onBehalfOf}` : "";
     const trigger = d.provenance?.trigger ? ` [${d.provenance.trigger}]` : "";
     const flattened = d.text.trim().replace(/\s+/g, " ");

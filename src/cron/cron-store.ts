@@ -1,3 +1,4 @@
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { Destination, ScopeId } from "../types.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -92,6 +93,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   loopId?: string;
   sessionRef?: string;
   script?: CronScript;
+  sharedFrom?: string;
 }
 
 export interface CronPatch {
@@ -109,6 +111,8 @@ export interface CronPatch {
   taskAuthor?: "automation" | null;
   sessionRef?: string | null;
   script?: CronScript | null;
+  forkedAt?: number;
+  sharedFrom?: null;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -124,13 +128,15 @@ export interface CronStore {
   list(ids?: readonly string[]): Promise<Cron[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
+  copiesOf(id: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
+  updateLinked(id: string, patch: CronPatch, linked: CronPatch): Promise<Cron[]>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   setDestination(
     id: string,
     destination: Destination | undefined,
-    privacy?: Pick<Cron, "personalOnly" | "sourceProvenance">,
+    privacy?: Pick<CronPatch, "personalOnly" | "sourceProvenance" | "sharedFrom" | "forkedAt">,
   ): Promise<void>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
@@ -155,6 +161,23 @@ export interface CronStore {
   due(now: number): Promise<Array<Cron & { scheduledAt: number; tenantId: string }>>;
 }
 
+export async function withCronAccess<T>(
+  crons: Pick<CronStore, "get">,
+  lock: Pick<AdvisoryLock, "withLock">,
+  id: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const root = (cron: Cron | null) => (cron?.sharedFrom && !cron.forkedAt ? cron.sharedFrom : id);
+  for (;;) {
+    const selected = root(await crons.get(id));
+    const result = await lock.withLock(`cron-access:${selected}`, async () => {
+      if (root(await crons.get(id)) !== selected) return { retry: true } as const;
+      return { retry: false, value: await work() } as const;
+    });
+    if (!result.retry) return result.value;
+  }
+}
+
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
   if (!cron.enabled || cron.archived) return false;
   const oneShot = cron.schedule.cron === undefined && cron.schedule.everyMs === undefined;
@@ -173,6 +196,30 @@ function normalizeTitle(title: string | undefined): string | undefined {
   const trimmed = title?.trim().replace(/\s+/g, " ");
   if (!trimmed) return undefined;
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
+}
+
+function cronFields(patch: CronPatch): Partial<Cron> {
+  const fields: Partial<Cron> = {};
+  if (patch.runtime !== undefined) fields.runtime = patch.runtime;
+  if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
+  if (patch.action !== undefined) fields.action = patch.action;
+  if (patch.message !== undefined) fields.message = patch.message;
+  if (patch.schedule !== undefined) {
+    const normalized = normalizeSchedule(patch.schedule, Date.now());
+    fields.schedule = normalized.schedule;
+    fields.nextFireAt = normalized.nextFireAt;
+  }
+  if (patch.enabled !== undefined) fields.enabled = patch.enabled;
+  if (patch.archived !== undefined) fields.archived = patch.archived;
+  if (patch.destination !== undefined) fields.destination = patch.destination;
+  if (patch.archived === true) fields.enabled = false;
+  if (patch.owner !== undefined) fields.owner = patch.owner;
+  if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
+  if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
+  if (patch.script !== undefined) fields.script = patch.script ?? undefined;
+  if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;
+  if (patch.sharedFrom === null) fields.sharedFrom = undefined;
+  return fields;
 }
 
 export function createCronStore(
@@ -248,6 +295,7 @@ export function createCronStore(
         ...(input.runtime ? [contentPart(input.runtime)] : []),
         ...(input.script ? [contentPart(input.script)] : []),
         ...(input.personalOnly || input.sourceProvenance ? [contentPart(triggerPrivacy({}, input))] : []),
+        ...(input.sharedFrom ? [contentPart(input.sharedFrom)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -261,6 +309,7 @@ export function createCronStore(
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.script ? { script: input.script } : {}),
+        ...(input.sharedFrom ? { sharedFrom: input.sharedFrom } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -272,33 +321,49 @@ export function createCronStore(
     },
     claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
+    copiesOf: async (id) =>
+      (await backing.select({ where: { field: "sharedFrom", anyOfFold: [id] } })).filter((c) => c.sharedFrom === id),
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
       assertCronRuntime({ ...before, ...patch });
-      const fields: Partial<Cron> = {};
-      if (patch.runtime !== undefined) fields.runtime = patch.runtime;
-      if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
-      if (patch.action !== undefined) fields.action = patch.action;
-      if (patch.message !== undefined) fields.message = patch.message;
-      if (patch.schedule !== undefined) {
-        const normalized = normalizeSchedule(patch.schedule, Date.now());
-        fields.schedule = normalized.schedule;
-        fields.nextFireAt = normalized.nextFireAt;
-      }
-      if (patch.enabled !== undefined) fields.enabled = patch.enabled;
-      if (patch.archived !== undefined) fields.archived = patch.archived;
-      if (patch.destination !== undefined) fields.destination = patch.destination;
-      if (patch.archived === true) fields.enabled = false;
-      if (patch.owner !== undefined) fields.owner = patch.owner;
-      if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
-      if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
-      if (patch.script !== undefined) fields.script = patch.script ?? undefined;
       return backing.update(id, (current) => {
-        const next = { ...current, ...fields, ...triggerPrivacy(current, patch) };
+        const next = { ...current, ...cronFields(patch), ...triggerPrivacy(current, patch) };
         assertPrivateTrigger(next);
         return next;
       });
+    },
+    async updateLinked(id, patch, linked) {
+      const before = await backing.get(id);
+      if (!before) return [];
+      assertCronRuntime({ ...before, ...patch });
+      const copies = (await backing.select({ where: { field: "sharedFrom", anyOfFold: [id] } }))
+        .filter((c) => c.sharedFrom === id && !c.forkedAt)
+        .map((c) => c.id);
+      const own = cronFields(patch);
+      const shared = cronFields(linked);
+      return backing.mutateMany([
+        {
+          id,
+          apply: (current) => {
+            if (!current) throw new Error("Schedule no longer exists.");
+            const next = { ...current, ...own, ...triggerPrivacy(current!, patch) };
+            assertPrivateTrigger(next);
+            if (next.personalOnly && copies.length) throw new Error("Private context cannot update a shared schedule.");
+            return next;
+          },
+        },
+        ...copies.map((copy) => ({
+          id: copy,
+          apply: (c: Cron | null) => {
+            if (!c) throw new Error("Shared schedule copy no longer exists.");
+            if (c.forkedAt || c.sharedFrom !== id) return c;
+            const next = { ...c!, ...shared, ...triggerPrivacy(c!, linked) };
+            assertPrivateTrigger(next);
+            return next;
+          },
+        })),
+      ]);
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {
@@ -306,7 +371,12 @@ export function createCronStore(
     },
     async setDestination(id, destination, privacy) {
       await backing.update(id, (current) => {
-        const next = { ...current, destination, ...triggerPrivacy(current, privacy ?? {}) };
+        const next = {
+          ...current,
+          destination,
+          ...cronFields(privacy ?? {}),
+          ...triggerPrivacy(current, privacy ?? {}),
+        };
         assertPrivateTrigger(next);
         return next;
       });
