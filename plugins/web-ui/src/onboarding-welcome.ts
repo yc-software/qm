@@ -386,7 +386,7 @@ export class OnboardingWelcome extends LitElement {
     } catch (error) {
       if (controller.signal.aborted || !this.isConnected) return;
       this.connections = [];
-      this.connectionsChecked = true;
+      this.connectionsChecked = false;
       this.connectionOutcome = "";
       this.connectionError = error instanceof Error ? error.message : "Could not check connected apps.";
       await this.updateComplete;

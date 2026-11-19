@@ -30,14 +30,14 @@ test("a card says in one line why an app isn't connected and what to do next", a
 
     Object.assign(widget, { connectionOutcome: "failed" });
     await settle(() => status() === "Couldn’t confirm the connection");
-    assert.equal(primary(), "Try again Gmail");
+    assert.equal(primary(), "Try connecting Gmail again");
     assert.equal(widget.querySelector(".connection-card")?.getAttribute("data-tone"), "error");
 
     h.setConnections([], 502);
     window.dispatchEvent(new Event("focus"));
     await settle(() => status() === "Could not check connected apps. Please try again.");
     const retry = widget.querySelector<HTMLButtonElement>(".connection-card .btn:not(.primary)")!;
-    assert.equal(retry.getAttribute("aria-label"), "Check again Gmail");
+    assert.equal(retry.getAttribute("aria-label"), "Check Gmail again");
     assert.equal(primary(), undefined);
     h.setConnections([{ id: "ca_test", toolkit: "gmail", missingScopes: [] }]);
     retry.click();

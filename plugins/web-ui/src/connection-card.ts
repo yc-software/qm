@@ -22,9 +22,9 @@ const ghost = html`<span class="connection-card-ghost"></span>`;
 function status(at: ConnectionStanding): { text: string; tone: string; mark: keyof typeof MARKS | "spinner" } {
   const healthy = at.connected && !at.stale;
   if (at.outcome === "checking") return { text: "Confirming access…", tone: "muted", mark: "spinner" };
-  if (!at.checked) return { text: "", tone: "muted", mark: "idle" };
   if (at.working) return { text: at.working, tone: "muted", mark: "spinner" };
   if (at.problem) return { text: at.problem, tone: "error", mark: "error" };
+  if (!at.checked) return { text: "", tone: "muted", mark: "idle" };
   if (at.outcome === "failed" && !healthy)
     return { text: "Couldn’t confirm the connection", tone: "error", mark: "error" };
   if (healthy) return { text: "Connected", tone: "success", mark: "check" };
@@ -45,22 +45,15 @@ export function connectionCard(
     </div>`;
   const { text, tone, mark } = status(at);
   const settled = at.checked && at.outcome !== "checking";
-  const unknown = Boolean(at.problem) && !at.connected;
-  const button = (label: string, run: (() => void) | undefined, style: string) =>
-    run
-      ? html`<button
-          type="button"
-          class=${style}
-          aria-label=${`${label} ${service.name}`}
-          ?disabled=${Boolean(at.working)}
-          @click=${run}
-        >
-          ${label}
-        </button>`
-      : nothing;
-  let next = "";
-  if (settled && !unknown && at.stale) next = "Reconnect";
-  else if (settled && !unknown && !at.connected) next = at.outcome === "failed" ? "Try again" : "Connect";
+  const button = (label: string, name: string, run: () => void, style = "btn") =>
+    html`<button type="button" class=${style} aria-label=${name} ?disabled=${Boolean(at.working)} @click=${run}>
+      ${label}
+    </button>`;
+  let next: TemplateResult | typeof nothing = nothing;
+  if (settled && at.stale) next = button("Reconnect", `Reconnect ${service.name}`, at.connect, "btn primary");
+  else if (settled && !at.connected && at.outcome === "failed")
+    next = button("Try again", `Try connecting ${service.name} again`, at.connect, "btn primary");
+  else if (settled && !at.connected) next = button("Connect", `Connect ${service.name}`, at.connect, "btn primary");
   return html`<div
     class=${mark === "check" && at.outcome === "success" ? "connection-card fresh" : "connection-card"}
     data-tone=${tone}
@@ -79,9 +72,9 @@ export function connectionCard(
       >
     </span>
     <span class="connection-card-actions"
-      >${settled && at.disconnect ? button("Disconnect", at.disconnect, "btn") : nothing}${
-        settled && unknown ? button("Check again", at.recheck, "btn") : nothing
-      }${button(next, next ? at.connect : undefined, "btn primary")}</span
+      >${settled && at.disconnect ? button("Disconnect", `Disconnect ${service.name}`, at.disconnect) : nothing}${
+        !at.checked && at.problem ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing
+      }${next}</span
     >
   </div>`;
 }
