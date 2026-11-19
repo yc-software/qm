@@ -637,10 +637,26 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     skill: Pick<Skill, "id" | "scopeId" | "createdBy">,
     principalId: string,
     botWork: boolean,
+    grants?: readonly Grant[],
   ): Promise<boolean> {
     if (!loadsScopeContext(principalId, skill.scopeId, botWork)) return false;
     if (await principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)) return true;
-    return (await artifactGrantPermission(skill.scopeId, encodeRef(skillRef(skill.id)), principalId)) === "write";
+    const ref = encodeRef(skillRef(skill.id));
+    return (await artifactGrantPermission(skill.scopeId, ref, principalId, grants)) === "write";
+  }
+
+  async function manageableSkills(
+    skills: readonly Skill[],
+    principalId: string,
+    botWork: boolean,
+  ): Promise<Set<string>> {
+    const resources = skills.map((s) => ({ ownerScopeId: s.scopeId, ref: encodeRef(skillRef(s.id)) }));
+    const grants = resources.length
+      ? ((await deps.acl?.find(ambientTenant(), { resources }).catch(reportFailureAs("skill grants", []))) ?? [])
+      : [];
+    const of = (s: Skill) => grants.filter((g) => g.ownerScopeId === s.scopeId && g.ref === encodeRef(skillRef(s.id)));
+    const ok = await Promise.all(skills.map((s) => canManageSkill(s, principalId, botWork, of(s))));
+    return new Set(skills.filter((_, i) => ok[i]).map((s) => s.id));
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
@@ -662,9 +678,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ownerScopeId: ScopeId,
     ref: string,
     principalId: string,
+    preloaded?: readonly Grant[],
   ): Promise<Permission | null> {
     let best: Permission | null = null;
     const grants =
+      preloaded ??
       (await deps.acl?.grantsFor(ambientTenant(), ownerScopeId, ref).catch(reportFailureAs("artifact grants", []))) ??
       [];
     for (const g of grants) {
@@ -1005,6 +1023,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalManagesArtifactHome,
     artifactAuthor,
     canManageSkill,
+    manageableSkills,
     republishIfShared,
     effectiveAppPermission,
     artifactGrantPermission,

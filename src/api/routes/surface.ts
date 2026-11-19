@@ -903,16 +903,13 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const resolved = (await app.listVisibleSkills(principalId, false)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
-  const archivedChecks = await Promise.all(
-    (await app.listSkills())
-      .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId, false) })),
-  );
-  const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
+  const archivedAll = (await app.listSkills()).filter((skill) => skill.status === "archived");
   const visible = resolved.flatMap((row) => [
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),
   ]);
+  const manageable = await app.manageableSkills([...archivedAll, ...visible.map((r) => r.skill)], principalId, false);
+  const archived = archivedAll.filter((skill) => manageable.has(skill.id)).map((skill) => ({ skill, shadowed: [] }));
   const skills = await Promise.all(
     [...visible, ...archived].map(async (r) => ({
       id: r.skill.id,
@@ -927,7 +924,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
       pack: r.skill.pack,
       assetCount: r.skill.manifest.files?.length ?? 0,
       requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId, false),
+      editable: manageable.has(r.skill.id),
     })),
   );
   return sendJson(res, 200, { skills });
