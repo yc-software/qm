@@ -776,6 +776,7 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
+  discloseArtifact?: ReturnType<typeof import("../memory/artifact-disclosure.ts").createArtifactDisclosure>;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;

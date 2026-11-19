@@ -149,6 +149,19 @@ export function pauseStampAfterToolCall(
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
 
+function withPrivateSharingApproval(tool: ToolDefinition, label: "app" | "file") {
+  return {
+    ...tool,
+    needsApproval: (params: unknown) =>
+      isObj(params) && params.action === "share" && params.privateRevision !== undefined,
+    approvalReason: (params: unknown) => {
+      const selected = isObj(params) ? params : {};
+      const contents = label === "app" ? "its stored data and history" : "the selected saved bytes";
+      return `Share ${label} ${String(selected.id)} at private revision ${String(selected.privateRevision)} with ${String(selected.toScope)} (${selected.permission === "write" ? "manage" : "read"} access). This includes ${contents}; the private conversation and other outputs remain private.${selected.notify === false ? " No notifications or invitations." : ""}`;
+    },
+  };
+}
+
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -175,23 +188,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
       ...(controlTools ? { share: sharingTool("skill") } : {}),
     }),
-    resourceTool("files", {
-      read,
-      write,
-      ...(controlTools ? { share: sharingTool("file") } : {}),
-    }),
-    {
-      ...resourceTool("apps", {
+    withPrivateSharingApproval(
+      resourceTool("files", {
+        read,
+        write,
+        ...(controlTools ? { share: sharingTool("file") } : {}),
+      }),
+      "file",
+    ),
+    withPrivateSharingApproval(
+      resourceTool("apps", {
         publish,
         ...(controlTools ? { share: sharingTool("deploy") } : {}),
       }),
-      needsApproval: (params: unknown) =>
-        isObj(params) && params.action === "share" && params.privateRevision !== undefined,
-      approvalReason: (params: unknown) => {
-        const selected = isObj(params) ? params : {};
-        return `Share app ${String(selected.id)} at private revision ${String(selected.privateRevision)} with ${String(selected.toScope)} (${selected.permission === "write" ? "manage" : "read"} access). This includes its stored data and history; the private conversation and other outputs remain private.${selected.notify === false ? " No notifications or invitations." : ""}`;
-      },
-    },
+      "app",
+    ),
     ...(ref.current?.appFiles ? [resourceTool("app_files", appFileTools(kit))] : []),
     memory,
     history,

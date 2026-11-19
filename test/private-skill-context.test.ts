@@ -340,8 +340,8 @@ test("private document capability and skill privacy survive memory opt-out and a
     headers: { "x-agent-capability": protectedOwn, "content-type": "application/json" },
     body: JSON.stringify({ type: "file", id: privateFileId, toScope: "org" }),
   });
-  assert.equal(shareFile.status, 400);
-  assert.equal(((await shareFile.json()) as { message: string }).message, "Private artifacts cannot change audience");
+  assert.equal(shareFile.status, 403);
+  assert.match(((await shareFile.json()) as { message: string }).message, /requires approval/);
   await built.skills.archive(copiedId);
   await built.skills.review(privateId, actorId, []);
   await built.skills.publish(privateId);
@@ -653,11 +653,10 @@ test("private document capability and skill privacy survive memory opt-out and a
   for (const [type, id] of [
     ["skill", sharedSkill.id],
     ["file", "shared-origin-file"],
-  ])
-    assert.equal(
-      (await call("/v1/share", writerToken, "POST", { type, id, toScope: teamScope, notify: false })).status,
-      200,
-    );
+  ]) {
+    const shared = await call("/v1/share", writerToken, "POST", { type, id, toScope: teamScope, notify: false });
+    assert.equal(shared.status, 200, `${type}: ${await shared.text()}`);
+  }
   assert.equal((await call("/v1/skills/" + sharedSkill.id, readerToken)).status, 200);
   assert.equal((await call("/v1/files/shared-origin-file/content", readerToken)).status, 200);
   const origin = (await built.sessions.get(reader.id))?.sourceProvenance;

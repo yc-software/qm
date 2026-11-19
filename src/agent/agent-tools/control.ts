@@ -374,12 +374,12 @@ export function controlPlaneTools(kit: ToolKit) {
               ),
             }
           : {}),
-        ...(type === "deploy"
+        ...(type === "deploy" || type === "file"
           ? {
               privateRevision: Type.Optional(
                 Type.String({
                   description:
-                    "Exact private revision from the sharing preflight; requires approval to share this app, including its stored data and history.",
+                    "Exact private revision from the sharing preflight; requires approval to share this selected output.",
                 }),
               ),
             }

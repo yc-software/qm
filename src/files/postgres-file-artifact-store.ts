@@ -9,6 +9,7 @@ import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
   FileArtifactDeletedError,
+  fileSharingRevision,
   clampLimit,
   decodeCursor,
   encodeCursor,
@@ -208,6 +209,25 @@ export function createPostgresFileArtifactStore(
   }
 
   return {
+    async releasePrivate(id, revision, provenance, writeGrant) {
+      return withPgTransaction(await pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${id}`]);
+        const selected = await client.query("SELECT * FROM file_artifacts WHERE id=$1 AND enabled=TRUE FOR UPDATE", [
+          id,
+        ]);
+        const file = selected.rows[0] && rowToArtifact(selected.rows[0]);
+        if (!file?.personalOnly || fileSharingRevision(file) !== revision)
+          throw new Error("The selected private file changed after approval. Read it again before sharing.");
+        if (!file.blobKey || !file.sha256)
+          throw new Error("The private file needs saved, verified bytes before it can be shared.");
+        await writeGrant(client);
+        const saved = await client.query(
+          "UPDATE file_artifacts SET personal_only=FALSE,source_provenance=$2::jsonb,updated_at=$3 WHERE id=$1 RETURNING *",
+          [id, JSON.stringify(provenance), Date.now()],
+        );
+        return rowToArtifact(saved.rows[0]);
+      });
+    },
     async put(input) {
       const existing = await getRow(input.id);
       if (existing) return { artifact: existing, created: false };

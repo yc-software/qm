@@ -1,3 +1,5 @@
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { hashId } from "../util/crypto.ts";
 import type { PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
@@ -26,6 +28,10 @@ export interface FileArtifact {
   createdAt: number;
   updatedAt: number;
   enabled: boolean;
+}
+
+export function fileSharingRevision(file: FileArtifact): string {
+  return hashId([canonicalJson(file)], 64);
 }
 
 export interface PutFileInput {
@@ -74,6 +80,12 @@ export class FileArtifactDeletedError extends Error {
 }
 
 export interface FileArtifactStore {
+  releasePrivate(
+    id: string,
+    revision: string,
+    sourceProvenance: SourceProvenance,
+    writeGrant: (transaction: PoolClient) => Promise<void>,
+  ): Promise<FileArtifact>;
   put(input: PutFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
   publish(input: PublishFileInput, transaction?: PoolClient): Promise<{ artifact: FileArtifact; created: boolean }>;
 

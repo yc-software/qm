@@ -115,7 +115,7 @@ export type ShareArtifactResult =
 
 ## Internal interfaces
 
-App.grant options add optional privateRevision and trusted PrivateContext. DeployService adds releasePrivateApp(grant, revision, context). DeployStore adds releaseContext(id, metadataRevision, sourceProvenance). AclStore.grant adds an internal releasePrivate?:true argument; it still validates the personal owner, and no HTTP handler accepts it. DeployServiceDeps adds the existing-source-policy callback wired with authoritative membership/configuration; provenance-bearing audience changes fail closed when that callback is unavailable. No persisted approval format changes: the existing durable exact-tool call and once-only grant are used.
+App.grant options add optional privateRevision and trusted PrivateContext. DeployService adds releasePrivateApp(grant, revision, context). DeployStore adds releaseContext(id, metadataRevision, sourceProvenance). AclStore.grant accepts internal options.releasePrivate?:true; it still validates the personal owner, and no HTTP handler accepts it. DeployServiceDeps adds the existing-source-policy callback wired with authoritative membership/configuration; provenance-bearing audience changes fail closed when that callback is unavailable. No persisted approval format changes: the existing durable exact-tool call and once-only grant are used.
 
 ## Validation checkpoint
 
@@ -133,6 +133,8 @@ New approval issuances use an opaque ID scoped to the originating durable run, o
 
 The private app regression suite passes20 cases; the agent-tool suite passes165; the orchestrator approval suite passes38; six additional affected input-screening/execution/session/approval-delivery files pass. Focused independent review accepted the app release and approval corrections94. Native sharing also exposed the Docker reload collision documented in [docker-app-ports.md](docker-app-ports.md).
 
-App release is implemented and natively qualified. Explicit release of files, skills and schedules, the complete resource/unknown-source compatibility audit, full-head reviews/CI and final rollout audit remain outstanding. No production merge or deployment has occurred.
+App release is implemented and natively qualified. Explicit release of skills and schedules, the complete resource/unknown-source compatibility audit, full-head reviews/CI and final rollout audit remain outstanding. No production merge or deployment has occurred.
 
 The approval issuance regression also fails against unchanged22efcad:37 existing cases pass and the new case detects the reused denied ID. With the fix, all38 pass; stale approval submissions leave the newer request pending. The Docker provider regression separately fails on its unchanged old source. Native sharing proof confirms exactly one executed share call and zero grants before approval.
+
+Private file release and the shared disclosure helper are documented in [private-file-sharing.md](private-file-sharing.md). The internal ACL preparation/CAS interfaces there supersede the earlier grant signature described above.

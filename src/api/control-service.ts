@@ -1,3 +1,4 @@
+import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import {
   refreshPrivateContext,
   privateSourceAllowed,
@@ -946,6 +947,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           code: "forbidden",
           message: "Open the output from your personal conversation before sharing it.",
         };
+      if (
+        home.privateRevision &&
+        toKind === "personal" &&
+        (await app.samePerson(parseScopeId(home.ownerScopeId).ref, parseScopeId(toScope).ref))
+      )
+        return { ok: false, code: "bad_request", message: "The selected output is already personal to you." };
       if (home.privateRevision && !req.privateRevision)
         return {
           ok: false,
@@ -955,7 +962,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       if (
         req.privateRevision &&
-        (req.type !== "deploy" ||
+        ((req.type !== "deploy" && req.type !== "file") ||
           req.move ||
           req.email ||
           req.id !== home.id ||
@@ -1059,7 +1066,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           permission,
         };
       } catch (e) {
-        if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
+        if (
+          e instanceof MemoryDisclosureDenied ||
+          e instanceof AdminError ||
+          (e instanceof DeployAccessError && e.code === "forbidden")
+        ) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         return { ok: false, code: "share_failed", message: errMessage(e) };

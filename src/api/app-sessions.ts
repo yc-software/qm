@@ -1,6 +1,11 @@
 import { appSharingRevision } from "../deploy/deploy-store.ts";
 import { contextualFiles } from "../files/context-files.ts";
-import { inheritSessionContext } from "../sessions/private-context.ts";
+import {
+  privateSourceAllowed,
+  refreshPrivateContext,
+  inheritContextSources,
+  inheritSessionContext,
+} from "../sessions/private-context.ts";
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { loadsScopeContext } from "../resolution/context-filter.ts";
@@ -16,7 +21,7 @@ import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.t
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { ambientTenant } from "../tenants/context.ts";
-import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
+import { fileSharingRevision, fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
@@ -1280,6 +1285,24 @@ export function createSessionMethods(
           if (cron.personalOnly) throw new Error("Share this private schedule explicitly before granting access.");
           await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
         });
+      } else if (ref.kind === "file" && opts?.privateRevision && opts.context) {
+        const context = await refreshPrivateContext(deps.sessions, opts.context);
+        if (!privateSourceAllowed(context, g.ownerScopeId) || !samePerson(context.actorId, g.grantedBy))
+          throw new Error("Only the private file's owner can share it from personal context.");
+        const file = await deps.files.get(ref.id);
+        if (
+          !file?.personalOnly ||
+          file.ownerScopeId !== g.ownerScopeId ||
+          fileSharingRevision(file) !== opts.privateRevision
+        )
+          throw new Error("The selected private file changed after approval. Read it again before sharing.");
+        if ((await inheritContextSources(deps.sessions, context, [file])).has(file.id))
+          throw new Error("The selected file is private to its owner's personal context.");
+        if (!deps.discloseArtifact) throw new Error("File source authorization is unavailable.");
+        const provenance = await deps.discloseArtifact(file, g.granteeScopeId, g.grantedBy);
+        if (!provenance) throw new Error("The selected private file has no source provenance.");
+        const writeGrant = await deps.acl.preparePrivateGrant(tenant, g, file.createdBy);
+        await deps.files.releasePrivate(ref.id, opts.privateRevision, provenance, writeGrant);
       } else if (ref.kind !== "deploy") await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
         at: Date.now(),
@@ -1355,7 +1378,13 @@ export function createSessionMethods(
       if (type === "file") {
         const f = await deps.files.get(idOrName);
         return f
-          ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.id)) }
+          ? {
+              id: f.id,
+              ownerScopeId: f.ownerScopeId,
+              createdBy: f.createdBy,
+              grantRef: encodeRef(fileRef(f.id)),
+              ...(f.personalOnly ? { privateRevision: fileSharingRevision(f) } : {}),
+            }
           : null;
       }
       const d = await deps.deploy.getApp(idOrName);

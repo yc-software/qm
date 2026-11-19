@@ -1,4 +1,5 @@
-import { createAppDisclosure } from "./deploy/app-disclosure.ts";
+import type { Grant } from "./types.ts";
+import { createArtifactDisclosure } from "./memory/artifact-disclosure.ts";
 import { ATTACHMENT_STAGING_MIGRATION, ATTACHMENT_RECEIPTS_MIGRATION } from "./sessions/attachment-migrations.ts";
 import { DOCUMENT_BINDING_KEYS_MIGRATION } from "./documents/migrations.ts";
 import { createDocumentMemory, nativeDocumentSources } from "./documents/memory.ts";
@@ -659,21 +660,14 @@ export function buildApp(
     canManageScope?: CanManageScope;
     canUseSandboxScope?: CanManageScope;
     managesArtifactHome?: ManagesArtifactHome;
+    authorizeArtifactShare?: (grant: Grant, actorId: string, releasePrivate?: true) => Promise<void>;
   } = {};
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) =>
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
     resolveFiles: (refs) => files.resolveByIds(refs),
-    isPersonalOnly: async (ownerScopeId, ref) => {
-      const parsed = parseRef(ref);
-      if (parsed.kind === "file") {
-        const file = await files.get(parsed.id);
-        return file?.ownerScopeId === ownerScopeId && file.personalOnly === true;
-      }
-      if (parsed.kind !== "skill") return false;
-      const skill = await skills.get(parsed.id);
-      return skill?.scopeId === ownerScopeId && skill.personalOnly === true;
-    },
+    authorizeArtifactShare: (grant, actorId, releasePrivate) =>
+      membership.authorizeArtifactShare!(grant, actorId, releasePrivate),
   });
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
@@ -1979,15 +1973,35 @@ export function buildApp(
     sessionStateBus,
   );
 
+  const discloseArtifact = createArtifactDisclosure({
+    nativeSources: (target, sources) => nativeDocumentSources(documentConversations, [target], sources),
+    classify: identity.classify,
+    orgScopeId: scopeId("org", config.orgId),
+    config: configStore,
+    currentScopeMembers: createCurrentScopeMembers({ managedGroups, directory, identity }, true),
+    isCurrentSharedScopeMember,
+  });
+  membership.authorizeArtifactShare = async (grant, actorId, releasePrivate) => {
+    const parsed = parseRef(grant.ref);
+    if (parsed.kind !== "file" && parsed.kind !== "skill") return;
+    const stored = parsed.kind === "file" ? await files.get(parsed.id) : await skills.get(parsed.id);
+    const ownerScopeId = stored && ("ownerScopeId" in stored ? stored.ownerScopeId : stored.scopeId);
+    if (!stored || ownerScopeId !== grant.ownerScopeId)
+      throw new Error("The artifact's current owner does not match this grant.");
+    if (stored.personalOnly && !releasePrivate) throw new Error("Private artifacts cannot change audience");
+    const provenance = stored.sourceProvenance;
+    if (
+      releasePrivate ||
+      (provenance &&
+        (!provenance.sources.length ||
+          provenance.sources.some(
+            (source) => source !== ownerScopeId && source !== personalScope(actorId) && source !== grant.granteeScopeId,
+          )))
+    )
+      await discloseArtifact(stored, grant.granteeScopeId, actorId);
+  };
   const deployService = createDeployService({
-    discloseApp: createAppDisclosure({
-      nativeSources: (target, sources) => nativeDocumentSources(documentConversations, [target], sources),
-      classify: identity.classify,
-      orgScopeId: scopeId("org", config.orgId),
-      config: configStore,
-      currentScopeMembers: createCurrentScopeMembers({ managedGroups, directory, identity }, true),
-      isCurrentSharedScopeMember,
-    }),
+    discloseApp: discloseArtifact,
     sessions,
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2480,6 +2494,7 @@ export function buildApp(
     advisoryLock,
   };
   const app = createApp({
+    discloseArtifact,
     errors,
     settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,

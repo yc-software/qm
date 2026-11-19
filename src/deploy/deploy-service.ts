@@ -1,5 +1,5 @@
 import { mergeSourceProvenance } from "../memory/facts.ts";
-import type { createAppDisclosure } from "./app-disclosure.ts";
+import type { createArtifactDisclosure } from "../memory/artifact-disclosure.ts";
 import {
   refreshPrivateContext,
   privateSourceAllowed,
@@ -225,7 +225,7 @@ export class DeployAccessError extends Error {
 }
 
 export interface DeployServiceDeps {
-  discloseApp?: ReturnType<typeof createAppDisclosure>;
+  discloseApp?: ReturnType<typeof createArtifactDisclosure>;
   sessions?: Pick<SessionStore, "get" | "getMany" | "recordContextProvenance">;
   deliveries?: DeliveryStore;
   deployAppsDomain?: string;
@@ -1277,7 +1277,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const provenance = await discloseApp(app, grant.granteeScopeId, context.actorId);
         if (!provenance)
           throw new DeployAccessError("forbidden", "The private app has no verifiable source provenance.");
-        await deps.acl.grant(ambientTenant(), grant, app.createdBy, true);
+        await deps.acl.grant(ambientTenant(), grant, app.createdBy, { releasePrivate: true });
         await deps.deployStore.releaseContext(app.id, appSharingRevision(app), provenance);
         recordAudit({
           at: Date.now(),

@@ -164,8 +164,8 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         );
       });
     },
-    async replaceForResourceIfCurrent(tenant, ownerScopeId, ref, expected, replacement) {
-      return db.forTenant(tenant).transaction(async (client) => {
+    async replaceForResourceIfCurrent(tenant, ownerScopeId, ref, expected, replacement, transaction) {
+      const replace = async (client: PoolClient) => {
         await lockResource(client, ownerScopeId, ref);
         const selected = await client.query(
           "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE tenant_id = $1 AND owner_scope_id = $2 AND path = $3 FOR UPDATE",
@@ -185,7 +185,8 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
           );
         }
         return true;
-      });
+      };
+      return transaction ? replace(transaction) : db.forTenant(tenant).transaction(replace);
     },
   };
 }

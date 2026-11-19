@@ -1,4 +1,4 @@
-import { createAppDisclosure } from "../src/deploy/app-disclosure.ts";
+import { createArtifactDisclosure } from "../src/memory/artifact-disclosure.ts";
 import { createCurrentScopeMembers, createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { createServer as createHttpServer } from "node:http";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
@@ -42,7 +42,7 @@ async function fixture(
   const directory = createPostgresDirectoryStore(databaseUrl);
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const deps = {
-    discloseApp: createAppDisclosure({
+    discloseApp: createArtifactDisclosure({
       classify: identity.classify,
       orgScopeId: "org:test",
       config: { resolveSharingPostureDurable: async () => options.sharingPosture ?? "isolated" },
