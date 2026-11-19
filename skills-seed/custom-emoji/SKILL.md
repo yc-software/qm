@@ -17,8 +17,8 @@ The flow, cheapest first:
 2. **Fetch a fitting one.** If nothing in the workspace fits but you know the emoji that would (you
    know meme culture — "this is fine", "coffin dance", "lolsob", "party parrot"…), get its image:
    find it on Slackmojis (https://slackmojis.com) or the web with `curl` (their emoji pages are
-   plain HTML — grep the image URL out), then download it: `curl -L -o /tmp/<name>.png
-"<url>"`. Keep it square and under ~128KB (Slack's limit); shrink it if needed.
+   plain HTML — grep the image URL out), then download it with
+   `curl -L -o /tmp/<name>.png "<url>"`. Step 4 sizes it for Slack.
 
 3. **Generate one.** When nothing existing fits and no known meme/image is out there to fetch
    — an original or specific picture ("our logo on fire", "a cartoon of _this_ person shrugging")
@@ -30,12 +30,10 @@ The flow, cheapest first:
    the picture — and/or _edit_ one to get the look you want:
 
    ```bash
-
    curl -s https://api.openai.com/v1/images/generations \
      -H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json" \
      -d '{"model":"gpt-image-1","prompt":"a flat sticker of a happy blob, transparent background","size":"1024x1024","n":1}' \
      | python3 -c "import sys,json,base64;open('/tmp/blob.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
-
 
    curl -s https://api.openai.com/v1/images/edits \
      -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -45,10 +43,9 @@ The flow, cheapest first:
 
    A square image with a transparent or simple background works best as an emoji.
 
-   **Motion (optional, in code).** If the emoji should move, feed that generated image into the
-   **slack-gif-creator** skill (`skills/slack-gif-creator/`) and apply pan/zoom/pulse/shake/spin/
-   fade — or composite a couple of generated layers — to produce a 128×128 GIF. Read its SKILL.md;
-   its first step self-installs Pillow/imageio/numpy.
+   **Motion (optional, in code).** If the emoji should move, animate the generated image in code
+   with Pillow (in `/opt/browser-engine/venv`): pan, zoom, pulse, shake, spin or fade it, or
+   composite a couple of generated layers, and save the frames as a looping 128×128 GIF.
 
    **Hard rule: never generate frame-by-frame.** Use 1–few image-API calls for the _content_, then
    do ALL per-frame motion in code. Asking the image model for ~60 images for ~60 frames is the
@@ -98,9 +95,8 @@ Use the **browse** skill's browser with the person's own profile (read it and it
 first; same `sandbox_id` and `credentials` throughout). The sign-in lands in their profile too, so
 next time this usually needs no one.
 
-1. **Create the browser** exactly as the provider doc says (take the writer lease so the sign-in
-   is kept). Workspace host: the one from the upload error, or the connected workspace
-   (`WS=acme.slack.com`).
+1. **Create the browser** exactly as the provider doc says for a sign-in that should be kept.
+   Workspace host: the one from the upload error, or the connected workspace (`WS=acme.slack.com`).
 2. **Open Slack and see whether they're already signed in.** This opens the workspace and
    exports its cookies to a file (never print them):
 
@@ -145,8 +141,7 @@ next time this usually needs no one.
    signed in to a different workspace) — fix that with the person on the same live view and
    save again.
 
-5. **Clean up** per the provider doc (delete the browser, release the lease), then **retry the
-   upload**. It now runs as them.
+5. **Clean up** per the provider doc so the sign-in is kept, then **retry the upload**. It now runs as them.
 
 Only the person whose turn it is can save their own session, so if someone else (or a
 fallback account) was signed in before, this replaces nothing of theirs. Before you save,
