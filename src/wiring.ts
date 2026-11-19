@@ -446,8 +446,6 @@ import { createGenericChatNotices, genericChatRunNotice } from "./surfaces/gener
 import { GENERIC_CHAT } from "./surfaces/generic-chat/protocol.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
-const ADMIN_CHECK_REUSE_MS = 1000;
-
 export interface Runtime {
   start(services?: BackgroundServices): void;
   stop(opts?: { beforeClose?: () => Promise<void>; fatal?: boolean }): Promise<void>;
@@ -1917,29 +1915,11 @@ export function buildApp(
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
-  const adminChecks = new Map<string, { at: number; check: Promise<boolean> }>();
-  const isOrgAdmin = (principalId: string): Promise<boolean> => {
-    const tenant = ambientTenant();
-    const key = `${tenant.id}\0${principalId}`;
-    const now = Date.now();
-    const hit = adminChecks.get(key);
-    if (hit && now - hit.at < ADMIN_CHECK_REUSE_MS) return hit.check;
-    for (const [k, v] of adminChecks) if (now - v.at >= ADMIN_CHECK_REUSE_MS) adminChecks.delete(k);
-    const check = admin.adminStatusOf(tenant, identity.classify(principalId)).then((status) => status.isAdmin);
-    adminChecks.set(key, { at: now, check });
-    check.catch(() => adminChecks.delete(key));
-    return check;
-  };
-  const canManageScope = createCanManageScope({
-    managedGroups: projects,
-    directory,
-    identity,
-    sessions,
-    personas,
-    isOrgAdmin,
-  });
+  const isOrgAdmin = async (principalId: string): Promise<boolean> =>
+    (await admin.adminStatusOf(ambientTenant(), identity.classify(principalId))).isAdmin;
+  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams, personas, isOrgAdmin },
+    { managedGroups: projects, directory, identity, teams, personas },
     canManageScope,
   );
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
@@ -1980,6 +1960,7 @@ export function buildApp(
       (await vouchedInternalEmail(email)) ||
       (identity.isInternal(identity.classify(email)) && identity.externalMember(email) !== undefined),
     managesArtifactHome,
+    isOrgAdmin,
     ...(deployGitSecret && deployGitBase
       ? {
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {

@@ -123,6 +123,7 @@ export function createSessionMethods(
   | "grantees"
   | "promoteSkill"
   | "belongsToScope"
+  | "isOrgAdmin"
   | "canManageArtifactHome"
   | "artifactGrantPermission"
   | "getArtifactHome"
@@ -1294,6 +1295,10 @@ export function createSessionMethods(
 
     belongsToScope(principalId, scope) {
       return principalCanAccessCurrentScope(principalId, scope);
+    },
+
+    async isOrgAdmin(principalId) {
+      return (await deps.isOrgAdmin?.(principalId)) === true;
     },
 
     canManageArtifactHome(homeScopeId, createdBy, principalId) {

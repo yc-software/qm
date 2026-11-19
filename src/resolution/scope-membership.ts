@@ -42,11 +42,6 @@ export interface ScopeMembershipDeps {
   teams?: { isMember(tenant: Tenant, principalId: string, teamId: string): Promise<boolean> };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
   personas?: { role(principalId: string, personaId: string): Promise<PersonaRole | null> };
-  isOrgAdmin?: (principalId: string) => Promise<boolean>;
-}
-
-async function orgAdmin(deps: ScopeMembershipDeps, principalId: string): Promise<boolean> {
-  return (await deps.isOrgAdmin?.(principalId).catch(swallowAs("scope membership: org admin", false))) === true;
 }
 
 async function personaRoleAtLeast(
@@ -247,18 +242,14 @@ export function createMembershipControlsScope(deps: ScopeMembershipDeps) {
 export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope {
   return async function canManageScope(principalId: string, scope: ScopeId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
-    return (await managesAsMember(deps, principalId, scope)) || orgAdmin(deps, principalId);
+    const { kind, ref } = parseScopeId(scope);
+    if (kind === "personal") return samePerson(ref, principalId);
+    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
+    if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
+    if (kind === "channel")
+      return (await channelPrivacy(deps, ref)) === true && currentSharedScopeMember(deps, kind, ref, principalId);
+    return false;
   };
-}
-
-async function managesAsMember(deps: ScopeMembershipDeps, principalId: string, scope: ScopeId): Promise<boolean> {
-  const { kind, ref } = parseScopeId(scope);
-  if (kind === "personal") return samePerson(ref, principalId);
-  if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
-  if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
-  if (kind === "channel")
-    return (await channelPrivacy(deps, ref)) === true && currentSharedScopeMember(deps, kind, ref, principalId);
-  return false;
 }
 
 export type ManagesArtifactHome = (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;
@@ -315,7 +306,7 @@ export async function scopeMembershipSnapshot(
     .catch(swallowAs("scope membership: directory lookup", new Map<string, DirectoryMember>()));
   const member = members.get(principalId);
   const aliases = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
-  const [channelFacts, groupFacts, projectMembers, roles, memberTeams, admin] = await Promise.all([
+  const [channelFacts, groupFacts, projectMembers, roles, memberTeams] = await Promise.all([
     Promise.all(
       aliases.map(
         async (id) =>
@@ -347,7 +338,6 @@ export async function scopeMembershipSnapshot(
     teams
       ?.memberTeams(principalId, teamIds)
       .catch(swallowAs("scope membership: teams", new Set<string>() as ReadonlySet<string>)),
-    sources.isOrgAdmin?.(principalId).catch(swallowAs("scope membership: org admin", false)),
   ]);
   const channelsBy = new Map(channelFacts);
   const groupsBy = new Map(groupFacts);
@@ -377,6 +367,5 @@ export async function scopeMembershipSnapshot(
         }
       : {}),
     ...(personas ? { personas: { role: async (_id: string, persona: string) => roles?.get(persona) ?? null } } : {}),
-    isOrgAdmin: async (id: string) => admin === true && id === principalId,
   } satisfies ScopeMembershipDeps;
 }

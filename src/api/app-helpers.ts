@@ -478,7 +478,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ...(deps.identity ? { identity: deps.identity } : {}),
     ...(deps.teams ? { teams: deps.teams } : {}),
     ...(deps.personas ? { personas: deps.personas } : {}),
-    ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
   };
 
   function scopeRules(membership: ScopeMembershipDeps) {
@@ -753,7 +752,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           ...(deps.identity ? { identity: deps.identity } : {}),
           ...(deps.projects ? { managedGroups: deps.projects } : {}),
           ...(deps.personas ? { personas: deps.personas } : {}),
-          ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
           ...(deps.teams
             ? {
                 teams: {

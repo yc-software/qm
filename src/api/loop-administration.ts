@@ -5,7 +5,6 @@ import { samePersonInDirectory } from "../directory/person.ts";
 import {
   createMembershipControlsScope,
   createCanManageScope,
-  createIsCurrentSharedScopeMember,
   scopeMembershipSnapshot,
 } from "../resolution/scope-membership.ts";
 import type { TriggerBase } from "../triggers/types.ts";
@@ -35,7 +34,6 @@ export async function loopAdministration(
       identity: deps.identity,
       ...(deps.projects ? { managedGroups: deps.projects } : {}),
       ...(deps.personas ? { personas: deps.personas } : {}),
-      ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
     },
     actorId,
     loops.map((loop) => loop.ownerScopeId),
@@ -47,12 +45,5 @@ export async function loopAdministration(
     managesScope: (_actor: string, scope: ScopeId) => manages(actorId, scope),
     samePerson: (a: string, b: string) => samePersonInDirectory(snapshot.directory, a, b),
   };
-  const member = createIsCurrentSharedScopeMember(snapshot);
-  return Promise.all(
-    loops.map(
-      async (loop) =>
-        ((await policy.samePerson(loop.owner, actorId)) || (await member(actorId, loop.ownerScopeId))) &&
-        canAdministerLoop(policy, loop, actor),
-    ),
-  );
+  return Promise.all(loops.map((loop) => canAdministerLoop(policy, loop, actor)));
 }

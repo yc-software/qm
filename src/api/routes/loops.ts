@@ -1,3 +1,4 @@
+import { asOrgAdmin } from "../control-service.ts";
 import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
@@ -104,7 +105,10 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx.app, loop, acting.capability ?? acting))) {
+  if (
+    !(await canAdministerLoop(ctx.app, loop, acting.capability ?? acting)) &&
+    !(await asOrgAdmin(ctx.app, acting.capability ?? acting))
+  ) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }

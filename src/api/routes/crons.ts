@@ -9,7 +9,7 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
-import { canAdministerCron, cronTaskRewrite } from "../control-service.ts";
+import { administersCron, canAdministerCron, cronTaskRewrite } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -71,7 +71,7 @@ async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
+  if (principalId && (await administersCron(app, cron, { actorId: principalId }))) return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -84,7 +84,7 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
+  if (principalId && (await administersCron(app, cron, { actorId: principalId }))) return cron;
   if (principalId && (await app.listCronsForViewer(principalId)).visible.some((candidate) => candidate.id === id))
     return cron;
   sendJson(res, 404, { error: "not_found" });

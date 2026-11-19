@@ -494,6 +494,7 @@ export interface App {
   grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
+  isOrgAdmin(principalId: string): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
@@ -753,6 +754,7 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
+  isOrgAdmin?: (principalId: string) => Promise<boolean>;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;
@@ -785,7 +787,6 @@ export interface AppDeps {
   refreshCustomProviders?: () => Promise<void>;
   acl: AclStore;
   admin?: AdminService;
-  isOrgAdmin?: (principalId: string) => Promise<boolean>;
   skills: SkillStore;
   skillPacks?: SkillPackStore;
   skillFetcher?: SkillPackFetcher;
