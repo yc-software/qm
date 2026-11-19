@@ -1,3 +1,5 @@
+import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
+import { cronSharingRevision, cronPublicationId } from "../cron/cron-store.ts";
 import { ambientTenant } from "../tenants/context.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import { refreshPrivateContext, inheritContextSources, privateSourceAllowed } from "../sessions/private-context.ts";
@@ -81,6 +83,7 @@ export function createMessagingMethods(
 ): Pick<
   App,
   | "createCron"
+  | "publishPrivateCron"
   | "getCron"
   | "listCrons"
   | "listCronsForViewer"
@@ -148,6 +151,10 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
+  const sharedMembers = createCurrentScopeMembers(
+    { managedGroups: deps.managedGroups ?? deps.projects, directory: deps.directory, identity: deps.identity },
+    true,
+  );
   const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
   const identityMembers = async (): Promise<DirectoryMember[]> => {
@@ -238,10 +245,73 @@ export function createMessagingMethods(
       (await deps.acl.grantsFor(ambientTenant(), before.ownerScopeId, encodeRef(cronRef(before.id)))).length
     )
       throw new Error("Private context cannot update a shared schedule. Create a personal schedule instead.");
+    if (!desired.personalOnly && desired.sourceProvenance) {
+      const grants = await deps.acl.grantsFor(ambientTenant(), before.ownerScopeId, encodeRef(cronRef(before.id)));
+      const destinationScope =
+        desired.destination?.audienceScopeId ??
+        (desired.destination?.type === "principal" ? personalScope(desired.destination.target) : undefined);
+      const audiences = new Set([
+        desired.ownerScopeId,
+        ...grants.map((grant) => grant.granteeScopeId),
+        ...(destinationScope ? [destinationScope] : []),
+      ]);
+      audiences.delete(personalScope(by.actorId));
+      for (const audience of audiences) {
+        if (!deps.discloseArtifact) throw new Error("Schedule source authorization is unavailable.");
+        await deps.discloseArtifact(desired, audience, by.actorId);
+      }
+    }
     return triggerPrivacy(before, desired);
   };
 
   return {
+    async publishPrivateCron(id, revision, target, by) {
+      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+        const context = await refreshPrivateContext(deps.sessions, by);
+        const selected = await deps.crons.get(id);
+        if (
+          !selected?.personalOnly ||
+          !privateSourceAllowed(context, selected.ownerScopeId) ||
+          !samePerson(selected.owner, context.actorId)
+        )
+          throw new Error("Only the private schedule's owner can publish it from personal context.");
+        const kind = parseScopeId(target).kind;
+        if (
+          kind !== "group" ||
+          !(deps.managedGroups ?? deps.projects)?.recognizes(parseScopeId(target).ref) ||
+          !(await h.principalCanAccessCurrentScope(context.actorId, target))
+        )
+          throw new Error("Choose a Team or workbook context you currently belong to for this schedule.");
+        const existing = await deps.crons.get(cronPublicationId(id, revision, target));
+        if (existing) {
+          if (
+            existing.ownerScopeId !== target ||
+            existing.personalOnly ||
+            existing.createdBy !== selected.createdBy ||
+            !existing.sourceProvenance
+          )
+            throw new Error("The saved schedule publication has incompatible access.");
+          return deps.crons.publishPrivate(id, revision, target, existing.sourceProvenance);
+        }
+        if (cronSharingRevision(selected) !== revision)
+          throw new Error("The selected private schedule changed after approval.");
+        if (!deps.discloseArtifact) throw new Error("Schedule source authorization is unavailable.");
+        const sourceProvenance = await deps.discloseArtifact(selected, target, context.actorId);
+        if (!sourceProvenance) throw new Error("The selected private schedule has no source provenance.");
+        await validateRuntime({ ...selected, ownerScopeId: target });
+        const members = await sharedMembers(target);
+        if (!members?.length) throw new Error("The shared schedule's current audience is unavailable.");
+        const sharedThread = `web:${selected.owner}:${cronPublicationId(id, revision, target)}`;
+        const sharedSession = await deps.sessions.getOrCreateByThread(sharedThread, kind, target, undefined, "web");
+        if (sharedSession.scopeId !== target || sharedSession.personalOnly)
+          throw new Error("The shared schedule conversation has incompatible access.");
+        await deps.sessions.recordContextProvenance(sharedSession.id, target, sourceProvenance);
+        await Promise.all(members.map((member) => deps.sessions.addParticipant(sharedSession.id, member.id)));
+        const published = await deps.crons.publishPrivate(id, revision, target, sourceProvenance);
+        auditCron("cron_publish", published, by);
+        return published;
+      });
+    },
     async createCron(input, trial) {
       input = await triggerInput(input);
       await validateRuntime(input);

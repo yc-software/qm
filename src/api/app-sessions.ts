@@ -1,3 +1,4 @@
+import { cronSharingRevision } from "../cron/cron-store.ts";
 import { skillSharingRevision } from "../skills/skill-store.ts";
 import { appSharingRevision } from "../deploy/deploy-store.ts";
 import { contextualFiles } from "../files/context-files.ts";
@@ -1278,15 +1279,7 @@ export function createSessionMethods(
           await deps.deploy.releasePrivateApp(g, opts.privateRevision, opts.context);
         } else await deps.deploy.grantAppAccess(g);
       }
-      if (ref.kind === "cron") {
-        await deps.advisoryLock.withLock(`cron-access:${ref.id}`, async () => {
-          const cron = await deps.crons.get(ref.id);
-          if (!cron || cron.ownerScopeId !== g.ownerScopeId)
-            throw new Error("The current schedule does not match this grant.");
-          if (cron.personalOnly) throw new Error("Share this private schedule explicitly before granting access.");
-          await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
-        });
-      } else if (ref.kind === "file" && opts?.privateRevision && opts.context) {
+      if (ref.kind === "file" && opts?.privateRevision && opts.context) {
         const context = await refreshPrivateContext(deps.sessions, opts.context);
         if (!privateSourceAllowed(context, g.ownerScopeId) || !samePerson(context.actorId, g.grantedBy))
           throw new Error("Only the private file's owner can share it from personal context.");
@@ -1412,7 +1405,13 @@ export function createSessionMethods(
       if (type === "cron") {
         const c = await deps.crons.get(idOrName);
         return c
-          ? { id: c.id, ownerScopeId: c.ownerScopeId, createdBy: c.createdBy, grantRef: encodeRef(cronRef(c.id)) }
+          ? {
+              id: c.id,
+              ownerScopeId: c.ownerScopeId,
+              createdBy: c.createdBy,
+              grantRef: encodeRef(cronRef(c.id)),
+              ...(c.personalOnly ? { privateRevision: cronSharingRevision(c) } : {}),
+            }
           : null;
       }
       if (type === "file") {

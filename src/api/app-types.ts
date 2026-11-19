@@ -539,6 +539,7 @@ export interface App {
     opts?: { allowSharedScope?: boolean; botActor?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
+  publishPrivateCron(id: string, revision: string, target: ScopeId, by: CronEditor): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
   listCronsForViewer(principalId: string | PrivateContext): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;

@@ -953,6 +953,18 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         (await app.samePerson(parseScopeId(home.ownerScopeId).ref, parseScopeId(toScope).ref))
       )
         return { ok: false, code: "bad_request", message: "The selected output is already personal to you." };
+      if (home.privateRevision && cron && (cron.loopId || cron.script))
+        return {
+          ok: false,
+          code: "bad_request",
+          message: "Loop and script schedules require their own publication controls.",
+        };
+      if (home.privateRevision && cron && toKind !== "group")
+        return {
+          ok: false,
+          code: "bad_request",
+          message: "Publish this schedule into a shared Team or workbook context.",
+        };
       if (home.privateRevision && !req.privateRevision)
         return {
           ok: false,
@@ -962,13 +974,13 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       if (
         req.privateRevision &&
-        ((req.type !== "deploy" && req.type !== "file" && req.type !== "skill") ||
+        ((req.type !== "deploy" && req.type !== "file" && req.type !== "skill" && req.type !== "cron") ||
           req.move ||
           req.email ||
           req.id !== home.id ||
           req.scope !== toScope ||
           !personAtKeyboard(capability) ||
-          req.privateRevision !== home.privateRevision)
+          (req.type !== "cron" && req.privateRevision !== home.privateRevision))
       )
         return {
           ok: false,
@@ -977,6 +989,17 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
 
       try {
+        if (req.type === "cron" && req.privateRevision) {
+          const published = await app.publishPrivateCron(home.id, req.privateRevision, toScope, capability);
+          return {
+            ok: true,
+            verb: "share",
+            type: "cron",
+            id: published.id,
+            target: { scope: toScope, label: target.label },
+            permission,
+          };
+        }
         if (orgSkillCede && !req.privateRevision) {
           const promoted = await app.promoteSkill(
             home.id,

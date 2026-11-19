@@ -315,7 +315,23 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         .filter((project) => deps.identity.isInternal(deps.identity.classify(project.ownerId)))
         .map((project) => project.id),
     );
-    return new Map([...projectScopes].map(([scope, id]) => [scope, allowed.has(id)]));
+    const result = new Map([...projectScopes].map(([scope, id]) => [scope, allowed.has(id)]));
+    const otherManaged = scopes.flatMap((scope) => {
+      const { kind, ref } = parseScopeId(scope);
+      return kind === "group" && !projectScopes.has(scope) && deps.managedGroups?.recognizes(ref)
+        ? [{ scope, ref }]
+        : [];
+    });
+    if (otherManaged.length && deps.managedGroups) {
+      const rosters = await deps.managedGroups.membersMany(otherManaged.map(({ ref }) => ref));
+      for (const { scope, ref } of otherManaged)
+        result.set(
+          scope,
+          deps.identity.isInternal(deps.identity.classify(principalId)) &&
+            (rosters.get(ref)?.some((member) => samePerson(member, principalId)) ?? false),
+        );
+    }
+    return result;
   }
 
   async function managedProjectMembership(scope: ScopeId, principalId: string): Promise<boolean | undefined> {

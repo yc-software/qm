@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Destination } from "../types.ts";
+import type { Destination, ScopeId } from "../types.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import type { SourceProvenance } from "../memory/facts.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import {
@@ -23,6 +25,62 @@ import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
+
+export function cronPublicationId(id: string, revision: string, target: ScopeId): string {
+  return hashId(["private-cron-publication", id, revision, target]);
+}
+
+export function cronSharingRevision(cron: Cron): string {
+  const {
+    id,
+    ownerScopeId,
+    owner,
+    createdBy,
+    ownerConsentedAt,
+    botActor,
+    taskAuthor,
+    personalOnly,
+    sourceProvenance,
+    enabled,
+    archived,
+    runtime,
+    schedule,
+    title,
+    action,
+    message,
+    loopId,
+    sessionRef,
+    script,
+    destination,
+  } = cron;
+  return hashId(
+    [
+      canonicalJson({
+        id,
+        ownerScopeId,
+        owner,
+        createdBy,
+        ownerConsentedAt,
+        botActor,
+        taskAuthor,
+        personalOnly,
+        sourceProvenance,
+        enabled,
+        archived,
+        runtime,
+        schedule,
+        title,
+        action,
+        message,
+        loopId,
+        sessionRef,
+        script,
+        destination,
+      }),
+    ],
+    64,
+  );
+}
 
 export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
@@ -60,6 +118,7 @@ export const STRANDED_FIRE_NOTE = "fire never completed — stranded by a restar
 export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 export interface CronStore {
+  publishPrivate(id: string, revision: string, target: ScopeId, provenance: SourceProvenance): Promise<Cron>;
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(ids?: readonly string[]): Promise<Cron[]>;
@@ -123,6 +182,53 @@ export function createCronStore(
   const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts.fires;
   return {
+    async publishPrivate(id, revision, target, provenance) {
+      const publishedId = cronPublicationId(id, revision, target);
+      const existing = await backing.get(publishedId);
+      if (existing) return existing;
+      let published: Cron;
+      const results = await backing.mutateMany([
+        {
+          id,
+          apply: (current) => {
+            if (!current?.personalOnly || cronSharingRevision(current) !== revision)
+              throw new Error("The selected private schedule changed after approval.");
+            if (current.loopId || current.script)
+              throw new Error("Loop and script schedules require their own publication controls.");
+            const nextFireAt = recoverNextFireAt(
+              current.schedule,
+              current.createdAt,
+              current.lastFiredAt,
+              current.nextFireAt,
+            );
+            const finished =
+              !current.schedule.cron && current.schedule.everyMs === undefined && current.lastFiredAt !== undefined;
+            published = {
+              id: publishedId,
+              ownerScopeId: target,
+              owner: current.owner,
+              createdBy: current.createdBy,
+              createdAt: Date.now(),
+              enabled: current.enabled && !current.archived && !finished,
+              schedule: current.schedule,
+              ...(nextFireAt !== undefined && !finished ? { nextFireAt } : {}),
+              ...(current.title !== undefined ? { title: current.title } : {}),
+              ...(current.action !== undefined ? { action: current.action } : {}),
+              ...(current.message !== undefined ? { message: current.message } : {}),
+              ...(current.runtime !== undefined ? { runtime: current.runtime } : {}),
+              ...(current.ownerConsentedAt !== undefined ? { ownerConsentedAt: current.ownerConsentedAt } : {}),
+              ...(current.taskAuthor ? { taskAuthor: current.taskAuthor } : {}),
+              ...(current.botActor ? { botActor: current.botActor } : {}),
+              sourceProvenance: provenance,
+              destination: { type: "web", target: `web:${current.owner}:${publishedId}`, audienceScopeId: target },
+            };
+            return { ...current, enabled: false };
+          },
+        },
+        { id: publishedId, apply: (current) => current ?? published },
+      ]);
+      return results[1]!;
+    },
     async create(input) {
       assertNoEscalation(input);
       assertPrivateTrigger(input);

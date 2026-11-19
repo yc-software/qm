@@ -149,7 +149,7 @@ export function pauseStampAfterToolCall(
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
 
-function withPrivateSharingApproval(tool: ToolDefinition, label: "app" | "file" | "skill") {
+function withPrivateSharingApproval(tool: ToolDefinition, label: "app" | "file" | "skill" | "schedule") {
   return {
     ...tool,
     needsApproval: (params: unknown) =>
@@ -157,6 +157,8 @@ function withPrivateSharingApproval(tool: ToolDefinition, label: "app" | "file" 
     approvalReason: (params: unknown) => {
       const selected = isObj(params) ? params : {};
       const contents = label === "app" ? "its stored data and history" : "the selected saved content";
+      if (label === "schedule")
+        return `Publish a new shared schedule from ${String(selected.id)} at private revision ${String(selected.privateRevision)} in ${String(selected.toScope)}. The original is paused; its private conversation and run history remain private. The copy keeps the selected task and schedule, starts only if the original is enabled, and posts future results to a new shared conversation.`;
       return `Share ${label} ${String(selected.id)} at private revision ${String(selected.privateRevision)} with ${String(selected.toScope)} (${selected.permission === "write" ? "manage" : "read"} access). This includes ${contents}; the private conversation and other outputs remain private.${selected.notify === false ? " No notifications or invitations." : ""}`;
     },
   };
@@ -214,14 +216,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     sandboxManagement,
     ...(controlTools
       ? [
-          resourceTool("cron", {
-            ...Object.fromEntries(
-              (cron.parameters.properties.action as { anyOf: Array<{ const: string }> }).anyOf.map(
-                ({ const: action }) => [action, cron],
+          withPrivateSharingApproval(
+            resourceTool("cron", {
+              ...Object.fromEntries(
+                (cron.parameters.properties.action as { anyOf: Array<{ const: string }> }).anyOf.map(
+                  ({ const: action }) => [action, cron],
+                ),
               ),
-            ),
-            share: sharingTool("cron"),
-          }),
+              share: sharingTool("cron"),
+            }),
+            "schedule",
+          ),
           webhook,
           admin,
         ]

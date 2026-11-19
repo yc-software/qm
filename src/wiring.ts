@@ -1985,18 +1985,29 @@ export function buildApp(
   });
   membership.withArtifactLock = async (owner, ref, write) => {
     const parsed = parseRef(ref);
+    if (parsed.kind === "cron") return advisoryLock.withLock(`cron-access:${parsed.id}`, write);
     if (parsed.kind !== "skill") return write();
     const selected = await skills.get(parsed.id);
     return selected ? skills.withNameLock(owner, selected.manifest.name, write) : write();
   };
   membership.authorizeArtifactShare = async (grant, actorId, releasePrivate) => {
     const parsed = parseRef(grant.ref);
-    if (parsed.kind !== "file" && parsed.kind !== "skill") return;
-    const stored = parsed.kind === "file" ? await files.get(parsed.id) : await skills.get(parsed.id);
+    if (parsed.kind !== "file" && parsed.kind !== "skill" && parsed.kind !== "cron") return;
+    const loaders = {
+      file: () => files.get(parsed.id),
+      skill: () => skills.get(parsed.id),
+      cron: () => crons.get(parsed.id),
+    };
+    const stored = await loaders[parsed.kind]();
     const ownerScopeId = stored && ("ownerScopeId" in stored ? stored.ownerScopeId : stored.scopeId);
     if (!stored || ownerScopeId !== grant.ownerScopeId)
       throw new Error("The artifact's current owner does not match this grant.");
-    if (stored.personalOnly && !releasePrivate) throw new Error("Private artifacts cannot change audience");
+    if (stored.personalOnly && !releasePrivate)
+      throw new Error(
+        parsed.kind === "cron"
+          ? "Share this private schedule explicitly before granting access."
+          : "Private artifacts cannot change audience",
+      );
     const provenance = stored.sourceProvenance;
     if (
       releasePrivate ||
@@ -2095,6 +2106,12 @@ export function buildApp(
   });
   const crons: CronStore = {
     ...cronsBase,
+    async publishPrivate(id, revision, target, provenance) {
+      const published = await cronsBase.publishPrivate(id, revision, target, provenance);
+      cronChanged.notify?.(id);
+      cronChanged.notify?.(published.id);
+      return published;
+    },
     async create(input) {
       const cron = await cronsBase.create(input);
       cronChanged.notify?.(cron.id);
