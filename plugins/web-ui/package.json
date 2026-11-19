@@ -60,6 +60,7 @@
     },
     "@codemirror/lang-liquid": "6.3.2",
     "@lezer/highlight": "1.2.4",
-    "@lezer/javascript": "1.5.5"
+    "@lezer/javascript": "1.5.5",
+    "fast-xml-parser": "5.12.0"
   }
 }
