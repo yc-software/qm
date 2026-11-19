@@ -74,6 +74,10 @@ test("a post from a persona turn goes out under the persona's name and icon", ()
     username: "Ada",
     icon_emoji: ":ada-face:",
   });
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "image", url: "https://example.com/ada.png" } }), {
+    username: "Ada",
+    icon_url: "https://example.com/ada.png",
+  });
   assert.deepEqual(botIdentityArgs(ada), { username: "Ada" }, "no icon keeps the app's own");
   assert.deepEqual(slackReplyArgs("C1", "hi", "1.2", { persona: ada }), {
     channel: "C1",

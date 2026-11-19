@@ -58,8 +58,11 @@ curl -sS --fail-with-body -X POST "$AGENT_API_URL/v1/memory/facts" \
 with `{"facts":[{"id","text"}]}` or `DELETE /v1/memory/facts` with `{"ids":[…]}` to curate.)
 Those writes land in the notebook every conversation in the org recalls, so confirm the
 wording with the admin before writing and keep personal facts out of it. A `403 org
-memory writes require an org admin` means the user isn't one — say so rather than
-retrying (`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively).
+memory writes need an org admin's own turn while it is still running` means the user isn't
+an org admin (`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively) or this isn't
+their own running turn: a scheduled or triggered turn, or one that has ended, as a
+background job's has. Say which rather than retrying, and make org writes from a command
+that runs while the turn does.
 
 ## A member's own memory brain
 

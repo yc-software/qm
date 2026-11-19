@@ -17,9 +17,9 @@ export function brandingCard(s: SettingsState) {
       <h2>Branding</h2>
       <p>
         How this org's surfaces look. Accent is the highlight color across the web UI, admin, and portal; icon is the
-        square image beside the name in the top left; mark is a 1–2 character badge drawn over that icon instead; label
-        is the assistant's name everywhere it introduces itself; organization name is how the assistant refers to this
-        org. Leave a field blank to use the deployment default.
+        square image that stands in for the name in the top left (there is none unless you set one); mark is a 1–2
+        character badge drawn in its place instead; label is the assistant's name everywhere it introduces itself;
+        organization name is how the assistant refers to this org. Leave a field blank to use the deployment default.
       </p>
     </div>
     <div class="body">

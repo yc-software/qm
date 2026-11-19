@@ -384,6 +384,11 @@ export function setFormMenuValue(control: HTMLElement | null, value: string, lab
   if (activeOption) activeOption.append(iconElement(Check, 15));
 }
 
+export function fileLabel(name: string, size?: number): TemplateResult {
+  return html`<span dir="auto">${name}</span
+    >${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
+}
+
 export function chipBadge(
   glyph: IconNode,
   name: string,
@@ -392,8 +397,7 @@ export function chipBadge(
   download = false,
   mimetype?: string,
 ): TemplateResult {
-  const inner = html`${icon(glyph, 14)}<span dir="auto">${name}</span
-    >${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
+  const inner = html`${icon(glyph, 14)}${fileLabel(name, size)}`;
   if (!href) return html`<span class="file-chip">${inner}</span>`;
   if (download) return html`<a class="file-chip" href=${href} download=${name}>${inner}</a>`;
   return html`<span class="file-chip-group"

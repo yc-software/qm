@@ -7,6 +7,7 @@ import { personKey, samePerson } from "../directory/person.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { bootTenant } from "../tenants/boot.ts";
+import { PrincipalLinkError } from "../identity/principal-links.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -18,8 +19,8 @@ export interface AdminStatus {
 
 export class AdminError extends Error {
   status: number;
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(status: number, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "AdminError";
     this.status = status;
   }
@@ -44,6 +45,12 @@ export interface AdminService {
     issuer: string,
     subject: string,
   ): Promise<{ grant: AdminGrant; created: boolean }>;
+  provisionSelfServe(
+    tenant: Tenant,
+    issuer: string,
+    subject: string,
+    email: string | null,
+  ): Promise<{ grant: AdminGrant; granted: boolean }>;
   createGrant(
     tenant: Tenant,
     actor: Principal,
@@ -75,6 +82,12 @@ export interface AdminServiceOptions {
   users: UserStore;
 }
 
+export function trustedSubjectPrincipal(issuer: string, subject: string): string {
+  if (!subject || subject.length > 255 || Buffer.from(subject).toString("utf8") !== subject)
+    throw new AdminError(400, "invalid trusted subject");
+  return `oidc:${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(subject).toString("base64url")}`;
+}
+
 export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions): AdminService {
   const orgId = configOrgId();
   const now = opts.now ?? (() => Date.now());
@@ -103,9 +116,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
     async provisionTrustedEntry(tenant, issuer, subject) {
       if (!opts.trustedOidcAdminIssuer || issuer !== opts.trustedOidcAdminIssuer)
         throw new AdminError(403, "trusted administrator provisioning is not enabled for this issuer");
-      if (!subject || subject.length > 255 || Buffer.from(subject).toString("utf8") !== subject)
-        throw new AdminError(400, "invalid trusted subject");
-      const principalId = `oidc:${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(subject).toString("base64url")}`;
+      const principalId = trustedSubjectPrincipal(issuer, subject);
       if (tenant.id !== bootTenant() && !(await opts.memberTenants?.(principalId))?.includes(tenant.id))
         throw new AdminError(403, "trusted subject is not a member of this tenant");
       const existing = (await grants.list(tenant)).find((g) => g.principalId === principalId && g.role === "org_admin");
@@ -120,6 +131,36 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
       const created = await grants.addIfAbsent(tenant, grant);
       return { grant, created };
+    },
+    async provisionSelfServe(tenant, issuer, subject, email) {
+      const principalId = trustedSubjectPrincipal(issuer, subject);
+      const known = await opts.users.resolve(email ? [principalId, email] : [principalId]);
+      if ([...known.values()].some((user) => user.offboardedAt !== undefined))
+        throw new AdminError(403, "this person was removed from the workspace");
+      const at = now();
+      const grant: AdminGrant = {
+        principalId,
+        role: "org_admin",
+        scopeId: scopeId("org", orgId),
+        grantedBy: `trusted-oidc-self-serve:${issuer}`,
+        createdAt: at,
+      };
+      const granted = known.size === 0 && (await grants.addIfAbsent(tenant, grant));
+      await opts.users.record({ id: principalId, source: "admin", at });
+      if (email)
+        await opts.users
+          .link({
+            principalId: email,
+            canonicalId: principalId,
+            evidence: `verified email from ${issuer}`,
+            linkedBy: "",
+            createdAt: at,
+          })
+          .catch((error: unknown) => {
+            if (!(error instanceof PrincipalLinkError)) throw error;
+            console.warn(`[self-serve] email not linked to ${principalId} in ${tenant.id}: ${error.message}`);
+          });
+      return { grant, granted };
     },
     async listGrants(tenant) {
       return grants.list(tenant);

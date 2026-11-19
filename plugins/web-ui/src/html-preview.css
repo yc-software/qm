@@ -1,0 +1,162 @@
+.file-html-slot {
+  --file-html-bar: 40px;
+  width: 100%;
+  border-radius: 12px;
+}
+.user-row:not(.stuck) .file-html-slot {
+  width: 620px;
+  max-width: 100%;
+}
+.file-html-slot:has(> :popover-open) {
+  background: var(--muted);
+}
+.file-html-layer {
+  all: unset;
+  display: block;
+}
+.file-html-layer:popover-open > .file-html-card {
+  width: 100%;
+  height: 100%;
+}
+.file-html-card {
+  position: relative;
+  box-sizing: border-box;
+  overflow: clip;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.file-html-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: var(--file-html-bar);
+  padding-inline: 10px 6px;
+  list-style: none;
+  cursor: default;
+  color: var(--muted-foreground);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
+}
+.file-html-bar::-webkit-details-marker {
+  display: none;
+}
+.file-html-card[open] > .file-html-bar {
+  border-bottom: 1px solid var(--border);
+}
+.file-html-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.file-html-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+  font-weight: 500;
+}
+.file-html-title > small {
+  flex: none;
+  font-size: inherit;
+}
+@media (max-width: 620px) {
+  .file-html-title > small {
+    display: none;
+  }
+}
+.file-html-actions {
+  flex: none;
+  margin-inline-start: auto;
+}
+.file-html-actions > button {
+  cursor: pointer;
+}
+.file-html-card > iframe {
+  display: block;
+  width: 100%;
+  height: clamp(240px, 56cqh, 480px);
+  border: 0;
+  background: #fff;
+}
+.file-html-expand,
+.file-html-layer:popover-open .file-html-close {
+  display: contents;
+}
+.file-html-close,
+.file-html-layer:popover-open .file-html-expand,
+.file-html-layer:popover-open .activity-chevron,
+.message-stack .user-row.stuck .file-html-card .activity-chevron,
+.message-stack .user-row.stuck .file-html-layer:not(:popover-open) iframe {
+  display: none;
+}
+.message-stack .user-row.stuck .file-html-layer:not(:popover-open) .file-html-bar {
+  border-bottom: 0;
+}
+.file-html-layer:popover-open iframe {
+  position: absolute;
+  inset-block-start: var(--file-html-bar);
+  height: calc(100% - var(--file-html-bar));
+}
+.file-html-layer.morphing > .file-html-card {
+  view-transition-name: file-html-card;
+  border-color: transparent;
+}
+.file-html-layer.morphing iframe {
+  view-transition-name: file-html-frame;
+}
+.file-html-layer.morphing .file-html-title {
+  view-transition-name: file-html-title;
+}
+.file-html-layer.morphing .file-html-actions {
+  view-transition-name: file-html-actions;
+}
+::view-transition-group(file-html-card),
+::view-transition-group(file-html-frame),
+::view-transition-group(file-html-title),
+::view-transition-group(file-html-actions) {
+  animation-duration: 320ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+::view-transition-group(file-html-card) {
+  overflow: clip;
+  border-radius: 12px;
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
+}
+::view-transition-group(file-html-frame) {
+  overflow: clip;
+  border-radius: 0 0 11px 11px;
+}
+::view-transition-old(file-html-card),
+::view-transition-new(file-html-card),
+::view-transition-old(file-html-frame),
+::view-transition-new(file-html-frame) {
+  height: 100%;
+  object-fit: none;
+  object-position: top;
+  mix-blend-mode: normal;
+  animation: none;
+}
+::view-transition-old(file-html-card),
+::view-transition-new(file-html-card) {
+  object-position: top left;
+}
+.file-html-expanding::view-transition-old(file-html-card),
+.file-html-expanding::view-transition-old(file-html-frame) {
+  z-index: 1;
+  animation: file-html-fade 100ms reverse both;
+}
+.file-html-shrinking::view-transition-new(file-html-card) {
+  animation: file-html-fade 100ms both;
+}
+.file-html-shrinking::view-transition-new(file-html-frame) {
+  animation: file-html-fade 100ms 220ms both;
+}
+@keyframes file-html-fade {
+  from {
+    opacity: 0;
+  }
+}

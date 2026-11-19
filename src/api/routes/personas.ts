@@ -7,6 +7,7 @@ import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
 import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 import { sessionVisibleTo } from "../../sessions/session-rows.ts";
+import { scopeId } from "../../types.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -63,18 +64,24 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
     .filter((skill) => skill.scopeId === home)
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const crons = await personaCrons(ctx, principalId, result.value.id);
+  const pinned = new Set(result.value.access.filter((grant) => grant.pinned).map((grant) => grant.scopeId));
+  const crons = await personaCrons(ctx, principalId, result.value.id, pinned);
   respond(ctx, { status: "ok", value: { ...result.value, access, skills, crons } }, "persona");
 }
 
-async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string) {
+async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string, pinned: Set<string>) {
   const { owned, visible } = await ctx.app.listCronsForViewer(principalId);
   const crons = [...new Map([...owned, ...visible].map((c) => [c.id, c])).values()].filter((c) => !c.archived);
   const refsOf = (c: Cron) => [...new Set([c.destination?.target, c.sessionRef])].filter((ref) => ref !== undefined);
   const personaThreads =
     (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
   return crons
-    .filter((c) => refsOf(c).some((ref) => personaThreads.has(ref)))
+    .filter(
+      (c) =>
+        c.ownerScopeId === scopeId("persona", personaId) ||
+        pinned.has(c.ownerScopeId) ||
+        refsOf(c).some((ref) => personaThreads.has(ref)),
+    )
     .map(({ id, title, action, message, schedule, enabled }) => ({ id, title, action, message, schedule, enabled }));
 }
 
@@ -108,7 +115,7 @@ async function updatePersona(ctx: ApiCtx): Promise<void> {
 async function deletePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   respond(ctx, await personas.remove(principalId, ctx.params.id!), "deleted");
 }
 
@@ -153,7 +160,7 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const access = isObj(ctx.body) ? ctx.body.access : undefined;
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
@@ -170,7 +177,7 @@ async function keychainResult<T>(ctx: ApiCtx, fn: () => Promise<PersonaResult<T>
 async function attachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const credentialId = isObj(ctx.body) ? ctx.body.credentialId : undefined;
   await keychainResult(ctx, () => personas.attachCredential(principalId, ctx.params.id!, credentialId), "credential");
 }
@@ -178,7 +185,7 @@ async function attachCredential(ctx: ApiCtx): Promise<void> {
 async function detachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !(await livePersonTurn(ctx))) return;
+  if (!personas || !principalId || !livePersonTurn(ctx)) return;
   await keychainResult(
     ctx,
     () => personas.detachCredential(principalId, ctx.params.id!, ctx.params.grantId!),

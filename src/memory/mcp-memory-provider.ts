@@ -9,7 +9,7 @@ import {
   type McpClient,
 } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
-import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
+import { attestedPerson, attestedActorHeaders, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryCandidate } from "./facts.ts";
@@ -92,7 +92,7 @@ export function createMcpMemoryProvider(opts: {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
       throw new OutsideAudience("memory provider");
-    return { person, headers: opts.attestActor && person ? { "x-qm-actor": person } : undefined };
+    return { person, headers: opts.attestActor && person ? attestedActorHeaders(person) : undefined };
   };
 
   const listings = toolListings();

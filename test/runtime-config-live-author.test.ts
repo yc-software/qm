@@ -11,6 +11,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { liveRunBinding, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "test-capability-secret";
 
@@ -23,7 +24,11 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
       seedSkills: false,
     }),
   );
-  const server = createInsecureTestServer(built.app, { capabilitySecret: SECRET, config: built.config });
+  const server = createInsecureTestServer(built.app, {
+    capabilitySecret: SECRET,
+    config: built.config,
+    runs: liveRunStore(),
+  });
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
@@ -39,6 +44,7 @@ const token = (claims: Record<string, unknown>): Promise<string> =>
       scopeId: "group:C123",
       aud: CONTROL_PLANE_AUD,
       exp: Date.now() + CAPABILITY_TTL_MS,
+      ...liveRunBinding("alice@default-org"),
       ...claims,
     } as never,
     SECRET,

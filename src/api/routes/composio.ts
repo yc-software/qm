@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
@@ -18,8 +19,10 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, activeRun, audit } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
+import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
+const NO_COMPOSIO: Record<string, unknown> = { items: [] };
 
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
@@ -31,7 +34,22 @@ export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
 }
 
-export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
+export function composioUnavailable(ctx: ApiCtx, status: number): void {
+  sendJson(ctx.res, status, {
+    error: "composio_unavailable",
+    message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
+  });
+}
+
+export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null>;
+export async function credential(
+  ctx: ApiCtx,
+  optional: true,
+): Promise<{ key: string | null; principal: string } | null>;
+export async function credential(
+  ctx: ApiCtx,
+  optional = false,
+): Promise<{ key: string | null; principal: string } | null> {
   if (!(await activeRun(ctx))) return null;
   const principal = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principal) {
@@ -99,11 +117,9 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
     (c) => c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY" && allowed.has(c.slug),
   );
+  if (!records.length && optional) return { key: null, principal };
   if (records.length !== 1) {
-    sendJson(ctx.res, records.length ? 409 : 403, {
-      error: "composio_unavailable",
-      message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
-    });
+    composioUnavailable(ctx, records.length ? 409 : 403);
     return null;
   }
   const record = await ctx.deps.serviceCreds!.getServiceCredentialSecret(org, records[0]!.slug);
@@ -182,21 +198,30 @@ export async function request(
   return (await response.json()) as Record<string, unknown>;
 }
 
+export async function externalApps(ctx: ApiCtx): Promise<ConnectorApp[]> {
+  return connectorApps((await ctx.deps.mcpServers?.list()) ?? []);
+}
+
 async function catalog(ctx: ApiCtx): Promise<void> {
-  const access = await credential(ctx);
+  const access = await credential(ctx, true);
   if (!access) return;
+  const apps = await externalApps(ctx);
+  if (!access.key && !apps.length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
+  const only = ctx.url.searchParams.get("toolkit");
+  if (only !== null && !isToolkitId(only)) return sendJson(ctx.res, 400, { error: "bad_toolkit" });
   const query = new URLSearchParams({ sort_by: "usage", limit: "1000" });
   if (cursor) query.set("cursor", cursor);
   try {
-    const data = await request(ctx, access.key, `/toolkits?${query}`);
+    let data = NO_COMPOSIO;
+    if (access.key && only) data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
+    else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
       if (
         !item ||
-        typeof item.slug !== "string" ||
-        !/^[a-z0-9_-]{1,100}$/.test(item.slug) ||
+        !isToolkitId(item.slug) ||
         typeof item.name !== "string" ||
         (Array.isArray(item.auth_schemes) && item.auth_schemes.every((scheme: unknown) => scheme === "NO_AUTH"))
       )
@@ -211,8 +236,8 @@ async function catalog(ctx: ApiCtx): Promise<void> {
       ];
     });
     return sendJson(ctx.res, 200, {
-      items,
-      nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+      items: withConnectorApps(items, only ? apps.filter((app) => app.toolkit === only) : apps, !cursor),
+      nextCursor: !only && typeof data.next_cursor === "string" ? data.next_cursor : null,
     });
   } catch {
     return sendJson(ctx.res, 502, { error: "composio_unavailable", message: "Could not load apps. Please try again." });
@@ -244,47 +269,70 @@ export async function activeOwnedAccount(
   return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
-const SCOPES_TTL_MS = 5 * 60_000;
-const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
+type Scopes = { scopes: string[]; updatedAt: number };
+const NO_SCOPES: Scopes = { scopes: [], updatedAt: Number.NaN };
+const scopeCache = new LRUCache<string, Promise<Scopes>>({ ttl: 5 * 60_000, ttlAutopurge: true });
 
-async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cacheKey = JSON.stringify([tenantOf(ctx).id, authConfigId]);
+function scopesOf(
+  ctx: ApiCtx,
+  key: string,
+  path: "auth_configs" | "connected_accounts",
+  id: string,
+  listed: (body: Record<string, unknown>) => unknown,
+): Promise<Scopes> {
+  const cacheKey = JSON.stringify([tenantOf(ctx).id, id]);
   const cached = scopeCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.scopes;
-  try {
-    const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
-    const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
-    const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(cacheKey, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
-    return scopes;
-  } catch (error) {
-    const mask = createExactSecretValueMasker([key]);
-    reportFailure("composio: auth config scopes", new Error(mask(redactSecrets(errMessage(error)))), authConfigId);
-    return [];
-  }
+  if (cached) return cached;
+  const found = request(ctx, key, `/${path}/${encodeURIComponent(id)}`)
+    .then((body) => {
+      const scopes = listed(body);
+      return {
+        scopes: Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [],
+        updatedAt: Date.parse(String(body.last_updated_at)),
+      };
+    })
+    .catch((error: unknown) => {
+      scopeCache.delete(cacheKey);
+      const mask = createExactSecretValueMasker([key]);
+      reportFailure(`composio: ${path} scopes`, new Error(mask(redactSecrets(errMessage(error)))), id);
+      return NO_SCOPES;
+    });
+  scopeCache.set(cacheKey, found);
+  return found;
 }
 
 function scopeName(scope: string): string {
   return scope.slice(scope.lastIndexOf("/") + 1) || scope;
 }
 
-function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
-  const granted = account.state?.val?.scope;
-  if (typeof granted !== "string" || !granted.trim()) return [];
-  const held = new Set(granted.split(/[\s,]+/).map(scopeName));
-  return configured.filter((scope) => !held.has(scopeName(scope)));
+async function missingScopes(
+  ctx: ApiCtx,
+  key: string,
+  account: { id: string; created_at?: unknown },
+  config: Scopes,
+): Promise<string[]> {
+  if (!config.scopes.length || config.updatedAt <= Date.parse(String(account.created_at))) return [];
+  const asked = await scopesOf(ctx, key, "connected_accounts", account.id, (body) => body.requested_scopes);
+  if (!asked.scopes.length) return [];
+  const names = new Set(asked.scopes.map(scopeName));
+  return config.scopes.filter((scope) => !names.has(scopeName(scope)));
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {
-  const access = await credential(ctx);
+  const access = await credential(ctx, true);
   if (!access) return;
+  const servers = (await ctx.deps.mcpServers?.list()) ?? [];
+  if (!access.key && !connectorApps(servers).length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
   const userIds = composioUserIds(access.principal);
   const query = new URLSearchParams({ user_ids: userIds.join(","), statuses: "ACTIVE", limit: "100" });
   if (cursor) query.set("cursor", cursor);
   try {
-    const data = await request(ctx, access.key, `/connected_accounts?${query}`);
+    const [data, external] = await Promise.all([
+      access.key ? request(ctx, access.key, `/connected_accounts?${query}`) : NO_COMPOSIO,
+      cursor ? [] : (ctx.deps.mcpToolService?.appConnections(access.principal, servers) ?? []),
+    ]);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
     const accounts = data.items.filter((item) => usableAccount(item, userIds));
     const configIds = [
@@ -294,15 +342,36 @@ async function connections(ctx: ApiCtx): Promise<void> {
           .filter((id): id is string => typeof id === "string" && /^ac_[a-zA-Z0-9_-]+$/.test(id)),
       ),
     ];
-    const scopes = new Map(
-      await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key, id)] as const)),
+    const configs = new Map(
+      await Promise.all(
+        configIds.map(
+          async (id) =>
+            [
+              id,
+              await scopesOf(
+                ctx,
+                access.key!,
+                "auth_configs",
+                id,
+                (body) => (body.credentials as { scopes?: unknown } | undefined)?.scopes,
+              ),
+            ] as const,
+        ),
+      ),
     );
-    const items = accounts.map((item) => ({
-      id: item.id,
-      toolkit: item.toolkit.slug,
-      userId: item.user_id,
-      missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
-    }));
+    const items = [
+      ...(await Promise.all(
+        accounts.map(async (item) => ({
+          id: item.id,
+          toolkit: item.toolkit.slug,
+          userId: item.user_id,
+          missingScopes: await missingScopes(ctx, access.key!, item, configs.get(item.auth_config?.id) ?? NO_SCOPES),
+        })),
+      )),
+      ...external
+        .filter((app) => app.connected)
+        .map((app) => ({ id: "", toolkit: app.toolkit, connector: app.connector, missingScopes: [] })),
+    ];
     ctx.res.setHeader("Cache-Control", "no-store");
     return sendJson(ctx.res, 200, {
       items,
@@ -355,7 +424,7 @@ async function tools(ctx: ApiCtx): Promise<void> {
   const toolkit = ctx.url.searchParams.get("toolkit") ?? "";
   const query = ctx.url.searchParams.get("query") ?? "";
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
-  if (!/^[a-z0-9_-]{1,100}$/.test(toolkit) || query.length > 1000 || cursor.length > 2048)
+  if (!isToolkitId(toolkit) || query.length > 1000 || cursor.length > 2048)
     return sendJson(ctx.res, 400, { error: "invalid_query" });
   const params = new URLSearchParams({ toolkit_slug: toolkit, query, limit: "25", toolkit_versions: "latest" });
   if (cursor) params.set("cursor", cursor);

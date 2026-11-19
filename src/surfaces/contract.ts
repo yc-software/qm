@@ -35,7 +35,7 @@ export type TurnSurfaceOrigin = {
   workspace: string;
   policyNamespace?: string;
   replyThread?: string;
-} & ({ audience: "internal" } | { audience: "external"; access: ExternalAudienceAccess });
+} & ({ audience: "internal" } | { audience: "external"; access: ExternalAudienceAccess; guests?: true });
 
 interface OutboundMessage {
   text: string;
@@ -57,6 +57,8 @@ export interface SurfaceCapabilities {
   externalParticipants: boolean;
   textOnly: boolean;
 }
+
+export const NON_WEB_PATHS = "skills' non-web paths apply, such as an ordinary authorization link";
 
 export interface SurfacePromptHints {
   mentionSyntax: string;

@@ -2,6 +2,7 @@ import {
   isValidMcpServerId,
   type McpApprovalPolicy,
   type McpServer,
+  type McpServerApp,
   type McpServerAuthMode,
 } from "../../../mcp/mcp-server-store.ts";
 import { isAccountType, oauthCallbackUrl, PROVIDERS } from "../../../connectors/oauth.ts";
@@ -15,10 +16,24 @@ import {
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
+import { isToolkitId } from "../../../mcp/connector-apps.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
 const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
+
+function parseApps(value: unknown): McpServerApp[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const apps = value.map((app): McpServerApp | null => {
+    if (!isObj(app)) return null;
+    const connectUrl = httpsUrl(app.connectUrl);
+    const name = typeof app.name === "string" ? app.name.trim() : "";
+    if (!isToolkitId(app.toolkit) || !name || !connectUrl) return null;
+    return { toolkit: app.toolkit, name, connectUrl };
+  });
+  return apps.every((app) => app !== null) ? apps : null;
+}
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -138,6 +153,13 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (attestAudience === "any" && !attestActor) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "attestAudience any requires attestActor" });
   }
+  const apps = parseApps(b.apps);
+  if (!apps) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "apps must be a list of { toolkit, name, connectUrl (HTTPS) }",
+    });
+  }
   const credentialHost = b.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (
     oauthUser &&
@@ -211,6 +233,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(catalog ? { catalog } : {}),
     ...(attestActor ? { attestActor } : {}),
     ...(attestAudience === "any" ? { attestAudience } : {}),
+    ...(apps.length ? { apps } : {}),
     readOnly: b.readOnly === true,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),

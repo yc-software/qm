@@ -775,15 +775,16 @@ for (const [what, change] of [
   });
 }
 
-test("an approved replay of held input goes through when it resends its file notes with details keys in another order", async () => {
+test("held input keeps one approval when held again with keys in another order, and goes through once approved", async () => {
   const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
-  const request = dm("hello", {
-    gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK", id: "1" } },
-    inboundNotes: ["note"],
-  });
-  const first = await built.app.turn(request);
-  const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
-  assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
+  const details = { topic: "SCREENING_FIXTURE_BLOCK", id: "1" };
+  const request = dm("hello", { gatewayContext: { details }, inboundNotes: ["note"] });
+  const requestId = (await built.app.turn(request)).pendingApprovals![0]!.requestId;
+  const other = (await built.app.turn(dm("x", { gatewayContext: { details } }))).pendingApprovals![0]!.requestId;
+  const reordered = { ...request, gatewayContext: { details: { id: details.id, topic: details.topic } } };
+  const again = await built.app.turn({ ...reordered, approval: { requestId: other, approved: true } });
+  assert.equal(again.pendingApprovals?.[0]?.requestId, requestId);
+  assert.equal((await built.app.turn({ ...request, approval: { requestId, approved: true } })).status, "ok");
 });
 
 for (const failure of ["error", "timeout"] as const) {

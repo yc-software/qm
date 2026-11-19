@@ -51,6 +51,7 @@ test("files attached to a chat message reach the turn as staged attachments, and
     surfaceCache: { readMessages: async () => [] },
     isInternalEmail: async () => true,
     unansweredReply: async () => {},
+    guestReply: async () => {},
     turns: { start: async (turn) => void turns.push(turn.body as TurnRequest) },
   });
   const ada = { id: "5", email: "ada@example.com", name: "Ada Lovelace" };

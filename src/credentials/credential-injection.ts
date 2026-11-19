@@ -1,6 +1,6 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HOP_BY_HOP } from "../util/http-proxy.ts";
-import type { AttestAudience } from "../directory/person.ts";
+import { ACTOR_HEADERS, type AttestAudience } from "../directory/person.ts";
 
 export interface CredentialInjection {
   header?: string;
@@ -20,7 +20,7 @@ const RESERVED_FIXED_HEADERS = new Set([
   "cookie",
   "expect",
   "host",
-  "x-qm-actor",
+  ...ACTOR_HEADERS,
 ]);
 
 const headerError = (validate: () => void): boolean => {
@@ -73,7 +73,8 @@ export function credentialInjectionError(value: unknown): string | undefined {
     (typeof injection.header !== "string" || headerError(() => validateHeaderName(injection.header!)))
   )
     return "authentication header must be a valid HTTP header name";
-  if (injection.header?.toLowerCase() === "x-qm-actor") return "x-qm-actor is reserved for broker actor attestation";
+  if (ACTOR_HEADERS.includes(injection.header?.toLowerCase() ?? ""))
+    return "actor headers are reserved for broker attestation";
   if (injection.scheme !== undefined && (typeof injection.scheme !== "string" || /[\r\n]/.test(injection.scheme)))
     return "authentication value prefix must be a single line";
   return fixedHeadersError(injection.headers, (injection.header || DEFAULT_AUTH_HEADER).toLowerCase());
