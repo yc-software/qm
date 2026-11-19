@@ -416,55 +416,67 @@ function credentialUsage(c: Data) {
     (c.usageCount ? " since " + new Date(c.usageSince).toLocaleString() : " in retained broker history")
   );
 }
+const fmt = (n: number) => n.toLocaleString();
+function usageShort(c: Data) {
+  if (c.usageUnavailable || c.usageCount == null) return "";
+  return (c.usageTruncated ? fmt(c.usageCount) + "+" : fmt(c.usageCount)) + (c.usageCount === 1 ? " use" : " uses");
+}
+function credentialFlags(c: Data) {
+  const org = c.source === "deployment" || (c.grantees || []).some((g: string) => g.startsWith("org:"));
+  return html`${c.enabled === false ? badge("Disabled", "warn") : null}${c.hasSecret ? null : badge("Secret missing", "err")}${
+    c.delivery !== "env" && !org ? badge(plural((c.grantees || []).length, "person"), "muted") : null
+  }${c.delivery !== "env" && c.deployments === false ? badge("Not for apps", "muted") : null}`;
+}
+function credentialRow(c: Data) {
+  const deployment = c.source === "deployment";
+  const meta =
+    c.delivery === "env"
+      ? "$" + (c.envKey || "?")
+      : [
+          c.host,
+          c.allowedMethods?.length ? c.allowedMethods.join(", ") : "GET",
+          c.maxRequestsPerDay ? fmt(c.maxRequestsPerDay) + " per day" : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+  const body = html`<span class="cred-mark" aria-hidden="true">${(c.name || c.slug).trim().charAt(0).toUpperCase()}</span>
+    <span class="cred-text">
+      <span class="cred-name">${c.name || c.slug}<span class="credential-slug">${c.slug}</span></span>
+      <span class="cred-meta">${meta}</span>
+    </span>
+    <span class="cred-flags">${credentialFlags(c)}</span>
+    <span class="cred-usage" title=${credentialUsage(c)}>${usageShort(c)}</span>`;
+  return deployment
+    ? html`<div class="cred-row is-locked" title="Set in the deployment's configuration; edit it there.">
+        ${body}<span class="cred-end">Managed</span>
+      </div>`
+    : html`<button
+        type="button"
+        class=${classMap({ "cred-row": true, "is-editing": c.slug === credentialState.editing })}
+        aria-label=${"Edit " + (c.name || c.slug)}
+        @click=${() => openEditor(c)}
+      >
+        ${body}<span class="cred-end" aria-hidden="true">›</span>
+      </button>`;
+}
+const credentialGroups: [string, string, (c: Data) => boolean][] = [
+  ["Proxied services", "Called through the broker. The secret stays in core.", (c) => c.source !== "deployment" && c.delivery !== "env"],
+  ["Sandbox environment", "Injected as an env var in all-internal conversations.", (c) => c.source !== "deployment" && c.delivery === "env"],
+  ["From the deployment", "Configured outside this page. Read-only here.", (c) => c.source === "deployment"],
+];
 function credentialRows() {
   if (credentialState.listMessage)
     return html`${credentialState.listMessage}${credentialState.listRetry ? html`<button class="btn" type="button" style="margin-inline-start: 8px" @click=${() => loadCredentials(page)}>Retry</button>` : null}`;
-  return credentialState.rows.length
-    ? repeat(
-        credentialState.rows,
-        (c) => c.slug,
-        (c) => {
-          const deployment = c.source === "deployment";
-          const org = deployment || (c.grantees || []).some((g: string) => g.startsWith("org:"));
-          const target =
-            c.delivery === "env"
-              ? "sandbox env $" + (c.envKey || "?")
-              : c.host +
-                " · " +
-                (c.allowedMethods?.length ? c.allowedMethods.join("/") : "GET") +
-                (c.maxRequestsPerDay ? " · " + plural(c.maxRequestsPerDay, "request") + " per UTC day" : "");
-          return html`<div
-            class=${classMap({ "credential-row": true, "is-editing": c.slug === credentialState.editing })}
-          >
-            <div class="credential-main">
-              <div class="credential-title">
-                <strong>${c.name || c.slug}</strong><span class="credential-slug">${c.slug}</span>
-              </div>
-              <div class="hint">${target + " · " + credentialUsage(c)}</div>
-              <div class="credential-badges">
-                ${badge(c.delivery === "env" ? "Env" : "Broker", "info")}${badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok")}${badge(c.hasSecret ? "Secret set" : "Secret missing", c.hasSecret ? "ok" : "err")}${badge(org ? "Organization-wide" : plural((c.grantees || []).length, "principal"), org ? "info" : "muted")}${c.delivery !== "env" && c.deployments === false ? badge("No apps", "muted") : null}${deployment ? badge("Supplied by deployment", "info") : null}
-              </div>
-            </div>
-            ${
-              deployment
-                ? html`<div class="credential-actions hint">Read-only</div>`
-                : html`<div class="credential-actions">
-                    <button class="btn" type="button" @click=${() => openEditor(c)}>Edit</button
-                    ><button
-                      type="button"
-                      class="btn compact rowbtn danger"
-                      title="Delete credential"
-                      aria-label=${"Delete " + (c.name || c.slug)}
-                      @click=${() => remove(c)}
-                    >
-                      Delete
-                    </button>
-                  </div>`
-            }
-          </div>`;
-        },
-      )
-    : "No credentials configured.";
+  if (!credentialState.rows.length) return "No credentials configured.";
+  return credentialGroups.map(([title, hint, test]) => {
+    const rows = credentialState.rows.filter(test);
+    return rows.length
+      ? html`<div class="cred-section">
+          <div class="cred-section-head"><h3>${title}</h3><span>${hint}</span></div>
+          <div class="cred-group">${repeat(rows, (c) => c.slug, credentialRow)}</div>
+        </div>`
+      : null;
+  });
 }
 function pickerRows() {
   const s = credentialState;
@@ -678,7 +690,11 @@ export function credentialsCard() {
         </div>
       </div>
       <div class="project-dialog-actions" id="sc-dialog-actions">
-        ${s.open ? statusLine() : null}<button class="btn" id="sc-reset" @click=${dismiss}>Cancel</button
+        ${s.editing && s.original
+          ? html`<button class="btn danger" type="button" id="sc-delete" style="margin-inline-end: auto" @click=${() => remove(s.original!)}>
+              Delete
+            </button>`
+          : null}${s.open ? statusLine() : null}<button class="btn" id="sc-reset" @click=${dismiss}>Cancel</button
         ><button
           class=${classMap({ btn: true, primary: true, dirty: s.dirty })}
           id="sc-save"

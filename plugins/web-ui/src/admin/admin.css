@@ -2724,3 +2724,121 @@
 #app-view .spend-column:hover {
   background: color-mix(in srgb, var(--foreground) 5%, transparent);
 }
+
+/* Credentials: grouped list (Codex-style settings groups) */
+#app-view[data-subview="credentials"] #view-governance #sc-list {
+  display: grid;
+  gap: 28px;
+}
+#app-view .cred-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+#app-view .cred-section-head h3 {
+  margin: 0;
+  font-size: var(--font-14, 14px);
+  font-weight: 500;
+  color: var(--foreground);
+}
+#app-view .cred-section-head span {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5, 12.5px);
+}
+#app-view .cred-group {
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+  border-radius: 14px;
+  overflow: hidden;
+}
+#app-view .cred-row {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 13px 18px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+#app-view .cred-row + .cred-row {
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+#app-view button.cred-row:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+#app-view button.cred-row:focus-visible {
+  outline: 2px solid var(--ring, var(--foreground));
+  outline-offset: -2px;
+}
+#app-view .cred-row.is-locked {
+  cursor: default;
+}
+#app-view .cred-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+#app-view .cred-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+#app-view .cred-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#app-view .cred-name .credential-slug {
+  margin-inline-start: 8px;
+  font-weight: 400;
+}
+#app-view .cred-meta {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5, 12.5px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#app-view .cred-flags {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+#app-view .cred-usage {
+  flex: none;
+  min-width: 72px;
+  text-align: right;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5, 12.5px);
+  font-variant-numeric: tabular-nums;
+}
+#app-view .cred-end {
+  flex: none;
+  width: 16px;
+  text-align: right;
+  color: var(--muted-foreground);
+  font-size: 18px;
+  line-height: 1;
+}
+#app-view .cred-row.is-locked .cred-end {
+  width: auto;
+  font-size: var(--font-12-5, 12.5px);
+}
+@media (max-width: 650px) {
+  #app-view .cred-usage {
+    display: none;
+  }
+}
