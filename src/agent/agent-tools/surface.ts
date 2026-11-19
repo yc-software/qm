@@ -59,7 +59,9 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room." +
-            (textOnly ? "" : " react/edit/delete: which channel the target message is in (omit for the current one).") +
+            (textOnly
+              ? ""
+              : " react/edit/delete: which channel the target message is in (omit for the current one). read_thread: read recent messages in THIS channel instead of the current conversation.") +
             " NOT valid on post — post only ever replies in the current conversation.",
         }),
       ),
@@ -75,7 +77,9 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here." +
-            (textOnly ? "" : " react: the message id to react to."),
+            (textOnly
+              ? ""
+              : " react: the message id to react to. reach: reply inside THAT message's thread in the destination (the thread's parent id, e.g. a search hit's `thread`, or its own id when it has none) instead of posting top-level."),
         }),
       ),
       broadcast: Type.Optional(
@@ -189,6 +193,7 @@ export function surfaceTool(kit: ToolKit) {
             );
           }
           const target = {
+            ...(params.ts !== undefined ? { threadTs: params.ts } : {}),
             ...(params.channel !== undefined ? { channel: params.channel } : {}),
             ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
             ...(params.participants !== undefined ? { participants: params.participants } : {}),
@@ -266,12 +271,13 @@ export function surfaceTool(kit: ToolKit) {
           );
         }
         case "read_thread": {
-          await recordCall(callId, {
-            tool: surfaceName,
-            action: "read_thread",
+          const readOpts = {
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
-          });
-          const r = await tc.readThread(params.limit !== undefined ? { limit: params.limit } : undefined);
+            ...routing,
+            ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
+          };
+          await recordCall(callId, { tool: surfaceName, action: "read_thread", ...readOpts });
+          const r = await tc.readThread(readOpts);
           if (!r.ok)
             return recordResult(
               callId,
@@ -361,7 +367,8 @@ export function surfaceTool(kit: ToolKit) {
               hits
                 .map(
                   (h) =>
-                    `- ${[h.author, h.when].filter(Boolean).join(" · ")}${h.ref ? ` [${h.ref}]` : ""}: ${h.snippet}`,
+                    `- ${[h.author, h.when].filter(Boolean).join(" · ")}${h.ref ? ` [${h.ref}]` : ""}` +
+                    `${h.where ? ` in ${h.where}` : ""}${h.thread ? ` (thread ${h.thread})` : ""}: ${h.snippet}`,
                 )
                 .join("\n") + coverage;
           } else if (r.source === "slack") {

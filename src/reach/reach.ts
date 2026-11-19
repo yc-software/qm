@@ -103,6 +103,61 @@ async function membershipDenial(
   };
 }
 
+export interface ReadChannelDirectory {
+  resolveChannel(query: string): Promise<ChannelResolution>;
+  channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
+  directoryMember(principalId: string): Promise<unknown>;
+}
+
+export type ReadChannelResolution =
+  { ok: true; channelId: string; channelName?: string } | Extract<ReachResolution, { ok: false }>;
+
+async function readDenial(
+  dir: ReadChannelDirectory,
+  actorId: string,
+  label: string,
+): Promise<Extract<ReachResolution, { ok: false }>> {
+  const known = await dir.directoryMember(actorId);
+  return {
+    ok: false,
+    status: 403,
+    error: known ? "not_visible" : "identity_unverified",
+    message: known
+      ? `I can only read a private channel you're in, and I can't confirm you're in ${label}.`
+      : `I can't confirm your identity in this workspace — your login may not be linked to Slack — so I can't check whether you're in ${label}. Connecting / signing in with Slack should fix it.`,
+  };
+}
+
+export async function resolveReadChannel(
+  dir: ReadChannelDirectory,
+  actorId: string,
+  channel: string,
+): Promise<ReadChannelResolution> {
+  const ref = channel.trim().replace(/^#/, "");
+  if (/^[CG][A-Z0-9]{6,}$/.test(ref)) {
+    return (await dir.channelVisibleTo(actorId, ref))
+      ? { ok: true, channelId: ref }
+      : readDenial(dir, actorId, channel);
+  }
+  const r = await dir.resolveChannel(ref);
+  if (r.kind === "none") {
+    return { ok: false, status: 404, error: "channel_not_found", message: `no channel I'm in matches "${channel}"` };
+  }
+  if (r.kind === "ambiguous") {
+    return {
+      ok: false,
+      status: 409,
+      error: "ambiguous_channel",
+      message: `"${channel}" matches multiple channels — pass an exact name or id`,
+      candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
+    };
+  }
+  if (!(await dir.channelVisibleTo(actorId, r.channel.channelId, r.channel.isPrivate === true))) {
+    return readDenial(dir, actorId, `#${r.channel.name}`);
+  }
+  return { ok: true, channelId: r.channel.channelId, channelName: r.channel.name };
+}
+
 export interface ReachTarget {
   recipient?: string;
   channel?: string;

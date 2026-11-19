@@ -356,6 +356,7 @@ interface SurfacePostOpts {
 }
 
 interface SurfaceReachTarget {
+  threadTs?: string;
   channel?: string;
   recipient?: string;
   participants?: readonly string[];
@@ -413,6 +414,8 @@ interface SurfaceWhatsNewResult {
 
 interface SurfaceSearchHit {
   ref?: string;
+  where?: string;
+  thread?: string;
   author?: string;
   when?: string;
   snippet: string;
@@ -445,7 +448,7 @@ export interface SurfaceToolDeps {
   react(input: SurfaceReactInput): Promise<SurfacePostResult>;
   edit(input: SurfaceEditInput): Promise<SurfacePostResult>;
   delete(input: SurfaceDeleteInput): Promise<SurfacePostResult>;
-  readThread(opts?: { limit?: number }): Promise<SurfaceReadResult>;
+  readThread(opts?: { limit?: number } & SurfaceReachTarget): Promise<SurfaceReadResult>;
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;

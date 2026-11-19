@@ -1,4 +1,4 @@
-import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
+import { resolveReadChannel, type SurfaceContextQuery, type SurfaceContextResult } from "../../reach/reach.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
@@ -25,32 +25,16 @@ async function resolveSurfaceTarget(
   const { res, app, capability } = ctx;
   const cap = capability!;
   if (typeof b.channel === "string" && b.channel.trim()) {
-    const ref = b.channel.trim().replace(/^#/, "");
-    if (/^[CG][A-Z0-9]{6,}$/.test(ref)) {
-      if (!(await app.channelVisibleTo(cap.actorId, ref))) {
-        await notVisible(ctx, cap.actorId, b.channel);
-        return null;
-      }
-      return { source: "slack", target: { channelId: ref } };
-    }
-    const r = await app.resolveChannel(ref);
-    if (r.kind === "none") {
-      sendJson(res, 404, { error: "channel_not_found", message: `no channel I'm in matches "${b.channel}"` });
+    const r = await resolveReadChannel(app, cap.actorId, b.channel);
+    if (!r.ok) {
+      const { ok: _ok, status, ...body } = r;
+      sendJson(res, status, body);
       return null;
     }
-    if (r.kind === "ambiguous") {
-      sendJson(res, 409, {
-        error: "ambiguous_channel",
-        message: `"${b.channel}" matches multiple channels — pass an exact name or id`,
-        candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
-      });
-      return null;
-    }
-    if (!(await app.channelVisibleTo(cap.actorId, r.channel.channelId, r.channel.isPrivate === true))) {
-      await notVisible(ctx, cap.actorId, `#${r.channel.name}`);
-      return null;
-    }
-    return { source: "slack", target: { channelId: r.channel.channelId, channelName: r.channel.name } };
+    return {
+      source: "slack",
+      target: { channelId: r.channelId, ...(r.channelName ? { channelName: r.channelName } : {}) },
+    };
   }
   const dest = cap.destination;
   if (!dest?.target || !app.surfaceMirrored(dest.type)) {
@@ -128,16 +112,6 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
   };
   const request = await app.createContextRequest(resolved.source, query);
   return awaitFileFulfillment(ctx, request.id);
-}
-
-async function notVisible(ctx: ApiCtx, actorId: string, label: string): Promise<void> {
-  const known = await ctx.app.directoryMember(actorId);
-  return sendJson(ctx.res, 403, {
-    error: known ? "not_visible" : "identity_unverified",
-    message: known
-      ? `I can only read a private channel you're in, and I can't confirm you're in ${label}.`
-      : `I can't confirm your identity in this workspace — your login may not be linked to Slack — so I can't check whether you're in ${label}. Connecting / signing in with Slack should fix it.`,
-  });
 }
 
 async function awaitOutcome(
