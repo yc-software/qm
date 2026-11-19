@@ -88,7 +88,9 @@ automatic capture and the `memory` tool save there, and the room's own notebook 
 not read until the persona is unpinned. Every conversation that uses the persona reads the
 persona's notebook, so what one pinned room remembers is shown in the others and to
 everyone who can use the persona, including people who are not in that room. A room keeps
-its own notebook while anyone from outside the organization is among its members.
+its own notebook while anyone from outside the organization is among its members, and for a
+turn that arrives without the room's member list, as a web conversation opened in a Slack
+channel does.
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
