@@ -57,6 +57,7 @@ export function requiresDelegation(
   return (
     request.surfaceOrigin?.audience !== "external" &&
     !request.swarm &&
+    request.surface !== "monitor" &&
     !isSubagentThreadRef(request.conversation.threadRef) &&
     (request.surface === "slack" || request.surfaceTools === true)
   );
