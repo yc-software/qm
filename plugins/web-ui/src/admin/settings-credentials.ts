@@ -380,7 +380,7 @@ async function remove(c: Data) {
       : "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
   status(message, "err");
 }
-export const addCredential = () =>
+const addCredential = () =>
   html`<button
     class="btn"
     type="button"
