@@ -175,7 +175,8 @@ import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.
 import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
-import { withSignInMembers } from "./directory/sign-in-members.ts";
+import { signInMembers, withSignInMembers } from "./directory/sign-in-members.ts";
+import { withOffChatRecipients } from "./delivery/off-chat-delivery.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
@@ -1875,12 +1876,8 @@ export function buildApp(
     displayName: principalId,
     type: "internal" as const,
   }));
-  const directory = withSignInMembers(createPostgresDirectoryStore(databaseUrl), {
-    identity,
-    sessions,
-    users,
-    ...(emailAuthMembers?.length ? { emailAuthMembers } : {}),
-  });
+  const signInSources = { identity, sessions, users, ...(emailAuthMembers?.length ? { emailAuthMembers } : {}) };
+  const directory = withSignInMembers(createPostgresDirectoryStore(databaseUrl), signInSources);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
     memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
@@ -1949,11 +1946,13 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(
-    createPostgresDeliveryStore(databaseUrl),
-    sessions,
-    runs,
-    sessionStateBus,
+  const deliveries = withOffChatRecipients(
+    withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs, sessionStateBus),
+    {
+      directory,
+      sessions,
+      signInMembers: () => signInMembers({ identity, ...(emailAuthMembers?.length ? { emailAuthMembers } : {}) }),
+    },
   );
 
   const deployService = createDeployService({
