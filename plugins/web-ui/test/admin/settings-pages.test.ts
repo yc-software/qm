@@ -42,8 +42,8 @@ test("a refreshed model catalog only reaches the view that asked for it", async 
       baseModelOptions: [{ id: "new", name: "New model" }],
     });
     await admin.settle();
-    const offered = [...admin.document.querySelectorAll<HTMLOptionElement>("#webui-models-options option")].map(
-      (option) => option.value,
+    const offered = [...admin.document.querySelectorAll<HTMLButtonElement>("#webui-models-add .loadout-pick")].map(
+      (option) => option.dataset.value,
     );
     assert.equal(offered.includes("new"), !stale, stale ? "stale" : "current");
     assert.ok(offered.includes("configured"));
@@ -64,8 +64,7 @@ test("enabled models and custom providers save their payloads", async () => {
     "PUT /custom-providers/gw": record,
   });
   await admin.settle();
-  type(admin, "#webui-models-add", "b");
-  click(admin, "#webui-models-add-button");
+  click(admin, '#webui-models-add .loadout-pick[data-value="b"]');
   click(admin, '[data-save="webui-models"]');
   await admin.settle();
   click(admin, "#add-custom-provider");

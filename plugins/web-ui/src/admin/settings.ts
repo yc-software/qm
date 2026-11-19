@@ -2,6 +2,9 @@ import { settingsRow, settingsSection } from "../settings-layout.ts";
 import { html, render, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
+import { ChevronDown, Sparkles } from "lucide";
+import { icon, modelMark } from "../icons.ts";
+import { runtimeModelOptions } from "../model-options.ts";
 import type { AdminPage } from "./sections.ts";
 import { pageHeader } from "./shared.ts";
 import { saveButton, settingStatus, reviewChange } from "./setting-controls.ts";
@@ -317,14 +320,9 @@ function template() {
 }
 
 const value = (event: Event) => (event.target as HTMLInputElement).value;
-const label = (s: SettingsState, id: string) => {
-  const m = s.catalog.find((x) => x.id === id);
-  return m?.name && m.name !== id ? `${m.name} (${id})` : id;
-};
 function modelsCard(s: SettingsState) {
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
-  const canAdd = available.some((m) => m.id === s.selected);
   return html`<div class="settings-stack" id="card-webui-models" ?hidden=${!s.available}>
     ${settingsSection(
       "Model picker",
@@ -349,32 +347,169 @@ function modelsCard(s: SettingsState) {
             )
       }
       ${settingsRow(
-        html`<label for="webui-models-add">Add a model</label>`,
+        html`<span id="webui-models-add-label">Add a model</span>`,
         nothing,
-        html`<span class="settings-row-actions settings-control">
-          <input
-            id="webui-models-add"
-            list="webui-models-options"
-            autocomplete="off"
-            placeholder="Search models…"
-            .value=${s.selected}
-            ?disabled=${!available.length}
-            @input=${(e: Event) => {
-              s.selected = value(e);
-              s.render();
-            }}
-            @keydown=${(e: KeyboardEvent) => e.key === "Enter" && canAdd && s.add()}
-          /><datalist id="webui-models-options">
-            ${available.map((m) => html`<option value=${m.id}>${label(s, m.id)}</option>`)}
-          </datalist>
-          <button class="btn" type="button" id="webui-models-add-button" ?disabled=${!canAdd} @click=${() => s.add()}>
-            Add
-          </button>
-        </span>`,
+        html`<span class="settings-control">${addModelMenu(s, available)}</span>`,
       )}`,
     )}
     <div class="settings-save">${settingStatus(s)}${saveButton(s, "Save")}</div>
   </div>`;
+}
+function addModelMenu(s: SettingsState, available: Model[]) {
+  const catalog = s.context.modelCatalog ?? {};
+  const options = available.map((m) => {
+    const known = runtimeModelOptions([m.id], catalog)[0];
+    const provider = known ? (known.displayProvider ?? String(known.model.provider)) : "";
+    return { id: m.id, name: m.name || known?.label || m.id, provider };
+  });
+  const parts = (from: Element) => {
+    const control = from.closest<HTMLElement>(".model-add-menu")!;
+    return {
+      trigger: control.querySelector<HTMLButtonElement>(".loadout-button")!,
+      menu: control.querySelector<HTMLElement>(".loadout-popover")!,
+      input: control.querySelector<HTMLInputElement>(".loadout-search input")!,
+    };
+  };
+  const rows = (menu: HTMLElement) => [...menu.querySelectorAll<HTMLButtonElement>(".loadout-pick")];
+  const filter = (input: HTMLInputElement) => {
+    const query = input.value.trim().toLocaleLowerCase();
+    const menu = input.closest<HTMLElement>(".loadout-popover")!;
+    let shown = 0;
+    for (const row of rows(menu)) {
+      const hide = !!query && !row.dataset.search!.includes(query);
+      row.parentElement!.hidden = hide;
+      if (!hide) shown++;
+    }
+    menu.querySelector<HTMLElement>(".loadout-empty")!.hidden = shown > 0;
+  };
+  const close = (from: Element, refocus = false) => {
+    const { trigger, menu } = parts(from);
+    if (menu.matches(":popover-open")) menu.hidePopover();
+    trigger.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", outside, true);
+    if (refocus) trigger.focus();
+  };
+  let openFrom: Element | null = null;
+  function outside(e: Event) {
+    if (openFrom && !(e.target as Element).closest?.(".model-add-menu")) close(openFrom);
+  }
+  const place = (trigger: HTMLElement, menu: HTMLElement) => {
+    const rect = trigger.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - 20;
+    const above = rect.top - 20;
+    const up = below < Math.min(menu.offsetHeight, 240) && above > below;
+    menu.style.maxHeight = `${Math.max(160, up ? above : below)}px`;
+    menu.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 12))}px`;
+    menu.style.top = `${up ? Math.max(12, rect.top - menu.offsetHeight - 8) : rect.bottom + 8}px`;
+  };
+  const open = (from: Element) => {
+    const { trigger, menu, input } = parts(from);
+    input.value = "";
+    filter(input);
+    menu.showPopover();
+    place(trigger, menu);
+    trigger.setAttribute("aria-expanded", "true");
+    openFrom = from;
+    document.addEventListener("click", outside, true);
+    requestAnimationFrame(() => input.focus());
+  };
+  const pick = (from: Element, id: string) => {
+    close(from, true);
+    s.selected = id;
+    s.add();
+  };
+  const step = (e: KeyboardEvent) => {
+    const menu = (e.currentTarget as HTMLElement).querySelector<HTMLElement>(".loadout-popover")!;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      return close(menu, true);
+    }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (!menu.matches(":popover-open")) return;
+    e.preventDefault();
+    const visible = rows(menu).filter((row) => !row.parentElement!.hidden);
+    const at = visible.indexOf(document.activeElement as HTMLButtonElement);
+    let next = at - 1;
+    if (e.key === "ArrowDown") next = at + 1;
+    else if (at < 0) next = visible.length - 1;
+    if (next < 0) parts(menu).input.focus();
+    else visible[Math.min(next, visible.length - 1)]?.focus();
+  };
+  return html`<span class="field-menu model-add-menu" id="webui-models-add" @keydown=${step}>
+    <div class="menu-control loadout-control" data-align="left">
+      <button
+        class="menu-button loadout-button"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-controls="webui-models-add-menu"
+        aria-labelledby="webui-models-add-label"
+        ?disabled=${!options.length || s.saving}
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          const { menu } = parts(e.currentTarget as Element);
+          if (menu.matches(":popover-open")) close(menu);
+          else open(menu);
+        }}
+      >
+        <span class="menu-label">${options.length ? "Choose a model" : "All models added"}</span>${icon(
+          ChevronDown,
+          13,
+        )}
+      </button>
+      <div
+        class="menu-popover loadout-popover"
+        popover="manual"
+        id="webui-models-add-menu"
+        role="menu"
+        aria-label="Add a model"
+      >
+        <label class="loadout-search"
+          ><span class="sr-only">Search models</span
+          ><input
+            type="search"
+            placeholder="Search models…"
+            autocomplete="off"
+            @input=${(e: Event) => filter(e.currentTarget as HTMLInputElement)}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const menu = (e.currentTarget as HTMLElement).closest<HTMLElement>(".loadout-popover")!;
+              const first = rows(menu).find((row) => !row.parentElement!.hidden);
+              if (first) pick(menu, first.dataset.value!);
+            }}
+        /></label>
+        <div class="loadout-panel">
+          <div class="loadout-list">
+            ${repeat(
+              options,
+              (option) => option.id,
+              ({ id, name, provider }) =>
+                html`<div class="loadout-row">
+                  <button
+                    class="loadout-pick"
+                    type="button"
+                    role="menuitem"
+                    data-value=${id}
+                    data-search=${`${name} ${id}`.toLocaleLowerCase()}
+                    @click=${(e: Event) => pick(e.currentTarget as Element, id)}
+                  >
+                    <span class="loadout-icon" data-provider=${provider} aria-hidden="true"
+                      >${(provider && modelMark(provider, 16)) || icon(Sparkles, 16)}</span
+                    ><span class="loadout-model-copy"
+                      ><span class="loadout-title"><span class="loadout-name">${name}</span></span
+                      >${name === id ? nothing : html`<span class="loadout-details">${id}</span>`}</span
+                    >
+                  </button>
+                </div>`,
+            )}
+          </div>
+          <div class="loadout-empty" hidden>No models found</div>
+        </div>
+      </div>
+    </div>
+  </span>`;
 }
 function soulCard(s: SettingsState) {
   const saved = JSON.parse(s.baseline).content || "";
