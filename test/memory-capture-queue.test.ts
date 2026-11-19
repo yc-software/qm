@@ -40,7 +40,6 @@ test(
   { timeout: 20_000 },
   async (t) => {
     const databaseUrl = await readyDatabase();
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const tenant = ambientTenant().id;
     const memory = createPostgresMemoryService(databaseUrl);
     const completed = Promise.withResolvers<void>();
@@ -104,7 +103,6 @@ test(
   { timeout: 20_000 },
   async (t) => {
     const databaseUrl = await readyDatabase();
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const started = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const finished = Promise.withResolvers<void>();
@@ -142,7 +140,6 @@ test(
   { timeout: 20_000 },
   async (t) => {
     const databaseUrl = await readyDatabase();
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const memory = createPostgresMemoryService(databaseUrl);
     const attempted = Promise.withResolvers<void>();
     const lateResult = Promise.withResolvers<string>();
@@ -206,7 +203,6 @@ test(
   { timeout: 20_000 },
   async (t) => {
     const databaseUrl = await readyDatabase();
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const starting = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const captured = Promise.withResolvers<void>();
@@ -246,7 +242,6 @@ test(
   { timeout: 20_000 },
   async (t) => {
     const databaseUrl = await readyDatabase();
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const attempted = Promise.withResolvers<void>();
     const fail = Promise.withResolvers<void>();
     const first = createMemoryCaptureQueue({
