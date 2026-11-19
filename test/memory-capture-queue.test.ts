@@ -139,6 +139,10 @@ test(
   "an interrupted extraction is recovered and its late model result cannot write private memory",
   { timeout: 20_000 },
   async (t) => {
+    let phase = "database initialization";
+    t.signal.addEventListener("abort", () => t.diagnostic(`capture recovery timed out during ${phase}`), {
+      once: true,
+    });
     const databaseUrl = await readyDatabase();
     const memory = createPostgresMemoryService(databaseUrl);
     const attempted = Promise.withResolvers<void>();
@@ -182,14 +186,21 @@ test(
       lateResult.resolve("- Late private fact");
       await Promise.all([first.stop(), replacement.stop()]);
     });
+    phase = "first enqueue";
     await first.enqueue(testTenant, turn(1));
+    phase = "first worker start";
     await first.start();
+    phase = "first extraction attempt";
     await attempted.promise;
+    phase = "stop claims";
     await first.stopClaims();
+    phase = "first worker stop";
     await first.stop();
     lateResult.resolve("SENSITIVITY: ordinary\n- Late private fact");
     assert.equal((await memory.facts!("personal:queue-owner")).length, 0);
+    phase = "replacement worker start";
     await replacement.start();
+    phase = "replacement extraction";
     await recovered.promise;
     const facts = await memory.facts!("personal:queue-owner");
     assert.equal(facts.length, 1);
