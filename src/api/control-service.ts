@@ -596,11 +596,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
       const admits = await Promise.all(
-        all.map(
-          async (c) =>
-            (seen.has(c.id) || (await relatesTo(app, capability.actorId, c, isActor))) &&
-            canAdministerCron(app, c, capability, isActor),
-        ),
+        all.map(async (c) => seen.has(c.id) && canAdministerCron(app, c, capability, isActor)),
       );
       const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
