@@ -80,6 +80,43 @@ function picker(s: SettingsState, inheritLabel?: string) {
   return { control, state };
 }
 
+const NO_ENTRY: LoadoutEntry = { value: "", effort: "auto", fast: false };
+const ADD_MODEL = "webui-models-add";
+function addPicker(s: SettingsState) {
+  const available = () => optionsFor(s.context).filter((option) => !(s.draft.ids || []).includes(option.value));
+  const state = { openMenu: null as string | null, menuQuery: "", effortLevel: "auto" as EffortLevel };
+  const catalog: ModelCatalog = { options: available, supportsFast: () => false, overridden: () => false };
+  const actions = loadoutActions(
+    available,
+    () => NO_ENTRY,
+    (option) => {
+      s.selected = option.model.id;
+      s.add();
+    },
+    catalog.supportsFast,
+  );
+  const control = createModelPicker<void>({
+    host: () => document.querySelector<HTMLElement>(`[data-runtime-row="${ADD_MODEL}"]`),
+    redraw: () => s.render(),
+    scopeKey: () => null,
+    state,
+    catalog,
+    activeEntry: () => NO_ENTRY,
+    ...actions,
+    effectiveFastMode: () => false,
+    changeDefault: async () => {},
+    showDefaultAction: false,
+    showInheritAction: false,
+    emptyLabel: "Choose a model",
+  });
+  return { control, state };
+}
+export function addModelPicker(s: SettingsState) {
+  const { control } = pickers.get(ADD_MODEL) ?? pickers.set(ADD_MODEL, addPicker(s)).get(ADD_MODEL)!;
+  return html`<span class="field-menu settings-control" id=${ADD_MODEL} data-runtime-row=${ADD_MODEL}
+    >${control.render(undefined, undefined, s.saving)}</span
+  >`;
+}
 function runtimeRow(key: string, label: string, note: string, inheritLabel?: string) {
   const s = states.get(key)!;
   if (!s.available) return nothing;

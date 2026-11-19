@@ -1789,98 +1789,6 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   min-width: 18px;
   height: 18px;
 }
-#app-view #view-governance #card-runtimes > .runtime-rows,
-#app-view #view-governance .runtime-row {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  align-items: center;
-}
-#app-view #view-governance .runtime-row {
-  min-height: 40px;
-}
-#app-view #view-governance .runtime-label {
-  font-size: var(--font-14);
-  font-weight: 500;
-}
-#app-view #view-governance .runtime-row > :last-child {
-  justify-self: start;
-}
-#app-view #view-governance .runtime-row > input {
-  width: 120px;
-}
-#app-view #view-governance .runtime-hint {
-  grid-column: 2;
-  margin: 0;
-}
-#app-view .model-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  min-height: 32px;
-}
-#app-view .model-list > .hint {
-  margin: 0;
-}
-#app-view .model-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 7px 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--secondary);
-  font-size: var(--font-13);
-}
-#app-view #view-governance .model-chip button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 22px;
-  width: 22px;
-  height: 22px;
-  min-width: 22px;
-  min-height: 22px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: var(--font-16);
-  line-height: 1;
-}
-#app-view #view-governance .model-chip button:hover {
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
-  color: var(--foreground);
-}
-#app-view .model-add-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  max-width: 520px;
-  margin: 0 0 14px;
-}
-#app-view .model-add-field {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-#app-view .model-add-field label {
-  margin-bottom: 5px;
-}
-#app-view .model-add-row > button {
-  flex: none;
-}
-@media (max-width: 520px) {
-  #app-view .model-add-row {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  #app-view .model-add-row > button {
-    align-self: flex-start;
-  }
-}
 #app-view .egress-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2335,28 +2243,6 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 }
 :where(#app-view) :is(.admin-main, dialog) input[type="checkbox"] {
   accent-color: var(--cta);
-}
-:where(#app-view) :is(.admin-main, dialog) .model-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius);
-  padding: 4px 8px;
-  background: var(--secondary);
-  font-size: var(--control-font);
-}
-:where(#app-view) :is(.admin-main, dialog) .model-chip button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
 }
 :where(#app-view)
   :is(.admin-main, dialog)
