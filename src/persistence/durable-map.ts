@@ -33,6 +33,7 @@ export interface DurableMap<T> {
   insertIfAbsent(id: string, value: T): Promise<boolean>;
   merge(id: string, patch: Partial<T>): Promise<T | null>;
   update(id: string, fn: (value: T) => T): Promise<T | null>;
+  updateInTransaction(id: string, fn: (value: T, transaction: PoolClient) => T | Promise<T>): Promise<T | null>;
   mutateMany(updates: readonly { id: string; apply: (value: T | null) => T }[]): Promise<T[]>;
   deleteIf(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
@@ -282,6 +283,15 @@ export function createPostgresMap<T>(
     const rows = await pg.q(sql, params);
     return rows.map((row) => [row.id as string, row.json as Omit<T, K>]);
   }
+  async function updateRow(id: string, fn: (value: T, transaction: PoolClient) => T | Promise<T>): Promise<T | null> {
+    return withBump(async (client) => {
+      const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
+      if (!current.rows[0]) return null;
+      const next = await fn(current.rows[0].json as T, client);
+      await client.query(`UPDATE ${table} SET json = $2 WHERE id = $1`, [id, jsonbStringify(next)]);
+      return next;
+    });
+  }
   return {
     async all() {
       return (await snapshot()).map(([, value]) => value);
@@ -367,15 +377,8 @@ export function createPostgresMap<T>(
       );
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
-    async update(id, fn) {
-      return withBump(async (client) => {
-        const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
-        if (!current.rows[0]) return null;
-        const next = fn(current.rows[0].json as T);
-        await client.query(`UPDATE ${table} SET json = $2 WHERE id = $1`, [id, jsonbStringify(next)]);
-        return next;
-      });
-    },
+    update: updateRow,
+    updateInTransaction: updateRow,
     async mutateMany(updates) {
       if (!updates.length) return [];
       return withBump(async (client) => {

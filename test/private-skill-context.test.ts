@@ -31,6 +31,7 @@ test("private document capability and skill privacy survive memory opt-out and a
   let copies = 0;
   let sourceSessionId = "";
   let extractions = 0;
+  let allowWorkerClaims = true;
   const heldRuns: { id: string; leaseToken: string }[] = [];
   const capabilityRunStore = createPostgresRunStore(config.databaseUrl!);
   const raw = createPostgresMemoryService(config.databaseUrl!);
@@ -43,6 +44,7 @@ test("private document capability and skill privacy survive memory opt-out and a
     return fetchActual(input, init);
   });
   const built = buildApp(config, {
+    canClaimRuns: () => allowWorkerClaims,
     agent: {
       ...createMockAgent(),
       oneShot: async (_system, _prompt, purpose) => {
@@ -589,6 +591,7 @@ test("private document capability and skill privacy survive memory opt-out and a
   );
   const writer = await built.sessions.getOrCreateByThread("shared-origin-writer", "channel", teamScope);
   const reader = await built.sessions.getOrCreateByThread("shared-origin-reader", "channel", teamScope);
+  allowWorkerClaims = false;
   const capabilityRuns = capabilityRunStore.runs;
   const cap = async (actor: string, scope: string, sessionId: string) => {
     const session = await built.sessions.get(sessionId);
@@ -689,7 +692,16 @@ test("private document capability and skill privacy survive memory opt-out and a
         body: "Use the revised shared reporting procedure.",
       })
     ).status,
+    403,
+  );
+  assert.ok(!(await built.skills.get(sharedSkill.id))?.sourceProvenance?.sources.includes("channel:C2"));
+  assert.equal((await built.skills.get(sharedSkill.id))?.manifest.body, "Use the shared reporting procedure.");
+  assert.equal(
+    (
+      await call("/v1/skills/" + sharedSkill.id, writerToken, "PUT", {
+        body: "Use the revised shared reporting procedure.",
+      })
+    ).status,
     200,
   );
-  assert.ok((await built.skills.get(sharedSkill.id))?.sourceProvenance?.sources.includes("channel:C2"));
 });

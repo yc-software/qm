@@ -663,6 +663,7 @@ export interface App {
       botActor?: boolean;
       personalOnly?: true;
       contextScopeId?: ScopeId;
+      context?: PrivateContext;
       sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
     },
   ): Promise<Skill | "trigger_blocked" | "private_context" | null>;

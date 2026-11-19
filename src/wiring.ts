@@ -661,11 +661,13 @@ export function buildApp(
     canUseSandboxScope?: CanManageScope;
     managesArtifactHome?: ManagesArtifactHome;
     authorizeArtifactShare?: (grant: Grant, actorId: string, releasePrivate?: true) => Promise<void>;
+    withArtifactLock?: <R>(owner: ScopeId, ref: string, write: () => Promise<R>) => Promise<R>;
   } = {};
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) =>
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
     resolveFiles: (refs) => files.resolveByIds(refs),
+    withArtifactLock: (owner, ref, write) => membership.withArtifactLock!(owner, ref, write),
     authorizeArtifactShare: (grant, actorId, releasePrivate) =>
       membership.authorizeArtifactShare!(grant, actorId, releasePrivate),
   });
@@ -1981,6 +1983,12 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups, directory, identity }, true),
     isCurrentSharedScopeMember,
   });
+  membership.withArtifactLock = async (owner, ref, write) => {
+    const parsed = parseRef(ref);
+    if (parsed.kind !== "skill") return write();
+    const selected = await skills.get(parsed.id);
+    return selected ? skills.withNameLock(owner, selected.manifest.name, write) : write();
+  };
   membership.authorizeArtifactShare = async (grant, actorId, releasePrivate) => {
     const parsed = parseRef(grant.ref);
     if (parsed.kind !== "file" && parsed.kind !== "skill") return;

@@ -962,7 +962,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       if (
         req.privateRevision &&
-        ((req.type !== "deploy" && req.type !== "file") ||
+        ((req.type !== "deploy" && req.type !== "file" && req.type !== "skill") ||
           req.move ||
           req.email ||
           req.id !== home.id ||
@@ -977,7 +977,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
 
       try {
-        if (orgSkillCede) {
+        if (orgSkillCede && !req.privateRevision) {
           const promoted = await app.promoteSkill(
             home.id,
             toScope,

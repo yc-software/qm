@@ -149,14 +149,14 @@ export function pauseStampAfterToolCall(
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
 
-function withPrivateSharingApproval(tool: ToolDefinition, label: "app" | "file") {
+function withPrivateSharingApproval(tool: ToolDefinition, label: "app" | "file" | "skill") {
   return {
     ...tool,
     needsApproval: (params: unknown) =>
       isObj(params) && params.action === "share" && params.privateRevision !== undefined,
     approvalReason: (params: unknown) => {
       const selected = isObj(params) ? params : {};
-      const contents = label === "app" ? "its stored data and history" : "the selected saved bytes";
+      const contents = label === "app" ? "its stored data and history" : "the selected saved content";
       return `Share ${label} ${String(selected.id)} at private revision ${String(selected.privateRevision)} with ${String(selected.toScope)} (${selected.permission === "write" ? "manage" : "read"} access). This includes ${contents}; the private conversation and other outputs remain private.${selected.notify === false ? " No notifications or invitations." : ""}`;
     },
   };
@@ -181,13 +181,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const tools = [
     ...(!delegateWork ? [{ ...execute, handlesAbort: true }] : []),
-    resourceTool("skills", {
-      list: discoverSkills(false),
-      search: discoverSkills(true),
-      read: skill,
-      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
-      ...(controlTools ? { share: sharingTool("skill") } : {}),
-    }),
+    withPrivateSharingApproval(
+      resourceTool("skills", {
+        list: discoverSkills(false),
+        search: discoverSkills(true),
+        read: skill,
+        ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
+        ...(controlTools ? { share: sharingTool("skill") } : {}),
+      }),
+      "skill",
+    ),
     withPrivateSharingApproval(
       resourceTool("files", {
         read,

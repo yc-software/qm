@@ -105,6 +105,7 @@ type GrantQuery = {
 );
 
 export interface AclStoreOptions {
+  withArtifactLock?: <R>(ownerScopeId: ScopeId, ref: string, write: () => Promise<R>) => Promise<R>;
   authorizeArtifactShare?: (grant: Grant, actorId: string, releasePrivate?: true) => Promise<void>;
   manages?: ScopeManagement;
   resolveFiles?: (refs: readonly FileArtifactRef[]) => Promise<FileArtifact[]>;
@@ -181,6 +182,8 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
     if (isMembershipManaged(scopeId) && opts.manages) return opts.manages(principalId, scopeId, authoredBy);
     return true;
   }
+  const withArtifactLock = <R>(owner: ScopeId, ref: string, write: () => Promise<R>) =>
+    opts.withArtifactLock ? opts.withArtifactLock(owner, ref, write) : write();
   async function authorizeGrant(g: Grant, authoredBy?: string, releasePrivate?: true): Promise<void> {
     if (!(await canManage(g.ownerScopeId, g.grantedBy, authoredBy))) {
       throw new Error("only a manager of this scope may grant access (no transitive re-share)");
@@ -198,8 +201,10 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
   }
   return {
     async grant(tenant, g, authoredBy, options) {
-      await authorizeGrant(g, authoredBy, options?.releasePrivate);
-      await persist.put(tenant, g);
+      await withArtifactLock(g.ownerScopeId, g.ref, async () => {
+        await authorizeGrant(g, authoredBy, options?.releasePrivate);
+        await persist.put(tenant, g);
+      });
     },
     async preparePrivateGrant(tenant, grant, authoredBy) {
       const selected = { ...grant };
@@ -228,21 +233,24 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
       for (const g of matches) await persist.remove(tenant, g);
     },
     async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
-      if (!(await canManage(ownerScopeId, changedBy, authoredBy))) {
-        throw new Error("only a manager of this scope may replace access grants");
-      }
-      if (
-        expected.some((grant) => grant.ownerScopeId !== ownerScopeId || grant.ref !== ref) ||
-        replacement.some((grant) => grant.ownerScopeId !== ownerScopeId || grant.ref !== ref)
-      ) {
-        throw new Error("replacement grants must belong to the selected resource");
-      }
-      for (const grant of replacement) {
-        await validateFileGrant(grant);
-        if (grant.granteeScopeId !== grant.ownerScopeId) await opts.authorizeArtifactShare?.(grant, changedBy);
-      }
-      return persist.replaceForResourceIfCurrent(tenant, ownerScopeId, ref, expected, replacement);
+      return withArtifactLock(ownerScopeId, ref, async () => {
+        if (!(await canManage(ownerScopeId, changedBy, authoredBy))) {
+          throw new Error("only a manager of this scope may replace access grants");
+        }
+        if (
+          expected.some((grant) => grant.ownerScopeId !== ownerScopeId || grant.ref !== ref) ||
+          replacement.some((grant) => grant.ownerScopeId !== ownerScopeId || grant.ref !== ref)
+        ) {
+          throw new Error("replacement grants must belong to the selected resource");
+        }
+        for (const grant of replacement) {
+          await validateFileGrant(grant);
+          if (grant.granteeScopeId !== grant.ownerScopeId) await opts.authorizeArtifactShare?.(grant, changedBy);
+        }
+        return persist.replaceForResourceIfCurrent(tenant, ownerScopeId, ref, expected, replacement);
+      });
     },
+
     async handlesFor(tenant, scopeIds) {
       return handles((await persist.find(tenant, { granteeScopeIds: scopeIds })).filter(isFileGrant));
     },

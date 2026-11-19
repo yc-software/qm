@@ -1,7 +1,15 @@
+import { mergeSourceProvenance } from "../memory/facts.ts";
+import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
+import { refreshPrivateContext } from "../sessions/private-context.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { foreignSkillCollision, skillAllowedInContext, type SkillManifest } from "../skills/skill-store.ts";
+import {
+  foreignSkillCollision,
+  skillAllowedInContext,
+  skillSharingRevision,
+  type SkillManifest,
+} from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
@@ -292,6 +300,35 @@ export function createSkillMethods(
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
         if (!current || current.status === "archived") return null;
+        const context = opts?.context ? await refreshPrivateContext(deps.sessions, opts.context) : undefined;
+        if (context?.personalOnly && !current.personalOnly) return "private_context" as const;
+        if (!skillAllowedInContext(current, principalId, opts?.contextScopeId)) return null;
+        if (opts?.personalOnly && !current.personalOnly) return "private_context" as const;
+        const inherited = [current.sourceProvenance, opts?.sourceProvenance, context?.sourceProvenance].filter(
+          (value): value is NonNullable<typeof value> => value !== undefined,
+        );
+        const provenance = inherited.length ? mergeSourceProvenance(inherited) : undefined;
+        if (provenance) {
+          const audiences = new Set([
+            current.scopeId,
+            ...(await deps.acl.grantsFor(ambientTenant(), current.scopeId, `skill:${current.id}`)).map(
+              (grant) => grant.granteeScopeId,
+            ),
+          ]);
+          const personal = scopeId("personal", principalId);
+          audiences.delete(personal);
+          for (const audience of audiences) {
+            if (
+              provenance.sources.length &&
+              provenance.sources.every(
+                (source) => source === personal || source === current.scopeId || source === audience,
+              )
+            )
+              continue;
+            if (!deps.discloseArtifact) throw new MemoryDisclosureDenied("Skill source authorization is unavailable.");
+            await deps.discloseArtifact({ sourceProvenance: provenance }, audience, principalId);
+          }
+        }
         const updated = await deps.skills.update(
           id,
           {
@@ -299,11 +336,12 @@ export function createSkillMethods(
             description: patch.description ?? current.manifest.description,
             body: patch.body ?? current.manifest.body,
           },
-          opts?.sourceProvenance,
+          provenance,
+          skillSharingRevision(current),
         );
         return republishIfShared(updated, principalId);
       });
-      if (!live) return null;
+      if (!live || live === "private_context") return live;
       h.recordAudit({
         at: Date.now(),
         principalId,
@@ -437,6 +475,17 @@ export function createSkillMethods(
         throw new Error(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
+      }
+      if (
+        input.sourceProvenance &&
+        homeScope !== scopeId("personal", input.principalId) &&
+        (!input.sourceProvenance.sources.length ||
+          input.sourceProvenance.sources.some(
+            (source) => source !== homeScope && source !== scopeId("personal", input.principalId),
+          ))
+      ) {
+        if (!deps.discloseArtifact) throw new MemoryDisclosureDenied("Skill source authorization is unavailable.");
+        await deps.discloseArtifact({ sourceProvenance: input.sourceProvenance }, homeScope, input.principalId);
       }
       return deps.skills.withNameLock(homeScope, name, async () => {
         const sameName = (await deps.skills.list()).filter((s) => s.scopeId === homeScope && s.manifest.name === name);

@@ -5261,3 +5261,51 @@ test("private file sharing requires once-only approval bound to the exact revisi
     { type: "file", id: "selected-file", scope: "group:project", privateRevision: "selected-revision" },
   ]);
 });
+
+test("private skill sharing requires once-only approval bound to the exact revision and audience", async () => {
+  const requests: unknown[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async shareArtifact(req) {
+        requests.push(req);
+        return {
+          ok: true,
+          verb: "share",
+          type: "skill",
+          id: req.id,
+          target: { scope: req.scope!, label: req.scope! },
+          permission: "read",
+        };
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((tool) => tool.name === "skills")!;
+  const args = {
+    action: "share",
+    id: "selected-skill",
+    toScope: "group:project",
+    privateRevision: "selected-revision",
+  };
+  assert.match(textOut(await call(apps, args)), /needs human approval/);
+  assert.equal(requests.length, 0);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.call, { tool: "skills", input: args });
+  assert.ok(approval.reason?.includes(args.id));
+  assert.ok(approval.reason?.includes(args.privateRevision));
+  assert.ok(approval.reason?.includes(args.toScope));
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  ref.toolApprovalGate = (_, key) => key === approval.approvalKey;
+  ref.pausedOnApproval = false;
+  await call(apps, { ...args, toScope: "group:different" });
+  await call(apps, { ...args, privateRevision: "different" });
+  assert.equal(requests.length, 0);
+  ref.pausedOnApproval = false;
+  const approvedResult = textOut(await call(apps, args));
+  assert.match(approvedResult, /Shared skill/, approvedResult);
+  assert.deepEqual(requests, [
+    { type: "skill", id: "selected-skill", scope: "group:project", privateRevision: "selected-revision" },
+  ]);
+});

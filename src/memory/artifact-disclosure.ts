@@ -25,6 +25,7 @@ export function createArtifactDisclosure(
         throw new MemoryDisclosureDenied("This output's source restrictions prevent public access.");
       return published;
     }
+    if (!sources.length && !original.sourceUnknown && original.sensitivity !== "unknown") return published;
     const publicationMembers = async (scope: ScopeId) => {
       const parsed = parseScopeId(scope);
       return parsed.kind === "personal" ? [deps.classify(parsed.ref)] : deps.currentScopeMembers?.(scope);

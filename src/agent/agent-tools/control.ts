@@ -374,7 +374,7 @@ export function controlPlaneTools(kit: ToolKit) {
               ),
             }
           : {}),
-        ...(type === "deploy" || type === "file"
+        ...(type === "deploy" || type === "file" || type === "skill"
           ? {
               privateRevision: Type.Optional(
                 Type.String({

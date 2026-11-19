@@ -1,4 +1,4 @@
-import { inheritRequestSources } from "../private-context.ts";
+import { inheritRequestSources, requestPrivateContext } from "../private-context.ts";
 import { captureProvenance, UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
 import { refuseImpersonated } from "../http.ts";
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
@@ -1089,6 +1089,7 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
   const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    context: requestPrivateContext(ctx, principalId),
     liveActor,
     botActor: capability?.botActor === true,
     ...(capability?.personalOnly ? { personalOnly: true as const } : {}),

@@ -1,3 +1,4 @@
+import { skillSharingRevision } from "../skills/skill-store.ts";
 import { appSharingRevision } from "../deploy/deploy-store.ts";
 import { contextualFiles } from "../files/context-files.ts";
 import {
@@ -1303,6 +1304,30 @@ export function createSessionMethods(
         if (!provenance) throw new Error("The selected private file has no source provenance.");
         const writeGrant = await deps.acl.preparePrivateGrant(tenant, g, file.createdBy);
         await deps.files.releasePrivate(ref.id, opts.privateRevision, provenance, writeGrant);
+      } else if (ref.kind === "skill" && opts?.privateRevision && opts.context) {
+        const context = await refreshPrivateContext(deps.sessions, opts.context);
+        if (!privateSourceAllowed(context, g.ownerScopeId) || !samePerson(context.actorId, g.grantedBy))
+          throw new Error("Only the private skill's owner can share it from personal context.");
+        if (parseScopeId(g.granteeScopeId).kind === "org") {
+          if (
+            !deps.admin ||
+            !(await deps.admin.adminStatusOf(tenant, { id: context.actorId, type: "internal" })).isAdmin
+          )
+            throw new AdminError(403, "only an org admin can share a skill org-wide");
+        }
+        const skill = await deps.skills.get(ref.id);
+        if (
+          !skill?.personalOnly ||
+          skill.scopeId !== g.ownerScopeId ||
+          skillSharingRevision(skill) !== opts.privateRevision
+        )
+          throw new Error("The selected private skill changed after approval. Read it again before sharing.");
+        await inheritContextSources(deps.sessions, context, [{ ...skill, ownerScopeId: skill.scopeId }]);
+        if (!deps.discloseArtifact) throw new Error("Skill source authorization is unavailable.");
+        const provenance = await deps.discloseArtifact(skill, g.granteeScopeId, g.grantedBy);
+        if (!provenance) throw new Error("The selected private skill has no source provenance.");
+        const writeGrant = await deps.acl.preparePrivateGrant(tenant, g, skill.createdBy);
+        await deps.skills.releasePrivate(ref.id, opts.privateRevision, provenance, writeGrant);
       } else if (ref.kind !== "deploy") await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
         at: Date.now(),
@@ -1339,7 +1364,16 @@ export function createSessionMethods(
       if (!deps.admin) throw new Error("org promotion requires an admin service");
       const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");
-      const promoted = await deps.skills.promote(id, targetScopeId);
+      const selected = await deps.skills.get(id);
+      if (selected?.sourceProvenance) {
+        if (!deps.discloseArtifact) throw new Error("Skill source authorization is unavailable.");
+        await deps.discloseArtifact(selected, targetScopeId, actorId);
+      }
+      const promoted = await deps.skills.promote(
+        id,
+        targetScopeId,
+        selected ? skillSharingRevision(selected) : undefined,
+      );
       h.recordAudit({
         at: Date.now(),
         principalId: actorId,
@@ -1366,7 +1400,13 @@ export function createSessionMethods(
       if (type === "skill") {
         const s = await deps.skills.get(idOrName);
         return s
-          ? { id: s.id, ownerScopeId: s.scopeId, createdBy: s.createdBy, grantRef: encodeRef(skillRef(s.id)) }
+          ? {
+              id: s.id,
+              ownerScopeId: s.scopeId,
+              createdBy: s.createdBy,
+              grantRef: encodeRef(skillRef(s.id)),
+              ...(s.personalOnly ? { privateRevision: skillSharingRevision(s) } : {}),
+            }
           : null;
       }
       if (type === "cron") {
@@ -1409,7 +1449,19 @@ export function createSessionMethods(
       if (type !== "skill") {
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       }
-      await deps.skills.move(id, toScope);
+      const selected = await deps.skills.get(id);
+      if (selected?.sourceProvenance && toScope !== selected.scopeId) {
+        const audiences = new Set([
+          toScope,
+          ...(await deps.acl.grantsFor(ambientTenant(), toScope, `skill:${id}`)).map((grant) => grant.granteeScopeId),
+        ]);
+        audiences.delete(scopeId("personal", movedBy));
+        for (const audience of audiences) {
+          if (!deps.discloseArtifact) throw new Error("Skill source authorization is unavailable.");
+          await deps.discloseArtifact(selected, audience, movedBy);
+        }
+      }
+      await deps.skills.move(id, toScope, selected ? skillSharingRevision(selected) : undefined);
       h.recordAudit({
         at: Date.now(),
         principalId: movedBy,
