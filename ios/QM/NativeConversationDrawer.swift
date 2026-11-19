@@ -63,7 +63,6 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       // A drag commits `isOpen` only after its spring lands, so the card is already there.
       let target: CGFloat = open ? 1 : 0
       guard motion.dragStart == nil, motion.position != target else { return }
-      if hasSelection && !showsSidebarPage { motion.tap() }
       withAnimation(reduceMotion ? nil : .smooth(duration: 0.32)) {
         motion.position = target
       }
@@ -75,7 +74,7 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       // Read the card's live position: `isOpen` lags until a released drag lands.
       opening: { [motion] in motion.position < 0.5 },
       isEnabled: isEnabled,
-      onBegan: { motion.begin() },
+      onBegan: { motion.dragStart = motion.position },
       onChanged: { motion.track($0, width: width) },
       onEnded: { settle(translation: $0, velocity: $1, width: width) }
     )
@@ -88,7 +87,7 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
     let target: CGFloat = open ? 1 : 0
     let remaining = target - motion.position
     let relative = abs(remaining) > 0.001 ? (velocity / width) / remaining : 0
-    motion.land(open: open)
+    motion.dragStart = nil
     withAnimation(
       reduceMotion
         ? nil
@@ -104,43 +103,17 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
   }
 }
 
-@MainActor @Observable
+@Observable
 final class DrawerMotion {
   var position: CGFloat = 0
   @ObservationIgnored var dragStart: CGFloat?
-  // The side the last haptic announced, so a drag taps once as it crosses halfway.
-  @ObservationIgnored private var announcedOpen: Bool?
-  @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .soft)
-
-  func begin() {
-    dragStart = position
-    announcedOpen = position > 0.5
-    haptic.prepare()
-  }
 
   func track(_ translation: CGFloat, width: CGFloat) {
     let raw = (dragStart ?? position) + translation / width
     var transaction = Transaction()
     transaction.disablesAnimations = true
     withTransaction(transaction) { position = min(max(raw, 0), 1) }
-    let open = position > 0.5
-    if let announced = announcedOpen, announced != open {
-      announcedOpen = open
-      haptic.impactOccurred(intensity: 0.6)
-      haptic.prepare()
-    }
   }
-
-  // A fling can settle on the other side without crossing halfway; tap for it on release.
-  func land(open: Bool) {
-    if let announced = announcedOpen, announced != open {
-      haptic.impactOccurred(intensity: 0.6)
-    }
-    announcedOpen = nil
-    dragStart = nil
-  }
-
-  func tap() { haptic.impactOccurred(intensity: 0.6) }
 }
 
 // Drag frames change only `DrawerMotion`, which re-renders `DrawerCardLayer` alone; this
@@ -190,6 +163,8 @@ private struct DrawerCardLayer<Content: View>: View {
         .allowsHitTesting(false)
       }
       .offset(x: motion.position * width)
+      // Drags cross halfway under the finger; flings and taps cross when the target is set.
+      .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: reveal > 0.5)
   }
 }
 
