@@ -124,13 +124,10 @@ const retiredEgressProxyKeys = {
   SMOLMACHINES_EGRESS_PROXY_URL: "smolmachines",
   PORTER_SANDBOX_EGRESS_PROXY_URL: "porter",
   AGENT37_EGRESS_PROXY_URL: "agent37",
+  DO_AGENTS_EGRESS_PROXY_URL: "do-managed-agents",
 };
 
 function checkRetiredEgressProxyKeys(env: NodeJS.ProcessEnv): void {
-  if (env.DO_AGENTS_EGRESS_PROXY_URL)
-    throw new Error(
-      "No longer read: DO_AGENTS_EGRESS_PROXY_URL. DigitalOcean Managed Agents can't be forced through the QM egress proxy (docs/do-managed-agents.md), so its sessions keep open egress. Remove the setting.",
-    );
   const set = Object.entries(retiredEgressProxyKeys).filter(([key]) => env[key]);
   const uncovered = set.filter(([, backend]) => !egressProxyFor(env, backend).egressProxyUrl).map(([key]) => key);
   if (uncovered.length)
@@ -224,6 +221,7 @@ interface ManagedAgentsSandboxEnv {
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
   defaultTimeoutSec?: number;
+  egressProxyUrl?: string;
 }
 
 function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEnv {
@@ -233,6 +231,7 @@ function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEn
     ...(env.DO_AGENTS_TEMPLATE ? { template: env.DO_AGENTS_TEMPLATE } : {}),
     ...(env.DO_AGENTS_NAME_PREFIX ? { namePrefix: env.DO_AGENTS_NAME_PREFIX } : {}),
     ...(env.DO_AGENTS_SIZE_SLUG ? { sizeSlug: env.DO_AGENTS_SIZE_SLUG } : {}),
+    ...egressProxyFor(env, "do-managed-agents"),
     ...optNum(env, "DO_AGENTS_IDLE_TIMEOUT_SEC", "idleTimeoutSec"),
     ...(env.DO_AGENTS_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.DO_AGENTS_SNAPSHOT_S3_BUCKET } : {}),
     ...optNum(env, "DO_AGENTS_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
@@ -486,7 +485,9 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
 
 function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
   if (
-    ["sprites", "e2b", "modal", "smolmachines", "porter", "render"].includes(env.SANDBOX_BACKEND ?? "") &&
+    ["sprites", "e2b", "modal", "smolmachines", "porter", "render", "do-managed-agents"].includes(
+      env.SANDBOX_BACKEND ?? "",
+    ) &&
     !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
   ) {
     console.warn(
