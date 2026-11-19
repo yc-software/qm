@@ -39,6 +39,7 @@ export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
   pinned?: boolean;
+  routedBy?: string;
 }
 
 export interface PersonaService {

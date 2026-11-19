@@ -21,19 +21,22 @@ import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
+import type { DecisionBackend, DecisionRule } from "../src/decisions/decisions.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
 const CAROL = "U_CAROL";
 
-function setup() {
+function setup(overrides: Parameters<typeof buildApp>[1] = {}) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "personas-")),
       signingSecret: "test-secret",
       apiBaseUrl: "https://core.example.com",
     }),
+    overrides,
   );
   const personas = built.app.personas!;
   const enable = (who: string) => built.featureFlags.setEnabled("personas", scopeId("personal", who), true, "admin");
@@ -612,4 +615,58 @@ test("an agent's runtime write lands on the scope it names, only where it may wr
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
+});
+
+test("one turn_start call routes a DM to the persona it is addressed to, alongside model routing", async () => {
+  const states: string[] = [];
+  let toAda = 0.9;
+  const decisionBackend: DecisionBackend = {
+    async choose({ state }) {
+      states.push(state);
+      return { "route-ada": { ada: toAda, keep: 1 - toAda }, deep: { deep: 0.8, keep: 0.2 } };
+    },
+  };
+  const { built, personas, enable, sysprompt } = setup({ decisionBackend });
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  const by = { actorId: ALICE };
+  await built.decisions!.saveProvider(testTenant, { id: "gw", protocol: "chat-completions" }, by);
+  const rule = (id: string, option: string, chosen: Omit<DecisionRule["options"][string], "description">) =>
+    built.decisions!.saveRule(
+      testTenant,
+      {
+        id,
+        hook: "turn_start",
+        question: id,
+        options: { keep: { description: "No", action: "keep" }, [option]: { description: "Yes", ...chosen } },
+        model: { provider: "gw", model: "example/decision-model" },
+        mode: "enforce",
+        onError: "keep",
+      },
+      by,
+    );
+  await rule("route-ada", "ada", { action: "use_persona", persona: ada.id });
+  await rule("deep", "deep", { action: "use_runtime", runtime: { modelId: "gpt-5.5" } });
+
+  const first = await sysprompt(ALICE, { kind: "dm", threadRef: "dm:U_ALICE:routed" });
+  assert.match(first.reply, /## Persona: Ada[\s\S]*route-ada routed this conversation/);
+  assert.equal((await built.sessions.get(first.sessionId))?.personaId, ada.id);
+  assert.equal(states.length, 1);
+  assert.match(states[0]!, /conversation: dm/);
+
+  toAda = 0.1;
+  const plain = await built.app.turn({
+    surface: "test",
+    actor: { externalId: ALICE },
+    conversation: { kind: "dm", threadRef: "dm:U_ALICE:plain" },
+    text: "hi",
+  });
+  assert.equal(plain.runtime?.modelId, "gpt-5.5");
+  assert.equal((await built.sessions.get(plain.sessionId!))?.personaId, undefined);
+  assert.equal(states.length, 2);
+
+  toAda = 0.9;
+  const bob = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:routed" });
+  assert.equal(bob.reply.includes("## Persona:"), false);
+  assert.match(bob.reply, /route-ada picked persona .* can't wear it/);
 });

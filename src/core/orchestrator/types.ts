@@ -193,6 +193,7 @@ export interface OrchestratorDeps {
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   replyCheck?: import("../../decisions/hooks.ts").ReplyCheckFactory;
+  decide?: ReturnType<typeof import("../../decisions/hooks.ts").createDecisionHooks>;
   surfaceDebugFooter?: boolean;
 }
 
