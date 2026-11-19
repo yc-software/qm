@@ -1,5 +1,5 @@
 import { switchTrack } from "../switch.ts";
-import { cardClass, choiceGroup, settingStatus, saveFooter, textField, toggleField } from "./setting-controls.ts";
+import { cardClass, choiceGroup, formField, settingStatus, saveFooter, switchField } from "./setting-controls.ts";
 import { badge } from "./shared.ts";
 import { html, nothing, render } from "lit";
 import type { AdminPage } from "./sections.ts";
@@ -252,12 +252,25 @@ function connectorsCard() {
         </select></label
       >
       <div id="conn-guide" class="hint" style="margin: 0 0 12px">${connectorGuide()}</div>
-      ${textField("Client ID", 8, "conn-client-id", s.draft.clientId, (v) => s.change("clientId", v), { placeholder: "OAuth client ID", auto: "off" })}
-      ${textField("Client secret", 8, "conn-client-secret", s.draft.clientSecret, (v) => s.change("clientSecret", v), { type: "password", auto: "off", placeholder: s.editing && s.list.find((c) => c.provider === s.editing)?.hasSecret ? "•••• set (re-enter to replace)" : "(write-only)" })}
-      <p class="field-hint" id="conn-secret-hint">
-        ${s.editing ? "Saving requires the client secret. Re-enter it to keep this connector working." : "Secret values are write-only and will not be displayed after saving."}
-      </p>
-      ${toggleField("Enabled", 8, s.draft.enabled, (on) => s.change("enabled", on), { id: "conn-enabled" })}
+      ${formField("Client ID", "", "conn-client-id", s.draft.clientId, (v) => s.change("clientId", v), { placeholder: "OAuth client ID" })}
+      ${formField(
+        "Client secret",
+        s.editing
+          ? "Saving requires the client secret. Re-enter it to keep this connector working."
+          : "Secret values are write-only and will not be displayed after saving.",
+        "conn-client-secret",
+        s.draft.clientSecret,
+        (v) => s.change("clientSecret", v),
+        {
+          type: "password",
+          helpId: "conn-secret-hint",
+          placeholder:
+            s.editing && s.list.find((c) => c.provider === s.editing)?.hasSecret
+              ? "•••• set (re-enter to replace)"
+              : "(write-only)",
+        },
+      )}
+      ${switchField("conn-enabled", "Enabled", "", s.draft.enabled, (on) => s.change("enabled", on))}
     </div>
     <div class="foot">
       <button type="button" id="add-oauth-app" class=${s.editor ? "btn hidden" : "btn"} @click=${() => openConnector()}>
@@ -403,7 +416,7 @@ function tokenField(
     s[key] = value;
     s.revision++;
   };
-  return textField(label, 12, id, s[key], set, { type: "password", auto: "off", placeholder });
+  return formField(label, "", id, s[key], set, { type: "password", placeholder });
 }
 function openConnector(connector?: Parameters<typeof connectors.edit>[0]) {
   connectors.edit(connector);

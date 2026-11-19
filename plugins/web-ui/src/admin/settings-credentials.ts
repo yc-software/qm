@@ -1,7 +1,7 @@
+import { settingsSection } from "../settings-layout.ts";
 import { brandName } from "../ui.ts";
-import { switchTrack } from "../switch.ts";
 import { badge } from "./shared.ts";
-import { reviewChange } from "./setting-controls.ts";
+import { formField, reviewChange, switchField } from "./setting-controls.ts";
 import type { AdminPage } from "./sections.ts";
 import { page, draw } from "./settings.ts";
 import { SettingState } from "./setting-state.ts";
@@ -394,15 +394,14 @@ export const addCredential = () =>
   </button>`;
 export const keychainCard = () => {
   const ready = keychain && keychain.enabled !== false;
-  return html`<section class="card sv-credentials" id="card-personal-keychains">
-    <div class="settings-section-head"><h3>Personal keychains</h3></div>
-    <div class="body settings-card">
-      <div class="keychain-summary">
-        <strong id="keychain-user-count">${ready ? String(keychain!.users) : "—"}</strong> users with keychain entries ·
-        <strong id="keychain-standing-count">${ready ? String(keychain!.standing) : "—"}</strong> standing grants
-      </div>
-    </div>
-  </section>`;
+  return settingsSection(
+    "Personal keychains",
+    html`<div class="keychain-summary">
+      <strong id="keychain-user-count">${ready ? String(keychain!.users) : "—"}</strong> users with keychain entries ·
+      <strong id="keychain-standing-count">${ready ? String(keychain!.standing) : "—"}</strong> standing grants
+    </div>`,
+    { id: "card-personal-keychains" },
+  );
 };
 const plural = (n: number, label: string) => n + " " + label + (n === 1 ? "" : "s");
 const granteeCount = (grantees: string[]) => {
@@ -412,20 +411,18 @@ const granteeCount = (grantees: string[]) => {
     .filter(Boolean)
     .join(", ");
 };
-function credentialUsage(c: Data) {
-  if (c.usageUnavailable) return "Usage unavailable";
-  if (c.usageCount == null) return "Loading usage…";
-  return (
-    (c.usageTruncated ? "at least " : "") +
-    plural(c.usageCount, "successful use") +
-    (c.usageCount ? " since " + new Date(c.usageSince).toLocaleString() : " in retained broker history")
-  );
-}
 const fmt = (n: number) => n.toLocaleString();
-function usageShort(c: Data) {
-  if (c.usageUnavailable) return "Usage unavailable";
-  if (c.usageCount == null) return "";
-  return (c.usageTruncated ? fmt(c.usageCount) + "+" : fmt(c.usageCount)) + (c.usageCount === 1 ? " use" : " uses");
+function credentialUsage(c: Data): { short: string; full: string } {
+  if (c.usageUnavailable) return { short: "Usage unavailable", full: "Usage unavailable" };
+  if (c.usageCount == null) return { short: "", full: "Loading usage…" };
+  const n: number = c.usageCount;
+  return {
+    short: fmt(n) + (c.usageTruncated ? "+" : "") + (n === 1 ? " use" : " uses"),
+    full:
+      (c.usageTruncated ? "at least " : "") +
+      plural(n, "successful use") +
+      (n ? " since " + new Date(c.usageSince).toLocaleString() : " in retained broker history"),
+  };
 }
 function credentialFlags(c: Data) {
   const org = c.source === "deployment" || (c.grantees || []).some((g: string) => g.startsWith("org:"));
@@ -435,6 +432,7 @@ function credentialFlags(c: Data) {
 }
 function credentialRow(c: Data) {
   const deployment = c.source === "deployment";
+  const usage = credentialUsage(c);
   const meta =
     c.delivery === "env"
       ? "$" + (c.envKey || "?")
@@ -450,7 +448,7 @@ function credentialRow(c: Data) {
       <span class="cred-meta">${meta}</span>
     </span>
     <span class="cred-flags">${credentialFlags(c)}</span>
-    <span class="cred-usage" title=${credentialUsage(c)}>${usageShort(c)}</span>`;
+    <span class="cred-usage" title=${usage.full}>${usage.short}</span>`;
   return deployment
     ? html`<div class="cred-row is-locked" title="Set in the deployment's configuration; edit it there.">
         ${body}<span class="cred-end">Managed</span>
@@ -484,13 +482,11 @@ function credentialRows() {
   return credentialGroups.map(([title, hint, test]) => {
     const rows = credentialState.rows.filter(test);
     return rows.length
-      ? html`<div class="cred-section">
-          <div class="settings-section-head">
-            <h3>${title}</h3>
-            <span>${hint}</span>
-          </div>
-          <div class="settings-card cred-group">${repeat(rows, (c) => c.slug, credentialRow)}</div>
-        </div>`
+      ? settingsSection(
+          title,
+          repeat(rows, (c) => c.slug, credentialRow),
+          { note: hint },
+        )
       : null;
   });
 }
@@ -550,54 +546,26 @@ const capabilityRows = [
   ["Access", "principals"],
   ["Secret", "secret"],
 ] as const;
-type CdOptions = {
-  placeholder?: string;
-  auto?: string;
-  disabled?: boolean;
-  type?: string;
-  only?: "env" | "broker";
-  helpId?: string;
-};
-const cdField = (key: string, name: string, help: string, o: CdOptions = {}) =>
-  html`<label
-    class=${classMap({ "cd-field": true, hidden: !!o.only && (o.only === "env") !== (credentialState.draft.delivery === "env") })}
-    ><span class="cd-label">${name}</span
-    ><input
-      type=${o.type || "text"}
-      id=${"sc-" + key}
-      .value=${credentialState.draft[key] || ""}
-      @input=${(e: Event) => credentialState.change(key, (e.target as HTMLInputElement).value)}
-      ?disabled=${!!o.disabled}
-      placeholder=${o.placeholder ?? ""}
-      autocomplete=${o.auto ?? "off"}
-    />${help ? html`<span class="cd-help" id=${o.helpId ?? ""}>${help}</span>` : null}</label
-  >`;
-const cdSwitch = (id: string, name: string, help: string, on: boolean, set: (on: boolean) => void) =>
-  html`<label class="cd-switch-row setting-toggle"
-    ><span class="cd-switch-text"><span>${name}</span>${help ? html`<small>${help}</small>` : null}</span
-    ><input
-      type="checkbox"
-      role="switch"
-      id=${id}
-      .checked=${on}
-      @change=${(e: Event) => set((e.target as HTMLInputElement).checked)}
-    />${switchTrack(on)}</label
-  >`;
+const cdField = (
+  key: string,
+  name: string,
+  help: string,
+  o: Parameters<typeof formField>[5] & { only?: "env" | "broker" } = {},
+) =>
+  formField(name, help, "sc-" + key, credentialState.draft[key] || "", (v) => credentialState.change(key, v), {
+    ...o,
+    hidden: !!o.only && (o.only === "env") !== (credentialState.draft.delivery === "env"),
+  });
 
 export function credentialsCard() {
   const s = credentialState;
   const env = s.draft.delivery === "env";
   const cap = s.capability();
-  return html`<section
-    class=${classMap({ card: true, "sv-credentials": true, dirty: s.dirty })}
-    id="card-service-credentials"
-  >
-    <div class="body">
-      <div id="sc-list" role="status" aria-live="polite" class=${credentialState.rows.length ? "" : "hint"}>
-        ${credentialRows()}
-      </div>
+  return html`<div class=${classMap({ "settings-stack": true, dirty: s.dirty })} id="card-service-credentials">
+    <div id="sc-list" role="status" aria-live="polite" class=${credentialState.rows.length ? "settings-stack" : "hint"}>
+      ${credentialRows()}
     </div>
-    <div class="foot">${s.open ? null : statusLine()}</div>
+    ${s.open || !s.message ? null : statusLine()}
     <dialog
       id="sc-dialog"
       class="custom-provider-dialog credential-dialog cd"
@@ -615,8 +583,8 @@ export function credentialsCard() {
           <h3>Service</h3>
           ${cdField("name", "Name", "", { placeholder: "Example API" })}
           ${cdField("slug", "Identifier", s.editing ? "Can't be changed after the credential is created." : "Lowercase letters, numbers and dashes. Can't be changed later.", { placeholder: "example-api", auto: "off", disabled: !!s.editing })}
-          <label class="cd-field">
-            <span class="cd-label">Delivery</span>
+          <label class="form-field">
+            <span class="form-label">Delivery</span>
             <select
               id="sc-delivery"
               .value=${s.draft.delivery || ""}
@@ -625,7 +593,7 @@ export function credentialsCard() {
               <option value="broker">Proxied by ${brandName()}</option>
               <option value="env">Sandbox environment variable</option>
             </select>
-            <span class="cd-help"
+            <span class="form-help"
               >${
                 env
                   ? "Injected into every all-internal conversation. Rooms with external guests get nothing."
@@ -647,8 +615,8 @@ export function credentialsCard() {
         <section class=${classMap({ "cd-section": true, hidden: env })}>
           <h3>Allowed requests</h3>
           ${cdField("methods", "Methods", "Comma-separated. Blank allows GET only.", { placeholder: "GET, POST" })}
-          <label class="cd-field">
-            <span class="cd-label">Paths</span>
+          <label class="form-field">
+            <span class="form-label">Paths</span>
             <textarea
               id="sc-paths"
               rows="3"
@@ -656,17 +624,17 @@ export function credentialsCard() {
               @input=${(e: Event) => s.change("paths", (e.target as HTMLInputElement).value)}
               placeholder="/v1/search"
             ></textarea>
-            <span class="cd-help">One prefix per line. Blank allows every path on the host.</span>
+            <span class="form-help">One prefix per line. Blank allows every path on the host.</span>
           </label>
         </section>
         <section class="cd-section">
           <h3>Access</h3>
           <div class="cd-group">
-            ${cdSwitch("sc-enabled", "Enabled", "", s.draft.enabled !== false, (on) => s.change("enabled", on))}
+            ${switchField("sc-enabled", "Enabled", "", s.draft.enabled !== false, (on) => s.change("enabled", on))}
             ${
               env
                 ? null
-                : cdSwitch(
+                : switchField(
                     "sc-deployments",
                     "Published apps",
                     "Apps can use it, acting as their publisher.",
@@ -677,11 +645,11 @@ export function credentialsCard() {
           </div>
           ${
             env
-              ? html`<p class="cd-help">
+              ? html`<p class="form-help">
                   Every all-internal conversation gets the variable. It isn't limited by grants.
                 </p>`
-              : html`<div class="cd-field">
-                    <span class="cd-label">Who can use it</span>
+              : html`<div class="form-field">
+                    <span class="form-label">Who can use it</span>
                     <div class="cd-segmented" role="radiogroup" aria-label="Who can use it">
                       <label
                         ><input
@@ -780,7 +748,7 @@ export function credentialsCard() {
         </button>
       </footer>
     </dialog>
-  </section>`;
+  </div>`;
 }
 const statusLine = () =>
   html`<span

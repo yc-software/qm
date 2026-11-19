@@ -1,5 +1,6 @@
 import { ifDefined } from "lit/directives/if-defined.js";
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
+import { switchTrack } from "../switch.ts";
 import { classMap } from "lit/directives/class-map.js";
 import type { SettingState } from "./setting-state.ts";
 
@@ -57,52 +58,42 @@ type FieldOptions = {
   type?: string;
   placeholder?: string;
   auto?: string;
-  cls?: unknown;
-  flex?: boolean;
   disabled?: boolean;
+  hidden?: boolean;
+  helpId?: string;
 };
-export function textField(
+export function formField(
   label: string,
-  hint: string | number,
+  help: unknown,
   id: string,
   value: string,
   set: (value: string) => void,
   o: FieldOptions = {},
 ) {
-  return html`<label
-    style=${"display: block; margin-bottom: 8px" + (o.flex ? "; flex: 1" : "")}
-    class=${ifDefined(o.cls)}
-    >${label}${typeof hint === "string" ? html` <span class="hint">${hint}</span>` : "\n" + " ".repeat(hint)}<input
+  return html`<label class=${classMap({ "form-field": true, hidden: !!o.hidden })}
+    ><span class="form-label">${label}</span
+    ><input
       type=${o.type || "text"}
       id=${id}
       .value=${value}
       @input=${(e: Event) => set((e.target as HTMLInputElement).value)}
       ?disabled=${!!o.disabled}
-      placeholder=${ifDefined(o.placeholder)}
-      autocomplete=${ifDefined(o.auto)}
-      style="width: 100%"
-  /></label>`;
+      placeholder=${o.placeholder ?? ""}
+      autocomplete=${o.auto ?? "off"}
+    />${help ? html`<span class="form-help" id=${ifDefined(o.helpId)}>${help}</span>` : nothing}</label
+  >`;
 }
 
-export function toggleField(
-  label: string,
-  indent: number,
-  checked: boolean,
-  set: (on: boolean) => void,
-  o: { id?: string; name?: string; value?: string; cls?: unknown } = {},
-) {
-  return html`<label
-    class=${ifDefined(o.cls)}
-    style=${`display: flex; align-items: center; gap: ${o.value ? "8px" : "10px"}; cursor: pointer; margin-bottom: ${o.value ? "6px" : "10px"}`}
+export function switchField(id: string, label: string, help: string, on: boolean, set: (on: boolean) => void) {
+  return html`<label class="switch-row setting-toggle"
+    ><span class="switch-text"><span>${label}</span>${help ? html`<small>${help}</small>` : nothing}</span
     ><input
-      type=${o.value ? "radio" : "checkbox"}
-      name=${ifDefined(o.name)}
-      value=${ifDefined(o.value)}
-      id=${ifDefined(o.id)}
-      .checked=${checked}
+      type="checkbox"
+      role="switch"
+      id=${id}
+      .checked=${on}
       @change=${(e: Event) => set((e.target as HTMLInputElement).checked)}
-      style="width: auto"
-    />${"\n" + " ".repeat(indent) + label}</label
+    />${switchTrack(on)}</label
   >`;
 }
 

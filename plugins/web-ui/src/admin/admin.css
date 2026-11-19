@@ -1776,7 +1776,11 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   background: color-mix(in srgb, var(--foreground) 2%, transparent);
 }
 #app-view[data-subview="credentials"] #view-governance .keychain-summary {
+  padding: 14px 18px;
   color: var(--muted-foreground);
+}
+#app-view[data-subview="credentials"] #view-governance #sc-list .settings-card {
+  overflow: hidden;
 }
 #app-view[data-subview="credentials"] #view-governance .keychain-summary strong {
   color: var(--foreground);
@@ -2681,7 +2685,7 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   width: 16px;
   text-align: right;
   color: var(--muted-foreground);
-  font-size: 18px;
+  font-size: var(--font-18);
   line-height: 1;
 }
 #app-view .cred-row.is-locked .cred-end {
@@ -2693,8 +2697,6 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
     display: none;
   }
 }
-
-/* Credentials: page header — one title, one line, action on the same row */
 
 /* Credential editor (dialog.cd). An 8pt rhythm, after Apple's HIG:
    24 outer padding · 28 between sections · 16 between fields · 6 label→control · 6 control→help.
@@ -2721,7 +2723,7 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 }
 #app-view dialog.cd .cd-head h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: var(--font-20);
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -2750,7 +2752,7 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   min-width: 0;
 }
 #app-view dialog.cd .cd-section.hidden,
-#app-view dialog.cd .cd-field.hidden,
+#app-view .form-field.hidden,
 #app-view dialog.cd .cd-row.hidden {
   display: none;
 }
@@ -2761,22 +2763,22 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   font-weight: 600;
   line-height: 1.3;
 }
-#app-view dialog.cd .cd-field {
+#app-view .form-field {
   display: grid;
   gap: 6px;
   min-width: 0;
   margin: 0;
 }
-#app-view dialog.cd .cd-label {
+#app-view .form-label {
   color: var(--foreground);
   font-size: var(--font-13);
   font-weight: 500;
   line-height: 1.3;
 }
-#app-view dialog.cd .cd-help {
+#app-view .form-help {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--font-12-5);
   line-height: 1.45;
 }
 #app-view dialog.cd .cd-row {
@@ -2799,7 +2801,7 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 }
 /* Multi-line fields share the single-line inset: 20px line box + 8px top/bottom = 36px,
    so the first line of a textarea sits exactly where text sits in an input. */
-#app-view dialog.cd .cd-field textarea {
+#app-view .form-field textarea {
   display: block;
   min-height: calc(var(--cd-control-h) + 40px);
   padding: 8px 12px;
@@ -2832,7 +2834,7 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 html.dark #app-view dialog.cd .cd-group {
   background: var(--cd-fill);
 }
-#app-view dialog.cd .cd-switch-row {
+#app-view .switch-row {
   position: relative;
   display: flex;
   align-items: center;
@@ -2843,17 +2845,17 @@ html.dark #app-view dialog.cd .cd-group {
   margin: 0;
   cursor: pointer;
 }
-#app-view dialog.cd .cd-switch-row + .cd-switch-row {
-  border-top: 1px solid var(--cd-hairline);
+#app-view .switch-row + .switch-row {
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 10%, var(--background));
 }
-#app-view dialog.cd .cd-switch-text {
+#app-view .switch-text {
   display: grid;
   gap: 2px;
   font-size: var(--font-13);
 }
-#app-view dialog.cd .cd-switch-text small {
+#app-view .switch-text small {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 
 /* Segmented control for the two-way access choice. */
@@ -2906,7 +2908,7 @@ html.dark #app-view dialog.cd .cd-group {
 }
 #app-view dialog.cd .cd-summary dt {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--font-12-5);
   font-weight: 500;
   line-height: 1.45;
 }
@@ -2933,7 +2935,7 @@ html.dark #app-view dialog.cd .cd-group {
 #app-view dialog.cd .cd-foot .status {
   margin: 0 8px 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view dialog.cd .cd-foot .btn {
   height: 32px;
@@ -2967,9 +2969,6 @@ html.dark #app-view dialog.cd .cd-group {
   background-position: right 12px center;
   cursor: pointer;
 }
-
-/* Credentials page structure matches General: title at the top edge, 28px between blocks,
-   and Personal keychains as a titled section over a rounded card. */
 #app-view[data-subview="credentials"] #view-governance section#card-service-credentials {
   padding: 0;
 }

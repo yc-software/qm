@@ -3,12 +3,12 @@ import { html, nothing, type TemplateResult } from "lit";
 export const settingsSection = (
   title: string,
   body: unknown,
-  o: { card?: boolean; action?: unknown; id?: string; hidden?: boolean } = {},
+  o: { card?: boolean; action?: unknown; note?: unknown; id?: string; hidden?: boolean } = {},
 ): TemplateResult => html`
   <section class="settings-section" id=${o.id ?? nothing} ?hidden=${!!o.hidden}>
     <div class="settings-section-head">
       <h3>${title}</h3>
-      ${o.action ?? nothing}
+      ${o.note ? html`<span>${o.note}</span>` : nothing}${o.action ?? nothing}
     </div>
     ${o.card === false ? body : html`<div class="settings-card">${body}</div>`}
   </section>
