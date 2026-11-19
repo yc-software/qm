@@ -2762,7 +2762,7 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   width: min(560px, calc(100vw - 32px));
   max-height: min(760px, calc(100dvh - 48px));
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
   border-radius: 14px;
   border: 1px solid var(--cd-hairline);
   flex-direction: column;
@@ -2787,6 +2787,9 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   line-height: 1.45;
 }
 #app-view dialog.cd .cd-body {
+  /* Containing block for the visually hidden radio and switch inputs, so focusing one
+     scrolls this pane by at most a row instead of scrolling the whole dialog. */
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -2915,6 +2918,7 @@ html.dark #app-view dialog.cd .cd-group {
   background: color-mix(in srgb, var(--foreground) 7%, var(--background));
 }
 #app-view dialog.cd .cd-segmented label {
+  position: relative;
   margin: 0;
   cursor: pointer;
 }
