@@ -32,7 +32,7 @@ admin's own; find others' ids with `/v1/admin/crons`, `/v1/admin/apps` or `/v1/a
 credential, grant it to this conversation with
 `POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?}`
 (ids from `GET /v1/admin/keychain`; scope defaults to this conversation), then name its
-handle in `execute.credentials`. Every change is audited.
+handle in `execute.credentials`. Credential grants and most edits are audited.
 Confirm mutations with the admin first. Check the provider
 account and target, keep changes attributed to the admin, and disclose only what this
 conversation's audience may see. For cloud operations, also load cloud-cli.
