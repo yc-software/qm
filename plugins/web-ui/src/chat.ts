@@ -3268,7 +3268,7 @@ export function createChatSurface(
                 if (live) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
               }}
             >
-              <summary class=${ending ? "stopped-head" : "work-head"}>
+              <summary class=${ending ? "stopped-head" : "work-head"} @click=${animateDetailsToggle}>
                 ${liveStepLine.line(step && last ? step : null, label, animating, elapsed)}
               </summary>
               ${ending ? nothing : html`<div class="work-divider"></div>`}
@@ -3302,7 +3302,7 @@ export function createChatSurface(
                           class="activity-group work-fold"
                           ?open=${(active && last) || summary.attention}
                         >
-                          <summary class="work-head">
+                          <summary class="work-head" @click=${animateDetailsToggle}>
                             ${icon(groupIcon, 15)}<span>${summary.label}</span
                             ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
                           </summary>
@@ -3679,7 +3679,9 @@ export function createChatSurface(
       class="${classes} tool-expandable"
       @toggle=${(event: Event) => renderDisclosure(event.currentTarget as HTMLDetailsElement)}
     >
-      <summary class="tool-summary">${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span></summary>
+      <summary class="tool-summary" @click=${(event: MouseEvent) => animateDetailsToggle(event, renderDisclosure)}>
+        ${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+      </summary>
       <div
         class="tool-disclosure-host"
         ${ref((element) => {

@@ -167,7 +167,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function onClick(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
     if (target?.nodeType !== 1) return;
-    const disclosure = target.closest<HTMLElement>(".thinking-row > summary");
+    const disclosure = target.closest<HTMLElement>("details > summary");
     if (disclosure && stack?.contains(disclosure) && scroller) {
       cancelFollow();
       anchor = {
