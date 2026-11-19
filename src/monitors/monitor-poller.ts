@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
+import { triggerPrivacy, privateTriggerAllowed } from "../triggers/trigger-store.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
-import type { TurnRequest, TurnResult } from "../types.ts";
+import { personalScope, type TurnRequest, type TurnResult } from "../types.ts";
 import type { Monitor } from "../triggers/types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
@@ -287,11 +289,16 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   ): Promise<number> {
     const rec = await deps.processes.get(m.processId);
     if (!rec?.sandboxId) {
+      if (deps.sandboxResources && !m.personalOnly) {
+        await deps.monitors.recordError(m.id, "The background computer cannot be verified; watch stopped.");
+        await deps.monitors.setEnabled(m.id, false);
+        return 0;
+      }
       await reportLost(m);
       return 1;
     }
     try {
-      await assertBotMayUseComputer(
+      const computer = await assertBotMayUseComputer(
         deps.sandboxResources,
         rec.scopeId,
         rec.sandboxId,
@@ -299,6 +306,20 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           ? botMayUseComputers(deps.swarms, { actorId: m.owner, threadRef: m.threadRef, sessionId: "" })
           : undefined,
       );
+      if (computer?.personalOnly && computer.ownerScopeId !== personalScope(m.owner))
+        throw new SandboxAccessError("This computer is private to its owner.");
+      if (computer?.personalOnly || computer?.sourceProvenance) {
+        const privacy = triggerPrivacy(m, computer);
+        if (!privateTriggerAllowed({ ...m, ...privacy }))
+          throw new SandboxAccessError(
+            "Private computer output requires its owner's personal conversation and delivery.",
+          );
+        if (m.personalOnly !== privacy.personalOnly || !isDeepStrictEqual(m.sourceProvenance, privacy.sourceProvenance))
+          await deps.monitors.update(m.id, privacy);
+        const fresh = await deps.monitors.get(m.id);
+        if (!fresh?.enabled) return 0;
+        m = fresh;
+      }
     } catch (e) {
       if (!(e instanceof SandboxAccessError)) throw e;
       await deps.monitors.recordError(m.id, e.message);

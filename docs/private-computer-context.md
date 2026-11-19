@@ -214,7 +214,7 @@ The four new privacy/provisioning regressions fail against the previous computer
 
 The earlier four-file routing/pool/document/private-trigger batch passes, including26 pool cases. New resource cases verify separate defaults, shared/admin refusal, durable session taint, and rejection of an already-provisioned ordinary handle after a private resource read. The resource suite passes56/58; both load-probe failures reproduce on the unchanged baseline because the local test host lacks Linux /proc. Typecheck and changed-file ESLint pass.
 
-An asynchronous privacy read initially moved before pending-provision registration, breaking the existing synchronous invalidation contract and stalling the pool test. The two owned test children were stopped after process/database inspection; provisioning now registers pending work synchronously and rechecks privacy after awaiting it. The complete26-case pool suite passes. These are local implementation checks; no native private-computer proof or full-boundary acceptance is claimed. This remains a local implementation checkpoint, not a pushed or native-qualified boundary.
+An asynchronous privacy read initially moved before pending-provision registration, breaking the existing synchronous invalidation contract and stalling the pool test. The two owned test children were stopped after process/database inspection; provisioning now registers pending work synchronously and rechecks privacy after awaiting it. The complete26-case pool suite passes. Those were local implementation checks; the later native checks below cover persistent computers only. No full-boundary acceptance is claimed. This remains a local implementation checkpoint, not a pushed or native-qualified boundary.
 
 ## Credential and context payloads
 
@@ -524,3 +524,62 @@ Invented before resource: {id:"old",backend:"local",ownerScopeId:"personal:alice
 The current watched isolated dev core applied marker private-defaults-v1 at2026-11-19T08:40:19.039Z; this was observed directly in its QA Postgres. /readyz returned200. No production instance was migrated. Rollout must drain old workers/producers before enabling this boundary; running this code beside workers that still expose native credentials is unsupported.
 
 The migration regression exercises concurrent callers, retained disk bytes, unknown provenance, shared-owned resource preservation, default separation, marker idempotence and a clean ordinary computer created after cutover. /tmp/qm-private-computer-migration-tests.log passes the migration/new privacy cases and both other affected files (actual HTTP and trigger privacy); the resource file remains57/59 with the same two Linux-/proc load-probe failures. Independent migration review accepted94; it excludes production rollout authorization. Final typecheck/lint logs: /tmp/qm-private-computer-migration-final-types.log and /tmp/qm-private-computer-migration-final-lint.log.
+
+## Native persistent-computer verification
+
+The real spreadsheet development add-in exercised the running QM core at sourceea60e95 with real model turns. Private mode executed on the existing migrated personal computer: its environment credential decoded to computer.personalOnly:true, the expected resource ID, privateRead:true and personalOnly:true. A normal API request using that credential read the owned synthetic private skill with HTTP200 and the expected canary.
+
+In the separate shared workbook conversation, executing a harmless command on that same private computer was refused before execution. The existing Team computer then received computer.personalOnly:false/privateRead:false and returned HTTP404 for the same private skill. Only execute was called: one private call and two shared calls including the refusal. Durable run/session/tool results verify these outcomes, and the private skill canary is absent from every nonpersonal conversation. The original Private preference was restored and live cell values/formula result were verified unchanged.
+
+Sanitized proof and actual UI captures are outside Git: /tmp/qm-private-computer-native-proof.json, /tmp/excel-qm-native-computer-final-ui.json, /tmp/excel-qm-native-private-computer-boundary.png and /tmp/excel-qm-native-ordinary-computer-boundary.png. This qualifies the persistent-computer credential/read boundary, not yet native disposable scratch, background recovery, swarm paths, full-head CI/reviews or rollout.
+
+## Background and watch-output boundary
+
+Human background listing now resolves the canonical computer through the context facade, just as job I/O does. An unauthorized computer cannot list a private command/purpose; a native owner read inherits private context before metadata is returned. The old early return skipped this for non-bot callers. The regression reproduced that behavior in /tmp/qm-private-background-list-red.log. Broker/open/pool files pass; resource privacy cases pass with the two previously documented load-probe platform failures.
+
+The shared assertBotMayUseComputer helper retains all four inputs (resources:get/resolve facade|undefined,scopeId:ScopeId,sandboxId:string|undefined,botMayUse:optional resource predicate), existing refusal behavior, and now returns Promise<SandboxResource|undefined> instead of Promise<void>. Void-only callers await/discard the value. The poller reuses this canonical record rather than issuing a duplicate lookup.
+
+Before provisioning or reading a watched process, the poller merges its computer's privacy/source provenance into the existing durable monitor, validates the personal owner and existing destination, persists changes and reloads the monitor. Every normal, exit, lost-output and heartbeat fire uses that record. A private computer belonging to someone else or a monitor with incompatible shared delivery is disabled without firing or changing its destination. An ordinary monitor with no verifiable process/computer is stopped before retained tail/command/instructions can be sent. Known private classification survives an unavailable VM. Unchanged fields do not cause writes on subsequent idle polls.
+
+No SQL, configuration, provider, HTTP or stored shape changes. Both before and after use these same complete stored interfaces:
+
+```typescript
+export interface TriggerBase {
+  personalOnly?: true;
+  sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
+  id: string;
+  ownerScopeId: ScopeId;
+  owner: string;
+  createdBy: string;
+  ownerConsentedAt?: number;
+  botActor?: boolean;
+  taskAuthor?: "automation";
+  destination?: Destination;
+  enabled: boolean;
+  createdAt: number;
+  lastFiredAt?: number;
+}
+```
+
+```typescript
+export interface Monitor extends TriggerBase {
+  processId: string;
+  command: string;
+  purpose?: string;
+  threadRef: string;
+  instructions?: string;
+  pattern?: string;
+  cursor: number;
+  tail?: string;
+  expiresAt: number;
+  lastError?: string;
+}
+```
+
+Every monitor field above is retained. A valid ordinary monitor keeps its ID/owner/home/destination/process/task/cursor/history/times and gains personalOnly:true plus merged sourceProvenance when its computer becomes private. An incompatible or unverifiable ordinary monitor changes enabled:false and lastError to a standard explanation; its destination is not silently rewritten. Invented valid before: {id:"watch",owner:"alice",createdBy:"alice",ownerScopeId:"personal:alice",destination:{type:"principal",target:"alice"},enabled:true,createdAt:1,processId:"process",command:"synthetic command",threadRef:"chat",cursor:0,expiresAt:2000000000000}; after the same fields plus personalOnly:true,sourceProvenance:{sensitivity:"unknown",sources:["personal:alice"],sourceUnknown:true}. Existing stronger sensitivity/additional sources are merged, not dropped. No migration is added here; resource cutover is described above.
+
+Six new monitor cases fail on the previous poller (output, lost process, unavailable VM, missing registry row, foreign owner, shared destination). Final four-file batch /tmp/qm-private-monitor-resource-final.log passes monitor/broker/trigger files; resource file remains57/59 with the same two baseline /proc-dependent failures. The earlier routing/pool/trigger/monitor batch passes4/4. The output case checks that a second unchanged tick adds no write and no duplicate wake. Typecheck and affected ESLint pass. Independent focused review /root/private_outputs_plan_review accepted human metadata95 and final monitor boundary95 after the unchanged-write correction; these are checkpoint reviews, not full-head/model-specific review claims.
+
+Native disposable QA: /tmp/qm-private-scratch-native-proof.json verifies a real model execute(scope=scratch), private grant, private API200, an asserted ephemeral disk canary, and production cleanup deleting both exact scratch container/network. The isolated host's exhausted default Docker pools were handled by preallocating exactly one labeled, overlap-checked QA /28 network for that run; no product config or unrelated resource changed. The provider removed it at turn end. Actual screenshot: /tmp/excel-qm-native-private-scratch-boundary.png.
+
+Native background QA: /tmp/qm-private-background-native-proof.json verifies a private job started, Shared polling refused, and a later Private turn listed/polled/sent stdin/received the exact acknowledgment/stopped it. The registry is exited with no pending credentials; neither private canary occurs in nonpersonal sessions. Native watch QA: /tmp/qm-private-monitor-native-proof.json verifies a real private watch/model wake with sourceUnknown/personalOnly provenance and owner principal delivery, exact reply, no wake tools, exited process and disabled watch. The reply appeared in the native pane. This preceded only the unchanged-write optimization; its dedicated second-poll regression passes afterward. Screenshots: /tmp/excel-qm-native-shared-background-refusal.png, /tmp/excel-qm-native-private-background-resume.png and /tmp/excel-qm-native-private-monitor-boundary.png. Private mode and the workbook formula result were checked unchanged. Full-head checks, remaining resource/source audit and final rollout remain open.

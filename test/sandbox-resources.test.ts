@@ -11,6 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSandboxResources,
+  assertBotMayUseComputer,
   type SandboxResource,
   type SandboxResources,
   type SandboxDefault,
@@ -24,7 +25,7 @@ import {
   type LegacyRoute,
   type SandboxResourceUpgradeMarker,
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import type { Sandbox, ProcessSandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -1430,6 +1431,29 @@ test("opening a private computer records session privacy before a cached ordinar
   const router = createSandboxRouter({ backends: { local: f.backend }, defaultBackend: "local", resources });
   const oldHandle = await router.provision(personalSession.scopeId);
   const oldScratch = await router.provision(personalSession.scopeId, { scratch: { key: "ordinary-reader" } });
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  await registry.register({
+    processId: "private-computer-job",
+    scopeId: personalSession.scopeId,
+    sandboxId: computer.id,
+    kind: "background",
+    command: "PrivateBackgroundCedar7301",
+    ttlMs: 60_000,
+  });
+  const broker = createBackgroundBroker({
+    sandbox: router as ProcessSandbox,
+    registry,
+    scopeId: personalSession.scopeId,
+    assertComputerUsable: async (id) => {
+      await assertBotMayUseComputer(resources, personalSession.scopeId, id, undefined);
+    },
+  });
+  context.privateRead = false;
+  assert.deepEqual(await broker.list(), []);
+  assert.notEqual((await built.sessions.get(personalSession.id))!.personalOnly, true);
+  context.privateRead = true;
+  assert.equal((await broker.list())[0]?.command, "PrivateBackgroundCedar7301");
+  assert.equal((await built.sessions.get(personalSession.id))!.personalOnly, true);
   await resources.access("alice", computer.id);
   const protectedSession = (await built.sessions.get(personalSession.id))!;
   assert.equal(protectedSession.personalOnly, true);

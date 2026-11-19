@@ -224,14 +224,13 @@ export async function assertBotMayUseComputer(
   scopeId: ScopeId,
   sandboxId: string | undefined,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
-): Promise<void> {
-  if (!botMayUse) return;
-  if (!sandboxId) {
-    await defaultComputer(resources, scopeId, botMayUse);
-    return;
+): Promise<SandboxResource | undefined> {
+  if (!sandboxId && botMayUse) {
+    return defaultComputer(resources, scopeId, botMayUse);
   }
-  const resource = await resources?.get(sandboxId);
-  if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+  const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
+  if (resource && botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+  return resource ?? undefined;
 }
 
 export const MARK_ADMIN_CREATED_COMPUTERS_MIGRATION = {

@@ -387,8 +387,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const botMayUse = input.botActor
     ? botMayUseComputers(deps.swarms, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id })
     : undefined;
-  const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
-    assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
+  const assertDefaultUsable = async (sandboxId = boundSandboxId): Promise<void> => {
+    await assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
+  };
   const turnDefault = () => defaultComputer(deps.sandboxResources, resolution.writableScopeId, botMayUse);
   const personUsed = new Map<string, Promise<void>>();
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
