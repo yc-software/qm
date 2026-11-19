@@ -1,3 +1,4 @@
+import { requestSandboxResources } from "../private-context.ts";
 import { contextualFiles } from "../../files/context-files.ts";
 import { randomUUID } from "node:crypto";
 import { sendJson } from "../http.ts";
@@ -135,9 +136,11 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   }
   let attachments: OutgoingAttachment[] | undefined;
   if (files.length) {
-    const { sandbox, blobTransfer } = deps;
+    const { blobTransfer } = deps;
+    const resources = requestSandboxResources(ctx, capability.actorId);
+    const sandbox = resources && deps.sandboxForTurn ? deps.sandboxForTurn(resources) : deps.sandbox;
     const needsSandbox = files.some((f) => typeof f === "string");
-    if (!blobTransfer || (needsSandbox && !sandbox) || (requestedSandboxId && !deps.sandboxResources)) {
+    if (!blobTransfer || (needsSandbox && !sandbox) || (requestedSandboxId && !resources)) {
       return sendJson(res, 501, {
         error: "not_configured",
         message: "file attachments aren't available on this server — the sandbox/blob store isn't wired",
@@ -193,7 +196,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     if (requestedSandboxId) {
       try {
         resource = await accessConversationSandbox(
-          deps.sandboxResources,
+          resources,
           capability.actorId,
           requestedSandboxId,
           (scope) => scope === capability.scopeId || scope === envScope,
@@ -211,7 +214,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       }
     } else if (needsSandbox) {
       try {
-        resource = await defaultComputer(deps.sandboxResources, envScope, botMayUse);
+        resource = await defaultComputer(resources, envScope, botMayUse);
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, { error: "forbidden", message: e.message });

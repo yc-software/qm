@@ -122,6 +122,8 @@ export interface OrchestratorDeps {
   files: FileArtifactStore;
   toolOutput: ToolOutputStore;
   sandbox: Sandbox;
+  sandboxForTurn?: (resources: SandboxResources) => Sandbox;
+  cleanupSandbox?: Sandbox;
   sandboxResources?: SandboxResources;
   advisoryLock: AdvisoryLock;
   auditLog: AuditLog;

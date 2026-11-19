@@ -28,6 +28,7 @@ async function fixture(admin = false) {
   await built.skills.review(created.id, "alice", []);
   const skill = await built.skills.publish(created.id);
   const claims = {
+    privateRead: true,
     actorId: "alice",
     scopeId: session.scopeId,
     sessionId: session.id,

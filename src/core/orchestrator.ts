@@ -1,3 +1,4 @@
+import { refreshPrivateContext } from "../sessions/private-context.ts";
 import type { MemoryEdit } from "../memory/memory-service.ts";
 import { publishDocumentLearning } from "../documents/memory.ts";
 import { personaPrompt, personaRoutedNote } from "../personas/persona-service.ts";
@@ -83,7 +84,12 @@ import { askResolutionEvents } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
-import { CAPABILITY_TTL_MS, isValidCapabilityTimezone, type CapabilityClaims } from "../auth/capability-token.ts";
+import {
+  CAPABILITY_TTL_MS,
+  isValidCapabilityTimezone,
+  mintComputerCapabilityToken,
+  type CapabilityClaims,
+} from "../auth/capability-token.ts";
 import type {
   DetectResult,
   TurnLlmRequestRecord,
@@ -267,6 +273,7 @@ const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 const NEXT_PROMPT_READ_ITEMS = 20;
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
+  const baseDeps = deps;
   const config = deps.config;
   const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
   const spendLimits = spendReport
@@ -496,6 +503,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
+      let deps = baseDeps;
       const tenant = ambientTenant();
       if (
         !externalSlackRequestAllowed(
@@ -870,6 +878,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return { status: "refused", reason: "This private conversation cannot deliver to another audience." };
       let privateSession = storedSession ?? undefined;
       const fileContext = {
+        privateRead: true,
         actorId: actor.id,
         scopeId,
         sessionId: storedSession?.id,
@@ -1002,11 +1011,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           "This is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.",
         );
 
-      const scopeProfile = supportsScopeProfile(deps.sandbox)
-        ? await deps.sandbox
-            .profileFor(memoryScopeId, swarmBinding?.sandboxId)
-            .catch(swallowAs("orchestrator: scope profile read", deps.sandbox.profile))
-        : deps.sandbox.profile;
       const strategyLines = useMemory ? (memoryStrategy.promptLines?.() ?? []) : [];
       if (strategyLines.length) {
         systemPrompt += `\n\n${strategyLines.join("\n")}`;
@@ -1375,24 +1379,42 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let toolCalls = 0;
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
-      const turnSandboxResources = external
-        ? deps.sandboxResources?.forTurn({
-            actorId: actor.id,
-            scopeId,
-            isCurrent: async () =>
-              !!(await currentExternalSlackRun(
-                {
-                  actorId: actor.id,
-                  scopeId,
-                  runId: input.runId,
-                  runLeaseToken: input.runLeaseToken,
-                  runAttempt: input.attempt,
-                  threadRef: conversation.threadRef,
-                },
-                deps,
-              )),
-          })
-        : deps.sandboxResources;
+      const privateComputerContext = async () => {
+        if (session.personalOnly || personalOnlyContext) fileContext.personalOnly = true;
+        const current = await refreshPrivateContext(deps.sessions, fileContext);
+        if (current.personalOnly) await protectPersonalContext();
+        return current;
+      };
+      const turnSandboxResources = deps.sandboxResources?.forTurn({
+        actorId: actor.id,
+        scopeId,
+        isCurrent: async () =>
+          external &&
+          !!(await currentExternalSlackRun(
+            {
+              actorId: actor.id,
+              scopeId,
+              runId: input.runId,
+              runLeaseToken: input.runLeaseToken,
+              runAttempt: input.attempt,
+              threadRef: conversation.threadRef,
+            },
+            deps,
+          )),
+        privacy: { current: privateComputerContext, sessions: deps.sessions },
+      });
+      if (turnSandboxResources)
+        deps = {
+          ...deps,
+          cleanupSandbox: deps.sandbox,
+          sandbox: deps.sandboxForTurn?.(turnSandboxResources) ?? deps.sandbox,
+          sandboxResources: turnSandboxResources,
+        };
+      const scopeProfile = supportsScopeProfile(deps.sandbox)
+        ? await deps.sandbox
+            .profileFor(memoryScopeId, swarmBinding?.sandboxId)
+            .catch(swallowAs("orchestrator: scope profile read", deps.sandbox.profile))
+        : deps.sandbox.profile;
       const providerProfiles = turnSandboxResources?.profiles() ?? [];
       turnContextBlocks["Sandboxes"] = turnSandboxResources
         ? renderSandboxProviders(
@@ -1442,9 +1464,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         turnSessionDir,
         turnFilesDir,
         connectorEnv,
+        computerEnv: async (computer) => {
+          const { AGENT_API_TOKEN: _hostCapability, ...env } = connectorEnv;
+          if (!connectorEnv.AGENT_API_TOKEN) return env;
+          const secret = deps.capabilitySecret ?? deps.signingSecret;
+          if (!controlClaims || !secret) throw new Error("Computer API credentials are unavailable.");
+          const context = await privateComputerContext();
+          if (context.personalOnly && !computer.personalOnly)
+            throw new Error("Private work requires a private computer.");
+          return {
+            ...env,
+            AGENT_API_TOKEN: await mintComputerCapabilityToken(
+              controlClaims,
+              computer,
+              secret,
+              deps.capabilityTokenCompression,
+            ),
+          };
+        },
         egressTokenForTurn,
         egressTokenForPolicy,
         openResourceAccess: !external && (livePersonTurn || openAutomationKeychain),
+        privateContext: privateComputerContext,
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)

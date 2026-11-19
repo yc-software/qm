@@ -1,3 +1,4 @@
+import type { ComputerCapability } from "../auth/capability-token.ts";
 import { personalScope, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { CoreSearch } from "../search/core-search.ts";
@@ -10,6 +11,8 @@ import {
 } from "../memory/facts.ts";
 
 export interface PrivateContext {
+  computer?: ComputerCapability;
+  privateRead?: boolean;
   actorId: string;
   scopeId?: ScopeId;
   audienceScopeId?: ScopeId;
@@ -62,6 +65,12 @@ export function privateSourceAllowed(context: PrivateContext, ownerScopeId: Scop
   const owner = personalScope(context.actorId);
   return (
     context.botActor !== true &&
+    context.computer?.personalOnly !== false &&
+    (context.privateRead === true ||
+      (context.privateRead === undefined &&
+        context.scopeId === undefined &&
+        context.sessionId === undefined &&
+        context.computer === undefined)) &&
     ownerScopeId === owner &&
     (context.scopeId === undefined || context.scopeId === owner) &&
     (context.audienceScopeId ?? owner) === owner &&
@@ -107,11 +116,15 @@ export async function inheritSessionContext(
   sessions: ContextSessions,
   context: PrivateContext,
   sourceIds: readonly string[],
+  threadRefs: readonly string[] = [],
 ): Promise<Set<string>> {
-  if (!sourceIds.length) return new Set();
-  const sources = await sessions.getMany({ ids: sourceIds, threadRefs: [] });
-  const missing = new Set(sourceIds);
-  for (const source of sources) missing.delete(source.id);
+  if (!sourceIds.length && !threadRefs.length) return new Set();
+  const sources = await sessions.getMany({ ids: sourceIds, threadRefs });
+  const missing = new Set([...sourceIds, ...threadRefs]);
+  for (const source of sources) {
+    missing.delete(source.id);
+    missing.delete(source.threadRef);
+  }
   const blocked = await inheritContextSources(
     sessions,
     context,

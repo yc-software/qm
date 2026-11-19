@@ -1,3 +1,6 @@
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
+import { refreshPrivateContext, type PrivateContext } from "../src/sessions/private-context.ts";
 import { spawnSync } from "node:child_process";
 import { defaultSandboxLoadLine, sandboxLoadLine } from "../src/core/orchestrator/prompt-blocks.ts";
 import type { LoadSample } from "../src/sandbox/load-probe.ts";
@@ -15,6 +18,7 @@ import {
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
+  upgradePrivateSandboxDefaults,
   legacySandboxBackendForScope,
   legacySandboxId,
   type LegacyRoute,
@@ -1320,4 +1324,152 @@ test("the recorded load sample takes mem and disk totals from the created size, 
   await sized.options.records.update(resized.resourceId!, (current) => ({ ...current, memoryGb: 8 }));
   await sized.router.run(resized, "true");
   assert.equal((await sized.resources.load(resized.resourceId!))?.memTotalMb, 8192);
+});
+
+test("private computers keep a separate default and are unavailable to shared or other-admin contexts", async () => {
+  const f = fixture();
+  const built = buildApp(testConfig());
+  const normal = await f.resources.create("alice", "personal:alice", "local", "ordinary");
+  await f.resources.setDefault("alice", "personal:alice", normal.id);
+  const session = await built.sessions.getOrCreateByThread("private-computer-owner", "dm", "personal:alice");
+  await built.sessions.recordContextProvenance(session.id, session.scopeId, {
+    sensitivity: "ordinary",
+    sources: [session.scopeId],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const context: PrivateContext = {
+    privateRead: true,
+    actorId: "alice",
+    scopeId: session.scopeId,
+    sessionId: session.id,
+  };
+  const resources = f.resources.forTurn({
+    actorId: "alice",
+    scopeId: session.scopeId,
+    isCurrent: async () => false,
+    privacy: { current: () => refreshPrivateContext(built.sessions, context), sessions: built.sessions },
+  });
+  const privateComputer = await resources.create("alice", session.scopeId, "local", "private");
+  assert.equal(privateComputer.personalOnly, true);
+  await resources.setDefault("alice", session.scopeId, privateComputer.id);
+  assert.deepEqual(await f.defaults.get(session.scopeId), {
+    sandboxId: normal.id,
+    privateSandboxId: privateComputer.id,
+  });
+  assert.equal((await resources.resolve(session.scopeId))!.id, privateComputer.id);
+  assert.equal((await f.resources.resolve(session.scopeId))!.id, normal.id);
+  await assert.rejects(resources.access("alice", normal.id), /private computer/);
+  await assert.rejects(resources.create("alice", "channel:team", "local", "private-shared"), /personal conversation/);
+  const shared = await built.sessions.getOrCreateByThread("private-computer-shared-reader", "channel", "channel:team");
+  const sharedContext: PrivateContext = {
+    privateRead: true,
+    actorId: "alice",
+    scopeId: shared.scopeId,
+    sessionId: shared.id,
+  };
+  const sharedResources = f.resources.forTurn({
+    actorId: "alice",
+    scopeId: shared.scopeId,
+    isCurrent: async () => false,
+    privacy: { current: () => refreshPrivateContext(built.sessions, sharedContext), sessions: built.sessions },
+  });
+  await assert.rejects(sharedResources.access("alice", privateComputer.id), /private/);
+  assert.ok(
+    !(await sharedResources.list("alice", shared.scopeId)).sandboxes.some((row) => row.id === privateComputer.id),
+  );
+  await assert.rejects(f.resources.access("admin", privateComputer.id), /private/);
+  assert.equal(
+    (await resources.list("alice", session.scopeId)).sandboxes.every((row) => row.personalOnly),
+    true,
+  );
+});
+
+test("opening a private computer records session privacy before a cached ordinary handle can run", async () => {
+  const f = fixture();
+  const built = buildApp(testConfig());
+  const ordinary = await f.resources.create("alice", "personal:alice", "local", "ordinary");
+  await f.resources.setDefault("alice", "personal:alice", ordinary.id);
+  const privateSession = await built.sessions.getOrCreateByThread("private-resource-origin", "dm", "personal:alice");
+  await built.sessions.recordContextProvenance(privateSession.id, privateSession.scopeId, {
+    sensitivity: "restricted",
+    sources: [privateSession.scopeId, "group:source"],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const privateContext: PrivateContext = {
+    privateRead: true,
+    actorId: "alice",
+    scopeId: privateSession.scopeId,
+    sessionId: privateSession.id,
+  };
+  const privateResources = f.resources.forTurn({
+    actorId: "alice",
+    scopeId: privateSession.scopeId,
+    isCurrent: async () => false,
+    privacy: { current: () => refreshPrivateContext(built.sessions, privateContext), sessions: built.sessions },
+  });
+  const computer = await privateResources.create("alice", privateSession.scopeId, "local", "private");
+  const personalSession = await built.sessions.getOrCreateByThread(
+    "private-resource-personal-reader",
+    "dm",
+    "personal:alice",
+  );
+  const context: PrivateContext = {
+    privateRead: true,
+    actorId: "alice",
+    scopeId: personalSession.scopeId,
+    sessionId: personalSession.id,
+  };
+  const resources = f.resources.forTurn({
+    actorId: "alice",
+    scopeId: personalSession.scopeId,
+    isCurrent: async () => false,
+    privacy: { current: () => refreshPrivateContext(built.sessions, context), sessions: built.sessions },
+  });
+  const router = createSandboxRouter({ backends: { local: f.backend }, defaultBackend: "local", resources });
+  const oldHandle = await router.provision(personalSession.scopeId);
+  const oldScratch = await router.provision(personalSession.scopeId, { scratch: { key: "ordinary-reader" } });
+  await resources.access("alice", computer.id);
+  const protectedSession = (await built.sessions.get(personalSession.id))!;
+  assert.equal(protectedSession.personalOnly, true);
+  assert.ok(protectedSession.sourceProvenance?.sources.includes("group:source"));
+  await assert.rejects(router.run(oldHandle, "printf should-not-run"), /private computer/);
+  await assert.rejects(router.run(oldScratch, "printf should-not-run"), /privacy/);
+  await assert.rejects(router.readFile(oldScratch, "secret"), /privacy/);
+  await assert.rejects(router.writeFile(oldScratch, "secret", "private write"), /privacy/);
+  await assert.rejects(router.provision(personalSession.scopeId, { scratch: { key: "wrong" } }), /privacy/);
+  const privateScratch = await router.provision(personalSession.scopeId, {
+    scratch: { key: "private-reader", personalOnly: true },
+  });
+  assert.equal(privateScratch.personalOnly, true);
+  assert.equal((await router.run(privateScratch, "printf private")).code, 0);
+
+  const privateHandle = await router.provision(personalSession.scopeId, { sandboxId: computer.id });
+  assert.equal((await router.run(privateHandle, "printf private")).code, 0);
+});
+
+test("private cutover preserves disks, classifies historical personal computers and separates their defaults once", async () => {
+  const f = fixture();
+  const existing = await f.router.provision("personal:alice");
+  await f.router.writeFile(existing, "history", "HistoricalPersonalCedar7301");
+  const shared = await f.resources.create("alice", "channel:team", "local", "Team computer");
+  await f.defaults.put("personal:bob", { sandboxId: existing.resourceId! });
+  const migrated = () => upgradePrivateSandboxDefaults({ ...f.options, marker: f.marker });
+  await Promise.all([migrated(), migrated()]);
+  const old = await f.resources.get(existing.resourceId!);
+  assert.equal(old.personalOnly, true);
+  assert.equal(old.sourceProvenance?.sourceUnknown, true);
+  assert.ok(old.sourceProvenance?.sources.includes("personal:alice"));
+  assert.equal(await f.router.readFile(existing, "history"), "HistoricalPersonalCedar7301");
+  assert.deepEqual(await f.defaults.get("personal:alice"), { sandboxId: null, privateSandboxId: old.id });
+  assert.deepEqual(await f.defaults.get("personal:bob"), { sandboxId: null });
+  assert.equal((await f.resources.get(shared.id)).personalOnly, undefined);
+  assert.equal((await f.resources.get(shared.id)).ownerScopeId, "channel:team");
+  const clean = await f.resources.create("alice", "personal:alice", "local", "Clean ordinary computer");
+  await f.resources.setDefault("alice", "personal:alice", clean.id);
+  await migrated();
+  assert.equal((await f.resources.get(clean.id)).personalOnly, undefined);
+  assert.deepEqual(await f.defaults.get("personal:alice"), { sandboxId: clean.id, privateSandboxId: old.id });
+  assert.equal(await f.router.readFile(await f.router.provision("personal:alice"), "history"), null);
 });

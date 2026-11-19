@@ -123,6 +123,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     if (!deps.sessionId) throw new Error("The monitor's conversation is unavailable.");
     const context = await refreshPrivateContext(deps.sessions, {
       actorId: deps.owner,
+      privateRead: true,
       scopeId: deps.ownerScopeId,
       sessionId: deps.sessionId,
       botActor: deps.botActor,

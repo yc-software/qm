@@ -667,6 +667,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     const metadata = deps.memoryCaptureMetadata?.();
     return {
       actorId: deps.createdBy,
+      privateRead: deps.controlClaims?.privateRead ?? true,
+      ...(deps.controlClaims?.computer ? { computer: deps.controlClaims.computer } : {}),
       scopeId: writableScopeId,
       audienceScopeId: deps.audienceScopeId,
       sessionId: deps.sessionId,

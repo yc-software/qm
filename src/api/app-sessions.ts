@@ -85,6 +85,7 @@ export function createSessionMethods(
   h: AppHelpers,
 ): Pick<
   App,
+  | "inheritSessionContext"
   | "getSessionContext"
   | "recordContextProvenance"
   | "getSession"
@@ -425,6 +426,8 @@ export function createSessionMethods(
           }
         : null;
     },
+    inheritSessionContext: (context, sourceIds, threadRefs) =>
+      inheritSessionContext(deps.sessions, context, sourceIds, threadRefs),
     recordContextProvenance: (sessionId, scope, provenance) =>
       deps.sessions.recordContextProvenance(sessionId, scope, provenance),
     async getSession(sessionId, window) {
@@ -460,7 +463,12 @@ export function createSessionMethods(
     async getSessionForViewer(sessionId, viewer, window) {
       const principalId = viewer.actorId;
       const found = await sessionForViewer(sessionId, principalId);
-      if (!found || !sessionVisibleTo(viewer, found)) return null;
+      if (
+        !found ||
+        !sessionVisibleTo(viewer, found) ||
+        (found.personalOnly && !privateSourceAllowed(viewer, found.scopeId))
+      )
+        return null;
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals, latestPromptAt, run] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
@@ -1076,9 +1084,11 @@ export function createSessionMethods(
       const principalId = viewer.actorId;
       const session = await sessionForViewer(sessionId, principalId);
       if (!session || !sessionVisibleTo(viewer, session)) return null;
+      if ((await inheritSessionContext(deps.sessions, viewer, [sessionId])).has(sessionId)) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       const updated = await sessionForViewer(sessionId, principalId);
-      return updated && { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
+      if (!updated || (await inheritSessionContext(deps.sessions, viewer, [sessionId])).has(sessionId)) return null;
+      return { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
     },
 
     async detachSession(sessionId, principalId) {

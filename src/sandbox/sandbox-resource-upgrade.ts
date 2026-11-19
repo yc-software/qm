@@ -1,3 +1,4 @@
+import { mergeSourceProvenance, UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -109,5 +110,47 @@ export async function upgradeLegacySandboxes(opts: {
       await opts.defaults.putIfAbsent(scope, { sandboxId: record?.state === "retired" ? null : id });
     }
     await opts.marker.put("explicit-defaults", { activatedAt: new Date().toISOString() });
+  });
+}
+
+export async function upgradePrivateSandboxDefaults(opts: {
+  records: DurableMap<SandboxResource>;
+  defaults: DurableMap<SandboxDefault>;
+  marker: DurableMap<SandboxResourceUpgradeMarker>;
+  lock: AdvisoryLock;
+}): Promise<void> {
+  const markerId = "private-defaults-v1";
+  if (await opts.marker.get(markerId)) return;
+  await opts.lock.withLock("sandbox-resources:private-activation", async () => {
+    if (await opts.marker.get(markerId)) return;
+    for (const record of await opts.records.all()) {
+      if (typeof record.ownerScopeId !== "string" || parseScopeId(record.ownerScopeId).kind !== "personal") continue;
+      if (!record.personalOnly)
+        await opts.records.update(record.id, (current) => ({
+          ...current,
+          personalOnly: true,
+          sourceProvenance: mergeSourceProvenance([
+            UNTRACKED_PROVENANCE,
+            ...(current.sourceProvenance ? [current.sourceProvenance] : []),
+            { sensitivity: "ordinary", sources: [current.ownerScopeId], sourceUnknown: false },
+          ]),
+        }));
+    }
+    for (const [scope, selected] of await opts.defaults.entries()) {
+      if (!selected.sandboxId) continue;
+      const record = await opts.records.get(selected.sandboxId);
+      if (!record?.personalOnly) continue;
+      await opts.defaults.update(scope, (current) => {
+        if (current.sandboxId !== selected.sandboxId) return current;
+        return {
+          ...current,
+          sandboxId: null,
+          ...(record.ownerScopeId === scope && current.privateSandboxId === undefined
+            ? { privateSandboxId: record.id }
+            : {}),
+        };
+      });
+    }
+    await opts.marker.put(markerId, { activatedAt: new Date().toISOString() });
   });
 }

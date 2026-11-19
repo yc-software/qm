@@ -86,7 +86,7 @@ async function fixture(
     session,
     deployStore,
     service,
-    context: () => ({ actorId: "alice", scopeId: ownerScopeId, sessionId: session.id }),
+    context: () => ({ privateRead: true, actorId: "alice", scopeId: ownerScopeId, sessionId: session.id }),
     input: {
       ownerScopeId,
       createdBy: "alice",
@@ -225,7 +225,7 @@ test("an owner's shared conversation cannot list, fetch, log or clone their priv
   await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
   const d = await f.service().deploy({ ...f.input, context: f.context() });
   const session = await f.sessions.getOrCreateByThread("shared-app-reader", "channel", "channel:team");
-  const caller = { actorId: "alice", scopeId: session.scopeId, sessionId: session.id };
+  const caller = { privateRead: true, actorId: "alice", scopeId: session.scopeId, sessionId: session.id };
   assert.deepEqual(await f.app.listAppsForViewer(testTenant, caller), []);
   assert.equal(await f.app.appGitPermissionFor(d.id, caller), null);
   assert.equal(
@@ -257,7 +257,7 @@ test("reading a private app in another personal conversation persists its privac
   });
   const d = await f.service().deploy({ ...f.input, context: f.context() });
   const session = await f.sessions.getOrCreateByThread("personal-app-reader", "dm", f.ownerScopeId);
-  const caller = { actorId: "alice", scopeId: f.ownerScopeId, sessionId: session.id };
+  const caller = { privateRead: true, actorId: "alice", scopeId: f.ownerScopeId, sessionId: session.id };
   assert.deepEqual(
     (await f.app.listAppsForViewer(testTenant, caller)).map((app) => app.id),
     [d.id],
@@ -282,7 +282,7 @@ test("Git credentials recheck a conversation's audience after a previously ordin
   const f = await fixture();
   const d = await f.service().deploy({ ...f.input, name: "git-context" });
   const shared = await f.sessions.getOrCreateByThread("shared-git-origin", "channel", "channel:team");
-  const context = { actorId: "alice", scopeId: shared.scopeId, sessionId: shared.id };
+  const context = { privateRead: true, actorId: "alice", scopeId: shared.scopeId, sessionId: shared.id };
   const secret = "git-private-context-test-secret-0123456789";
   const link = await f.app.appGitUrlFor(d.id, context, { secret, baseUrl: "http://core.test" });
   assert.ok(link);
@@ -297,7 +297,7 @@ test("Git credentials recheck a conversation's audience after a previously ordin
   assert.ok(capturedReader);
   const token = decodeURIComponent(new URL(link.url).password);
   const access = await verifyDeployGitAccess(secret, token);
-  assert.deepEqual(access?.context, { scopeId: shared.scopeId, sessionId: shared.id });
+  assert.deepEqual(access?.context, { scopeId: shared.scopeId, sessionId: shared.id, privateRead: true });
   const server = createServer(f.app, {
     signingSecret: secret,
     replayDedupe: createPostgresReplayDedupe(f.databaseUrl),
@@ -366,14 +366,20 @@ test("a failed source-edit callback inherits the private app before any source i
   const d = await f.service().deploy({ ...f.input, context: f.context() });
   const reader = await f.sessions.getOrCreateByThread("edit-private-source", "dm", f.ownerScopeId);
   await assert.rejects(
-    f.service().editSource(d.id, { actorId: "alice", scopeId: f.ownerScopeId, sessionId: reader.id }, async (read) => {
-      assert.equal(Buffer.from((await read(["server.js"])).files[0]!.data).toString(), "original");
-      const context = (await f.sessions.get(reader.id))!;
-      assert.equal(context.personalOnly, true);
-      assert.equal(context.sourceProvenance?.sensitivity, "restricted");
-      assert.ok(context.sourceProvenance?.sources.includes("group:restricted"));
-      throw new Error("edit preparation failed");
-    }),
+    f
+      .service()
+      .editSource(
+        d.id,
+        { privateRead: true, actorId: "alice", scopeId: f.ownerScopeId, sessionId: reader.id },
+        async (read) => {
+          assert.equal(Buffer.from((await read(["server.js"])).files[0]!.data).toString(), "original");
+          const context = (await f.sessions.get(reader.id))!;
+          assert.equal(context.personalOnly, true);
+          assert.equal(context.sourceProvenance?.sensitivity, "restricted");
+          assert.ok(context.sourceProvenance?.sources.includes("group:restricted"));
+          throw new Error("edit preparation failed");
+        },
+      ),
     /edit preparation failed/,
   );
   assert.equal((await f.sessions.get(reader.id))!.personalOnly, true);
@@ -396,7 +402,7 @@ test("log retrieval excludes a concurrent private redeploy until its authorized 
   const reader = await f.sessions.getOrCreateByThread("shared-log-reader", "channel", "channel:team");
   const reading = f.app.appLogsFor(
     d.id,
-    { actorId: "alice", scopeId: reader.scopeId, sessionId: reader.id },
+    { privateRead: true, actorId: "alice", scopeId: reader.scopeId, sessionId: reader.id },
     { tailLines: 10 },
   );
   await entered.promise;
@@ -415,7 +421,7 @@ test("log retrieval excludes a concurrent private redeploy until its authorized 
     (
       await f.app.appLogsFor(
         d.id,
-        { actorId: "alice", scopeId: reader.scopeId, sessionId: reader.id },
+        { privateRead: true, actorId: "alice", scopeId: reader.scopeId, sessionId: reader.id },
         { tailLines: 10 },
       )
     ).status,
@@ -494,7 +500,7 @@ test("private management responses taint a fresh personal session before a subse
   const shared = await f.service().deploy({ ...f.input, name: "shared-management-target" });
   await f.service().shareApp(shared.id, "personal:bob", "read", { createdBy: "alice" }, { notify: false });
   const reader = await f.sessions.getOrCreateByThread("private-management-reader", "dm", f.ownerScopeId);
-  const context = { actorId: "alice", scopeId: f.ownerScopeId, sessionId: reader.id };
+  const context = { privateRead: true, actorId: "alice", scopeId: f.ownerScopeId, sessionId: reader.id };
   const secret = "management-private-context-secret-0123456789";
   const server = createServer(f.app, {
     signingSecret: secret,
@@ -806,10 +812,16 @@ test("new restricted context cannot update an app already released to an unentit
   });
   let edited = false;
   await assert.rejects(
-    f.service().editSource(app.id, { actorId: "alice", scopeId: f.ownerScopeId, sessionId: session.id }, async () => {
-      edited = true;
-      return { files: [{ path: "server.js", data: "restricted content" }], deletedPaths: [] };
-    }),
+    f
+      .service()
+      .editSource(
+        app.id,
+        { privateRead: true, actorId: "alice", scopeId: f.ownerScopeId, sessionId: session.id },
+        async () => {
+          edited = true;
+          return { files: [{ path: "server.js", data: "restricted content" }], deletedPaths: [] };
+        },
+      ),
     /source restrictions/,
   );
   assert.equal(edited, false);
@@ -862,4 +874,47 @@ test("a private app cannot be released through a grant to its owner", async () =
   );
   assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
   assert.deepEqual(await f.service().appGrantees(app.id), []);
+});
+
+test("an ordinary app's existing human Git credential cannot gain private access after a private update", async () => {
+  const f = await fixture();
+  const secret = "git-privacy-change-test-secret-0123456789";
+  const app = await f.service().deploy({ ...f.input, name: "git-privacy-change" });
+  const oldLink = await f.app.appGitUrlFor(app.id, { actorId: "alice" }, { secret, baseUrl: "http://core.test" });
+  assert.ok(oldLink);
+  const oldAccess = await verifyDeployGitAccess(secret, decodeURIComponent(new URL(oldLink.url).password));
+  assert.ok(oldAccess);
+  assert.equal(await f.app.authorizesAppGitAccess(app.id, "alice", "read", oldAccess.context), true);
+  await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
+  await f.service().redeploy(app.id, {
+    ...f.input,
+    context: f.context(),
+    files: [{ path: "server.js", data: "private source after update" }],
+  });
+  assert.equal(await f.app.authorizesAppGitAccess(app.id, "alice", "read", oldAccess.context), false);
+  const refreshed = await f.app.appGitUrlFor(app.id, { actorId: "alice" }, { secret, baseUrl: "http://core.test" });
+  assert.ok(refreshed);
+  const access = await verifyDeployGitAccess(secret, decodeURIComponent(new URL(refreshed.url).password));
+  assert.equal(access?.context?.personalOnly, true);
+  assert.equal(access?.context?.privateRead, true);
+  const { privateRead: _grant, ...legacyContext } = access!.context!;
+  const legacyToken = await mintDeployGitAccess(secret, {
+    deploymentId: app.id,
+    principalId: "alice",
+    permission: "read",
+    context: legacyContext,
+    exp: Date.now() + 60_000,
+  });
+  const legacy = await verifyDeployGitAccess(secret, legacyToken);
+  assert.equal(await f.app.authorizesAppGitAccess(app.id, "alice", "read", legacy!.context), false);
+
+  assert.equal(await f.app.authorizesAppGitAccess(app.id, "alice", "read", access!.context), true);
+  assert.equal(
+    await f.app.appGitUrlFor(
+      app.id,
+      { ...f.context(), computer: { personalOnly: false, resourceId: "ordinary" } },
+      { secret, baseUrl: "http://core.test" },
+    ),
+    null,
+  );
 });

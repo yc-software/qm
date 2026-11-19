@@ -189,6 +189,7 @@ export interface ServerDeps {
   egressControlPlaneConfigured?: boolean;
   sandboxResources?: SandboxResources;
   sandbox?: Sandbox;
+  sandboxForTurn?: (resources: SandboxResources) => Sandbox;
   advisoryLock?: AdvisoryLock;
   processes?: ProcessRegistry;
   browserSessionStore?: BrowserSessionStore;

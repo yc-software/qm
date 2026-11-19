@@ -259,7 +259,9 @@ export function createAppMethods(
           ...(caller.scopeId !== undefined ? { scopeId: caller.scopeId } : {}),
           ...(caller.audienceScopeId !== undefined ? { audienceScopeId: caller.audienceScopeId } : {}),
           ...(caller.sessionId !== undefined ? { sessionId: caller.sessionId } : {}),
-          ...(caller.personalOnly ? { personalOnly: true } : {}),
+          privateRead: caller.privateRead === true || (caller.scopeId === undefined && caller.computer === undefined),
+          ...(caller.computer ? { computer: caller.computer } : {}),
+          ...(caller.personalOnly || d.personalOnly ? { personalOnly: true } : {}),
           ...(caller.botActor !== undefined ? { botActor: caller.botActor } : {}),
         },
         exp: Date.now() + (opts.ttlMs ?? 60 * 60 * 1000),
@@ -274,8 +276,9 @@ export function createAppMethods(
       if (!d) return false;
       const external = await deps.appGitPrincipals?.authorizes(d, principalId, permission);
       if (external !== undefined) return external;
+      if (d.personalOnly && (context?.personalOnly !== true || context.privateRead !== true)) return false;
       if ((d.personalOnly || permission === "write") && !context) return false;
-      const caller = { ...context, actorId: principalId };
+      const caller = { ...context, actorId: principalId, privateRead: context?.privateRead === true };
       await refreshPrivateContext(deps.sessions, caller);
       const current = await callerGitPermission(d, caller);
       return permission === "write" ? current === "write" : current !== null;

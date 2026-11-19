@@ -188,6 +188,7 @@ async function mintControlPlaneTokens(
     const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
     controlClaims = {
       ...scopeAttestation,
+      privateRead: true,
       aud: CONTROL_PLANE_AUD,
       ...(!external && allInternal && ownCredentialsAllowed ? { ownerConnections: true } : {}),
       exp: sandboxTokenExpiry,

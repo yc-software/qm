@@ -767,6 +767,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             privateSourceAllowed(
               {
                 actorId: binding.request.actor.id,
+                privateRead: true,
                 scopeId: binding.scopeId,
                 audienceScopeId: binding.audienceScopeId,
                 sessionId: binding.session.id,
@@ -788,6 +789,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       async function inheritPrivateContexts(ids: readonly string[]): Promise<Set<string>> {
         const context = {
           actorId: binding.request.actor.id,
+          privateRead: true,
           scopeId: binding.scopeId,
           audienceScopeId: binding.audienceScopeId,
           sessionId: binding.session.id,
@@ -1287,6 +1289,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           });
           const context = {
             actorId: caller.actor.id,
+            privateRead: true,
             scopeId: binding.scopeId,
             audienceScopeId: binding.audienceScopeId,
             sessionId: binding.session.id,

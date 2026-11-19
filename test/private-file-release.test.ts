@@ -94,6 +94,7 @@ test("native file sharing preflight binds the selected file and preserves privat
   const { createControlService } = await import("../src/api/control-service.ts");
   const control = createControlService(built.app, built.scheduler);
   const claims = {
+    privateRead: true,
     actorId: "alice",
     scopeId: session.scopeId,
     sessionId: session.id,
@@ -181,7 +182,7 @@ test("released file foreign-source restrictions also gate raw grants and grant r
   };
   await built.app.grant(testTenant, grant, {
     privateRevision: fileSharingRevision(artifact),
-    context: { actorId: "alice", scopeId: session.scopeId, sessionId: session.id },
+    context: { privateRead: true, actorId: "alice", scopeId: session.scopeId, sessionId: session.id },
   });
   const outsider = { ...grant, granteeScopeId: "personal:carol" };
   const { createControlService } = await import("../src/api/control-service.ts");
@@ -221,7 +222,7 @@ test("private file release finishes with only one query-pool connection availabl
     for (let n = 1; n < pool.options.max!; n++) held.push(await pool.connect());
     await built.app.grant(testTenant, grant, {
       privateRevision: fileSharingRevision(artifact),
-      context: { actorId: "alice", scopeId: session.scopeId, sessionId: session.id },
+      context: { privateRead: true, actorId: "alice", scopeId: session.scopeId, sessionId: session.id },
     });
   } finally {
     for (const client of held) client.release();

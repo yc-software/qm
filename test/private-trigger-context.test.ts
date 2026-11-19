@@ -35,6 +35,7 @@ async function fixture() {
   ]);
   const session = await built.sessions.getOrCreateByThread("private-trigger-origin", "dm", ownerScope);
   const context = (): CapabilityClaims => ({
+    privateRead: true,
     actorId: "U1",
     scopeId: ownerScope,
     sessionId: session.id,
@@ -103,7 +104,7 @@ test("scheduled execution stores privacy and restricted provenance before the mo
         await built.app.setCronFireNote(
           cronId,
           { text: "Next private fire", at: Date.now() },
-          { actorId: "U1", scopeId: ownerScope, sessionId: input.session.id },
+          { privateRead: true, actorId: "U1", scopeId: ownerScope, sessionId: input.session.id },
         );
         await input.emit({ kind: "AgentMessage", text: "Private scheduled reply" });
         return { reply: "Private scheduled reply", modelCalls: 0 };
@@ -119,7 +120,7 @@ test("scheduled execution stores privacy and restricted provenance before the mo
     ownerScopeId: ownerScope,
     schedule: { everyMs: 3_600_000 },
     action: "Make a personal report",
-    context: { actorId: "U1", scopeId: ownerScope, sessionId: session.id },
+    context: { privateRead: true, actorId: "U1", scopeId: ownerScope, sessionId: session.id },
     destination: principalDestination("U1", "U1"),
   });
   cronId = cron.id;
@@ -262,7 +263,7 @@ test("unchanged schedule controls still inherit private contents before returnin
       f.built.app.updateCron(
         shared.id,
         { action: "Private copied task" },
-        { actorId: "U1", scopeId: ownerScope, sessionId: session.id },
+        { privateRead: true, actorId: "U1", scopeId: ownerScope, sessionId: session.id },
       ),
       /personal scope and delivery/,
     );
@@ -477,4 +478,47 @@ test("webhook event history is withheld after a concurrent private update", asyn
   assert.equal(status, 404);
   assert.deepEqual(body, { error: "not_found" });
   assert.equal((await f.built.sessions.get(shared.id))!.personalOnly, undefined);
+});
+
+test("ordinary schedule history cannot expose a fire that acquired private context", async () => {
+  const f = await fixture();
+  const cron = await f.built.app.createCron({
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: ownerScope,
+    schedule: { everyMs: 3_600_000 },
+    action: "Ordinary task",
+    destination: principalDestination("U1", "U1"),
+  });
+  const execution = await f.built.sessions.getOrCreateByThread("late-private-fire", "dm", ownerScope);
+  await f.built.sessions.recordContextProvenance(execution.id, ownerScope, { ...provenance, personalOnly: true });
+  await f.built.crons.recordFire(cron.id, {
+    fireKey: "late-private-fire",
+    threadRef: execution.threadRef,
+    sessionId: execution.id,
+    firedAt: Date.now(),
+    reply: "PrivateHistorySpruce7301",
+  });
+  const reader = await f.built.sessions.getOrCreateByThread("ordinary-history-caller", "dm", ownerScope);
+  const caller = { ...f.context(), sessionId: reader.id, threadRef: reader.threadRef };
+  const refused = await f.control.getCronRuns(
+    cron.id,
+    {},
+    { ...caller, privateRead: false, computer: { personalOnly: false } },
+  );
+  assert.equal(refused.ok, false, JSON.stringify(refused));
+  assert.notEqual((await f.built.sessions.get(reader.id))!.personalOnly, true);
+  const allowed = await f.control.getCronRuns(cron.id, {}, caller);
+  assert.ok(allowed.ok, JSON.stringify(allowed));
+  assert.equal(allowed.runs[0]?.reply, "PrivateHistorySpruce7301");
+  assert.equal((await f.built.sessions.get(reader.id))!.personalOnly, true);
+  assert.equal((await f.built.crons.get(cron.id))!.personalOnly, undefined);
+  await f.built.crons.recordFire(cron.id, {
+    fireKey: "unresolved-private-fire",
+    threadRef: "deleted-private-execution",
+    firedAt: Date.now(),
+    reply: "UnknownPrivateHistorySpruce7301",
+  });
+  const unverifiable = await f.control.getCronRuns(cron.id, {}, caller);
+  assert.equal(unverifiable.ok, false, JSON.stringify(unverifiable));
 });

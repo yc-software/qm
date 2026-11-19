@@ -281,6 +281,7 @@ import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
+  upgradePrivateSandboxDefaults,
   legacySandboxBackendForScope,
   type LegacyRoute,
 } from "./sandbox/sandbox-resource-upgrade.ts";
@@ -571,6 +572,7 @@ export interface BuiltApp {
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   memory: MemoryService;
   sandbox: Sandbox;
+  sandboxForTurn: (resources: SandboxResources) => Sandbox;
   advisoryLock: AdvisoryLock;
   sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
@@ -1282,6 +1284,12 @@ export function buildApp(
           ];
         },
       });
+      await upgradePrivateSandboxDefaults({
+        records: sandboxRecords,
+        defaults: sandboxDefaults,
+        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
+        lock: advisoryLock,
+      });
     },
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
@@ -1308,12 +1316,14 @@ export function buildApp(
     },
     canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
   });
-  const sandbox: Sandbox = createSandboxRouter({
-    resources: sandboxResources,
-    backends: sandboxBackends,
-    defaultBackend: config.sandboxBackend,
-    onError: sandboxOnError,
-  });
+  const sandboxForTurn = (resources: SandboxResources): Sandbox =>
+    createSandboxRouter({
+      resources,
+      backends: sandboxBackends,
+      defaultBackend: config.sandboxBackend,
+      onError: sandboxOnError,
+    });
+  const sandbox = sandboxForTurn(sandboxResources);
   const secretSource =
     config.secretsBackend === "aws"
       ? createLayeredSecretSource(
@@ -2348,6 +2358,7 @@ export function buildApp(
     toolOutput,
     sandbox,
     sandboxResources,
+    sandboxForTurn,
     swarms,
     connectorTokens,
     auditLog,
@@ -3411,6 +3422,7 @@ export function buildApp(
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
+    sandboxForTurn,
     sandboxResources,
     advisoryLock,
     blobTransfer,
@@ -3569,6 +3581,7 @@ export function serverDeps(
     }),
     egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
     sandbox: built.sandbox,
+    sandboxForTurn: built.sandboxForTurn,
     advisoryLock: built.advisoryLock,
     ...(built.processes ? { processes: built.processes } : {}),
     ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),

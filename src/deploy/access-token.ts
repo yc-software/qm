@@ -1,3 +1,4 @@
+import { isComputerCapability } from "../auth/capability-token.ts";
 import { parseScopeId } from "../types.ts";
 import type { PrivateContext } from "../sessions/private-context.ts";
 import { createHmac } from "node:crypto";
@@ -51,6 +52,8 @@ export async function verifyDeployGitAccess(
       (typeof context.sessionId !== "string" || !context.sessionId || !context.scopeId)
     )
       return null;
+    if (context.privateRead !== undefined && typeof context.privateRead !== "boolean") return null;
+    if (context.computer !== undefined && !isComputerCapability(context.computer)) return null;
     if (context.personalOnly !== undefined && context.personalOnly !== true) return null;
     if (context.botActor !== undefined && typeof context.botActor !== "boolean") return null;
   }

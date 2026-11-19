@@ -1,3 +1,4 @@
+import { requestSandboxResources } from "../../private-context.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
@@ -6,7 +7,7 @@ import { type ApiCtx } from "../route.ts";
 export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
-  const resources = ctx.deps.sandboxResources;
+  const resources = requestSandboxResources(ctx, actor.id);
   if (!resources) return sendJson(ctx.res, 404, { error: "not_supported" });
   const scopeId = ctx.params.scopeId!;
   const input = (ctx.body ?? {}) as Record<string, unknown>;

@@ -76,6 +76,12 @@ async function capabilityAdminDenied(
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
   if (WRITE_METHODS.has(method) && !personAtKeyboard(claims)) return ADMIN_WRITE_NEEDS_PERSON;
+  const privateTarget =
+    access.privateRead &&
+    (access.privateRead !== "unless-org-scope" ||
+      parseScopeId(params.scope ?? url.searchParams.get("scope") ?? "").kind !== "org");
+  if (privateTarget && (claims.privateRead !== true || claims.computer?.personalOnly === false))
+    return "This admin read requires native or private-computer authority.";
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
     const target =
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
@@ -216,6 +222,10 @@ async function verifyCapability(
     }
     sourceProvenance = context.sourceProvenance;
     if (context.personalOnly || capability.personalOnly || capability.memory?.personalOnly) {
+      if (capability.privateRead !== true || capability.computer?.personalOnly === false) {
+        sendJson(res, 403, { error: "forbidden", message: "This private conversation requires a private computer." });
+        return null;
+      }
       const owner = scopeId("personal", capability.actorId);
       if (
         context.scopeId !== owner ||

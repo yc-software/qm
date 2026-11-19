@@ -11,6 +11,7 @@ export interface SandboxHandle {
   coldStart?: boolean;
   env?: Record<string, string>;
   scratch?: boolean;
+  personalOnly?: true;
   backend?: string;
   scopeId?: string;
 }
@@ -100,7 +101,7 @@ export interface ProvisionOptions {
   env?: Record<string, string>;
   egress?: EgressPolicy;
   egressToken?: string;
-  scratch?: { key: string };
+  scratch?: { key: string; personalOnly?: true };
   onStatus?: (text: string) => void;
   memoryGb?: number;
 }

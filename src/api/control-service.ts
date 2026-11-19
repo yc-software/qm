@@ -574,6 +574,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         (await inheritContextSources(app, capability, [current])).has(current.id)
       )
         return { ok: false, code: "forbidden", message: "not your cron" };
+      const blocked = await app.inheritSessionContext(
+        capability,
+        runs.flatMap((run) => (run.sessionId ? [run.sessionId] : [])),
+        runs.filter((run) => run.reply !== undefined || run.sessionId !== undefined).map((run) => run.threadRef),
+      );
+      if (blocked.size) return { ok: false, code: "forbidden", message: "not your cron" };
       return { ok: true, cron: current, runs, total };
     },
 

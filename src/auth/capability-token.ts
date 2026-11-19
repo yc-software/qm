@@ -65,7 +65,23 @@ export async function personOrOwningBot(
 
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
+export interface ComputerCapability {
+  personalOnly: boolean;
+  resourceId?: string;
+}
+
+export function isComputerCapability(value: unknown): value is ComputerCapability {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.personalOnly === "boolean" &&
+    (record.resourceId === undefined || (typeof record.resourceId === "string" && record.resourceId.length > 0))
+  );
+}
+
 export interface CapabilityClaims {
+  computer?: ComputerCapability;
+  privateRead?: boolean;
   tenant?: string;
   externalSlack?: true;
   actorId: string;
@@ -116,7 +132,14 @@ export async function mintCapabilityToken(
   compressionEnabled = false,
 ): Promise<string> {
   const tenant = boundTenant();
-  const value = { orgId: configOrgId(), ...claims, ...(tenant ? { tenant } : {}) };
+  const value = {
+    orgId: configOrgId(),
+    ...claims,
+    ...(tenant ? { tenant } : {}),
+    ...(claims.aud === undefined || claims.aud === CONTROL_PLANE_AUD
+      ? { privateRead: claims.computer?.personalOnly === false ? false : (claims.privateRead ?? true) }
+      : {}),
+  };
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(
@@ -124,6 +147,33 @@ export async function mintCapabilityToken(
       ? { encoding: "deflate-raw", claims: (await compress(bytes)).toString("base64url") }
       : value,
     secret,
+  );
+}
+
+export function mintComputerCapabilityToken(
+  claims: CapabilityClaims,
+  computer: ComputerCapability,
+  secret: string,
+  compressionEnabled?: boolean,
+): Promise<string> {
+  return mintCapabilityToken(
+    {
+      ...claims,
+      computer,
+      privateRead: computer.personalOnly,
+      personalOnly: computer.personalOnly ? true : undefined,
+      ...(claims.memory
+        ? {
+            memory: {
+              ...claims.memory,
+              personalOnly: computer.personalOnly ? true : undefined,
+              ...(computer.personalOnly ? { orgWrite: undefined, teamWrite: undefined } : {}),
+            },
+          }
+        : {}),
+    },
+    secret,
+    compressionEnabled,
   );
 }
 
@@ -174,6 +224,8 @@ export async function verifyCapabilityToken(
   if (claims.browserModel !== undefined && (typeof claims.browserModel !== "string" || !claims.browserModel))
     return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
+  if (claims.computer !== undefined && !isComputerCapability(claims.computer)) return null;
+  if (claims.privateRead !== undefined && typeof claims.privateRead !== "boolean") return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
   if (claims.audienceScopeId !== undefined && typeof claims.audienceScopeId !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
@@ -203,6 +255,8 @@ export async function verifyCapabilityToken(
     )
       return null;
   } else if (!Number.isSafeInteger(claims.exp) || now >= claims.exp) return null;
+  if (claims.aud === undefined || claims.aud === CONTROL_PLANE_AUD)
+    claims.privateRead = claims.computer?.personalOnly !== false && claims.privateRead === true;
   return claims;
 }
 

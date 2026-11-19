@@ -1,3 +1,4 @@
+import type { ComputerCapability } from "../auth/capability-token.ts";
 import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, personalScope } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
@@ -8,6 +9,8 @@ import { queryFacts, type MemoryService } from "./memory-service.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 
 export interface MemoryDisclosure {
+  computer?: ComputerCapability;
+  privateRead?: boolean;
   actor: Principal;
   targetScope: ScopeId;
   audienceScopeId?: ScopeId;
@@ -108,7 +111,14 @@ export function memoryDisclosurePolicy(input: MemoryDisclosure) {
     allows(home: ScopeId, record: MemoryProvenance): Promise<boolean> {
       const { sensitivity, sourceUnknown, sources, personalOnly } = record;
       const owner = parseScopeId(home);
-      if (personalOnly && (!personalTarget || owner.kind !== "personal" || !samePerson(owner.ref, input.actor.id)))
+      if (
+        personalOnly &&
+        (input.computer?.personalOnly === false ||
+          input.privateRead === false ||
+          !personalTarget ||
+          owner.kind !== "personal" ||
+          !samePerson(owner.ref, input.actor.id))
+      )
         return Promise.resolve(false);
       return once(`allows:${home}:${JSON.stringify([sensitivity, sourceUnknown, sources, personalOnly])}`, async () => {
         const homeAllowed = async () => (await narrow(home)) || (await sourceAllowed(home, "unknown"));

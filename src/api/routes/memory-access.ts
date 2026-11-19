@@ -25,6 +25,8 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
   const personal = target.kind === "personal" && samePerson(target.ref, id);
   return disclosedMemory(ctx.deps.memory, {
     actor,
+    computer: ctx.capability?.computer,
+    privateRead: ctx.capability?.privateRead,
     targetScope,
     ...(ctx.capability?.audienceScopeId ? { audienceScopeId: ctx.capability.audienceScopeId } : {}),
     nativeScopes,

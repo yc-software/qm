@@ -361,6 +361,11 @@ export interface App {
   getSessionContext(
     sessionId: string,
   ): Promise<Pick<Session, "id" | "scopeId" | "personalOnly" | "sourceProvenance"> | null>;
+  inheritSessionContext(
+    context: PrivateContext,
+    sourceIds: readonly string[],
+    threadRefs?: readonly string[],
+  ): Promise<Set<string>>;
   recordContextProvenance: SessionStore["recordContextProvenance"];
   getSession(
     sessionId: string,

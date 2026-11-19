@@ -1,3 +1,4 @@
+import { mintComputerCapabilityToken, verifyCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
@@ -10,6 +11,8 @@ function fixture(
   target = "personal:alice",
   authority = true,
   toolDeps: Partial<ToolContextDeps> = {},
+  privateMode = false,
+  computerEnv?: TurnSandboxContext["computerEnv"],
 ) {
   const state = {
     open: true,
@@ -27,7 +30,11 @@ function fixture(
   const commands: string[] = [];
   const released: unknown[][] = [];
   const starts: SandboxHandle[] = [];
-  const resource = { id: "personal-box", ownerScopeId: target };
+  const resource = {
+    id: "personal-box",
+    ownerScopeId: target,
+    ...(privateMode && source === target ? { personalOnly: true } : {}),
+  };
   const commandUses = new Map<string, number>();
   const approvalCalls: unknown[][] = [];
   const egressClaims: unknown[] = [];
@@ -38,6 +45,7 @@ function fixture(
     getEgress: () => state.targetEgress,
   };
   const sandbox = {
+    profile: { backend: "local", writablePersistence: "resident_disk", processSessions: false },
     provision: async (...args: unknown[]) => {
       provisions.push(args);
       if (state.provisionGate) await state.provisionGate;
@@ -84,6 +92,7 @@ function fixture(
   };
   const resources = {
     get: async () => resource,
+    resolve: async () => (source === target ? resource : null),
     notePersonUse: async () => resource,
     access: async () => {
       if (!state.allowed) throw new Error("permission revoked");
@@ -104,7 +113,7 @@ function fixture(
     },
     actor: { id: "alice", type: "internal" },
     input: { origin: { kind: "human" } },
-    session: { id: "session" },
+    session: { id: "session", ...(privateMode ? { personalOnly: true } : {}) },
     resolution: {
       egress: { allowedHosts: [], deniedHosts: ["source-denied.test"] },
       writableScopeId: source,
@@ -119,6 +128,7 @@ function fixture(
       return "synthetic-narrow-egress";
     },
     connectorEnv: { AGENT_API_TOKEN: "synthetic-room-capability", SHARED_SECRET: "synthetic-room-secret" },
+    ...(computerEnv ? { computerEnv } : {}),
     turnSessionDir: "turn/session",
     turnFilesDir: "turn/session/fire",
     visibleSkills: [roomSkill],
@@ -473,4 +483,58 @@ test("same-scope explicit execution prepares credentials only after provisioning
   await f.tools.execute("pwd", { sandboxId: "personal-box", credentials: ["lazy"] });
   assert.deepEqual(events, ["policy", "resolve", "commit"]);
   assert.equal(f.runs.at(-1)?.env?.TOKEN, "synthetic-command-secret");
+});
+
+test("a private conversation cannot execute on a shared computer under open sharing", async () => {
+  const f = fixture("personal:alice", "group:project", true, {}, true);
+  await assert.rejects(
+    f.tools.execute("printf synthetic-private-computation", { sandboxId: "personal-box" }),
+    /private|personal|authorized/i,
+  );
+  assert.equal(f.runs.length, 0);
+  assert.equal(f.provisions.length, 0);
+});
+
+test("private work provisions a disposable computer in its own privacy namespace", async () => {
+  const f = fixture("personal:alice", "personal:alice", true, {}, true);
+  await f.turn.provisionScratch();
+  const options = f.provisions[0]?.[1] as import("../src/sandbox/sandbox.ts").ProvisionOptions;
+  assert.equal(options.scratch?.personalOnly, true);
+  assert.ok(options.scratch?.key.endsWith(":private"));
+  await f.turn.reclaimBox();
+});
+
+for (const privateMode of [false, true])
+  for (const path of ["default", "explicit", "scratch"] as const) {
+    test(`${privateMode ? "private" : "ordinary"} ${path} provisioning forwards only computer-bound API credentials`, async () => {
+      const secret = "computer-provision-token-test-0123456789";
+      const token = await mintComputerCapabilityToken(
+        { actorId: "alice", scopeId: "personal:alice", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
+        { personalOnly: privateMode, ...(path !== "scratch" ? { resourceId: "personal-box" } : {}) },
+        secret,
+      );
+      const seen: import("../src/auth/capability-token.ts").ComputerCapability[] = [];
+      const f = fixture("personal:alice", "personal:alice", true, {}, privateMode, async (resource) => {
+        seen.push(resource);
+        return { AGENT_API_TOKEN: token };
+      });
+      let handle;
+      if (path === "default") handle = await f.turn.provision();
+      else if (path === "explicit") handle = await f.turn.provisionResource("personal-box");
+      else handle = await f.turn.provisionScratch();
+      assert.equal(handle.env?.AGENT_API_TOKEN, token);
+      assert.notEqual(handle.env?.AGENT_API_TOKEN, "synthetic-room-capability");
+      assert.equal(seen[0]?.personalOnly, privateMode);
+      assert.equal(seen[0]?.resourceId, path === "scratch" ? undefined : "personal-box");
+      const claims = await verifyCapabilityToken(handle.env!.AGENT_API_TOKEN, secret);
+      assert.equal(claims?.computer?.personalOnly, privateMode);
+      await f.turn.reclaimBox();
+    });
+  }
+
+test("a caller without a computer credential issuer never forwards its native host token", async () => {
+  const f = fixture("personal:alice", "personal:alice");
+  const handle = await f.turn.provisionResource("personal-box");
+  assert.equal(handle.env?.AGENT_API_TOKEN, undefined);
+  await f.turn.reclaimBox();
 });

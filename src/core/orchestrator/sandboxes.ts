@@ -1,3 +1,5 @@
+import type { ComputerCapability } from "../../auth/capability-token.ts";
+import type { PrivateContext } from "../../sessions/private-context.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { ChildIsolation, Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import {
@@ -28,6 +30,7 @@ import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const SCOPED = "scoped";
+const PRIVATE_SCOPED = "scoped:private";
 const SCRATCH = "scratch";
 
 interface Slot {
@@ -60,9 +63,11 @@ export interface TurnSandboxContext {
   turnSessionDir: string;
   turnFilesDir: string;
   connectorEnv: Record<string, string>;
+  computerEnv?: (computer: ComputerCapability) => Promise<Record<string, string>>;
   egressTokenForTurn: string | undefined;
   egressTokenForPolicy: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
+  privateContext?: () => Promise<PrivateContext>;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
 }
 
@@ -98,9 +103,20 @@ interface TurnPool {
   accessResource: (id: string) => Promise<SandboxAccessPlan>;
 }
 
+async function computerEnv(
+  ctx: TurnSandboxContext,
+  resource?: SandboxResource,
+  personalOnly = resource?.personalOnly === true,
+): Promise<Record<string, string>> {
+  if (ctx.computerEnv) return ctx.computerEnv({ personalOnly, ...(resource ? { resourceId: resource.id } : {}) });
+  const { AGENT_API_TOKEN: _hostCapability, ...env } = ctx.connectorEnv;
+  return env;
+}
+
 async function releasePool(t: TurnPool): Promise<void> {
   const { tenant, deps, input, session, scopeId, turnFilesDir } = t.ctx;
   const { pool, writableScopeId, scopedUsed, audit } = t;
+  const cleanupSandbox = deps.cleanupSandbox ?? deps.sandbox;
   const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
     const runs = deps.runs;
     if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
@@ -110,7 +126,7 @@ async function releasePool(t: TurnPool): Promise<void> {
     });
   };
   const clearTurnFiles = (handle: SandboxHandle): Promise<void> =>
-    retried("turn file cleanup failed", () => deps.sandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
+    retried("turn file cleanup failed", () => cleanupSandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
       swallow("orchestrator: turn file cleanup", err),
     );
   const releaseHandle = async (
@@ -122,7 +138,7 @@ async function releasePool(t: TurnPool): Promise<void> {
     const keepWarm =
       (await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true))) ||
       (await hasLiveJob(handle).catch(swallowAs("orchestrator: live process check", true)));
-    await deps.sandbox
+    await cleanupSandbox
       .teardown(handle, {
         ...(keepWarm ? { keepWarm: true } : {}),
         ...(unchanged ? { homeUnchanged: true } : {}),
@@ -140,7 +156,7 @@ async function releasePool(t: TurnPool): Promise<void> {
   const destroyHandle = async ([key, slot]: [string, Slot], handle: SandboxHandle): Promise<void> => {
     const cleanupStart = Date.now();
     try {
-      await retried("Disposable sandbox destruction failed", () => deps.sandbox.teardown(handle, { destroy: true }));
+      await retried("Disposable sandbox destruction failed", () => cleanupSandbox.teardown(handle, { destroy: true }));
       audit("scratch.released", handle, { cleanupMs: Date.now() - cleanupStart });
     } catch (error) {
       if (!pool.has(key)) pool.set(key, slot);
@@ -164,7 +180,7 @@ async function releasePool(t: TurnPool): Promise<void> {
     for (const handle of slot.handles) {
       const id = `${handle.backend}:${handle.id}`;
       const seen = targets.get(id);
-      const scoped = key === SCOPED;
+      const scoped = key === SCOPED || key === PRIVATE_SCOPED;
       targets.set(id, {
         handle: seen?.scoped ? seen.handle : handle,
         scoped: scoped || !!seen?.scoped,
@@ -236,13 +252,14 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
       personUsed: !input.botActor,
     });
   if (boundSandboxId) await assertDefaultUsable();
-  const resource = boundSandboxId ? undefined : await turnDefault();
+  const resource = boundSandboxId ? await deps.sandboxResources?.get(boundSandboxId) : await turnDefault();
   if (input.surfaceOrigin?.audience === "external" && resource && resource.ownerScopeId !== scopeId)
     throw new Error("External Slack requires its own sandbox.");
   const sandboxId = boundSandboxId ?? resource?.id;
   const handle = await deps.sandbox.provision(resolution.writableScopeId, {
     ...(sandboxId ? { sandboxId } : {}),
     ...turnAccess,
+    env: await computerEnv(t.ctx, resource),
   });
   slot.handles.push(handle);
   await holdResource(handle);
@@ -272,20 +289,28 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
   return handle;
 }
 
-function openScratch(t: TurnPool): Promise<SandboxHandle> {
+function openScratch(t: TurnPool, privateMode: boolean): Promise<SandboxHandle> {
   const { deps, memoryScopeId } = t.ctx;
   const { pool, turnAccess, audit, scratchKey } = t;
-  const cached = pool.get(SCRATCH);
+  const key = privateMode ? `${SCRATCH}:private` : SCRATCH;
+  const cached = pool.get(key);
   if (cached?.opening) return cached.opening;
   if (cached?.handles.length)
     return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
   audit("scratch.provision_started");
   return openSlot(
     pool,
-    SCRATCH,
+    key,
     async (slot) => {
       try {
-        const handle = await deps.sandbox.provision(memoryScopeId, { ...turnAccess, scratch: { key: scratchKey() } });
+        const handle = await deps.sandbox.provision(memoryScopeId, {
+          ...turnAccess,
+          env: await computerEnv(t.ctx, undefined, privateMode),
+          scratch: {
+            key: `${scratchKey()}:${privateMode ? "private" : "ordinary"}`,
+            ...(privateMode ? { personalOnly: true as const } : {}),
+          },
+        });
         slot.handles.push(handle);
         audit("scratch.provision_ready", handle);
         return handle;
@@ -304,7 +329,7 @@ async function openResource(
   input: string | SandboxAccessPlan,
   authorize?: (access: SandboxAccessPlan) => void,
 ): Promise<SandboxHandle> {
-  const { deps, connectorEnv, egressTokenForTurn, egressTokenForPolicy } = t.ctx;
+  const { deps, egressTokenForTurn, egressTokenForPolicy } = t.ctx;
   const { pool, writableScopeId, accessResource, holdResource, notePersonUse, prepareTurnFiles } = t;
   const access = typeof input === "string" ? await accessResource(input) : input;
   const { resource, crossScope, egress, credentialScopeId } = access;
@@ -324,7 +349,7 @@ async function openResource(
       const egressToken = crossScope ? await egressTokenForPolicy(egress) : egressTokenForTurn;
       const handle = await deps.sandbox.provision(crossScope ? resource.ownerScopeId : writableScopeId, {
         sandboxId: resource.id,
-        ...(!crossScope ? { env: connectorEnv } : {}),
+        ...(!crossScope ? { env: await computerEnv(t.ctx, resource) } : {}),
         egress,
         ...(egressToken ? { egressToken } : {}),
       });
@@ -410,21 +435,34 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const finishProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
     finishProcessCredentials(
-      { sandbox: deps.sandbox, processes: deps.processes!, ...(deps.keychain ? { keychain: deps.keychain } : {}) },
+      {
+        sandbox: deps.cleanupSandbox ?? deps.sandbox,
+        processes: deps.processes!,
+        ...(deps.keychain ? { keychain: deps.keychain } : {}),
+      },
       handle,
       processId,
     );
-  const provision = async (eager = false): Promise<SandboxHandle> => {
+  const provisionForPrivacy = (eager: boolean, privateMode: boolean): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
-    const opening = pool.get(SCOPED)?.opening;
-    const handle = opening
-      ? await opening
-      : await openSlot(pool, SCOPED, (slot) =>
-          tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)),
-        );
-    if (opening) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
-    return handle;
+    const key = privateMode ? PRIVATE_SCOPED : SCOPED;
+    const opening = pool.get(key)?.opening;
+    const work =
+      opening ??
+      openSlot(pool, key, async (slot) => {
+        const current = await ctx.privateContext?.();
+        if (!privateMode && (current?.personalOnly || session.personalOnly)) return provisionForPrivacy(eager, true);
+        return tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager));
+      });
+    return work.then(async (handle) => {
+      const current = await ctx.privateContext?.();
+      if (!privateMode && (current?.personalOnly || session.personalOnly)) return provisionForPrivacy(eager, true);
+      if (opening) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
+      return handle;
+    });
   };
+  const provision = (eager = false): Promise<SandboxHandle> =>
+    provisionForPrivacy(eager, session.personalOnly === true);
   const writableScopeId = resolution.writableScopeId;
   const { accessResource, jobComputerPlan } = createTurnSandboxAccess({
     deps,
@@ -432,6 +470,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     resolution,
     scopeId,
     openResourceAccess,
+    privateContext:
+      ctx.privateContext ??
+      (async () => ({
+        actorId: actor.id,
+        privateRead: true,
+        scopeId,
+        sessionId: session.id,
+        ...(session.personalOnly ? { personalOnly: true as const } : {}),
+      })),
     botMayUse,
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
@@ -458,7 +505,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
   ): Promise<SandboxHandle> => openResource(turnPool, input, authorize);
-  const provisionScratch = (): Promise<SandboxHandle> => openScratch(turnPool);
+  const provisionScratch = async (): Promise<SandboxHandle> => {
+    const privateMode = !!((await ctx.privateContext?.())?.personalOnly || session.personalOnly);
+    const handle = await openScratch(turnPool, privateMode);
+    if (!privateMode && ((await ctx.privateContext?.())?.personalOnly || session.personalOnly))
+      return provisionScratch();
+    return handle;
+  };
   const turnSkills = createTurnSkills({
     tenant,
     deps,
@@ -511,10 +564,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     reclaimBox,
     finishProcess,
     invalidateProvision: () => {
-      const slot = pool.get(SCOPED);
-      if (slot) {
-        pool.delete(SCOPED);
-        pool.set(`retired:${retiredSlots++}`, slot);
+      for (const key of [SCOPED, PRIVATE_SCOPED]) {
+        const slot = pool.get(key);
+        if (slot) {
+          pool.delete(key);
+          pool.set(`retired:${retiredSlots++}`, slot);
+        }
       }
       turnSkills.forgetLaidTrees();
     },

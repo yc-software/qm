@@ -27,6 +27,7 @@ async function fixture(overrides: Parameters<typeof buildApp>[1] = {}, message?:
     personalOnly: true,
   });
   const claims = {
+    privateRead: true,
     actorId: "alice",
     scopeId: session.scopeId,
     sessionId: session.id,
