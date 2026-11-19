@@ -73,7 +73,7 @@ describe("tenant tokens", () => {
     const grant = { principalId: "p", scopeId: scopeId("org", "o"), role: "org_admin" as const };
     await grants.put(tokenA, { ...grant, grantedBy: tenantA });
     await grants.put(tokenB, { ...grant, grantedBy: tenantB });
-    assert.equal(await grants.insertIfAbsent(tokenB, { ...grant, principalId: "q" }), true);
+    assert.equal((await grants.insertIfAbsent(tokenB, [{ ...grant, principalId: "q" }])).length, 1);
     assert.deepEqual(
       (await grants.all(tokenA)).map((g) => [g.principalId, g.grantedBy]),
       [["p", tenantA]],

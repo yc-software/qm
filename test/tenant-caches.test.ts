@@ -201,8 +201,8 @@ test("admin seed grants go only to the boot tenant, once", async () => {
         puts += 1;
         persisted.set(tenant.id, [...(persisted.get(tenant.id) ?? []), grant]);
       },
-      async insertIfAbsent() {
-        return true;
+      async insertIfAbsent(_tenant, grants) {
+        return [...grants];
       },
       async remove() {},
     },

@@ -89,10 +89,10 @@ test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbe
 test("concurrent administrator provisioning preserves the first grant", { skip }, async () => {
   const store = createPostgresAdminGrantStore(URL!);
   const candidates = Array.from({ length: 8 }, (_, i) => grant({ createdAt: i, grantedBy: `issuer-${i}` }));
-  const inserted = await Promise.all(candidates.map((g) => store.insertIfAbsent(tenant, g)));
-  assert.equal(inserted.filter(Boolean).length, 1);
-  const winner = candidates[inserted.indexOf(true)]!;
+  const inserted = (await Promise.all(candidates.map((g) => store.insertIfAbsent(tenant, [g])))).flat();
+  assert.equal(inserted.length, 1);
+  const winner = inserted[0]!;
   assert.deepEqual(await store.all(tenant), [winner]);
-  assert.equal(await createPostgresAdminGrantStore(URL!).insertIfAbsent(tenant, grant({ createdAt: 999 })), false);
+  assert.deepEqual(await createPostgresAdminGrantStore(URL!).insertIfAbsent(tenant, [grant({ createdAt: 999 })]), []);
   assert.deepEqual(await store.all(tenant), [winner]);
 });

@@ -18,14 +18,14 @@ export function grantKey(principalId: string, scopeId: ScopeId, role: AdminRole)
 export interface AdminGrantPersistence {
   all(tenant: Tenant): Promise<AdminGrant[]>;
   put(tenant: Tenant, g: AdminGrant): Promise<void>;
-  insertIfAbsent(tenant: Tenant, g: AdminGrant): Promise<boolean>;
+  insertIfAbsent(tenant: Tenant, grants: readonly AdminGrant[]): Promise<AdminGrant[]>;
   remove(tenant: Tenant, principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
 }
 
 export interface AdminGrantStore {
   list(tenant: Tenant): Promise<AdminGrant[]>;
   add(tenant: Tenant, g: AdminGrant): Promise<void>;
-  addIfAbsent(tenant: Tenant, g: AdminGrant): Promise<boolean>;
+  addIfAbsent(tenant: Tenant, grants: readonly AdminGrant[]): Promise<AdminGrant[]>;
   revoke(tenant: Tenant, principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
 }
 
@@ -66,9 +66,9 @@ export function createAdminGrantStore(
       await ensureSeeded(tenant);
       await persist.put(tenant, g);
     },
-    async addIfAbsent(tenant, g) {
+    async addIfAbsent(tenant, grants) {
       await ensureSeeded(tenant);
-      return persist.insertIfAbsent(tenant, g);
+      return persist.insertIfAbsent(tenant, grants);
     },
     async revoke(tenant, principalId, scopeId, role) {
       await ensureSeeded(tenant);

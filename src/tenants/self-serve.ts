@@ -5,7 +5,12 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { tenantSettingsSchema } from "./settings.ts";
 import { bootTenant } from "./boot.ts";
-import { AdminError, trustedSubjectPrincipal, type AdminService } from "../admin/admin-service.ts";
+import {
+  AdminError,
+  trustedSubjectPrincipal,
+  type AdminService,
+  type SelfServePerson,
+} from "../admin/admin-service.ts";
 import { reportFailure } from "../util/errors.ts";
 import { orgScope } from "../config.ts";
 import { withTenant, type Tenant } from "./context.ts";
@@ -122,13 +127,12 @@ export interface SelfServe {
 export function createSelfServe(
   pg: Pick<PgPool, "q">,
   provision: (request: WorkspaceProvisionRequest) => Promise<ProvisionedWorkspace>,
-  admin: Pick<AdminService, "provisionSelfServe" | "users">,
+  admin: Pick<AdminService, "provisionSelfServe">,
   auditLog: Pick<AuditLog, "record">,
 ): SelfServe {
-  const enroll = async (bound: Tenant, issuer: string, subject: string, email: string | null, name?: string) => {
-    const { grant, granted } = await admin.provisionSelfServe(bound, issuer, subject, email);
-    if (name) await admin.users.setDisplayName(grant.principalId, name);
-    if (granted)
+  const enroll = async (bound: Tenant, issuer: string, people: readonly SelfServePerson[]) => {
+    const { granted, removed } = await admin.provisionSelfServe(bound, issuer, people);
+    for (const grant of granted)
       auditLog.record(bound, {
         at: Date.now(),
         principalId: grant.grantedBy!,
@@ -136,13 +140,33 @@ export function createSelfServe(
         action: "grant.create",
         resource: `${grant.principalId}/org_admin`,
       });
+    return removed;
   };
 
-  const enrollMember = async (bound: Tenant, issuer: string, raw: unknown) => {
-    const member = provisionedMember.safeParse(raw);
-    if (!member.success) throw new Error(`invalid member: ${z.prettifyError(member.error)}`);
-    const { subject, email, name } = member.data;
-    await enroll(bound, issuer, subject, email ?? null, name);
+  const enrollMembers = async (bound: Tenant, issuer: string, members: readonly unknown[]) => {
+    const failed = (index: number, error: unknown) =>
+      reportFailure("self-serve member setup", error, `${bound.id} member ${index}`);
+    const people: { index: number; person: SelfServePerson }[] = [];
+    for (const [index, raw] of members.entries()) {
+      const member = provisionedMember.safeParse(raw);
+      if (!member.success) {
+        failed(index, new Error(`invalid member: ${z.prettifyError(member.error)}`));
+        continue;
+      }
+      try {
+        trustedSubjectPrincipal(issuer, member.data.subject);
+        people.push({ index, person: { ...member.data, email: member.data.email ?? null } });
+      } catch (error) {
+        failed(index, error);
+      }
+    }
+    const removed = await enroll(
+      bound,
+      issuer,
+      people.map(({ person }) => person),
+    );
+    for (const { index, person } of people)
+      if (removed.includes(person)) failed(index, new AdminError(403, "this person was removed from the workspace"));
   };
 
   return {
@@ -174,13 +198,11 @@ export function createSelfServe(
               cause: error,
             });
           });
-          for (const [index, member] of provisioned.members.entries())
-            await enrollMember(bound, issuer, member).catch((error: unknown) =>
-              reportFailure("self-serve member setup", error, `${workspace.tenant} member ${index}`),
-            );
+          await enrollMembers(bound, issuer, provisioned.members);
           await markSelfServeProvisioned(pg, workspace.tenant, provisioned.settings.modelGatewayKey);
         }
-        await enroll(bound, issuer, subject, email);
+        if ((await enroll(bound, issuer, [{ subject, email }])).length)
+          throw new AdminError(403, "this person was removed from the workspace");
       });
       return { tenant: workspace.tenant, created: workspace.created };
     },

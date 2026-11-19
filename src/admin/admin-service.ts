@@ -7,7 +7,6 @@ import { personKey, samePerson } from "../directory/person.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { bootTenant } from "../tenants/boot.ts";
-import { PrincipalLinkError } from "../identity/principal-links.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -48,15 +47,20 @@ export interface AdminService {
   provisionSelfServe(
     tenant: Tenant,
     issuer: string,
-    subject: string,
-    email: string | null,
-  ): Promise<{ grant: AdminGrant; granted: boolean }>;
+    people: readonly SelfServePerson[],
+  ): Promise<{ granted: AdminGrant[]; removed: SelfServePerson[] }>;
   createGrant(
     tenant: Tenant,
     actor: Principal,
     input: { principalId: string; role: AdminRole; scopeId: ScopeId },
   ): Promise<AdminGrant>;
   revokeGrant(tenant: Tenant, actor: Principal, principalId: string, scope: ScopeId, role: AdminRole): Promise<void>;
+}
+
+export interface SelfServePerson {
+  subject: string;
+  email: string | null;
+  name?: string;
 }
 
 export function parseAdminGrants(raw: string | undefined, orgId: string): AdminGrant[] | undefined {
@@ -129,38 +133,55 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         createdAt: now(),
       };
       await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
-      const created = await grants.addIfAbsent(tenant, grant);
+      const created = (await grants.addIfAbsent(tenant, [grant])).length > 0;
       return { grant, created };
     },
-    async provisionSelfServe(tenant, issuer, subject, email) {
-      const principalId = trustedSubjectPrincipal(issuer, subject);
-      const known = await opts.users.resolve(email ? [principalId, email] : [principalId]);
-      if ([...known.values()].some((user) => user.offboardedAt !== undefined))
-        throw new AdminError(403, "this person was removed from the workspace");
+    async provisionSelfServe(tenant, issuer, people) {
+      const entries = people.map((person) => ({
+        person,
+        principalId: trustedSubjectPrincipal(issuer, person.subject),
+      }));
+      const aliases = ({ person, principalId }: (typeof entries)[number]) =>
+        person.email ? [principalId, person.email] : [principalId];
+      const known = await opts.users.resolve(entries.flatMap(aliases));
+      const removed = entries.filter((entry) =>
+        aliases(entry).some((alias) => known.get(alias)?.offboardedAt !== undefined),
+      );
+      const admitted = entries.filter((entry) => !removed.includes(entry));
       const at = now();
-      const grant: AdminGrant = {
-        principalId,
-        role: "org_admin",
-        scopeId: scopeId("org", orgId),
-        grantedBy: `trusted-oidc-self-serve:${issuer}`,
-        createdAt: at,
-      };
-      const granted = known.size === 0 && (await grants.addIfAbsent(tenant, grant));
-      await opts.users.record({ id: principalId, source: "admin", at });
-      if (email)
-        await opts.users
-          .link({
-            principalId: email,
-            canonicalId: principalId,
-            evidence: `verified email from ${issuer}`,
-            linkedBy: "",
+      const granted = await grants.addIfAbsent(
+        tenant,
+        admitted
+          .filter((entry) => !aliases(entry).some((alias) => known.has(alias)))
+          .map(({ principalId }) => ({
+            principalId,
+            role: "org_admin",
+            scopeId: scopeId("org", orgId),
+            grantedBy: `trusted-oidc-self-serve:${issuer}`,
             createdAt: at,
-          })
-          .catch((error: unknown) => {
-            if (!(error instanceof PrincipalLinkError)) throw error;
-            console.warn(`[self-serve] email not linked to ${principalId} in ${tenant.id}: ${error.message}`);
-          });
-      return { grant, granted };
+          })),
+      );
+      await opts.users.recordAll(
+        admitted.map(({ person, principalId }) => ({ id: principalId, source: "admin", at, name: person.name })),
+      );
+      const unlinked = await opts.users.linkAll(
+        admitted.flatMap(({ person, principalId }) =>
+          person.email
+            ? [
+                {
+                  principalId: person.email,
+                  canonicalId: principalId,
+                  evidence: `verified email from ${issuer}`,
+                  linkedBy: "",
+                  createdAt: at,
+                },
+              ]
+            : [],
+        ),
+      );
+      for (const { link, error } of unlinked)
+        console.warn(`[self-serve] email not linked to ${link.canonicalId} in ${tenant.id}: ${error.message}`);
+      return { granted, removed: removed.map(({ person }) => person) };
     },
     async listGrants(tenant) {
       return grants.list(tenant);

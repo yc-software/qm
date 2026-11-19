@@ -50,14 +50,24 @@ export function createPostgresAdminGrantStore(connectionString: string): AdminGr
         [tenant.id, g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
       );
     },
-    async insertIfAbsent(tenant, g) {
-      const result = await pg.forTenant(tenant).query(
+    async insertIfAbsent(tenant, grants) {
+      if (!grants.length) return [];
+      const rows = await pg.forTenant(tenant).q(
         `INSERT INTO admin_grants (tenant_id, principal_id, scope_id, role, granted_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (tenant_id, principal_id, scope_id, role) DO NOTHING`,
-        [tenant.id, g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
+         SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::bigint[])
+         ON CONFLICT (tenant_id, principal_id, scope_id, role) DO NOTHING
+         RETURNING principal_id, scope_id, role`,
+        [
+          tenant.id,
+          grants.map((g) => g.principalId),
+          grants.map((g) => g.scopeId),
+          grants.map((g) => g.role),
+          grants.map((g) => g.grantedBy ?? null),
+          grants.map((g) => g.createdAt ?? null),
+        ],
       );
-      return result.rowCount > 0;
+      const inserted = new Set(rows.map((r) => `${r.principal_id}\0${r.scope_id}\0${r.role}`));
+      return grants.filter((g) => inserted.has(`${g.principalId}\0${g.scopeId}\0${g.role}`));
     },
     async remove(tenant, principalId, scopeId, role) {
       await pg
