@@ -101,7 +101,6 @@ function isCronPatch(b: unknown): b is {
   archived?: boolean;
   unfurlLinks?: boolean;
   session?: boolean;
-  persona?: string | null;
 } {
   if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
   if (!hasCronPatchFields(b)) return true;
@@ -120,7 +119,6 @@ function isCronPatch(b: unknown): b is {
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
   if (hasSchedule && userScheduleFromBody(b.schedule) === null) return false;
   if (b.session !== undefined && typeof b.session !== "boolean") return false;
-  if (b.persona !== undefined && b.persona !== null && typeof b.persona !== "string") return false;
   return true;
 }
 
@@ -134,8 +132,7 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.enabled !== undefined ||
     b.archived !== undefined ||
     b.unfurlLinks !== undefined ||
-    b.session !== undefined ||
-    b.persona !== undefined
+    b.session !== undefined
   );
 }
 
@@ -327,7 +324,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), session (boolean), and/or persona (id or name, null clears)";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
@@ -365,7 +362,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.archived !== undefined ? { archived: body.archived } : {}),
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
         ...(body.session !== undefined ? { session: body.session } : {}),
-        ...(body.persona !== undefined ? { persona: body.persona } : {}),
       },
       capability,
     );

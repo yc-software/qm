@@ -33,7 +33,6 @@ export interface CreateCronInput extends CreateTriggerInput {
   sessionRef?: string;
   script?: CronScript;
   sharedFrom?: string;
-  personaId?: string;
 }
 
 export interface CronPatch {
@@ -51,7 +50,6 @@ export interface CronPatch {
   script?: CronScript | null;
   forkedAt?: number;
   sharedFrom?: null;
-  personaId?: string | null;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -136,7 +134,6 @@ function cronFields(patch: CronPatch): Partial<Cron> {
   if (patch.script !== undefined) fields.script = patch.script ?? undefined;
   if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;
   if (patch.sharedFrom === null) fields.sharedFrom = undefined;
-  if (patch.personaId !== undefined) fields.personaId = patch.personaId ?? undefined;
   return fields;
 }
 
@@ -165,7 +162,6 @@ export function createCronStore(
         ...(input.runtime ? [contentPart(input.runtime)] : []),
         ...(input.script ? [contentPart(input.script)] : []),
         ...(input.sharedFrom ? [contentPart(input.sharedFrom)] : []),
-        ...(input.personaId ? [contentPart(input.personaId)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -180,7 +176,6 @@ export function createCronStore(
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.script ? { script: input.script } : {}),
         ...(input.sharedFrom ? { sharedFrom: input.sharedFrom } : {}),
-        ...(input.personaId ? { personaId: input.personaId } : {}),
       }));
     },
     get: (id) => backing.get(id),

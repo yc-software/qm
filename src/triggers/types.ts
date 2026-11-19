@@ -62,7 +62,6 @@ export interface Cron extends TriggerBase {
   script?: CronScript;
   sharedFrom?: string;
   forkedAt?: number;
-  personaId?: string;
 
   lastFireNote?: CronFireNote;
 }

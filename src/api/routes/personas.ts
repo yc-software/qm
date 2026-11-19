@@ -75,10 +75,11 @@ async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string,
   const personaThreads =
     (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
   return crons
-    .filter((c) =>
-      c.personaId
-        ? c.personaId === personaId
-        : pinned.has(c.ownerScopeId) || refsOf(c).some((ref) => personaThreads.has(ref)),
+    .filter(
+      (c) =>
+        c.ownerScopeId === `persona:${personaId}` ||
+        pinned.has(c.ownerScopeId) ||
+        refsOf(c).some((ref) => personaThreads.has(ref)),
     )
     .map(({ id, title, action, message, schedule, enabled }) => ({ id, title, action, message, schedule, enabled }));
 }

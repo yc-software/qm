@@ -74,12 +74,12 @@ export function createCronShareMethods(
       source.ownerScopeId !== runsIn && isSharedScope(source.ownerScopeId)
         ? ((await deps.personas?.pinnedIn(source.ownerScopeId)) ?? undefined)
         : undefined;
+    const { kind, ref } = parseScopeId(source.ownerScopeId);
     const personaId =
-      source.personaId ??
+      (kind === "persona" ? ref : undefined) ??
       (await sessionPersona(ownSession)) ??
       (source.sessionRef !== ownSession ? await sessionPersona(source.sessionRef) : undefined) ??
       pinned;
-    const { kind, ref } = parseScopeId(source.ownerScopeId);
     const projectId = kind === "group" ? projectIdFromGroupRef(ref) : null;
     const project = projectId ? await deps.projects?.get(projectId) : null;
     return {
@@ -126,8 +126,7 @@ export function createCronShareMethods(
   return {
     cronOrigin: async (cron) => {
       const source = (cron.sharedFrom ? await deps.crons.get(cron.sharedFrom) : null) ?? cron;
-      const origin = await originOf(source, cron.ownerScopeId, cron.sessionRef);
-      return cron.personaId ? { ...origin, personaId: cron.personaId } : origin;
+      return originOf(source, cron.ownerScopeId, cron.sessionRef);
     },
     cronCopies: async (id) => (await deps.crons.copiesOf(id)).map(asCopy),
     cronSharing: (cron) => sharingFor(deps.crons, cron),
