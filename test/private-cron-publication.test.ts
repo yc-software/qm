@@ -1,3 +1,4 @@
+import { testTenant as cronTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
@@ -120,7 +121,10 @@ test("publishing a private schedule creates a separate shared configuration and 
   assert.equal((await f.control.getCron(selected.id, bob)).ok, false);
   assert.equal((await f.control.getCronRuns(selected.id, {}, bob)).ok, false);
   assert.equal((await f.built.sessions.get(f.session.id))!.personalOnly, true);
-  await assert.rejects(f.built.app.updateCron(shared.id, { action: "New private content" }, f.claims), /Private/);
+  await assert.rejects(
+    f.built.app.updateCron(cronTenant, shared.id, { action: "New private content" }, f.claims),
+    /Private/,
+  );
   const repeated = await f.built.crons.publishPrivate(
     selected.id,
     cronSharingRevision(selected),

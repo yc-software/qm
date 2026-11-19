@@ -102,6 +102,7 @@ test("scheduled execution stores privacy and restricted provenance before the mo
         assert.equal(input.session.sourceProvenance?.sensitivity, "restricted");
         assert.ok(input.session.sourceProvenance?.sources.includes("group:restricted"));
         await built.app.setCronFireNote(
+          testTenant,
           cronId,
           { text: "Next private fire", at: Date.now() },
           { privateRead: true, actorId: "U1", scopeId: ownerScope, sessionId: input.session.id },
@@ -189,11 +190,11 @@ test("private schedule notes and task changes cannot modify an existing shared s
   const stale = f.context();
   await f.protect();
   await assert.rejects(
-    f.built.app.updateCron(ordinary.id, { action: "Private replacement" }, stale),
+    f.built.app.updateCron(testTenant, ordinary.id, { action: "Private replacement" }, stale),
     /cannot update a shared schedule/,
   );
   await assert.rejects(
-    f.built.app.setCronFireNote(ordinary.id, { text: "Private note", at: Date.now() }, stale),
+    f.built.app.setCronFireNote(testTenant, ordinary.id, { text: "Private note", at: Date.now() }, stale),
     /cannot update a shared schedule/,
   );
   assert.equal((await f.built.crons.get(ordinary.id))!.action, "Ordinary task");
@@ -208,7 +209,7 @@ test("private schedule notes and task changes cannot modify an existing shared s
     destination: principalDestination("U1", "U1"),
   });
   await assert.rejects(
-    f.built.app.setCronDestination(personal.id, principalDestination("U2", "U1"), f.context()),
+    f.built.app.setCronDestination(testTenant, personal.id, principalDestination("U2", "U1"), f.context()),
     /personal scope and delivery/,
   );
   await assert.rejects(
@@ -255,13 +256,15 @@ test("unchanged schedule controls still inherit private contents before returnin
       destinations: [{ ...destination, key: "self", label: "me" }],
     };
     let result;
-    if (operation === "patch") result = await f.control.patchCron(cron.id, { title: "Private title" }, context);
-    else if (operation === "enabled") result = await f.control.setCronEnabled(cron.id, true, context);
-    else result = await f.control.retargetCron(cron.id, "self", context);
+    if (operation === "patch")
+      result = await f.control.patchCron(testTenant, cron.id, { title: "Private title" }, context);
+    else if (operation === "enabled") result = await f.control.setCronEnabled(testTenant, cron.id, true, context);
+    else result = await f.control.retargetCron(testTenant, cron.id, "self", context);
     assert.equal(result.ok, true, operation + JSON.stringify(result));
     assert.equal((await f.built.sessions.get(session.id))!.personalOnly, true);
     await assert.rejects(
       f.built.app.updateCron(
+        testTenant,
         shared.id,
         { action: "Private copied task" },
         { privateRead: true, actorId: "U1", scopeId: ownerScope, sessionId: session.id },
@@ -411,7 +414,7 @@ test("fire history is withheld when its schedule becomes private during retrieva
   const actual = f.built.app.listCronFires.bind(f.built.app);
   t.mock.method(f.built.app, "listCronFires", async (id: string, options?: Parameters<typeof actual>[1]) => {
     await f.protect();
-    await f.built.app.updateCron(id, { action: "Private task" }, f.context());
+    await f.built.app.updateCron(testTenant, id, { action: "Private task" }, f.context());
     await f.built.crons.recordFire(id, {
       fireKey: "private-history",
       threadRef: "private-history",

@@ -1,6 +1,6 @@
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { cronSharingRevision, cronPublicationId, withCronAccess } from "../cron/cron-store.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import { refreshPrivateContext, inheritContextSources, privateSourceAllowed } from "../sessions/private-context.ts";
 import { triggerPrivacy, assertPrivateTrigger } from "../triggers/trigger-store.ts";
@@ -211,6 +211,7 @@ export function createMessagingMethods(
   };
 
   const cronPrivacy = async (
+    tenant: Tenant,
     before: Cron,
     by: CronEditor,
     patch: Partial<Pick<Cron, "owner" | "destination" | "personalOnly" | "sourceProvenance">> = {},
@@ -224,7 +225,7 @@ export function createMessagingMethods(
     if (desired.personalOnly || desired.sourceProvenance) {
       const copies = (await deps.crons.copiesOf(before.id)).filter((copy) => !copy.forkedAt);
       const related = [desired, ...copies];
-      const grants = await deps.acl.find(ambientTenant(), {
+      const grants = await deps.acl.find(tenant, {
         resources: related.map((cron) => ({ ownerScopeId: cron.ownerScopeId, ref: encodeRef(cronRef(cron.id)) })),
       });
       if (desired.personalOnly && (copies.length || grants.length))
@@ -377,15 +378,15 @@ export function createMessagingMethods(
       const blocked = await inheritContextSources(deps.sessions, context, [...owned, ...visible]);
       return { owned: owned.filter((c) => !blocked.has(c.id)), visible: visible.filter((c) => !blocked.has(c.id)) };
     },
-    async updateCron(id, patch, by, trial) {
+    async updateCron(tenant, id, patch, by, trial) {
       return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return null;
-        await cronPrivacy(before, by, patch);
+        await cronPrivacy(tenant, before, by, patch);
         if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
         if (patch.schedule) validateUserSchedule(patch.schedule);
         await trialBeforeSave(patch.script, patch.schedule, trial);
-        const privacy = await cronPrivacy(before, by, patch);
+        const privacy = await cronPrivacy(tenant, before, by, patch);
         const linked = linkedChanges(before, patch);
         const edited = Object.keys(linked).length > 0;
         const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
@@ -408,39 +409,39 @@ export function createMessagingMethods(
         if (before) auditCron("cron_delete", before, by);
       });
     },
-    async setCronEnabled(id, enabled, by) {
+    async setCronEnabled(tenant, id, enabled, by) {
       return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return;
-        if (by) await deps.crons.update(id, await cronPrivacy(before, by));
+        if (by) await deps.crons.update(id, await cronPrivacy(tenant, before, by));
         await deps.crons.setEnabled(id, enabled);
       });
     },
-    async setCronFireNote(id, note, by) {
+    async setCronFireNote(tenant, id, note, by) {
       return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return "missing";
-        const privacy = await cronPrivacy(before, by);
+        const privacy = await cronPrivacy(tenant, before, by);
         await deps.crons.update(id, privacy);
         const outcome = await deps.crons.setFireNote(id, note);
         if (outcome === "applied") auditCron("cron_note", before, by);
         return outcome;
       });
     },
-    async setCronRuntime(id, runtime, by) {
+    async setCronRuntime(tenant, id, runtime, by) {
       return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return null;
         await validateRuntime({ ...before, runtime });
-        const privacy = by ? await cronPrivacy(before, by) : {};
+        const privacy = by ? await cronPrivacy(tenant, before, by) : {};
         return deps.crons.update(id, { runtime, ...privacy });
       });
     },
-    async setCronDestination(id, destination, by) {
+    async setCronDestination(tenant, id, destination, by) {
       return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
         const before = await deps.crons.get(id);
         if (!before) return null;
-        const privacy = await cronPrivacy(before, by, { destination });
+        const privacy = await cronPrivacy(tenant, before, by, { destination });
         await deps.crons.setDestination(id, destination, privacy);
         auditCron("cron_retarget", before, by);
         return deps.crons.get(id);

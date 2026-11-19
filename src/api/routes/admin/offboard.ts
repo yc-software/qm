@@ -1,3 +1,4 @@
+import { tenantOf } from "../route.ts";
 import { samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -37,7 +38,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   for (const c of await app.listCrons())
     if (!c.loopId && !c.archived && (await owns(c.owner, c.ownerScopeId)))
       step("cron", c.id, c.title ?? "", "disable_and_archive", () =>
-        app.updateCron(c.id, { enabled: false, archived: true }, { actorId }),
+        app.updateCron(tenantOf(ctx), c.id, { enabled: false, archived: true }, { actorId }),
       );
   const loops = deps.loops;
   for (const l of (await loops?.store.list()) ?? [])

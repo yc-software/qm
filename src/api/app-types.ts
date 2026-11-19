@@ -568,15 +568,36 @@ export interface App {
   cronCopies(id: string): Promise<CronCopy[]>;
   cronSharing(cron: VisibleCron): Promise<VisibleCron>;
   unshareCron(id: string, recipient: string): Promise<void>;
-  updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
+  updateCron(
+    tenant: Tenant,
+    id: string,
+    patch: CronPatch,
+    by: CronEditor,
+    trial?: CronScriptTrial,
+  ): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
-  setCronEnabled(id: string, enabled: boolean, by?: CronEditor): Promise<void>;
-  setCronFireNote(id: string, note: CronFireNote, by: CronEditor): Promise<"applied" | "superseded" | "missing">;
+  setCronEnabled(tenant: Tenant, id: string, enabled: boolean, by?: CronEditor): Promise<void>;
+  setCronFireNote(
+    tenant: Tenant,
+    id: string,
+    note: CronFireNote,
+    by: CronEditor,
+  ): Promise<"applied" | "superseded" | "missing">;
   listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>, by?: CronEditor): Promise<Cron | null>;
-  setCronDestination(id: string, destination: Destination | undefined, by: CronEditor): Promise<Cron | null>;
+  setCronRuntime(
+    tenant: Tenant,
+    id: string,
+    runtime: Exclude<Cron["runtime"], undefined>,
+    by?: CronEditor,
+  ): Promise<Cron | null>;
+  setCronDestination(
+    tenant: Tenant,
+    id: string,
+    destination: Destination | undefined,
+    by: CronEditor,
+  ): Promise<Cron | null>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;

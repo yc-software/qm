@@ -1389,13 +1389,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
     cronPatch(id, req) {
-      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
+      return controlOp((c, cl) => c.patchCron(deps.tenant, id, req, cl, trialOn(this)));
     },
-    cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
+    cronNote: (id, note) => controlOp((c, cl) => c.noteCron(deps.tenant, id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
-    cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
+    cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(deps.tenant, id, enabled, cl)),
     cronRun: (id) => controlOp((c, cl) => c.runCron(id, cl)),
-    cronRetarget: (id, destinationKey) => controlOp((c, cl) => c.retargetCron(id, destinationKey, cl)),
+    cronRetarget: (id, destinationKey) => controlOp((c, cl) => c.retargetCron(deps.tenant, id, destinationKey, cl)),
     webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),

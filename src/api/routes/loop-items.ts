@@ -1,3 +1,4 @@
+import { tenantOf } from "./route.ts";
 import { inheritRequestSources } from "../private-context.ts";
 import { triggerPrivacy } from "../../triggers/trigger-store.ts";
 import { z } from "zod";
@@ -601,8 +602,8 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
         }
         if (cron) {
           if (enable && cron.action !== task)
-            await ctx.app.updateCron(cron.id, { action: task, title: `${loop.name} sync` }, acting);
-          await ctx.app.setCronEnabled(cron.id, enable);
+            await ctx.app.updateCron(tenantOf(ctx), cron.id, { action: task, title: `${loop.name} sync` }, acting);
+          await ctx.app.setCronEnabled(tenantOf(ctx), cron.id, enable);
           if (enable && current.state === "paused") await deps.store.setState(loop.id, "enabled");
         }
         results.push({

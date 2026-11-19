@@ -34,11 +34,11 @@ test("a cron shared with a person becomes their paused linked copy until they ed
   assert.match(notice?.text ?? "", new RegExp(`turning cron ${copy.id} on`));
   assert.equal((await app.shareCron(testTenant, source.id, "U2", "U1")).copy.id, copy.id);
 
-  await app.updateCron(source.id, { action: "weather in Oakland" }, { actorId: "U1" });
+  await app.updateCron(testTenant, source.id, { action: "weather in Oakland" }, { actorId: "U1" });
   assert.equal((await app.getCron(copy.id))?.action, "weather in Oakland");
 
-  await app.updateCron(copy.id, { title: "My weather" }, { actorId: "U2" });
-  await app.updateCron(source.id, { action: "weather in Berkeley" }, { actorId: "U1" });
+  await app.updateCron(testTenant, copy.id, { title: "My weather" }, { actorId: "U2" });
+  await app.updateCron(testTenant, source.id, { action: "weather in Berkeley" }, { actorId: "U1" });
   const forked = await app.getCron(copy.id);
   assert.ok(forked?.forkedAt);
   assert.equal(forked.action, "weather in Oakland");
@@ -60,7 +60,7 @@ test("unsharing a cron detaches each copy and leaves it with its owner", async (
   });
   const paused = (await app.shareCron(testTenant, source.id, "U2", "U1")).copy;
   const accepted = (await app.shareCron(testTenant, source.id, "U3", "U1")).copy;
-  await app.updateCron(accepted.id, { enabled: true }, { actorId: "U3" });
+  await app.updateCron(testTenant, accepted.id, { enabled: true }, { actorId: "U3" });
 
   await app.unshareCron(source.id, "U2");
   await app.unshareCron(source.id, "U3");
@@ -91,19 +91,19 @@ test("private source edits cannot fan out to linked recipients, and private copi
   };
   const alice = await privateContext("U1");
   await assert.rejects(
-    app.updateCron(source.id, { action: "PrivateLinkedSourceSpruce7301" }, alice),
+    app.updateCron(testTenant, source.id, { action: "PrivateLinkedSourceSpruce7301" }, alice),
     /shared schedule/,
   );
   assert.equal((await crons.get(source.id))!.action, "Ordinary source");
   assert.equal((await crons.get(copy.id))!.action, "Ordinary source");
   const bob = await privateContext("U2");
-  await app.updateCron(copy.id, { action: "PrivateLinkedCopySpruce7301" }, bob);
+  await app.updateCron(testTenant, copy.id, { action: "PrivateLinkedCopySpruce7301" }, bob);
   const personal = (await crons.get(copy.id))!;
   assert.equal(personal.personalOnly, true);
   assert.equal(personal.sharedFrom, undefined);
   assert.ok(personal.forkedAt);
   assert.deepEqual(await app.cronCopies(source.id), []);
-  await app.updateCron(source.id, { action: "Later ordinary source" }, { actorId: "U1" });
+  await app.updateCron(testTenant, source.id, { action: "Later ordinary source" }, { actorId: "U1" });
   assert.equal((await crons.get(copy.id))!.action, "PrivateLinkedCopySpruce7301");
   await assert.rejects(app.shareCron(testTenant, copy.id, "U1", "U2"), /selected publication/);
 });
@@ -182,6 +182,7 @@ for (const exposure of ["destination", "grant"] as const) {
     if (exposure === "destination") {
       const target = await sessions.getOrCreateByThread("linked-other-team-result", "group", otherScope);
       await app.setCronDestination(
+        testTenant,
         copy.id,
         { type: "web", target: target.threadRef, audienceScopeId: otherScope },
         { actorId: "U2" },
@@ -212,6 +213,7 @@ for (const exposure of ["destination", "grant"] as const) {
     });
     const safeCopy = await app.shareCron(testTenant, safe.id, "U2", "U1");
     await app.updateCron(
+      testTenant,
       safe.id,
       { action: "Allowed restricted update" },
       { actorId: "U1", scopeId: context.scopeId, sessionId: context.id, privateRead: true },
@@ -219,6 +221,7 @@ for (const exposure of ["destination", "grant"] as const) {
     assert.equal((await crons.get(safeCopy.copy.id))!.action, "Allowed restricted update");
     await assert.rejects(
       app.updateCron(
+        testTenant,
         source.id,
         { action: "RestrictedLinkedSpruce7301" },
         { actorId: "U1", scopeId: context.scopeId, sessionId: context.id, privateRead: true },

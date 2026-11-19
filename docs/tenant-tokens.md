@@ -85,3 +85,29 @@ patch/options fields, authorization, locks, revisions, and stored/HTTP JSON rema
 unchanged. Existing deployment/provenance operations called by these methods are
 still legacy paths. Five affected authorization/release/control files pass;
 focused independent review accepted this slice96/100.
+
+## Schedule-edit token forwarding
+
+These internal methods gain a leading `tenant: Tenant`; all previously listed
+arguments and return types remain unchanged:
+
+| Owner            | Before                                     | After                                              |
+| ---------------- | ------------------------------------------ | -------------------------------------------------- |
+| `App`            | `updateCron(id, patch, by, trial?)`        | `updateCron(tenant, id, patch, by, trial?)`        |
+| `App`            | `setCronEnabled(id, enabled, by?)`         | `setCronEnabled(tenant, id, enabled, by?)`         |
+| `App`            | `setCronFireNote(id, note, by)`            | `setCronFireNote(tenant, id, note, by)`            |
+| `App`            | `setCronRuntime(id, runtime, by?)`         | `setCronRuntime(tenant, id, runtime, by?)`         |
+| `App`            | `setCronDestination(id, destination, by)`  | `setCronDestination(tenant, id, destination, by)`  |
+| `ControlService` | `patchCron(id, req, claims, trial?)`       | `patchCron(tenant, id, req, claims, trial?)`       |
+| `ControlService` | `noteCron(id, text, claims)`               | `noteCron(tenant, id, text, claims)`               |
+| `ControlService` | `setCronEnabled(id, enabled, claims)`      | `setCronEnabled(tenant, id, enabled, claims)`      |
+| `ControlService` | `retargetCron(id, destinationKey, claims)` | `retargetCron(tenant, id, destinationKey, claims)` |
+
+HTTP routes forward `tenantOf(ctx)` and turn tools forward `deps.tenant`. The
+locked schedule privacy check uses that token for its ACL audience query. No
+additional ambient read or tenant mint is introduced. Existing locks, privacy
+refreshes, linked-copy checks, trial checks, revisions and audit behavior remain.
+No tenant token enters tool inputs, HTTP bodies, saved claims or stored records.
+There are no table, column, key, index, constraint, JSON, setting, provider,
+migration or backfill changes. Core source callers must update together; HTTP
+clients need no changes. Other schedule stores remain on their legacy tenant APIs.

@@ -835,11 +835,11 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const control = createControlService(built.app, built.scheduler);
     const script = { command: "./standup.sh" };
     const passes = async () => undefined;
-    const byPreviousOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
+    const byPreviousOwner = await control.patchCron(testTenant, cron.id, { script }, channelClaims("U1"), passes);
     assert.equal(byPreviousOwner.ok ? "" : byPreviousOwner.code, "forbidden", "only the owner changes the script");
-    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
+    const byOwner = await control.patchCron(testTenant, cron.id, { script }, channelClaims("U2"), passes);
     assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
-    const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U1"));
+    const removed = await control.patchCron(testTenant, cron.id, { script: null }, channelClaims("U1"));
     assert.equal(removed.ok ? "" : removed.code, "forbidden");
     const overHttp = await patch(
       `/v1/crons/${cron.id}`,

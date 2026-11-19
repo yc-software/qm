@@ -148,12 +148,14 @@ export interface ControlService {
     claims: CapabilityClaims,
   ): Promise<ControlOk<CronRunsResult> | ControlErr<"not_found" | "forbidden" | "bad_request">>;
   patchCron(
+    tenant: Tenant,
     id: string,
     req: CronPatchRequest,
     claims: CapabilityClaims,
     trial?: CronScriptTrial,
   ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">>;
   noteCron(
+    tenant: Tenant,
     id: string,
     text: string,
     claims: CapabilityClaims,
@@ -163,6 +165,7 @@ export interface ControlService {
     claims: CapabilityClaims,
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden">>;
   setCronEnabled(
+    tenant: Tenant,
     id: string,
     enabled: boolean,
     claims: CapabilityClaims,
@@ -175,6 +178,7 @@ export interface ControlService {
     | ControlErr<"not_found" | "forbidden" | "unavailable" | "bad_request" | "already_running">
   >;
   retargetCron(
+    tenant: Tenant,
     id: string,
     destinationKey: string,
     claims: CapabilityClaims,
@@ -601,7 +605,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       return { ok: true, cron: current, runs, total };
     },
 
-    async patchCron(id, req, capability, trial) {
+    async patchCron(tenant, id, req, capability, trial) {
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, before, capability)))
@@ -624,7 +628,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
-        const cron = await app.updateCron(id, patch, capability, trial);
+        const cron = await app.updateCron(tenant, id, patch, capability, trial);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");
@@ -647,7 +651,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
     },
 
-    async noteCron(id, text, capability) {
+    async noteCron(tenant, id, text, capability) {
       const flattened = flattenFireNote(text);
       if (!flattened)
         return { ok: false, code: "bad_request", message: "the note is empty — say what the next fire should know" };
@@ -689,6 +693,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
       const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
       const outcome = await app.setCronFireNote(
+        tenant,
         id,
         {
           text: flattened,
@@ -714,7 +719,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       return { ok: true };
     },
 
-    async setCronEnabled(id, enabled, capability) {
+    async setCronEnabled(tenant, id, enabled, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
@@ -722,7 +727,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (cron.enabled === enabled) return { ok: true, cron };
-      await app.setCronEnabled(id, enabled, capability);
+      await app.setCronEnabled(tenant, id, enabled, capability);
       await notifyEdit(cron, capability, [`enabled=${enabled}`]);
       const after = await app.getCron(id);
       if (
@@ -761,7 +766,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       return { ok: true, fireKey: result.fireKey };
     },
 
-    async retargetCron(id, destinationKey, capability) {
+    async retargetCron(tenant, id, destinationKey, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
@@ -777,7 +782,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
-      const updated = await app.setCronDestination(id, resolved.destination, capability);
+      const updated = await app.setCronDestination(tenant, id, resolved.destination, capability);
       const destLabel = capability.destinations?.find((d) => d.key === destinationKey)?.label;
       await notifyEdit(cron, capability, ["destination"], destLabel ? { destinationLabel: destLabel } : undefined);
       return { ok: true, cron: updated ?? cron };

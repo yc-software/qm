@@ -1,3 +1,4 @@
+import { testTenant as cronTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
@@ -165,7 +166,7 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.ok(!controlledCrons.visible.some((cron) => cron.id === projectCron.id));
   assert.ok(controlledCrons.crons.some((cron) => cron.id === slackCron.id));
   assert.equal((await control.getCron(projectCron.id, claims("member"))).ok, false);
-  assert.equal((await control.patchCron(projectCron.id, { title: "hijack" }, claims("member"))).ok, false);
+  assert.equal((await control.patchCron(cronTenant, projectCron.id, { title: "hijack" }, claims("member"))).ok, false);
   assert.equal((await control.getCron(slackCron.id, claims("member"))).ok, true);
 
   const controlledWebhooks = await control.listWebhooks(claims("member"));

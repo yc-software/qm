@@ -1,3 +1,4 @@
+import { tenantOf } from "../route.ts";
 import { inheritRequestSources, requestPrivateContext } from "../../private-context.ts";
 import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
@@ -147,7 +148,12 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
   )
     return sendJson(res, 400, { error: "bad_request", message: "runtime is required; use null to inherit" });
   try {
-    const updated = await app.setCronRuntime(id, body.runtime, requestPrivateContext(ctx, scoped.actor.id));
+    const updated = await app.setCronRuntime(
+      tenantOf(ctx),
+      id,
+      body.runtime,
+      requestPrivateContext(ctx, scoped.actor.id),
+    );
     audit(ctx, {
       principalId: scoped.actor.id,
       action: "cron.runtime.update",
@@ -187,7 +193,7 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   }
   if (isDeepStrictEqual(cron.destination, next))
     return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
-  const updated = await app.setCronDestination(id, next, requestPrivateContext(ctx, actor.id));
+  const updated = await app.setCronDestination(tenantOf(ctx), id, next, requestPrivateContext(ctx, actor.id));
   await notifyOwnerOfCronEdit(app, {
     cron,
     editorId: actor.id,
