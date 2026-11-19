@@ -84,6 +84,11 @@ export function surfaceTool(kit: ToolKit) {
             "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
         }),
       ),
+      final: Type.Optional(
+        Type.Boolean({
+          description: "post: set true when this post is your last action; the turn ends once it is sent.",
+        }),
+      ),
       sandbox_id: outboundSandboxSchema,
       files: Type.Optional(outboundFilesSchema),
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
@@ -167,7 +172,10 @@ export function surfaceTool(kit: ToolKit) {
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
-            text(r.ok ? "[sent]" : `[not sent] ${r.message ?? "delivery failed"}`),
+            {
+              ...text(r.ok ? "[sent]" : `[not sent] ${r.message ?? "delivery failed"}`),
+              terminate: r.ok && params.final === true,
+            },
             !r.ok,
           );
         }
