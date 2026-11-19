@@ -3243,9 +3243,10 @@ export function createChatSurface(
       const last = index === segments.length - 1;
       const replies: TemplateResult[] = [];
       const timeline = segment.filter((item) => {
-        const speech = item.kind === "tool" ? postSpeechText(item.row) : null;
+        if (item.kind !== "tool") return true;
+        const speech = postSpeechText(item.row);
         if (speech === null) return true;
-        replies.push(spokenText(speech, `said:${timelineKey(item)}`, "streaming-text"));
+        replies.push(spokenText(speech, `reply:${item.row.result?.createdAt}:0`, "streaming-text"));
         return false;
       });
       const tail = active && last ? streamedAnswer(text, work) : "";

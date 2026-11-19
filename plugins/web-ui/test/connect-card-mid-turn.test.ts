@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 import { item } from "./item-fixture.ts";
+import type { Item } from "../src/items.ts";
 
 const text = 'Connect Drive first.\n\n::connect-apps{toolkit="googledrive"}';
 const at = Date.now() - 6_000;
@@ -12,7 +13,8 @@ const post = [
   item("ToolResult", { seq: 3, createdAt: at, tool: "web", callId: "p", body: { ok: true } }),
 ];
 const run = { status: "running", alive: true, startedAt: at, attempt: 1, activity: post.map((i) => ({ item: i })) };
-const cases = {
+const cases: Record<string, { key: string; items: Item[]; api?: (path: string) => Response | undefined }> = {
+  "a finished turn's posted reply": { key: `reply:${at}:0:1`, items: [user, ...post] },
   "a finished turn's narration": {
     key: "said:text:2:1",
     items: [
@@ -20,10 +22,9 @@ const cases = {
       item("AgentMessage", { seq: 2, createdAt: at, variant: "narration", text, step: 0, body: wire("toolUse") }),
       item("AgentMessage", { seq: 3, createdAt: at, text: "Waiting on you.", step: 1, body: wire("stop") }),
     ],
-    api: () => undefined,
   },
   "a live turn's posted reply": {
-    key: "said:tool:2:1",
+    key: `reply:${at}:0:1`,
     items: [user],
     api: (path: string) => {
       if (path.includes("/api/runs/active")) return Response.json({ runId: "r1", run, queued: [] });
