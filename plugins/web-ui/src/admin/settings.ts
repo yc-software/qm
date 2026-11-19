@@ -1,9 +1,10 @@
+import { settingsRow, settingsSection } from "../settings-layout.ts";
 import { html, render, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { AdminPage } from "./sections.ts";
 import { pageHeader } from "./shared.ts";
-import { saveButton, settingStatus, saveFooter, reviewChange } from "./setting-controls.ts";
+import { saveButton, settingStatus, reviewChange } from "./setting-controls.ts";
 import { SettingState, putSetting } from "./setting-state.ts";
 import {
   credentialsCard,
@@ -297,7 +298,7 @@ function template() {
   const view = page.view;
   const s = (key: string) => states.get(key)!;
   const cards: Data = {
-    models: () => [runtimesCard(), providersCard(), modelsCard(s("webui-models"))],
+    models: () => [runtimesCard(), modelsCard(s("webui-models")), providersCard()],
     credentials: () => [credentialsCard(), keychainCard()],
     customize: () => [
       soulCard(s("soul")),
@@ -309,7 +310,7 @@ function template() {
   };
   return html`${pageHeader({ actions: view === "credentials" ? addCredential() : nothing })}
     <div id="view-governance">
-      <div class="governance-content">
+      <div class=${view === "models" ? "settings-general" : "governance-content"}>
         ${status ? html`<p class="hint" role="status">${status}</p>` : nothing}${cards[view]()}
       </div>
     </div>`;
@@ -324,16 +325,34 @@ function modelsCard(s: SettingsState) {
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
   const canAdd = available.some((m) => m.id === s.selected);
-  return html`<section
-    class=${classMap({ card: true, "sv-models": true, hidden: !s.available, dirty: s.dirty })}
-    id="card-webui-models"
-  >
-    <div class="head"><h2>Enabled models</h2></div>
-    <div class="body">
-      <div class="model-add-row">
-        <div class="model-add-field">
-          <label for="webui-models-add">Add a model</label
-          ><input
+  return html`<div class="settings-stack" id="card-webui-models" ?hidden=${!s.available}>
+    ${settingsSection(
+      "Model picker",
+      html`${
+        ids.length
+          ? repeat(
+              ids,
+              (id) => id,
+              (id) =>
+                settingsRow(
+                  s.catalog.find((m) => m.id === id)?.name ?? id,
+                  id,
+                  html`<button class="btn" type="button" aria-label=${"Remove " + id} @click=${() => s.remove(id)}>
+                    Remove
+                  </button>`,
+                ),
+            )
+          : settingsRow(
+              html`<span id="webui-models-empty">Only the default model</span>`,
+              "Add models people can switch to in the composer.",
+              nothing,
+            )
+      }
+      ${settingsRow(
+        html`<label for="webui-models-add">Add a model</label>`,
+        nothing,
+        html`<span class="settings-row-actions settings-control">
+          <input
             id="webui-models-add"
             list="webui-models-options"
             autocomplete="off"
@@ -348,40 +367,14 @@ function modelsCard(s: SettingsState) {
           /><datalist id="webui-models-options">
             ${available.map((m) => html`<option value=${m.id}>${label(s, m.id)}</option>`)}
           </datalist>
-        </div>
-        <button class="btn" type="button" id="webui-models-add-button" ?disabled=${!canAdd} @click=${() => s.add()}>
-          + Add model
-        </button>
-      </div>
-      <div id="webui-models-list" class="model-list">
-        <p id="webui-models-empty" class=${classMap({ hint: true, hidden: !!ids.length })}>
-          No additional models enabled.
-        </p>
-        ${repeat(
-          ids,
-          (id) => id,
-          (id) =>
-            html`<span data-chip=${id} class="model-chip"
-              ><span>${label(s, id)}</span
-              ><button class="btn" type="button" aria-label=${"Remove " + id} @click=${() => s.remove(id)}>
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  aria-hidden="true"
-                >
-                  <path d="m4 4 8 8M12 4l-8 8" />
-                </svg></button
-            ></span>`,
-        )}
-      </div>
-    </div>
-    ${saveFooter(s)}
-  </section>`;
+          <button class="btn" type="button" id="webui-models-add-button" ?disabled=${!canAdd} @click=${() => s.add()}>
+            Add
+          </button>
+        </span>`,
+      )}`,
+    )}
+    <div class="settings-save">${settingStatus(s)}${saveButton(s, "Save")}</div>
+  </div>`;
 }
 function soulCard(s: SettingsState) {
   const saved = JSON.parse(s.baseline).content || "";

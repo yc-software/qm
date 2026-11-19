@@ -1225,9 +1225,6 @@ a.chat-row-open {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.settings-content > .settings-group {
-  margin-top: 0;
-}
 @media (max-width: 720px) {
   .settings-layout.with-nav {
     grid-template-columns: minmax(0, 1fr);
@@ -1244,13 +1241,6 @@ a.chat-row-open {
   .settings-nav-item {
     flex: none;
   }
-}
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-width: 960px;
-  margin: 12px auto 0;
 }
 .settings-row {
   display: flex;
@@ -14077,4 +14067,66 @@ button:disabled .qm-switch {
   .qm-switch::after {
     transition: none;
   }
+}
+.settings-section-head > .btn {
+  margin-left: auto;
+}
+.settings-stack {
+  display: grid;
+  gap: 28px;
+}
+.settings-stack[hidden] {
+  display: none;
+}
+.settings-save {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: -16px;
+}
+.settings-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-control {
+  flex: none;
+  width: 240px;
+}
+.settings-control .menu-control,
+.settings-control .loadout-button,
+.settings-control .field-select,
+.settings-control select {
+  width: 100%;
+}
+.settings-control .loadout-button {
+  justify-content: space-between;
+}
+.settings-number {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding-right: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
+.settings-number:focus-within {
+  border-color: var(--ring, var(--cta));
+}
+#app-view .settings-number input[type="number"] {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.settings-row-actions input {
+  flex: 1;
+  min-width: 0;
 }

@@ -1,4 +1,5 @@
-import { html } from "lit";
+import { settingsRow, settingsSection } from "../settings-layout.ts";
+import { html, nothing } from "lit";
 import type { AdminPage } from "./sections.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -136,56 +137,41 @@ export async function loadProviders() {
   provider.rows = (res.data?.providers || []).filter((p: any) => !p.disabled);
   redraw();
 }
-function providerRows(compact: boolean) {
-  return repeat(
-    provider.rows,
-    (p) => p.id,
-    (p) =>
-      html`<tr>
-        ${[p.name + " (" + p.id + ")", labels[p.protocol] || p.protocol, p.baseUrl, compact ? String(p.models.length) : p.models.map((m: any) => m.id).join(", "), keyLabel(p, compact)].map((text) => html`<td>${text}</td>`)}
-        <td>
-          <button class="btn" type="button" @click=${() => openProvider(p)}>Edit</button
-          ><button class="btn danger" @click=${() => removeProvider(p)}>Remove</button>
-        </td>
-      </tr>`,
-  );
-}
 export function providersCard() {
-  return html`<section class="card sv-models" id="card-custom-providers">
-      <div class="head">
-        <h2>Custom providers</h2>
-        <p>
-          OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers
-          above and below.
-        </p>
-      </div>
-      <div class="body">
-        <div class="tablewrap" id="model-custom-provider-table" ?hidden=${!provider.rows.length}>
-          <table>
-            <thead>
-              <tr>
-                <th>Provider</th>
-                <th>Protocol</th>
-                <th>Endpoint</th>
-                <th>Models</th>
-                <th>Key</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="model-custom-provider-rows">
-              ${providerRows(true)}
-            </tbody>
-          </table>
-        </div>
-        <div id="custom-provider-summary" class="hint" ?hidden=${!!provider.rows.length}>No custom providers.</div>
-      </div>
-      <div class="foot">
-        <button class="btn" type="button" id="add-custom-provider" @click=${() => openProvider()}>
-          + Add provider
-        </button>
-      </div>
-    </section>
-    ${providerDialog()}`;
+  return html`${settingsSection(
+    "Custom providers",
+    provider.rows.length
+      ? repeat(
+          provider.rows,
+          (p) => p.id,
+          (p) =>
+            settingsRow(
+              p.name,
+              [
+                labels[p.protocol] || p.protocol,
+                p.baseUrl,
+                `${p.models.length} ${p.models.length === 1 ? "model" : "models"}`,
+                p.hasKey ? "Key set" : "No key",
+              ].join(" · "),
+              html`<span class="settings-row-actions">
+                <button class="btn" type="button" @click=${() => openProvider(p)}>Edit</button
+                ><button class="btn danger" type="button" @click=${() => removeProvider(p)}>Remove</button>
+              </span>`,
+            ),
+        )
+      : settingsRow(
+          html`<span id="custom-provider-summary">No custom providers</span>`,
+          "OpenAI Chat Completions, OpenAI Responses or Anthropic Messages endpoints. Their models join every picker.",
+          nothing,
+        ),
+    {
+      id: "card-custom-providers",
+      action: html`<button class="btn" type="button" id="add-custom-provider" @click=${() => openProvider()}>
+        + Add provider
+      </button>`,
+    },
+  )}
+  ${providerDialog()}`;
 }
 
 function input(
@@ -283,8 +269,4 @@ function providerDialog() {
       </div>
     </dialog>
   `;
-}
-function keyLabel(p: any, compact: boolean) {
-  const text = p.hasKey ? "set (write-only)" : "none";
-  return compact ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
