@@ -1208,6 +1208,7 @@
 }
 #app-view dialog.review-dialog {
   width: min(520px, calc(100vw - 28px));
+  margin: auto;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--card);
