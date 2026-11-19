@@ -1915,9 +1915,18 @@ export function buildApp(
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
+  const isOrgAdmin = async (principalId: string) =>
+    (await admin.adminStatusOf(ambientTenant(), identity.classify(principalId))).isAdmin;
+  const canManageScope = createCanManageScope({
+    managedGroups: projects,
+    directory,
+    identity,
+    sessions,
+    personas,
+    isOrgAdmin,
+  });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams, personas },
+    { managedGroups: projects, directory, identity, teams, personas, isOrgAdmin },
     canManageScope,
   );
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
@@ -1926,8 +1935,7 @@ export function buildApp(
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
     identity.isInternal(identity.classify(actorId)) &&
-    ((await admin.adminStatusOf(ambientTenant(), identity.classify(actorId))).isAdmin ||
-      (await canWriteScope(actorId, scopeId)));
+    ((await isOrgAdmin(actorId)) || (await canWriteScope(actorId, scopeId)));
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;

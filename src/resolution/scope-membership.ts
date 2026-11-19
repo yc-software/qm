@@ -42,6 +42,11 @@ export interface ScopeMembershipDeps {
   teams?: { isMember(tenant: Tenant, principalId: string, teamId: string): Promise<boolean> };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
   personas?: { role(principalId: string, personaId: string): Promise<PersonaRole | null> };
+  isOrgAdmin?: (principalId: string) => Promise<boolean>;
+}
+
+async function orgAdmin(deps: ScopeMembershipDeps, principalId: string): Promise<boolean> {
+  return (await deps.isOrgAdmin?.(principalId).catch(() => false)) === true;
 }
 
 async function personaRoleAtLeast(
@@ -242,6 +247,7 @@ export function createMembershipControlsScope(deps: ScopeMembershipDeps) {
 export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope {
   return async function canManageScope(principalId: string, scope: ScopeId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
+    if (await orgAdmin(deps, principalId)) return true;
     const { kind, ref } = parseScopeId(scope);
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
@@ -260,6 +266,7 @@ export function createManagesArtifactHome(
 ): ManagesArtifactHome {
   return async function managesArtifactHome(homeScopeId, createdBy, principalId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
+    if (await orgAdmin(deps, principalId)) return true;
     if (await canManageScope(principalId, homeScopeId)) return true;
     const { kind, ref } = parseScopeId(homeScopeId);
     if (kind === "team") return teamMember(deps, principalId, ref);
