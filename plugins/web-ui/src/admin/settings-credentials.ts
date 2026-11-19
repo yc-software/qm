@@ -714,19 +714,19 @@ export function credentialsCard() {
                             id="sc-picker-search"
                             .value=${s.query}
                             @input=${(e: Event) => {
-                            s.query = (e.target as HTMLInputElement).value;
-                            s.picker = true;
-                            s.render();
-                          }}
-                            @focus=${() => {
-                            s.picker = true;
-                            s.render();
-                          }}
-                            @blur=${() =>
-                            setTimeout(() => {
-                              s.picker = false;
+                              s.query = (e.target as HTMLInputElement).value;
+                              s.picker = true;
                               s.render();
-                            }, 150)}
+                            }}
+                            @focus=${() => {
+                              s.picker = true;
+                              s.render();
+                            }}
+                            @blur=${() =>
+                              setTimeout(() => {
+                                s.picker = false;
+                                s.render();
+                              }, 150)}
                             placeholder="Search people or channels"
                             autocomplete="off"
                             spellcheck="false"

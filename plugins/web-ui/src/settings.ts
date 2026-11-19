@@ -627,7 +627,8 @@ function settingsNav(section: string): TemplateResult {
       ${
         can("admin")
           ? html`<p class="settings-tip">
-              Ask ${brandName()} in a DM to change any setting. It makes the edit and confirms what changed.
+              The easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for you
+              and confirm what changed.
             </p>`
           : nothing
       }
