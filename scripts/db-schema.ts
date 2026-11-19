@@ -26,9 +26,11 @@ const dropScratch = async () => {
 };
 try {
   const pool = new pg.Pool({ connectionString: scratch.toString(), max: 1 });
-  const ledger = await applyPgMigrations(pool, dbMigrations({ schema: false }))
+  const ledger = await applyPgMigrations(pool, dbMigrations())
     .then(() =>
-      pool.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE} ORDER BY id`),
+      pool.query<{ id: string; checksum: string }>(
+        `SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id <> 'schema' ORDER BY id`,
+      ),
     )
     .then(
       async (result) => {

@@ -387,7 +387,7 @@ jobs:
       - name: Build connector SDK
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run build:connector-sdk
-      - name: db/schema.sql matches db/migrations
+      - name: db/schema.sql includes db/migrations
         if: needs.reuse.outputs.reusable != 'true'
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm

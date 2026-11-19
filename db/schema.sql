@@ -5080,4 +5080,3 @@ REVOKE ALL ON FUNCTION public.qm_self_serve_provisioned(tenant uuid, key text) F
 REVOKE ALL ON FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand text) FROM PUBLIC;
 
 INSERT INTO public.tenants DEFAULT VALUES;
-INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0000-baseline', '3cbea410b72a0197432376761d946b3666fabffb492fe331b868f95795560f43');

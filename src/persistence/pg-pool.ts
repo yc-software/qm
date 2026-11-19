@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import type { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
@@ -471,22 +471,13 @@ function sqlMigration(id: string, file: string, replaces?: string): PgMigration 
   });
 }
 
-export function dbMigrations({ vector = false, schema = true } = {}): PgMigration[] {
+export function dbMigrations({ vector = false } = {}): PgMigration[] {
   const files = readdirSync(new URL("migrations/", DB_DIR))
     .filter((name) => name.endsWith(".sql"))
-    .sort()
-    .map((name) => name.slice(0, -4));
+    .sort();
   return [
-    ...(schema
-      ? [{ ...sqlMigration("schema", "schema.sql", "migrations/0000-baseline-replaces.txt"), checksum: "current" }]
-      : []),
-    ...files.map((name) =>
-      sqlMigration(
-        `migrations/${name}`,
-        `migrations/${name}.sql`,
-        existsSync(new URL(`migrations/${name}-replaces.txt`, DB_DIR)) ? `migrations/${name}-replaces.txt` : undefined,
-      ),
-    ),
+    { ...sqlMigration("schema", "schema.sql", "schema-replaces.txt"), checksum: "current" },
+    ...files.map((name) => sqlMigration(`migrations/${name.slice(0, -4)}`, `migrations/${name}`)),
     ...(vector ? [sqlMigration("vector", "vector.sql", "vector-replaces.txt")] : []),
   ];
 }

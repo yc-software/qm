@@ -10,7 +10,7 @@ _wears_ rather than one it _lives in_.
 
 ## Storage
 
-The tables are defined in `db/baseline.sql`, with foreign keys to `users(id)`. In short:
+The tables are defined in `db/schema.sql`, with foreign keys to `users(id)`. In short:
 
 - `personas`: `id`, `name`, `description`, `instructions`, `icon` (JSONB, the project icon
   shape), `created_by UUID REFERENCES users(id)`, timestamps.
