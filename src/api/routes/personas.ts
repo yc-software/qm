@@ -7,6 +7,7 @@ import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
 import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 import { sessionVisibleTo } from "../../sessions/session-rows.ts";
+import { scopeId } from "../../types.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -75,7 +76,12 @@ async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string,
   const personaThreads =
     (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
   return crons
-    .filter((c) => pinned.has(c.ownerScopeId) || refsOf(c).some((ref) => personaThreads.has(ref)))
+    .filter(
+      (c) =>
+        c.ownerScopeId === scopeId("persona", personaId) ||
+        pinned.has(c.ownerScopeId) ||
+        refsOf(c).some((ref) => personaThreads.has(ref)),
+    )
     .map(({ id, title, action, message, schedule, enabled }) => ({ id, title, action, message, schedule, enabled }));
 }
 

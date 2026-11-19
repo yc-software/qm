@@ -46,6 +46,8 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
     }
   }
   for (const project of await h.projectsForViewer(principalId)) scopeNames.set(project.scopeId, project.name);
+  const personas = await deps.personas?.list(principalId);
+  if (personas?.status === "ok") for (const p of personas.value) scopeNames.set(scopeId("persona", p.id), p.name);
   const allowed = (ownerScopeId: ScopeId): boolean => {
     const { kind, ref } = parseScopeId(ownerScopeId);
     return kind !== "group" || deps.projects?.recognizes(ref) !== true || scopeNames.has(ownerScopeId);

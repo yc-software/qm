@@ -6,6 +6,7 @@ import { isSharedScope, parseScopeId, scopeId, type Destination, type ScopeId } 
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
 import { projectIdFromGroupRef } from "../projects/project-store.ts";
+import { recordErrorInBinding } from "../admin/error-log.ts";
 
 const LINKED_FIELDS = ["runtime", "title", "action", "message", "schedule"] as const;
 
@@ -74,11 +75,12 @@ export function createCronShareMethods(
       source.ownerScopeId !== runsIn && isSharedScope(source.ownerScopeId)
         ? ((await deps.personas?.pinnedIn(source.ownerScopeId)) ?? undefined)
         : undefined;
+    const { kind, ref } = parseScopeId(source.ownerScopeId);
     const personaId =
+      (kind === "persona" ? ref : undefined) ??
       (await sessionPersona(ownSession)) ??
       (source.sessionRef !== ownSession ? await sessionPersona(source.sessionRef) : undefined) ??
       pinned;
-    const { kind, ref } = parseScopeId(source.ownerScopeId);
     const projectId = kind === "group" ? projectIdFromGroupRef(ref) : null;
     const project = projectId ? await deps.projects?.get(projectId) : null;
     return {
@@ -125,7 +127,19 @@ export function createCronShareMethods(
   return {
     cronOrigin: async (cron) => {
       const source = (cron.sharedFrom ? await deps.crons.get(cron.sharedFrom) : null) ?? cron;
-      return originOf(source, cron.ownerScopeId, cron.sessionRef);
+      const origin = await originOf(source, cron.ownerScopeId, cron.sessionRef);
+      if (cron.message === undefined || parseScopeId(source.ownerScopeId).kind !== "persona") return origin;
+      const held = await app.personas?.forTurn(origin.personaId, cron.owner, cron.ownerScopeId);
+      if (typeof held === "string")
+        recordErrorInBinding(deps.errors, {
+          category: "cron",
+          code: "persona_unavailable",
+          message: `cron ${cron.id} posts without its persona: ${held}`,
+          scopeLabel: cron.ownerScopeId,
+        });
+      if (!held || typeof held === "string") return origin;
+      const { id, name, icon } = held.persona;
+      return { ...origin, persona: { id, name, ...(icon ? { icon } : {}) } };
     },
     cronCopies: async (id) => (await deps.crons.copiesOf(id)).map(asCopy),
     cronSharing: (cron) => sharingFor(deps.crons, cron),
