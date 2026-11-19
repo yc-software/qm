@@ -7,10 +7,13 @@ import { fileURLToPath } from "node:url";
 import { analyticsHookConfig } from "../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../plugins/chassis/src/browser-error-config.ts";
 import { injectBranding, type OrgBranding } from "../../plugins/chassis/src/branding.ts";
+import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 import { escapeHtml, gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
 import { readWebBundleLayout } from "../../cli/src/web-release.ts";
 import type { Config } from "../config.ts";
 import { s3Client } from "../persistence/s3.ts";
+import { appHostLabel } from "../tenants/app-handle.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
 import { jitteredBackoffMs } from "../util/async.ts";
 import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 import {
@@ -110,6 +113,13 @@ function sharedSessionHtml(template: string, transcript: unknown): string {
     /<script id="shared-transcript" type="application\/json">\s*null\s*<\/script>/,
     () => `<script id="shared-transcript" type="application/json">${data}</script>`,
   );
+}
+
+function appHostOf(slug: string): string | undefined {
+  if (!isDnsLabel(slug)) return undefined;
+  const handle = tenantAppHandle();
+  const label = handle ? appHostLabel(handle, slug) : slug;
+  return isDnsLabel(label) ? label : undefined;
 }
 
 function spaCsp(env: NodeJS.ProcessEnv, frameAncestors: string): string {
@@ -238,8 +248,9 @@ export function createWebShell(
       if (req.method !== "GET" || path.startsWith("/api/")) return json(res, 404, { error: "not found" });
       if (path === "/manifest.webmanifest") return manifest(res);
       const slug = (url.searchParams.get("slug") ?? "").toLowerCase();
-      if ((path === "/app-edit" || path === "/app-share") && appsDomain && /^[a-z0-9-]{1,63}$/.test(slug))
-        return document(res, spaCsp(env, `'self' ${slug}.${appsDomain}`));
+      const host = appHostOf(slug);
+      if ((path === "/app-edit" || path === "/app-share") && appsDomain && host)
+        return document(res, spaCsp(env, `'self' ${host}.${appsDomain}`));
       return serveStatic(res, path === "/" ? "/index.html" : path);
     },
     async sharePage(res, status, transcript) {
