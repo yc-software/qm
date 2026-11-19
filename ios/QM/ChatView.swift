@@ -4,7 +4,6 @@ import SwiftUI
 struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
-  var showsConversations = false
   var onShowConversations: (() -> Void)?
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
@@ -15,10 +14,6 @@ struct ChatView: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.conversationDrawerSettling) private var drawerSettling
-  // History stays behind the placeholder until the drawer lands, so laying out a long
-  // transcript never lands inside the slide.
-  @State private var historyRevealed = false
   @Environment(\.qmIdentity) private var identity
   @Environment(AppModel.self) private var app: AppModel?
   @State private var approvalToConfirm: Approval?
@@ -37,10 +32,8 @@ struct ChatView: View {
   @FocusState private var composerFocused: Bool
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, showsConversations: Bool = false,
-    onShowConversations: (() -> Void)? = nil
+    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
   ) {
-    self.showsConversations = showsConversations
     self.onShowConversations = onShowConversations
     _model = State(initialValue: model)
     _dictation = State(
@@ -121,16 +114,21 @@ struct ChatView: View {
   var body: some View {
     ScrollViewReader { proxy in
       GeometryReader { geometry in
-        transcriptScroll(width: geometry.size.width, proxy: proxy)
-          .safeAreaInset(edge: .bottom, spacing: 0) {
+        ZStack {
+          // A fresh scroll view for arriving history takes its bottom anchor as its initial
+          // offset, instead of scrolling down after laying out from the top.
+          transcriptScroll(width: geometry.size.width, proxy: proxy)
+            .transition(
+              .asymmetric(insertion: .opacity.combined(with: .offset(y: 16)), removal: .opacity))
+            .id(model.hasLoadedTranscript)
+        }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomBar(proxy)
           }
       }
     }
     .background(QMTheme.paper)
-    .onChange(of: drawerSettling, initial: true) { _, settling in
-      if !settling { historyRevealed = true }
-    }
     .toolbarBackground(QMTheme.paper, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
     .environment(\.qmSessionID, model.conversation.id)
@@ -183,8 +181,8 @@ struct ChatView: View {
         composerFocused = true
       }
     }
-    .onChange(of: showsConversations) { _, showing in
-      if showing {
+    .background {
+      DrawerOpenWatcher {
         composerFocused = false
         showingAgents = false
         dictation.stop()
@@ -492,8 +490,6 @@ struct ChatView: View {
       && model.displayedPartial.isEmpty && model.pending == nil && !model.sending
   }
 
-  private var holdsHistory: Bool { !historyRevealed && model.conversation.localOnly != true }
-
   private var transcript: some View {
     let messages = model.messages
     let liveTimeline = model.liveTimeline
@@ -508,100 +504,85 @@ struct ChatView: View {
       model.conversation.isShared
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
     return VStack(alignment: .leading, spacing: 16) {
-      // A conversation chosen from the list shows its placeholder until the drawer lands.
-      if holdsHistory {
-        NativeChatHistoryPlaceholder()
-          .padding(.horizontal, 16)
-          .transition(.opacity)
-      } else {
-        Group {
-          pinsSection
-          forkOrigin
-          if model.earlierItems > 0,
-            inheritedExpanded || model.conversation.forkBoundarySeq == nil
-              || model.earlierItems > (model.conversation.forkBoundarySeq ?? -1) + 1
+      Group {
+        pinsSection
+        forkOrigin
+        if model.earlierItems > 0,
+          inheritedExpanded || model.conversation.forkBoundarySeq == nil
+            || model.earlierItems > (model.conversation.forkBoundarySeq ?? -1) + 1
+        {
+          Button {
+            Task { await model.loadEarlier() }
+          } label: {
+            NativeActionLabel(
+              title: "Load earlier messages",
+              busyTitle: targetSequence != nil
+                ? "Loading selected message…" : "Loading earlier messages…",
+              busy: model.loadingEarlier)
+          }.disabled(model.loadingEarlier)
+        }
+        if showsInitialHistoryPlaceholder {
+          NativeChatHistoryPlaceholder()
+        } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
+          && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
+          && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
+        {
+          ContentUnavailableView {
+            Text("What shall we work on?")
+          } description: {
+            Text("Ask a question or hand off a task.")
+          }
+          .padding(.top, 60)
+          if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
+            let identity, !model.conversation.isShared
           {
-            Button {
-              Task { await model.loadEarlier() }
-            } label: {
-              NativeActionLabel(
-                title: "Load earlier messages",
-                busyTitle: targetSequence != nil
-                  ? "Loading selected message…" : "Loading earlier messages…",
-                busy: model.loadingEarlier)
-            }.disabled(model.loadingEarlier)
-          }
-          if showsInitialHistoryPlaceholder {
-            NativeChatHistoryPlaceholder()
-              .transition(.opacity)
-          } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
-            && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
-            && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
-          {
-            ContentUnavailableView {
-              Text("What shall we work on?")
-            } description: {
-              Text("Ask a question or hand off a task.")
+            NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
+              guard model.draft.isEmpty else { return }
+              model.draft = activity.prompt
+              model.saveDraft()
+              composerFocused = true
             }
-            .padding(.top, 60)
-            if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
-              let identity, !model.conversation.isShared
-            {
-              NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
-                guard model.draft.isEmpty else { return }
-                model.draft = activity.prompt
-                model.saveDraft()
-                composerFocused = true
-              }
-            }
-          }
-          ForEach(sections) { section in
-            VStack(alignment: .leading, spacing: 16) {
-              if inheritedExpanded, !inherited.isEmpty, section.items.first?.id == current.first?.id
-              {
-                HStack {
-                  Rectangle().frame(height: 1)
-                  Text("This conversation").font(.caption).fixedSize()
-                  Rectangle().frame(height: 1)
-                }.foregroundStyle(.secondary)
-              }
-              if section.isActivity {
-                NativeTimelineActivityGroup(
-                  section: section, client: model.client, user: model.user,
-                  disclosure: workDisclosure,
-                  reasoningText: model.reasoningText,
-                  onShowAgents: {
-                    composerFocused = false
-                    showingAgents = true
-                  },
-                  onInspect: { followsLatest = false })
-              } else if let item = section.items.first {
-                timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
-              }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .id(section.id)
-            .transition(.opacity.combined(with: .offset(y: 16)))
-          }
-          if liveTimeline == nil, !model.displayedPartial.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-              MessageMarkdown(text: model.displayedPartial, client: model.client)
-            }.accessibilityIdentifier("streamingResponse")
-          }
-          if model.conversation.canReply {
-            ForEach(model.approvals) { approval in approvalCard(approval) }
           }
         }
-        .padding(.horizontal, 16)
+        ForEach(sections) { section in
+          VStack(alignment: .leading, spacing: 16) {
+            if inheritedExpanded, !inherited.isEmpty, section.items.first?.id == current.first?.id {
+              HStack {
+                Rectangle().frame(height: 1)
+                Text("This conversation").font(.caption).fixedSize()
+                Rectangle().frame(height: 1)
+              }.foregroundStyle(.secondary)
+            }
+            if section.isActivity {
+              NativeTimelineActivityGroup(
+                section: section, client: model.client, user: model.user,
+                disclosure: workDisclosure,
+                reasoningText: model.reasoningText,
+                onShowAgents: {
+                  composerFocused = false
+                  showingAgents = true
+                },
+                onInspect: { followsLatest = false })
+            } else if let item = section.items.first {
+              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .id(section.id)
+        }
+        if liveTimeline == nil, !model.displayedPartial.isEmpty {
+          VStack(alignment: .leading, spacing: 8) {
+            MessageMarkdown(text: model.displayedPartial, client: model.client)
+          }.accessibilityIdentifier("streamingResponse")
+        }
+        if model.conversation.canReply {
+          ForEach(model.approvals) { approval in approvalCard(approval) }
+        }
       }
+      .padding(.horizontal, 16)
     }
     .padding(.vertical, 20)
     .frame(maxWidth: .infinity, alignment: .leading)
-    // Arriving history fades and rises in place of the skeleton rather than popping in.
-    .animation(
-      reduceMotion ? nil : .smooth(duration: 0.45),
-      value: holdsHistory || showsInitialHistoryPlaceholder
-    )
     .id("transcript")
   }
 
@@ -939,5 +920,17 @@ private struct TranscriptGeometry: Equatable {
 
   func sizeChanged(since previous: Self) -> Bool {
     contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
+  }
+}
+
+// Reads the drawer state on its own, so opening the drawer doesn't re-render the transcript.
+private struct DrawerOpenWatcher: View {
+  @Environment(\.conversationDrawerOpen) private var open
+  let onOpen: () -> Void
+
+  var body: some View {
+    Color.clear.onChange(of: open) { _, open in
+      if open { onOpen() }
+    }
   }
 }

@@ -31,18 +31,6 @@ struct RootView: View {
   @State private var confirmingSignOut = false
   @Environment(\.scenePhase) private var phase
 
-  private var conversationSyncURL: URL? {
-    guard phase == .active, showingConversations, homePath.isEmpty, model.client?.hasSession == true
-    else {
-      return nil
-    }
-    return model.client?.baseURL
-  }
-
-  private var openConversation: Conversation? {
-    showingConversations ? nil : selectedConversation
-  }
-
   private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   private var narrowing: Bool {
@@ -171,7 +159,6 @@ struct RootView: View {
             model: ChatModel(
               conversation: conversation, client: client, user: identity.user,
               knownSession: conversation.localOnly != true),
-            showsConversations: showingConversations,
             onShowConversations: { showingConversations = true })
         }
         .id(conversation.id)
@@ -219,13 +206,10 @@ struct RootView: View {
       showingConversations = true
       search = ""
     }
-    .onChange(of: openConversation?.threadRef) {
-      let opened = openConversation
-      Task { await model.open(opened) }
-    }
-    .task(id: conversationSyncURL) {
-      if conversationSyncURL != nil { await model.watchConversations() }
-    }
+    .modifier(
+      ConversationDrawerEffects(
+        isOpen: $showingConversations, selected: selectedConversation,
+        listVisible: homePath.isEmpty, phase: phase, model: model))
     .task(id: [searchTerm, String(webOnly)]) {
       if !searchTerm.isEmpty {
         do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
@@ -544,5 +528,35 @@ private struct ConversationErrorBanner: View {
         .accessibilityIdentifier("conversationErrorBanner")
       }
     }
+  }
+}
+
+// Reads the drawer's open state here rather than in RootView, so opening or closing the
+// drawer re-runs this modifier alone instead of RootView and the conversation inside it.
+private struct ConversationDrawerEffects: ViewModifier {
+  @Binding var isOpen: Bool
+  let selected: Conversation?
+  let listVisible: Bool
+  let phase: ScenePhase
+  let model: AppModel
+
+  private var syncURL: URL? {
+    guard phase == .active, isOpen, listVisible, model.client?.hasSession == true else {
+      return nil
+    }
+    return model.client?.baseURL
+  }
+
+  private var openConversation: Conversation? { isOpen ? nil : selected }
+
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: openConversation?.threadRef) {
+        let opened = openConversation
+        Task { await model.open(opened) }
+      }
+      .task(id: syncURL) {
+        if syncURL != nil { await model.watchConversations() }
+      }
   }
 }

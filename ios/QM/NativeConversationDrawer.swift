@@ -2,9 +2,7 @@ import SwiftUI
 import UIKit
 
 extension EnvironmentValues {
-  // True while the drawer animates to a state it was told to take, such as closing over a
-  // conversation just chosen from the list.
-  @Entry var conversationDrawerSettling = false
+  @Entry var conversationDrawerOpen = false
 }
 
 struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
@@ -16,45 +14,29 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var motion = DrawerMotion()
 
+  // This body reads neither `isOpen` nor the card's position, so it runs only when the parent
+  // passes new content; the layers below read the open state and redraw on their own.
   var body: some View {
     let revision = UUID()
-    let settling = isOpen != motion.restingOpen
     GeometryReader { geometry in
       let sidebarWidth = min(geometry.size.width * 0.8, 400)
       let drawer = hasSelection && !showsSidebarPage
       ZStack(alignment: .leading) {
         DrawerSidebarLayer(
-          motion: motion, width: sidebarWidth, isDrawer: drawer,
+          isOpen: $isOpen, motion: motion, width: sidebarWidth, isDrawer: drawer,
+          isCovered: hasSelection && !showsSidebarPage,
           content: DrawerContent(revision: revision) {
             sidebar()
               .frame(width: drawer ? sidebarWidth : geometry.size.width)
           }
         )
-        .allowsHitTesting(!hasSelection || isOpen || showsSidebarPage)
-        .accessibilityHidden(hasSelection && !isOpen && !showsSidebarPage)
         if hasSelection {
           DrawerCardLayer(
-            motion: motion, width: sidebarWidth,
+            isOpen: $isOpen, motion: motion, width: sidebarWidth, isHidden: showsSidebarPage,
             content: DrawerContent(revision: revision) {
               detail()
-                .environment(\.conversationDrawerSettling, settling)
                 .frame(width: geometry.size.width)
                 .background(QMTheme.paper.ignoresSafeArea(.container, edges: .vertical))
-                .disabled(isOpen || showsSidebarPage)
-                .accessibilityHidden(isOpen || showsSidebarPage)
-                .overlay {
-                  if isOpen {
-                    Button {
-                      isOpen = false
-                    } label: {
-                      Color.clear.contentShape(Rectangle())
-                        .ignoresSafeArea(.container, edges: .vertical)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Return to conversation")
-                    .accessibilityIdentifier("closeConversationDrawer")
-                  }
-                }
             }
           )
           .gesture(drawerPan(width: sidebarWidth, isEnabled: drawer))
@@ -66,31 +48,13 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       .mask { Rectangle().ignoresSafeArea(.container, edges: .vertical) }
     }
     .background(QMTheme.paper.ignoresSafeArea())
-    .onAppear {
-      motion.position = isOpen ? 1 : 0
-      motion.restingOpen = isOpen
-    }
-    .onChange(of: isOpen) { _, open in
-      // A drag commits `isOpen` only after its spring lands, so the card is already there.
-      let target: CGFloat = open ? 1 : 0
-      guard motion.dragStart == nil, motion.position != target else { return }
-      guard !reduceMotion else {
-        motion.position = target
-        motion.restingOpen = open
-        return
-      }
-      withAnimation(.smooth(duration: 0.32)) {
-        motion.position = target
-      } completion: {
-        if motion.position == target { motion.restingOpen = open }
-      }
-    }
+    .modifier(DrawerSync(isOpen: $isOpen, motion: motion))
   }
 
   private func drawerPan(width: CGFloat, isEnabled: Bool) -> DrawerPan {
-    DrawerPan(
-      // Read the card's live position: `isOpen` lags until a released drag lands.
-      opening: { [motion] in motion.position < 0.5 },
+    let isOpen = $isOpen
+    return DrawerPan(
+      opening: { !isOpen.wrappedValue },
       isEnabled: isEnabled,
       onBegan: { motion.dragStart = motion.position },
       onChanged: { motion.track($0, width: width) },
@@ -105,32 +69,40 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
     let target: CGFloat = open ? 1 : 0
     let remaining = target - motion.position
     let relative = abs(remaining) > 0.001 ? (velocity / width) / remaining : 0
-    motion.dragStart = nil
-    guard !reduceMotion else {
-      motion.position = target
-      motion.restingOpen = open
-      if isOpen != open { isOpen = open }
-      return
-    }
     withAnimation(
-      .interpolatingSpring(
-        duration: 0.38, bounce: 0, initialVelocity: min(max(relative, 0), 12))
+      reduceMotion
+        ? nil
+        : .interpolatingSpring(
+          duration: 0.38, bounce: 0, initialVelocity: min(max(relative, 0), 12))
     ) {
       motion.position = target
-    } completion: {
-      // Flipping `isOpen` re-renders the conversation; doing it mid-spring drops frames.
-      guard motion.dragStart == nil, motion.position == target else { return }
-      motion.restingOpen = open
-      if isOpen != open { isOpen = open }
     }
+    motion.dragStart = nil
+    if isOpen != open { isOpen = open }
+  }
+}
+
+// Moves the card when `isOpen` changes from outside a drag, such as choosing a conversation.
+private struct DrawerSync: ViewModifier {
+  @Binding var isOpen: Bool
+  let motion: DrawerMotion
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func body(content: Content) -> some View {
+    content
+      .onAppear { motion.position = isOpen ? 1 : 0 }
+      .onChange(of: isOpen) { _, open in
+        guard motion.dragStart == nil else { return }
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.32)) {
+          motion.position = open ? 1 : 0
+        }
+      }
   }
 }
 
 @Observable
 final class DrawerMotion {
   var position: CGFloat = 0
-  // The state the card last came to rest in; only the drawer body reads it, once per settle.
-  var restingOpen = false
   @ObservationIgnored var dragStart: CGFloat?
 
   func track(_ translation: CGFloat, width: CGFloat) {
@@ -141,9 +113,9 @@ final class DrawerMotion {
   }
 }
 
-// Drag frames change only `DrawerMotion`, which re-renders `DrawerCardLayer` alone; this
-// wrapper keeps that from re-rendering the transcript. A new `revision` per drawer body
-// lets real content changes through.
+// Drag frames and open/close re-render only the layers that read them; this wrapper keeps
+// those from re-rendering the transcript. A new `revision` per drawer body lets real content
+// changes through.
 private struct DrawerContent<Content: View>: View, Equatable {
   let revision: UUID
   @ViewBuilder let content: () -> Content
@@ -154,8 +126,10 @@ private struct DrawerContent<Content: View>: View, Equatable {
 }
 
 private struct DrawerCardLayer<Content: View>: View {
+  @Binding var isOpen: Bool
   let motion: DrawerMotion
   let width: CGFloat
+  let isHidden: Bool
   let content: DrawerContent<Content>
 
   var body: some View {
@@ -165,6 +139,22 @@ private struct DrawerCardLayer<Content: View>: View {
     // path constant during a drag; an animated radius re-rasterizes the mask every frame.
     let shape = RoundedRectangle(cornerRadius: reveal > 0 ? 32 : 0, style: .continuous)
     content.equatable()
+      .environment(\.conversationDrawerOpen, isOpen)
+      .disabled(isOpen || isHidden)
+      .accessibilityHidden(isOpen || isHidden)
+      .overlay {
+        if isOpen {
+          Button {
+            isOpen = false
+          } label: {
+            Color.clear.contentShape(Rectangle())
+              .ignoresSafeArea(.container, edges: .vertical)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Return to conversation")
+          .accessibilityIdentifier("closeConversationDrawer")
+        }
+      }
       .overlay {
         QMTheme.paper.opacity(0.3 * reveal)
           .ignoresSafeArea(.container, edges: .vertical)
@@ -195,13 +185,17 @@ private struct DrawerCardLayer<Content: View>: View {
 
 // The list trails the card a little, so the two read as one surface.
 private struct DrawerSidebarLayer<Content: View>: View {
+  @Binding var isOpen: Bool
   let motion: DrawerMotion
   let width: CGFloat
   let isDrawer: Bool
+  let isCovered: Bool
   let content: DrawerContent<Content>
 
   var body: some View {
     content.equatable()
+      .allowsHitTesting(!isCovered || isOpen)
+      .accessibilityHidden(isCovered && !isOpen)
       .offset(x: isDrawer ? -(1 - motion.position) * width * 0.25 : 0)
   }
 }
