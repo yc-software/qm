@@ -570,7 +570,6 @@ export async function createAdminKeychainGrant(ctx: ApiCtx): Promise<void> {
   const audience = typeof body.scope === "string" && body.scope.trim() ? body.scope.trim() : capability?.scopeId;
   if (!audience || !parseScopeId(audience as ScopeId).kind)
     return sendJson(res, 400, { error: "bad_request", message: "scope required (no conversation to default to)" });
-  const mode = body.mode === "once" ? "once" : "standing";
   const reason = typeof body.purpose === "string" ? body.purpose.trim() : "";
   const credential = await deps.keychain.getCredential(body.credentialId);
   if (!credential) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
@@ -579,7 +578,7 @@ export async function createAdminKeychainGrant(ctx: ApiCtx): Promise<void> {
       credentialId: credential.id,
       ownerId: credential.ownerId,
       audienceScopeId: audience as ScopeId,
-      mode,
+      mode: "standing",
       purpose: `org admin ${actor.id}${reason ? `: ${reason}` : ""}`,
     });
     audit(ctx, {

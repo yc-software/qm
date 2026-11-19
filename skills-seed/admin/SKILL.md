@@ -29,7 +29,7 @@ state with no owner hand-off: the ordinary cron, webhook, loop, skill, app and s
 accept an admin on any person's or scope's artifacts (a cron task an admin rewrites keeps its
 owner, so it still runs with the owner's credentials). To use another person's linked
 credential, grant it to this conversation with
-`POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?,"mode"?:"standing"|"once"}`
+`POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?}`
 (ids from `GET /v1/admin/keychain`; scope defaults to this conversation), then name its
 handle in `execute.credentials`. Every change is audited and the owner is notified of edits.
 Confirm mutations with the admin first. Check the provider
