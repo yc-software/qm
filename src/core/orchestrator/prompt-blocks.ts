@@ -27,7 +27,7 @@ export function renderSandboxProviders(
   ];
   const behindProxy = names.filter((name) => proxied.includes(name)).toSorted();
   const network = behindProxy.length
-    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node.`
+    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node's fetch.`
     : "";
   return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}${network}`;
 }
