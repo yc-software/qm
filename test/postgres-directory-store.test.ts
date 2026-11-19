@@ -187,11 +187,17 @@ test(
       [{ channelId: "C-sec", name: "secret", isPrivate: true }],
       [{ channelId: "C-sec", principalId: "U-carol" }],
     );
-    assert.equal(await store.channelMember("C-sec", "U-carol"), true);
-    assert.equal(await store.channelMembership("C-sec", "U-carol"), true);
-    assert.equal(await store.channelMembership("C-sec", "U-alice"), false);
-    assert.equal(await store.channelMember("C-sec", "U-alice"), false);
-    assert.equal(await store.channelMember("C-other", "U-carol"), false);
+    assert.deepEqual(
+      await Promise.all([
+        store.channelMember("C-sec", "U-carol"),
+        store.channelMembership("C-sec", "U-carol"),
+        store.channelMembership("C-sec", "U-alice"),
+        store.channelMember("C-sec", "U-alice"),
+        store.channelMember("C-other", "U-carol"),
+        store.get("U-alice").then((member) => member?.displayName),
+      ]),
+      [true, true, false, false, false, "Alice"],
+    );
     assert.deepEqual(
       (await store.conversationMembers("channel", "C-sec"))?.map((member) => member.principalId),
       ["U-carol"],
