@@ -92,7 +92,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PATCH",
         path: "/v1/personas/:id",
         summary:
-          '{name?,description?,instructions?,icon?} edits it (write or owner); icon is {kind:"emoji",value}, {kind:"custom",name} (Slack custom emoji), {kind:"image",url} (any https image URL) or null; each change that alters a field records a new version',
+          '{name?,description?,instructions?,icon?} edits it (write or owner); icon is {kind:"emoji",value}, {kind:"custom",name} (a Slack custom emoji already in the workspace — you cannot add new ones), {kind:"image",url} (any https image URL Slack can fetch — the way to give a persona a new picture) or null; each change that alters a field records a new version',
       },
       {
         method: "GET",
@@ -236,7 +236,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PATCH",
         path: "/v1/projects/:id",
         summary:
-          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji, {kind:"custom",name} with a workspace custom emoji, {kind:"image",url} with an https image URL, or null to clear (any member)',
+          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji, {kind:"custom",name} with a custom emoji already in the workspace, {kind:"image",url} with an https image URL (for a picture the workspace does not have), or null to clear (any member)',
       },
       {
         method: "POST",
