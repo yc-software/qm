@@ -2984,7 +2984,7 @@ html.dark #app-view dialog.cd .cd-group {
   flex: 1;
 }
 #app-view dialog.cd .cd-foot .status {
-  margin-inline-end: 8px;
+  margin: 0 8px 0 0;
   color: var(--muted-foreground);
   font-size: 12px;
 }
