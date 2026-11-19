@@ -1184,8 +1184,6 @@ a.chat-row-open {
   align-items: start;
 }
 .settings-nav {
-  position: sticky;
-  top: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -1212,11 +1210,17 @@ a.chat-row-open {
 .settings-content {
   min-width: 0;
 }
+.settings-side {
+  position: sticky;
+  top: 0;
+}
 .settings-tip {
-  max-width: 1180px;
-  margin: 0 auto;
+  max-width: 200px;
+  margin: 24px 8px 0;
   color: var(--muted-foreground);
-  font-size: var(--font-13);
+  font-size: var(--font-12-5);
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 .settings-page-title {
   position: absolute;
@@ -1228,16 +1232,26 @@ a.chat-row-open {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.settings-content > .settings-group {
-  margin-top: 0;
-}
 @media (max-width: 720px) {
   .settings-layout.with-nav {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
-  .settings-nav {
+  .settings-side {
     position: static;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .settings-tip {
+    order: -1;
+    max-width: none;
+    margin: 0;
+    font-size: var(--font-13);
+    line-height: inherit;
+  }
+  .settings-nav {
     flex-direction: row;
     overflow-x: auto;
   }
@@ -1247,13 +1261,6 @@ a.chat-row-open {
   .settings-nav-item {
     flex: none;
   }
-}
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-width: 960px;
-  margin: 12px auto 0;
 }
 .settings-row {
   display: flex;
@@ -14006,4 +14013,78 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 html.app-share-embed,
 html.app-share-embed body {
   background: transparent;
+}
+
+/* Settings page title, and General as titled sections of grouped rows. Desktop only:
+   narrow screens keep the flat list of rows, in the new order. */
+@media (min-width: 721px) {
+  .settings-general {
+    display: grid;
+    gap: 28px;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  .settings-page-head {
+    max-width: 960px;
+    margin: 0 auto 28px;
+    font-size: var(--font-24);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .settings-section-head {
+    margin: 0 0 10px;
+    font-size: var(--font-14);
+    font-weight: 500;
+    color: var(--foreground);
+  }
+  .settings-card {
+    border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+    border-radius: 14px;
+    background: var(--background);
+  }
+  html.dark .settings-card {
+    background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+  }
+  .settings-card > .settings-row {
+    padding: 14px 18px;
+    border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+  }
+  .settings-card > .settings-row:last-child {
+    border-bottom: 0;
+  }
+  .settings-connections {
+    display: grid;
+    gap: 12px;
+  }
+  .settings-connections .welcome-slack,
+  .settings-connections .welcome-content {
+    max-width: none;
+  }
+  .settings-connections .welcome-content {
+    padding: 0;
+  }
+  .settings-connections .welcome-slack,
+  .settings-connections .welcome-load,
+  .settings-connections .connection-picker {
+    border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
+  }
+  html.dark .settings-connections .welcome-slack,
+  html.dark .settings-connections .welcome-load,
+  html.dark .settings-connections .connection-picker {
+    background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+  }
+}
+@media (max-width: 720px) {
+  .settings-page-head,
+  .settings-section-head {
+    display: none;
+  }
+  .settings-general .settings-section:not(:last-child) .settings-row:last-child,
+  .settings-connections > .settings-slack-account {
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-connections > * {
+    padding: 16px 2px;
+  }
 }
