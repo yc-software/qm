@@ -647,7 +647,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   async function manageableSkills(
     tenant: Tenant,
-    skills: readonly Skill[],
+    skills: readonly Pick<Skill, "id" | "scopeId" | "createdBy">[],
     principalId: string,
     botWork: boolean,
   ): Promise<Set<string>> {
@@ -655,7 +655,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const grants = resources.length
       ? ((await deps.acl?.find(tenant, { resources }).catch(reportFailureAs("skill grants", []))) ?? [])
       : [];
-    const of = (s: Skill) => grants.filter((g) => g.ownerScopeId === s.scopeId && g.ref === encodeRef(skillRef(s.id)));
+    const of = (s: Pick<Skill, "id" | "scopeId">) =>
+      grants.filter((g) => g.ownerScopeId === s.scopeId && g.ref === encodeRef(skillRef(s.id)));
     const ok = await Promise.all(skills.map((s) => canManageSkill(s, principalId, botWork, of(s))));
     return new Set(skills.filter((_, i) => ok[i]).map((s) => s.id));
   }
