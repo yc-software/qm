@@ -148,6 +148,7 @@ export function providersCard() {
             settingsRow(
               p.name,
               [
+                p.id,
                 labels[p.protocol] || p.protocol,
                 p.baseUrl,
                 `${p.models.length} ${p.models.length === 1 ? "model" : "models"}`,

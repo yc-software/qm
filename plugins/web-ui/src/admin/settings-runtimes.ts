@@ -163,7 +163,7 @@ const budgetRow = () =>
     "tokens",
     1000,
     (fallback) =>
-      `Most history any model sees, never more than half its context window. Lower is cheaper but remembers less word for word. Default ${fallback}.`,
+      `Most history any model sees, never more than half its context window. Lower is cheaper but remembers less word for word. Applies to every model. Default ${fallback}.`,
   );
 
 export function runtimesCard() {

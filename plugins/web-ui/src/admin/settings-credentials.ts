@@ -1,3 +1,4 @@
+import { brandName } from "../ui.ts";
 import { switchTrack } from "../switch.ts";
 import { badge } from "./shared.ts";
 import { reviewChange } from "./setting-controls.ts";
@@ -404,6 +405,13 @@ export const keychainCard = () => {
   </section>`;
 };
 const plural = (n: number, label: string) => n + " " + label + (n === 1 ? "" : "s");
+const granteeCount = (grantees: string[]) => {
+  const channels = grantees.filter((g) => g.startsWith("channel:")).length;
+  const people = grantees.length - channels;
+  return [people ? people + (people === 1 ? " person" : " people") : "", channels ? plural(channels, "channel") : ""]
+    .filter(Boolean)
+    .join(", ");
+};
 function credentialUsage(c: Data) {
   if (c.usageUnavailable) return "Usage unavailable";
   if (c.usageCount == null) return "Loading usage…";
@@ -422,7 +430,7 @@ function usageShort(c: Data) {
 function credentialFlags(c: Data) {
   const org = c.source === "deployment" || (c.grantees || []).some((g: string) => g.startsWith("org:"));
   return html`${c.enabled === false ? badge("Disabled", "warn") : null}${c.hasSecret ? null : badge("Secret missing", "err")}${
-    c.delivery !== "env" && !org ? badge(plural((c.grantees || []).length, "person"), "muted") : null
+    c.delivery !== "env" && !org ? badge(granteeCount(c.grantees || []), "muted") : null
   }${c.delivery !== "env" && c.deployments === false ? badge("Not for apps", "muted") : null}`;
 }
 function credentialRow(c: Data) {
@@ -614,14 +622,14 @@ export function credentialsCard() {
               .value=${s.draft.delivery || ""}
               @input=${(e: Event) => s.change("delivery", (e.target as HTMLInputElement).value)}
             >
-              <option value="broker">Proxied by QM</option>
+              <option value="broker">Proxied by ${brandName()}</option>
               <option value="env">Sandbox environment variable</option>
             </select>
             <span class="cd-help"
               >${
                 env
                   ? "Injected into every all-internal conversation. Rooms with external guests get nothing."
-                  : "QM adds the secret to outgoing requests. It never enters a sandbox."
+                  : `${brandName()} adds the secret to outgoing requests. It never enters a sandbox.`
               }</span
             >
           </label>
@@ -782,7 +790,7 @@ const statusLine = () =>
   >`;
 
 function secretHint() {
-  if (!credentialState.editing) return "The secret is write-only. It cannot be viewed after saving.";
+  if (!credentialState.editing) return "Required. The secret is write-only and can't be viewed after saving.";
   return credentialState.original?.hasSecret
     ? "Stored secret is set. Leave blank to keep it; enter a new value to replace it."
     : "No stored secret yet. Enter one to make this credential usable.";
