@@ -269,7 +269,7 @@ export async function activeOwnedAccount(
   return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
-const scopeCache = new LRUCache<string, string[]>({ max: 5000, ttl: 5 * 60_000 });
+const scopeCache = new LRUCache<string, string[]>({ ttl: 5 * 60_000, ttlAutopurge: true });
 
 async function scopesOf(
   ctx: ApiCtx,
@@ -287,14 +287,10 @@ async function scopesOf(
     scopeCache.set(cacheKey, found);
     return found;
   } catch (error) {
-    reportComposioFailure(`composio: ${path} scopes`, key, error, id);
+    const mask = createExactSecretValueMasker([key]);
+    reportFailure(`composio: ${path} scopes`, new Error(mask(redactSecrets(errMessage(error)))), id);
     return [];
   }
-}
-
-function reportComposioFailure(what: string, key: string, error: unknown, id: string): void {
-  const mask = createExactSecretValueMasker([key]);
-  reportFailure(what, new Error(mask(redactSecrets(errMessage(error)))), id);
 }
 
 function scopeName(scope: string): string {
