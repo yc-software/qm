@@ -14045,3 +14045,21 @@ html.dark .settings-card {
   display: grid;
   gap: 12px;
 }
+/* Connection cards span the column and share the settings-card surface. */
+.settings-connections .welcome-slack,
+.settings-connections .welcome-content {
+  max-width: none;
+}
+.settings-connections .welcome-content {
+  padding: 0;
+}
+.settings-connections .welcome-slack,
+.settings-connections .welcome-load,
+.settings-connections .connection-picker {
+  border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
+}
+html.dark .settings-connections .welcome-slack,
+html.dark .settings-connections .welcome-load,
+html.dark .settings-connections .connection-picker {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
