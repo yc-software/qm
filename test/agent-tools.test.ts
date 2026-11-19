@@ -1194,6 +1194,19 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.body.count, 0);
 });
 
+test("surface post/edit results carry the delivered ts and the ref they acted on", async () => {
+  const emitted: Emitted[] = [];
+  const ctx = fakeToolContext();
+  ctx.post = async () => ({ ok: true, deliveryId: "d1", ts: "1795030226.902129", notes: ["<@U999> unverified"] });
+  ctx.edit = async () => ({ ok: true, deliveryId: "e1", ts: "777.888" });
+  const slack = surfaceTool({ current: ctx, emit: sink(emitted), scopeLabel: "channel:C1" });
+  const textOf = async (action: string, params: Record<string, unknown>) =>
+    ((await call(slack, { action, ...params })) as { content: Array<{ text: string }> }).content[0]!.text;
+  assert.equal(await textOf("post", { text: "hello there" }), "[sent ts=1795030226.902129] <@U999> unverified");
+  assert.equal(await textOf("edit", { ref: "777.888", text: "hello again" }), "[edited ref=777.888]");
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.body.action === "post")!.body.ts, "1795030226.902129");
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.body.action === "edit")!.body.ref, "777.888");
+});
 test("surface reads fail closed without persisting blocked content", async () => {
   const emitted: Emitted[] = [];
   const external = {
@@ -1323,8 +1336,8 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
     tool: "slack",
     callId: "t",
     isError: false,
-    text: "[edited]",
-    body: { action: "edit", ok: true, deliveryId: "e1" },
+    text: "[edited ref=173.4]",
+    body: { action: "edit", ok: true, ref: "173.4", deliveryId: "e1" },
   });
   assert.deepEqual(columns(result("delete")), {
     tool: "slack",

@@ -278,7 +278,7 @@ function installationCard() {
     d = s.data;
   return html`<section class="card sv-slack-settings" id="card-slack-installation">
     <div class="head">
-      <h2>Slack</h2>
+      <h2>Workspace</h2>
     </div>
     <div class="body">
       <div class="slack-connection">

@@ -49,6 +49,13 @@ group chat), and the jobs they start. Anything else such a run changed keeps the
 the core log names each path and why, and a foreground command's stderr says so. Each execution
 removes its own directory in `finally`.
 
+A token refresh is recognised only by which fields changed. QM doesn't ask the provider whether
+the new token belongs to the same account, so a run that can write the staged files can put
+another valid token in place of the stored one, keep every other byte, and have it saved as a
+refresh. A cache file that holds nothing but tokens, with no client or account fields beside
+them, has nothing else to compare. This is a known limit: treat any run that can reach the
+owner's computer as able to change these tokens.
+
 Background jobs accept the same `credentials` handles. The staging plan, credential ids,
 grant ids and baseline fingerprints (no secrets) are stored on the job's `process_sessions`
 row (`credential_files`). Any path that observes the exit (background poll/stop, monitor,

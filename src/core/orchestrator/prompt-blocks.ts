@@ -6,6 +6,7 @@ import type { CandidateDestination, GatewayContext, GrantedHandle, ScopeId } fro
 import type { SandboxResource, SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import { IO_SATURATED_FULL60, type LoadSample } from "../../sandbox/load-probe.ts";
 import type { Item } from "../../sessions/items.ts";
+import { NON_WEB_PATHS } from "../../surfaces/contract.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
@@ -127,7 +128,7 @@ function guidanceOf(item: Item): GuidanceSnapshot | undefined {
 
 export function webSurfaceLabel(botName: string, relayed: boolean): string {
   if (!relayed) return `the ${botName} web app`;
-  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so skills' non-web paths apply, such as an ordinary authorization link`;
+  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so ${NON_WEB_PATHS}`;
 }
 
 function trimmedEntries(record: Record<string, string> | undefined) {
@@ -227,8 +228,11 @@ function shortCron(expression: string): string {
   const pattern = new CronPattern(expression);
   const [minute, ...moreMinutes] = setIndexes(pattern.minute);
   const weekdays = setIndexes(pattern.dayOfWeek);
+  const hours = setIndexes(pattern.hour);
+  const listedHours = expression.trim().split(" ")[1]?.split(",").length;
   const plain =
     minute !== undefined &&
+    hours.length === listedHours &&
     !moreMinutes.length &&
     setIndexes(pattern.second).join() === "0" &&
     pattern.starDOM &&
@@ -239,9 +243,7 @@ function shortCron(expression: string): string {
     weekdays.every((day) => pattern.dayOfWeek[day] === EVERY_WEEKDAY_OCCURRENCE);
   if (!plain) return cronstrue.toString(expression.replaceAll("#L", "L"));
   const days = pattern.starDOW ? "daily" : weekdays.map((day) => WEEKDAYS[day]).join("/");
-  return `${setIndexes(pattern.hour)
-    .map((hour) => clockTime(hour, minute))
-    .join(", ")} ${days}`;
+  return `${hours.map((hour) => clockTime(hour, minute)).join(", ")} ${days}`;
 }
 
 function shortInterval(everyMs: number): string {

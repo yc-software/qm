@@ -117,6 +117,7 @@ test("schedules the short form can't express fall back to cronstrue's wording", 
   assert.match(renderStandingObligations([cron("0 8 * * 1-5")], [], []), /- T — 8:00 AM Mon\/Tue\/Wed\/Thu\/Fri$/m);
   assert.match(renderStandingObligations([cron("0 8 * * 1#2")], [], []), /second Monday/);
   assert.match(renderStandingObligations([cron("0 8 1 * *")], [], []), /day 1 of the month/);
+  assert.match(renderStandingObligations([cron("17 * * * *")], [], []), /- T — At 17 minutes past the hour$/m);
 });
 
 const revision = (version: number, content: string, sessionId?: string) => ({

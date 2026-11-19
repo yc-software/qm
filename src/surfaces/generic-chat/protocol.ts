@@ -17,6 +17,7 @@ const user = z.object({
   email: z.string().optional(),
   name: z.string().optional(),
   bot: z.boolean().optional(),
+  member: z.boolean().optional(),
 });
 const file = z.object({
   id: genericChatMessageIdSchema,

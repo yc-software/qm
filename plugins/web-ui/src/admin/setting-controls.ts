@@ -1,5 +1,6 @@
 import { ifDefined } from "lit/directives/if-defined.js";
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
+import { switchTrack } from "../switch.ts";
 import { classMap } from "lit/directives/class-map.js";
 import type { SettingState } from "./setting-state.ts";
 
@@ -60,7 +61,44 @@ type FieldOptions = {
   cls?: unknown;
   flex?: boolean;
   disabled?: boolean;
+  hidden?: boolean;
+  helpId?: string;
 };
+export function formField(
+  label: string,
+  help: unknown,
+  id: string,
+  value: string,
+  set: (value: string) => void,
+  o: FieldOptions = {},
+) {
+  return html`<label class=${classMap({ "form-field": true, hidden: !!o.hidden })}
+    ><span class="form-label">${label}</span
+    ><input
+      type=${o.type || "text"}
+      id=${id}
+      .value=${value}
+      @input=${(e: Event) => set((e.target as HTMLInputElement).value)}
+      ?disabled=${!!o.disabled}
+      placeholder=${o.placeholder ?? ""}
+      autocomplete=${o.auto ?? "off"}
+    />${help ? html`<span class="form-help" id=${ifDefined(o.helpId)}>${help}</span>` : nothing}</label
+  >`;
+}
+
+export function switchField(id: string, label: string, help: string, on: boolean, set: (on: boolean) => void) {
+  return html`<label class="switch-row setting-toggle"
+    ><span class="switch-text"><span>${label}</span>${help ? html`<small>${help}</small>` : nothing}</span
+    ><input
+      type="checkbox"
+      role="switch"
+      id=${id}
+      .checked=${on}
+      @change=${(e: Event) => set((e.target as HTMLInputElement).checked)}
+    />${switchTrack(on)}</label
+  >`;
+}
+
 export function textField(
   label: string,
   hint: string | number,

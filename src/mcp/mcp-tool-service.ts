@@ -17,7 +17,14 @@ import {
   type McpListing,
 } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { attestsInAudience, attestedPerson, OutsideAudience, type AttestingTurn } from "../directory/person.ts";
+import { connectorApps, type ConnectorApp } from "./connector-apps.ts";
+import {
+  attestsInAudience,
+  attestedPerson,
+  attestedActorHeaders,
+  OutsideAudience,
+  type AttestingTurn,
+} from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -98,6 +105,10 @@ export interface McpToolDescriptor {
   brain?: true;
 }
 
+interface McpAppConnection extends ConnectorApp {
+  connected: boolean;
+}
+
 export interface McpToolService {
   toolDefs(): Promise<McpToolDescriptor[]>;
   toolDefsFor(principalId?: string, audienceScopeId?: ScopeId, turn?: AttestingTurn): Promise<McpToolDescriptor[]>;
@@ -118,6 +129,7 @@ export interface McpToolService {
   ): Promise<boolean>;
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
+  appConnections(principalId: string, servers: McpServer[]): Promise<McpAppConnection[]>;
   close(): void;
 }
 
@@ -201,7 +213,7 @@ function refuseOutsideAudience(
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
   const actor = attestedPerson(principalId, `MCP server ${server.id}`);
-  return { "x-qm-actor": actor, ...(approval ? { "x-qm-approval": approval } : {}) };
+  return { ...attestedActorHeaders(actor), ...(approval ? { "x-qm-approval": approval } : {}) };
 }
 
 function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {
@@ -567,6 +579,22 @@ export function createMcpToolService(opts: {
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
+    },
+    async appConnections(principalId, servers) {
+      const perServer = await Promise.all(
+        servers.map(async (server) => {
+          const apps = connectorApps([server]);
+          if (!apps.length) return [];
+          let listed = new Set<string>();
+          try {
+            listed = new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
+          } catch (e) {
+            record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
+          }
+          return apps.map((app) => ({ ...app, connected: listed.has(app.toolkit) }));
+        }),
+      );
+      return perServer.flat();
     },
     close() {
       closed = true;

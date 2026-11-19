@@ -104,7 +104,10 @@ export interface SlackCoreClient {
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
-  ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
+  ackDelivery(
+    id: string,
+    body?: { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string },
+  ): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<void>;
 
@@ -359,7 +362,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async ackDelivery(id, body) {
       if (body?.recipientThreadRef) await deps.app.recordPrincipalDelivery(id, body.recipientThreadRef);
-      await deps.app.ackDelivery(id, body?.slackApiMs);
+      await deps.app.ackDelivery(id, body?.slackApiMs, body?.messageTs);
     },
 
     async reportDeliveryUndeliverable(id, reason) {

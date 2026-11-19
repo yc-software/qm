@@ -396,6 +396,8 @@ export interface SurfacePostResult {
   message?: string;
   matched?: string;
   attachments?: PostedFileMeta[];
+  ts?: string;
+  notes?: string[];
 }
 
 interface SurfaceReadResult {

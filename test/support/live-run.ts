@@ -27,11 +27,12 @@ export async function holdThread(runs: RunStore, threadRef: string): Promise<() 
 const RUN = { runAttempt: 1, runLeaseToken: "live", threadRef: "dm:live" };
 const running = { status: "running", leaseToken: "live", attempts: 1, sessionId: "dm:live", leaseExpiresAt: Infinity };
 
-export const liveRunClaims = (actorId: string) => ({ ...RUN, liveActor: true, runId: `live:${actorId}` });
+export const liveRunBinding = (actorId: string) => ({ ...RUN, runId: `live:${actorId}` });
+export const liveRunClaims = (actorId: string) => ({ ...liveRunBinding(actorId), liveActor: true });
+export const liveRun = (id: string, sessionId = "dm:live") => ({ ...running, sessionId, request: { actor: { id } } });
 
 export const liveRunStore = (runs?: RunStore) =>
   ({
     ...runs,
-    get: async (id: string) =>
-      id.startsWith("live:") ? { ...running, request: { actor: { id: id.slice(5) } } } : (runs?.get(id) ?? null),
+    get: async (id: string) => (id.startsWith("live:") ? liveRun(id.slice(5)) : (runs?.get(id) ?? null)),
   }) as never;

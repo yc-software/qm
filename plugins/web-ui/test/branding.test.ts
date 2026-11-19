@@ -62,3 +62,13 @@ test("the installable-app metadata follows the brand: manifest link, touch icon,
   assert.match(branded, /<meta name="apple-mobile-web-app-title" content="Ship &quot;Q&quot;" \/>/);
   assert.match(injectBranding(shell, {}), /<meta name="apple-mobile-web-app-title" content="QM" \/>/);
 });
+
+test("injectBranding flags the page only when an org configured a mark, so the UI has no default mark", async () => {
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const shell = '<!doctype html><html lang="en"><head></head><body></body></html>';
+  assert.doesNotMatch(injectBranding(shell, {}), /data-brand-mark/);
+  assert.doesNotMatch(injectBranding(shell, { accent: "#ff6600", selfLabel: "Acme" }), /data-brand-mark/);
+  assert.match(injectBranding(shell, { mark: "A" }), /<html data-brand-mark lang="en">/);
+  assert.match(injectBranding(shell, { markUrl: "https://cdn.example.com/icon.png" }), /<html data-brand-mark /);
+  assert.doesNotMatch(injectBranding(shell, { markUrl: "http://cdn.example.com/icon.png" }), /data-brand-mark/);
+});

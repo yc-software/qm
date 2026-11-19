@@ -228,6 +228,7 @@ export interface Destination {
   onBehalfOf?: string;
   relaySender?: string;
   persona?: WornPersona;
+  project?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -280,6 +281,7 @@ export interface Delivery {
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
+  messageTs?: string;
 }
 
 export interface EgressPolicy {
