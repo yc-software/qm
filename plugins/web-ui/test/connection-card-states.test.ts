@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
-
-const settle = async (done: () => boolean) => {
-  for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
-};
+import { connectWidget, harness, settle } from "./deep-link-boot-fixture.ts";
 
 test("a card says in one line why an app isn't connected and what to do next", async () => {
   const h = await harness({
@@ -15,14 +11,7 @@ test("a card says in one line why an app isn't connected and what to do next", a
   try {
     await h.boot();
     h.setConnections([]);
-    const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
-      me: { org: "test", user: "tester" },
-      widget: "apps",
-      setupOnly: true,
-      toolkit: "gmail",
-      returnKey: "reply:1:0:0",
-    });
-    document.querySelector(".message-stack")!.append(widget);
+    const widget = connectWidget();
     const status = () => widget.querySelector(".connection-card-status")?.textContent?.trim();
     const primary = () => widget.querySelector(".connection-card .btn.primary")?.getAttribute("aria-label");
     const recheck = () => widget.querySelector<HTMLButtonElement>(".connection-card .btn:not(.primary)");

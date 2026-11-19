@@ -1,22 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
-
-const settle = async (done: () => boolean) => {
-  for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
-};
-
-function gmailWidget(): HTMLElement {
-  const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
-    me: { org: "test", user: "tester" },
-    widget: "apps",
-    setupOnly: true,
-    toolkit: "gmail",
-    returnKey: "reply:1:0:0",
-  });
-  document.querySelector(".message-stack")!.append(widget);
-  return widget;
-}
+import { connectWidget, harness, settle } from "./deep-link-boot-fixture.ts";
 
 test("a connection missing configured permissions can be reconnected or disconnected", async () => {
   const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -37,7 +21,7 @@ test("a connection missing configured permissions can be reconnected or disconne
   });
   try {
     await h.boot();
-    const widget = gmailWidget();
+    const widget = connectWidget();
     await settle(() => Boolean(widget.querySelector(".connection-card .btn.primary")));
     const app = widget.querySelector<HTMLButtonElement>(".connection-card .btn.primary")!;
     assert.equal(app.disabled, false);

@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
-
-const settle = async (done: () => boolean) => {
-  for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
-};
+import { connectWidget, harness, settle } from "./deep-link-boot-fixture.ts";
 
 test("a card for one app asks for that app alone and never shows the person's other apps", async () => {
   let release = (): void => {};
@@ -32,14 +28,7 @@ test("a card for one app asks for that app alone and never shows the person's ot
   });
   try {
     await h.boot();
-    const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
-      me: { org: "test", user: "tester" },
-      widget: "apps",
-      setupOnly: true,
-      toolkit: "gmail",
-      returnKey: "reply:1:0:0",
-    });
-    document.querySelector(".message-stack")!.append(widget);
+    const widget = connectWidget();
     await settle(() => Boolean(widget.querySelector(".connection-card")));
     const waiting = widget.querySelector(".connection-card")!;
     assert.ok(waiting.querySelector('.connector-logo[data-service="gmail"]'), "the logo is there from the first frame");

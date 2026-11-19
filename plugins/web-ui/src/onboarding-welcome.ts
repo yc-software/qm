@@ -12,7 +12,7 @@ import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
-import { connectionCard, type ConnectionOutcome } from "./connection-card";
+import { connectionActions, connectionCard, type ConnectionOutcome } from "./connection-card";
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
 
@@ -43,7 +43,6 @@ import {
 } from "./connection-preview";
 
 const continuedAttempts = new Set<string>();
-const stillThere = (name: string) => `${name} is reconnected, but the old connection is still there.`;
 
 const HARNESS = "QM, your agent harness.";
 
@@ -67,7 +66,6 @@ export class OnboardingWelcome extends LitElement {
     connectionOutcome: { state: true },
     connections: { state: true },
     connectionsChecked: { state: true },
-    leftover: { state: true },
     connectionError: { state: true },
     workspaceConnected: { state: true },
     slackLinked: { state: true },
@@ -91,7 +89,6 @@ export class OnboardingWelcome extends LitElement {
   declare authorizationError: string;
   private connections: ConnectedAccount[] = [];
   private connectionsChecked = false;
-  private leftover = "";
   private disconnecting = "";
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
@@ -309,9 +306,35 @@ export class OnboardingWelcome extends LitElement {
       this.drawPicker();
     }
   }
-  private async confirmDisconnect(accounts: ConnectedAccount[], name: string): Promise<void> {
-    if (!window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`)) return;
-    for (const account of accounts) if (!(await this.disconnect(account, name))) return;
+  private confirmDisconnect(account: ConnectedAccount, name: string): void {
+    if (window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`))
+      void this.disconnect(account, name);
+  }
+  private accountRows(accounts: ConnectedAccount[]): TemplateResult {
+    return html`<div class="connection-connected" role="status" aria-live="polite">
+      ${accounts.map((account) => {
+        const service = this.services.find((item) => item.id === account.toolkit) ?? {
+          id: account.toolkit,
+          name: account.toolkit,
+          description: "",
+          popularity: 0,
+        };
+        const stale = Boolean(account.missingScopes?.length);
+        return html`<span class=${stale ? "stale" : ""}
+          >${icon(stale ? TriangleAlert : Check, 10)}${`${service.name} ${stale ? "needs new permissions" : "connected"}`}
+          ${
+            account.id
+              ? connectionActions(
+                  service.name,
+                  Boolean(this.authorizing || this.disconnecting),
+                  () => void this.authorize(service, account.id),
+                  () => this.confirmDisconnect(account, service.name),
+                )
+              : nothing
+          }</span
+        >`;
+      })}
+    </div>`;
   }
   private card(notice: string, listed: ConnectedAccount[]): TemplateResult | undefined {
     if (this.widget !== "apps" || !this.toolkit || this.error) return undefined;
@@ -319,25 +342,15 @@ export class OnboardingWelcome extends LitElement {
     if (!service) return this.loading ? connectionCard({ id: this.toolkit }) : undefined;
     const accounts = listed.filter((account) => account.toolkit === service.id);
     const removable = accounts.filter((account) => account.id);
+    const sole = removable.length === 1 ? removable[0] : undefined;
     const stale = this.staleToolkits().has(service.id);
-    const old = removable.find((account) => account.id === this.leftover);
     const checked = this.preview || this.connectionsChecked;
-    const problem = this.connectionError || this.authorizationError || (old ? stillThere(service.name) : "");
-    const sole = removable.length === 1 ? removable[0]!.id : undefined;
-    const connect = () => void this.authorize(service, sole ?? this.staleAccount(service.id));
+    const problem = this.connectionError || this.authorizationError;
+    const connect = () => void this.authorize(service, sole?.id ?? this.staleAccount(service.id));
     let working = "";
     if (this.authorizing) working = `Opening ${service.name}…`;
     else if (this.disconnecting) working = "Disconnecting…";
-    let fix;
-    if ((!checked && problem) || (!this.preview && this.connectionOutcome === "failed" && (stale || !accounts.length)))
-      fix = { label: "Check again", name: `Check ${service.name} again`, run: () => void this.loadConnections() };
-    else if (old)
-      fix = {
-        label: "Remove it",
-        name: `Remove the old ${service.name} connection`,
-        run: () => void this.disconnect(old, service.name),
-      };
-    return connectionCard(service, {
+    return html`${connectionCard(service, {
       outcome: this.connectionOutcome,
       notice,
       checked,
@@ -347,9 +360,12 @@ export class OnboardingWelcome extends LitElement {
       problem,
       connect,
       reconnect: sole && !stale ? connect : undefined,
-      disconnect: removable.length ? () => void this.confirmDisconnect(removable, service.name) : undefined,
-      fix,
-    });
+      disconnect: sole && (() => this.confirmDisconnect(sole, service.name)),
+      recheck:
+        (!checked && problem) || (!this.preview && this.connectionOutcome === "failed")
+          ? () => void this.loadConnections()
+          : undefined,
+    })}${removable.length > 1 ? this.accountRows(removable) : nothing}`;
   }
   private async loadConnections(): Promise<void> {
     this.connectionsController?.abort();
@@ -389,10 +405,8 @@ export class OnboardingWelcome extends LitElement {
           const replaced = accounts.find(
             (account) => account.id === attempt.replaces && account.id !== attempt.accountId,
           );
-          if (replaced && !(await this.disconnect(replaced, attempt.service.name))) {
-            this.leftover = replaced.id;
-            this.connectionError = `${stillThere(attempt.service.name)}${this.toolkit ? "" : " Disconnect it below."}`;
-          }
+          if (replaced && !(await this.disconnect(replaced, attempt.service.name)))
+            this.connectionError = `${attempt.service.name} is reconnected, but the old connection is still there. Disconnect it below.`;
           if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
             continuedAttempts.add(attempt.state);
             this.onConnected?.(attempt.service.name);
@@ -630,8 +644,6 @@ export class OnboardingWelcome extends LitElement {
       ? connected.map((toolkit) => ({ id: "", toolkit }) as ConnectedAccount)
       : this.connections;
     const connectedAccounts = this.loading ? [] : listed;
-    const serviceFor = (id: string) =>
-      this.services.find((service) => service.id === id) ?? { id, name: id, description: "", popularity: 0 };
     const outcome = {
       "": { title: "", brief: "", detail: "" },
       checking: {
@@ -721,39 +733,7 @@ export class OnboardingWelcome extends LitElement {
               ${this.connectionError && !this.error && !this.loading ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
               ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
               <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
-              ${
-                connectedAccounts.length
-                  ? html`<div class="connection-connected" role="status" aria-live="polite">
-                      ${connectedAccounts.map((account) => {
-                        const service = serviceFor(account.toolkit);
-                        const stale = Boolean(account.missingScopes?.length);
-                        return html`<span class=${stale ? "stale" : ""}
-                          >${icon(stale ? TriangleAlert : Check, 10)}${`${service.name} ${stale ? "needs new permissions" : "connected"}`}
-                          ${
-                            account.id
-                              ? html`<button
-                                    type="button"
-                                    class="kc-text-action"
-                                    ?disabled=${Boolean(this.authorizing || this.disconnecting)}
-                                    @click=${() => void this.authorize(service, account.id)}
-                                  >
-                                    Reconnect
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="kc-text-action danger"
-                                    ?disabled=${Boolean(this.authorizing || this.disconnecting)}
-                                    @click=${() => void this.confirmDisconnect([account], service.name)}
-                                  >
-                                    Disconnect
-                                  </button>`
-                              : nothing
-                          }</span
-                        >`;
-                      })}
-                    </div>`
-                  : nothing
-              }
+              ${connectedAccounts.length ? this.accountRows(connectedAccounts) : nothing}
               ${this.authorizing ? html`<p class="welcome-connection-status" role="status">Opening ${this.authorizing}…</p>` : nothing}
               ${this.authorizationError ? html`<p class="welcome-connection-status" role="alert">${this.authorizationError}</p>` : nothing}
             </div>`
