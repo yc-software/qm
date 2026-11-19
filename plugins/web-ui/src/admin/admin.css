@@ -2654,9 +2654,8 @@
 }
 
 /* Credentials: grouped list (Codex-style settings groups) */
-#app-view[data-subview="credentials"] #view-governance #sc-list {
-  display: grid;
-  gap: 28px;
+#app-view[data-subview="credentials"] #view-governance #sc-list > * + * {
+  margin-top: 28px;
 }
 #app-view .cred-group {
   overflow: hidden;
@@ -3013,7 +3012,7 @@
 }
 #app-view[data-subview="credentials"] #view-governance section#card-personal-keychains {
   display: block;
-  margin: 28px 0 0;
+  margin: 0;
   padding: 0;
   border: 0;
 }

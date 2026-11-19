@@ -562,7 +562,7 @@ export function credentialsCard() {
   const env = s.draft.delivery === "env";
   const cap = s.capability();
   return html`<div class=${classMap({ "settings-stack": true, dirty: s.dirty })} id="card-service-credentials">
-    <div id="sc-list" role="status" aria-live="polite" class=${credentialState.rows.length ? "settings-stack" : "hint"}>
+    <div id="sc-list" role="status" aria-live="polite" class=${credentialState.rows.length ? "" : "hint"}>
       ${credentialRows()}
     </div>
     ${s.open || !s.message ? null : statusLine()}

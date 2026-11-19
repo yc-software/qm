@@ -14029,8 +14029,9 @@ html.app-share-embed body {
 }
 .settings-section-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 2px 10px;
   margin: 0 0 10px;
 }
 .settings-section-head h3 {
