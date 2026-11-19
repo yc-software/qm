@@ -392,6 +392,20 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     ...execFileOps,
     ...blobStaging,
 
+    async restartComputer(scopeId: string): Promise<void> {
+      const name = sandboxScopeName(prefix, scopeId);
+      scopeByName.set(name, scopeId);
+      return provisionQueue(scopeId, async () => {
+        const stored = await store.get(scopeId);
+        if (!stored) throw new Error("e2b restart: no sandbox provisioned yet");
+        sessionByName.delete(name);
+        pauseFailed.delete(name);
+        const session = await client.restart(stored.sandboxId);
+        sessionByName.set(name, session);
+        await store.merge(scopeId, { preservationState: "running", preservationError: undefined });
+      });
+    },
+
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
       let name: string;
