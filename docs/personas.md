@@ -91,9 +91,9 @@ use the persona, including people who are not in that room. A turn in a pinned r
 to the room's own notebook when anyone from outside the organization is among the room's
 members, when it arrives without the room's member list (as a web conversation opened in a
 Slack channel does), when the `personas` flag does not reach its sender, and when its
-conversation picked a different persona. The nightly memory tidy of the room that last
-saved to the persona's notebook also tidies that notebook. With `MEMORY_PROVIDER_CONFIG`
-set, a route has to serve the `persona` kind ([memory providers](./memory-providers.md)).
+conversation picked a different persona. The persona's notebook gets its own nightly memory
+tidy, like a room's. With `MEMORY_PROVIDER_CONFIG` set, a route has to serve the `persona`
+kind ([memory providers](./memory-providers.md)).
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates

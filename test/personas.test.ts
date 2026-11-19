@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeActor, scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import type { PersonaResult } from "../src/personas/persona-service.ts";
 import { orgId } from "../src/config.ts";
@@ -560,11 +560,6 @@ test("a persona pinned in a channel is worn by every conversation there until it
 test("rooms that pin a persona share its notebook, read by every conversation that uses the persona", async () => {
   const { built, personas, enable, sysprompt, say } = setup();
   for (const who of [ALICE, BOB]) await enable(who);
-  await built.directory.replace([ALICE, BOB].map((id) => ({ principalId: id, displayName: id, type: "internal" })));
-  await built.directory.replaceChannels(
-    [{ channelId: "C_ONE", name: "one", isPrivate: true }],
-    [ALICE, BOB].map((principalId) => ({ channelId: "C_ONE", principalId })),
-  );
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
   const pin = (id: string) => ({ scopeId: scopeId("channel", id), role: "read" as const, pinned: true });
   const owner = { scopeId: scopeId("personal", ALICE), role: "owner" as const };
@@ -587,14 +582,14 @@ test("rooms that pin a persona share its notebook, read by every conversation th
   assert.match(await say(ALICE, dm(ALICE), "!memorysearch launch moved"), /March 3/);
   assert.equal(await say(ALICE, dm(ALICE), "!memoryremember Alice likes short replies."), "remembered 1");
   assert.doesNotMatch(await built.memory.read(scopeId("persona", ada.id)), /short replies/);
-  const one = scopeId("channel", "C_ONE");
+  const home = scopeId("personal", scopeActor(scopeId("persona", ada.id)));
   let tidyTurn: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (owner, opts) => provision(owner, (tidyTurn = opts));
-  const computers = built.sandboxResources.forTurn({ actorId: ALICE, scopeId: one, isCurrent: async () => true });
-  const computer = await computers.create(ALICE, one, await built.sandboxResources.defaultBackend());
-  await computers.setDefault(ALICE, one, computer.id);
-  const tidy = (await built.crons.list()).find((cron) => cron.ownerScopeId === one)!;
+  const computers = built.sandboxResources.forTurn({ actorId: ALICE, scopeId: home, isCurrent: async () => true });
+  const computer = await computers.create(ALICE, home, await built.sandboxResources.defaultBackend());
+  await computers.setDefault(ALICE, home, computer.id);
+  const tidy = (await built.crons.list()).find((cron) => cron.ownerScopeId === scopeId("persona", ada.id))!;
   await built.crons.update(tidy.id, { action: "!run true" });
   await runNowSettled(built.scheduler, tidy.id);
   const tidied = await verifyCapabilityToken(tidyTurn!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);

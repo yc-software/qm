@@ -17,7 +17,7 @@ const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with
 - Add no new information and leave every other notebook alone.
 Batch your edits and deletes into list calls; each call changes everything or nothing. If nothing needs changing, change nothing. Do not message anyone; end with finish_silently.`;
 
-export type MemoryTidyProfile = ManagedCronClaim & { room?: ScopeId };
+export type MemoryTidyProfile = ManagedCronClaim;
 
 export function createMemoryTidyService(deps: {
   store: DurableMap<MemoryTidyProfile>;
@@ -25,7 +25,6 @@ export function createMemoryTidyService(deps: {
   timezone: (principalId: string) => Promise<string | undefined>;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged">;
-  sharedNotebook: (room: ScopeId) => Promise<ScopeId | undefined>;
 }) {
   const manages = async (cron: Pick<Cron, "id" | "ownerScopeId">): Promise<boolean> =>
     (await deps.store.get(cron.ownerScopeId))?.cronId === cron.id;
@@ -38,12 +37,9 @@ export function createMemoryTidyService(deps: {
     manages,
     managesThread,
 
-    async ensure(notebook: ScopeId, room?: ScopeId): Promise<void> {
-      const shared = room !== undefined && room !== notebook && (await deps.sharedNotebook(room)) === notebook;
-      if (shared && (await deps.store.get(notebook))?.room !== room) await deps.store.put(notebook, { room });
-      const scope = shared ? room : notebook;
+    async ensure(scope: ScopeId): Promise<void> {
       const { kind, ref } = parseScopeId(scope);
-      if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
+      if (kind !== "personal" && kind !== "channel" && kind !== "group" && kind !== "persona") return;
       const claimed = await deps.store.get(scope);
       if (claimed?.cronId && !claimed.arming) return;
       const owner = kind === "personal" ? ref : scopeActor(scope);
@@ -67,12 +63,7 @@ export function createMemoryTidyService(deps: {
 
     async skipFire(cron: Cron): Promise<string | undefined> {
       if (!deps.memory.facts || !(await manages(cron))) return undefined;
-      const shared = await deps.sharedNotebook(cron.ownerScopeId);
-      const notebooks =
-        shared && (await deps.store.get(shared))?.room === cron.ownerScopeId
-          ? [cron.ownerScopeId, shared]
-          : [cron.ownerScopeId];
-      const facts = (await Promise.all(notebooks.map((scope) => deps.memory.facts!(scope)))).flat();
+      const facts = await deps.memory.facts(cron.ownerScopeId);
       const changedAt = facts.reduce((latest, fact) => Math.max(latest, fact.updatedAt), 0);
       const { runs } = await deps.crons.listFires(cron.id, { limit: 10 });
       const tidied = runs.findLast((run) => run.status === "ok" || run.status === "silent");
@@ -83,21 +74,15 @@ export function createMemoryTidyService(deps: {
   };
 }
 
-export function withMemoryTidy(
-  memory: MemoryService,
-  ensure: (notebook: ScopeId, room?: ScopeId) => Promise<void>,
-): MemoryService {
+export function withMemoryTidy(memory: MemoryService, ensure: (scope: ScopeId) => Promise<void>): MemoryService {
   return {
     ...memory,
     ...(memory.withDisclosure
       ? { withDisclosure: (access) => withMemoryTidy(memory.withDisclosure!(access), ensure) }
       : {}),
-    async capture(scope, facts, at, by, context) {
-      const added = await memory.capture(scope, facts, at, by, context);
-      if (added > 0)
-        await ensure(scope, context?.conversationScopeId).catch((e: unknown) =>
-          reportFailure(`memory tidy: ensure ${scope}`, e),
-        );
+    async capture(scope, ...rest) {
+      const added = await memory.capture(scope, ...rest);
+      if (added > 0) await ensure(scope).catch((e: unknown) => reportFailure(`memory tidy: ensure ${scope}`, e));
       return added;
     },
   };

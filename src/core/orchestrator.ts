@@ -14,6 +14,7 @@ import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
+import { RECALL_CHECKED } from "../memory/cross-scope.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
@@ -55,7 +56,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { scopeId as toScopeId, personalScope } from "../types.ts";
+import { actsAsScope, scopeId as toScopeId, personalScope } from "../types.ts";
 import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -875,7 +876,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botActor: input.botActor === true,
         ownScopeBotWork,
         notebookOnly,
-        ...(persona?.pinned && allInternal ? { sharedNotebook: persona.scope } : {}),
+        ...(persona && (actsAsScope(actor.id, persona.scope) || (persona.pinned && allInternal && !notebookOnly))
+          ? { sharedNotebook: persona.scope }
+          : {}),
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -1044,8 +1047,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (sharedFilesBlock) turnContextBlocks["Files"] = sharedFilesBlock;
 
       const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
-      const memoryHeading =
-        "## What you remember\nEach fact below was checked against who is in this conversation before it was shown, so everyone here may be told it, whichever room or person it names.\n";
+      const memoryHeading = `## What you remember\n${RECALL_CHECKED}\n`;
 
       const onboardingBlock = isIdeasConversation(input)
         ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."

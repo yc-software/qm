@@ -311,7 +311,8 @@ export function createPersonaService(deps: {
     adopt,
     pinnedIn: (scope) => store.pinnedIn(scope),
     async forTurn(personaId, actorId, contextScope) {
-      if (!actsAsScope(actorId, contextScope) && !(await enabledFor(actorId)))
+      const own = personaId !== undefined && actsAsScope(actorId, personaScope(personaId));
+      if (!own && !(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
       const pinnedHere = isSharedScope(contextScope) ? ((await store.pinnedIn(contextScope)) ?? undefined) : undefined;
       personaId ??= pinnedHere;
@@ -319,8 +320,7 @@ export function createPersonaService(deps: {
       if (!personaId) return PERSONAS_HINT;
       const persona = await store.get(personaId);
       if (!persona) return "This conversation's persona was deleted, so this turn runs without one.";
-      const held = await role(actorId, personaId, contextScope);
-      if (!held)
+      if (!own && !(await role(actorId, personaId, contextScope)))
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
       return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
     },
