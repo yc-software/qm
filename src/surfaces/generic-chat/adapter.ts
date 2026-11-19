@@ -18,10 +18,10 @@ const DEFAULT_LABEL = "Generic chat";
 const DEFAULT_PROMPT_HINTS: SurfacePromptHints = {
   mentionSyntax:
     "To @-mention someone here, write `@` followed by their name exactly as it appears in the chat roster, e.g. `@Jane Doe`.",
-  linkSyntax: `Use Markdown links: \`[label](https://example.com)\`. This chat shows ordinary Markdown, not web widgets or \`::name{}\` directives, so ${NON_WEB_PATHS}.`,
+  linkSyntax: `Use Markdown links: \`[label](https://example.com)\`. This chat shows ordinary Markdown, not web widgets or \`::name{}\` directives, so ${NON_WEB_PATHS}. People read it in a narrow chat pane, often on a phone: never use tables (use short lists or bold labels instead), and put links in plain text, not inside code or \`draft\` blocks, where they aren't clickable.`,
   autonomousStyle: `You're in a group chat: keep each posted message to at most two sentences unless asked for more. You see only a recent window here; use the \`${GENERIC_CHAT}\` tool's read actions (or \`POST $AGENT_API_URL/v1/surface-context\`) to reach further back.`,
   conversationStyle:
-    "- This is a group chat: keep each reply to a couple of sentences unless they ask for more.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",
+    "- This is a group chat: keep each reply to a couple of sentences unless they ask for more. Lead with the answer, answer only what was asked, and when asked to resend something, resend it whole.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",
 };
 
 export function genericChatPrincipal(user: GenericChatUser, internal: boolean): ActorAssertion {
