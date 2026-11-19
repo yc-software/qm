@@ -1044,7 +1044,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (sharedFilesBlock) turnContextBlocks["Files"] = sharedFilesBlock;
 
       const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
-      const memoryHeading = "## What you remember\n";
+      const memoryHeading =
+        "## What you remember\nEach fact below was checked against who is in this conversation before it was shown, so everyone here may be told it, whichever room or person it names.\n";
 
       const onboardingBlock = isIdeasConversation(input)
         ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."

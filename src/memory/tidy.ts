@@ -25,7 +25,7 @@ export function createMemoryTidyService(deps: {
   timezone: (principalId: string) => Promise<string | undefined>;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged">;
-  sharedNotebook?: (room: ScopeId) => Promise<ScopeId | undefined>;
+  sharedNotebook: (room: ScopeId) => Promise<ScopeId | undefined>;
 }) {
   const manages = async (cron: Pick<Cron, "id" | "ownerScopeId">): Promise<boolean> =>
     (await deps.store.get(cron.ownerScopeId))?.cronId === cron.id;
@@ -39,7 +39,7 @@ export function createMemoryTidyService(deps: {
     managesThread,
 
     async ensure(notebook: ScopeId, room?: ScopeId): Promise<void> {
-      const shared = room !== undefined && room !== notebook && (await deps.sharedNotebook?.(room)) === notebook;
+      const shared = room !== undefined && room !== notebook && (await deps.sharedNotebook(room)) === notebook;
       if (shared && (await deps.store.get(notebook))?.room !== room) await deps.store.put(notebook, { room });
       const scope = shared ? room : notebook;
       const { kind, ref } = parseScopeId(scope);
@@ -67,7 +67,7 @@ export function createMemoryTidyService(deps: {
 
     async skipFire(cron: Cron): Promise<string | undefined> {
       if (!deps.memory.facts || !(await manages(cron))) return undefined;
-      const shared = await deps.sharedNotebook?.(cron.ownerScopeId);
+      const shared = await deps.sharedNotebook(cron.ownerScopeId);
       const notebooks =
         shared && (await deps.store.get(shared))?.room === cron.ownerScopeId
           ? [cron.ownerScopeId, shared]

@@ -4,7 +4,7 @@ import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { Keychain } from "../credentials/keychain.ts";
-import { isSharedScope, parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
+import { actsAsScope, isSharedScope, parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { PERSONA_ROLES, activeHolder, atLeast, type PersonaRole } from "./persona-schema.ts";
 import {
@@ -311,7 +311,7 @@ export function createPersonaService(deps: {
     adopt,
     pinnedIn: (scope) => store.pinnedIn(scope),
     async forTurn(personaId, actorId, contextScope) {
-      if (!(await enabledFor(actorId)))
+      if (!actsAsScope(actorId, contextScope) && !(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
       const pinnedHere = isSharedScope(contextScope) ? ((await store.pinnedIn(contextScope)) ?? undefined) : undefined;
       personaId ??= pinnedHere;
@@ -338,7 +338,7 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn, shares
     );
   if (sharesNotebook)
     lines.push(
-      `Memory is the exception to where writes land: what you save here goes to ${persona.name}'s notebook, which every conversation using ${persona.name} reads, so word each fact to hold in all of them and leave out this room's name.`,
+      `Memory is the exception to where writes land: what you save here goes to ${persona.name}'s notebook, which every conversation using ${persona.name} reads.`,
     );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());

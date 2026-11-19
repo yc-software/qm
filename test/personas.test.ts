@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { scopeActor, scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import type { PersonaResult } from "../src/personas/persona-service.ts";
 import { orgId } from "../src/config.ts";
@@ -559,7 +559,7 @@ test("a persona pinned in a channel is worn by every conversation there until it
 
 test("rooms that pin a persona share its notebook, read by every conversation that uses the persona", async () => {
   const { built, personas, enable, sysprompt, say } = setup();
-  for (const who of [ALICE, BOB, scopeActor(scopeId("channel", "C_ONE"))]) await enable(who);
+  for (const who of [ALICE, BOB]) await enable(who);
   await built.directory.replace([ALICE, BOB].map((id) => ({ principalId: id, displayName: id, type: "internal" })));
   await built.directory.replaceChannels(
     [{ channelId: "C_ONE", name: "one", isPrivate: true }],
