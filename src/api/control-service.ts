@@ -218,6 +218,10 @@ async function mayShare(
   return app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId);
 }
 
+export function listingView<A extends Pick<App, "managesScope" | "managesScopeAsMember">>(app: A): A {
+  return { ...app, managesScope: app.managesScopeAsMember };
+}
+
 async function controlsOwner(
   app: Pick<App, "managesScope" | "samePerson">,
   owner: string,
@@ -576,7 +580,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const { visible } = await app.listCronsForViewer(capability.actorId);
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
-      const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
+      const lister = listingView(app);
+      const admits = await Promise.all(all.map((c) => canAdministerCron(lister, c, capability, isActor)));
       const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
@@ -810,7 +815,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async listWebhooks(capability) {
       const all = await app.listWebhooks();
       const isActor = await app.personMatcher(capability.actorId);
-      const allowed = await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, capability, isActor)));
+      const lister = listingView(app);
+      const allowed = await Promise.all(
+        all.map((webhook) => canAdministerWebhook(lister, webhook, capability, isActor)),
+      );
       return all.filter((_webhook, index) => allowed[index]);
     },
 

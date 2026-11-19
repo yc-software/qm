@@ -25,7 +25,7 @@ type HubApp = Pick<
   | "subscribeSessionStates"
   | "subscribeLedgerEvents"
   | "membershipControlsScope"
-  | "managesScope"
+  | "managesScopeAsMember"
   | "samePerson"
 >;
 
@@ -114,7 +114,16 @@ export function createWebEvents(
     const allowed = await Promise.all(
       candidates.map(
         async (id) =>
-          (!identity || identity.classify(id).type === "internal") && canAdministerLoop(app, loop, { actorId: id }),
+          (!identity || identity.classify(id).type === "internal") &&
+          canAdministerLoop(
+            {
+              membershipControlsScope: (scope) => app.membershipControlsScope(scope),
+              samePerson: (a, b) => app.samePerson(a, b),
+              managesScope: (actor, scope) => app.managesScopeAsMember(actor, scope),
+            },
+            loop,
+            { actorId: id },
+          ),
       ),
     );
     return candidates.filter((_, i) => allowed[i]);

@@ -245,9 +245,19 @@ export function createMembershipControlsScope(deps: ScopeMembershipDeps) {
 }
 
 export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope {
+  const asMember = createCanManageScopeAsMember(deps);
   return async function canManageScope(principalId: string, scope: ScopeId): Promise<boolean> {
+    return (
+      (await asMember(principalId, scope)) ||
+      (!!principalId && activePrincipal(deps, principalId) && orgAdmin(deps, principalId))
+    );
+  };
+}
+
+export function createCanManageScopeAsMember(deps: ScopeMembershipDeps): CanManageScope {
+  return async function canManageScopeAsMember(principalId: string, scope: ScopeId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
-    return (await managesAsMember(deps, principalId, scope)) || orgAdmin(deps, principalId);
+    return managesAsMember(deps, principalId, scope);
   };
 }
 

@@ -25,6 +25,7 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
   createCanReadScope,
   createCanManageScope,
+  createCanManageScopeAsMember,
   createCanWriteScope,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
@@ -485,6 +486,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const canReadScope = createCanReadScope(membership);
     const canWriteScope = createCanWriteScope(membership);
     const canManageScope = createCanManageScope(membership);
+    const canManageScopeAsMember = createCanManageScopeAsMember(membership);
     const managesArtifactHome = createManagesArtifactHome(membership, canManageScope);
     const channelPrivacy = (ref: string) => membership.directory?.channelPrivacy?.(ref).catch(() => undefined);
 
@@ -528,6 +530,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       canReadScope,
       canWriteScope,
       canManageScope,
+      canManageScopeAsMember,
       managesArtifactHome,
       canAccessCurrentScope,
       canUseWriteGrant,
@@ -540,6 +543,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     canReadScope: principalCanReadScope,
     canWriteScope: principalCanWriteScope,
     canManageScope: principalCanManageScope,
+    canManageScopeAsMember: principalCanManageScopeAsMember,
     managesArtifactHome: principalManagesArtifactHome,
     canAccessCurrentScope: principalCanAccessCurrentScope,
     canUseWriteGrant: principalCanUseWriteGrant,
@@ -1022,6 +1026,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     canContinueOnWeb,
     mayWriteSession,
     principalCanManageScope,
+    principalCanManageScopeAsMember,
     membershipControlsScope,
     authorizesCapabilityScope,
     principalManagesArtifactHome,
