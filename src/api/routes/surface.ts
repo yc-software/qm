@@ -908,7 +908,12 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),
   ]);
-  const manageable = await app.manageableSkills([...archivedAll, ...visible.map((r) => r.skill)], principalId, false);
+  const manageable = await app.manageableSkills(
+    tenantOf(ctx),
+    [...archivedAll, ...visible.map((r) => r.skill)],
+    principalId,
+    false,
+  );
   const archived = archivedAll.filter((skill) => manageable.has(skill.id)).map((skill) => ({ skill, shadowed: [] }));
   const skills = await Promise.all(
     [...visible, ...archived].map(async (r) => ({
