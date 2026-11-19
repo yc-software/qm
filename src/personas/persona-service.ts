@@ -340,3 +340,24 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): strin
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");
 }
+
+export async function routedPersonaTurn(
+  personas: Pick<PersonaService, "forTurn">,
+  routed: { persona?: string; ruleId: string } | undefined,
+  personaId: string | undefined,
+  actorId: string,
+  contextScope: ScopeId,
+): Promise<{ turn: PersonaForTurn | string | null; note?: string }> {
+  if (!routed?.persona || routed.persona === personaId)
+    return { turn: await personas.forTurn(personaId, actorId, contextScope) };
+  const picked = await personas.forTurn(routed.persona, actorId, contextScope);
+  if (picked && typeof picked === "object")
+    return {
+      turn: { ...picked, routedBy: routed.ruleId },
+      note: `The decision rule ${routed.ruleId} routed this conversation to the persona ${picked.persona.name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`,
+    };
+  return {
+    turn: await personas.forTurn(personaId, actorId, contextScope),
+    note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but the sender can't use it here, so the conversation's persona is unchanged. A persona owner can share it with them, or an org admin can change ${routed.ruleId} in Settings → Decision rules.`,
+  };
+}

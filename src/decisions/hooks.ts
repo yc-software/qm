@@ -168,6 +168,18 @@ export function createReplyCheck(
   };
 }
 
+export function turnStartOnce(
+  decide: (hook: DecisionHook, describe: () => Promise<string>, turn: DecisionTurn) => Promise<DecisionResult[]>,
+  facts: () => Promise<Parameters<typeof turnStartState>[0]>,
+  turn: DecisionTurn,
+): () => Promise<DecisionResult[]> {
+  let results: Promise<DecisionResult[]> | undefined;
+  return () =>
+    (results ??= decide("turn_start", async () => turnStartState(await facts()), turn).catch(
+      swallowAs("decisions: turn_start", []),
+    ));
+}
+
 export async function routeTurnRuntime<C extends { modelId: string }>(
   decision: DecisionResult | undefined,
   route: (runtime: NonNullable<DecisionResult["runtime"]>) => Promise<C>,

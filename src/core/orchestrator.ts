@@ -1,4 +1,4 @@
-import { personaPrompt, type PersonaForTurn } from "../personas/persona-service.ts";
+import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
@@ -137,8 +137,7 @@ import {
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
-import { turnStartState } from "../decisions/hooks.ts";
-import type { DecisionResult } from "../decisions/decisions.ts";
+import { turnStartOnce } from "../decisions/hooks.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
@@ -795,30 +794,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         automationDestination === undefined
           ? (input.surface ?? "slack")
           : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
-      let turnStartResults: Promise<DecisionResult[]> | undefined;
-      const turnDecisions = () =>
-        (turnStartResults ??= tracePhase("turn.decision", () =>
-          deps.decide!(
-            "turn_start",
-            async () =>
-              turnStartState({
-                input: input.text,
-                surfaceName,
-                runtimePurpose: turnRuntimePurpose(
-                  { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
-                  !!storedSession?.parentSessionId || !!swarmBinding?.member.parentId,
-                ),
-                ...(input.model ? { runtime: { modelId: input.model } } : {}),
-                runtimePinned:
-                  !external &&
-                  humanInput &&
-                  !!deps.userModelCredentials &&
-                  (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company") !==
-                    "company",
-                continueTurn: (input.attempt ?? 1) > 1,
-                scopeLabel: scopeId,
-                conversation: conversation.kind,
-              }),
+      const turnDecisions = deps.decide
+        ? turnStartOnce(
+            (...args) => tracePhase("turn.decision", () => deps.decide!(...args)),
+            async () => ({
+              input: input.text,
+              surfaceName,
+              runtimePurpose: turnRuntimePurpose(
+                { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+                !!storedSession?.parentSessionId || !!swarmBinding?.member.parentId,
+              ),
+              ...(input.model ? { runtime: { modelId: input.model } } : {}),
+              runtimePinned:
+                !external &&
+                humanInput &&
+                !!deps.userModelCredentials &&
+                (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company") !== "company",
+              continueTurn: (input.attempt ?? 1) > 1,
+              scopeLabel: scopeId,
+              conversation: conversation.kind,
+            }),
             {
               tenant,
               actorId: actor.id,
@@ -826,18 +821,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ...(storedSession ? { sessionId: storedSession.id } : {}),
               ...(input.runId ? { runId: input.runId } : {}),
             },
-          ),
-        ).catch(swallowAs("orchestrator: turn_start decision", [])));
-      const currentPersonaId = storedSession?.personaId ?? input.personaId;
+          )
+        : undefined;
       const routed =
-        external || ambientTurn || !deps.personas || !deps.decide
+        external || ambientTurn || !deps.personas || !turnDecisions
           ? undefined
-          : (await turnDecisions()).find((r) => r.persona && r.persona !== currentPersonaId);
-      const routedTurn = routed ? await deps.personas!.forTurn(routed.persona, actor.id, scopeId) : null;
-      let personaTurn: PersonaForTurn | string | null = null;
-      if (routedTurn && typeof routedTurn === "object") personaTurn = { ...routedTurn, routedBy: routed!.ruleId };
-      else if (!external && deps.personas)
-        personaTurn = await deps.personas.forTurn(currentPersonaId, actor.id, scopeId);
+          : (await turnDecisions()).find((r) => r.persona);
+      const { turn: personaTurn, note: personaNote } =
+        external || !deps.personas
+          ? { turn: null }
+          : await routedPersonaTurn(
+              deps.personas,
+              routed,
+              storedSession?.personaId ?? input.personaId,
+              actor.id,
+              scopeId,
+            );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
@@ -944,14 +943,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (typeof personaTurn === "string") turnContextBlocks["Personas"] = `## Personas\n${personaTurn}`;
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
-      if (persona?.routedBy)
-        turnEvents.push(
-          `The decision rule ${persona.routedBy} routed this conversation to the persona ${persona.persona.name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`,
-        );
-      else if (routed)
-        turnEvents.push(
-          `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but the sender can't use it here, so the conversation's persona is unchanged. A persona owner can share it with them, or an org admin can change ${routed.ruleId} in Settings → Decision rules.`,
-        );
+      if (personaNote) turnEvents.push(personaNote);
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
@@ -2376,7 +2368,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { runtimePinned: true }
               : {}),
             runtimeActorId: actor.id,
-            ...(deps.decide ? { turnStart: turnDecisions } : {}),
+            ...(turnDecisions ? { turnStart: turnDecisions } : {}),
             onRuntime: (reported: TurnRuntime) => {
               const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
               turnRuntime = runtime;
