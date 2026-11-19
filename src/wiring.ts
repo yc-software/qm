@@ -27,7 +27,7 @@ import {
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
 import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
-import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";

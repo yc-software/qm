@@ -1,4 +1,4 @@
-import { personaPrompt } from "../personas/persona-service.ts";
+import { personaPrompt, type PersonaForTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
@@ -834,12 +834,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? undefined
           : (await turnDecisions()).find((r) => r.persona && r.persona !== currentPersonaId);
       const routedTurn = routed ? await deps.personas!.forTurn(routed.persona, actor.id, scopeId) : null;
-      const personaTurn =
-        routedTurn && typeof routedTurn === "object"
-          ? { ...routedTurn, routedBy: routed!.ruleId }
-          : external || !deps.personas
-            ? null
-            : await deps.personas.forTurn(currentPersonaId, actor.id, scopeId);
+      let personaTurn: PersonaForTurn | string | null = null;
+      if (routedTurn && typeof routedTurn === "object") personaTurn = { ...routedTurn, routedBy: routed!.ruleId };
+      else if (!external && deps.personas)
+        personaTurn = await deps.personas.forTurn(currentPersonaId, actor.id, scopeId);
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
@@ -952,7 +950,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       else if (routed)
         turnEvents.push(
-          `The decision rule ${routed.ruleId} picked persona ${routed.persona} for this message, but the sender can't wear it (it doesn't exist, they hold no role on it, or personas are off for them), so the conversation's persona is unchanged.`,
+          `The decision rule ${routed.ruleId} picked persona ${routed.persona} for this message, but the sender can't use it here, so the conversation keeps its current persona. If they should have it, a persona owner can share it with them; if the pick is wrong, an org admin can fix ${routed.ruleId} in Settings → Decision rules.`,
         );
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
