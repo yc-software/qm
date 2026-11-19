@@ -931,7 +931,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      const personaBlock = persona ? personaPrompt(persona) : "";
+      const personaBlock = persona ? personaPrompt(persona, notebookScopeId !== memoryScopeId) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
       let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
       if (external && surfaceOrigin.guests)
