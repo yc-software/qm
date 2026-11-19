@@ -85,11 +85,13 @@ export interface ArtifactHome {
   ownerScopeId: ScopeId;
   createdBy: string;
   grantRef: string;
+  privateRevision?: string;
 }
 
 export interface ShareArtifactRequest {
   type: ArtifactType;
   id: string;
+  privateRevision?: string;
   scope?: string;
   recipient?: string;
   email?: string;
@@ -120,4 +122,5 @@ export type ShareArtifactResult =
         | "share_failed";
       message: string;
       candidates?: Array<{ id: string; label: string }>;
+      privateRelease?: { id: string; revision: string; scope: ScopeId };
     };

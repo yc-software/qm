@@ -1,6 +1,7 @@
+import { createAppDisclosure } from "./deploy/app-disclosure.ts";
 import { ATTACHMENT_STAGING_MIGRATION, ATTACHMENT_RECEIPTS_MIGRATION } from "./sessions/attachment-migrations.ts";
 import { DOCUMENT_BINDING_KEYS_MIGRATION } from "./documents/migrations.ts";
-import { createDocumentMemory } from "./documents/memory.ts";
+import { createDocumentMemory, nativeDocumentSources } from "./documents/memory.ts";
 import { createDocumentGroups } from "./documents/groups.ts";
 import {
   createDocumentConversations,
@@ -1979,6 +1980,14 @@ export function buildApp(
   );
 
   const deployService = createDeployService({
+    discloseApp: createAppDisclosure({
+      nativeSources: (target, sources) => nativeDocumentSources(documentConversations, [target], sources),
+      classify: identity.classify,
+      orgScopeId: scopeId("org", config.orgId),
+      config: configStore,
+      currentScopeMembers: createCurrentScopeMembers({ managedGroups, directory, identity }, true),
+      isCurrentSharedScopeMember,
+    }),
     sessions,
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,

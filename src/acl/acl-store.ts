@@ -40,7 +40,7 @@ function isMembershipManaged(scopeId: ScopeId): boolean {
 }
 
 export interface AclStore {
-  grant(tenant: Tenant, g: Grant, authoredBy?: string): Promise<void>;
+  grant(tenant: Tenant, g: Grant, authoredBy?: string, releasePrivate?: true): Promise<void>;
   revoke(
     tenant: Tenant,
     ownerScopeId: ScopeId,
@@ -175,12 +175,18 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
     return true;
   }
   return {
-    async grant(tenant, g, authoredBy) {
+    async grant(tenant, g, authoredBy, releasePrivate) {
       if (!(await canManage(g.ownerScopeId, g.grantedBy, authoredBy))) {
         throw new Error("only a manager of this scope may grant access (no transitive re-share)");
       }
       await validateFileGrant(g);
-      if (g.granteeScopeId !== g.ownerScopeId && (await opts.isPersonalOnly?.(g.ownerScopeId, g.ref)))
+      if (releasePrivate && !samePerson(ownerOf(g.ownerScopeId), g.grantedBy))
+        throw new Error("Only the personal owner can release a private artifact.");
+      if (
+        !releasePrivate &&
+        g.granteeScopeId !== g.ownerScopeId &&
+        (await opts.isPersonalOnly?.(g.ownerScopeId, g.ref))
+      )
         throw new Error("Private artifacts cannot change audience");
       await persist.put(tenant, g);
     },

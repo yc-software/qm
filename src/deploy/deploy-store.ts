@@ -1,3 +1,5 @@
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { hashId } from "../util/crypto.ts";
 import { mergeSourceProvenance, type SourceProvenance } from "../memory/facts.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
@@ -129,6 +131,20 @@ export interface PublishedApp {
   versions: AppVersion[];
 }
 
+export function appSharingRevision(app: PublishedApp, draft?: AppDraft | null): string {
+  const {
+    lastAccessAt: _lastAccessAt,
+    endpoint: _endpoint,
+    appliedVersion: _appliedVersion,
+    status: _status,
+    ...selected
+  } = app;
+  return hashId(
+    [canonicalJson({ app: selected, draft: draft ? { commit: draft.commit, entrypoint: draft.entrypoint } : null })],
+    64,
+  );
+}
+
 export interface AppDraft {
   deploymentId: string;
   commit: string;
@@ -183,6 +199,7 @@ export interface DeployStore {
   setEmbedAncestors(id: string, embedAncestors: string[]): Promise<void>;
   setConnectors(id: string, connectors: string[] | undefined): Promise<void>;
   setPublic(id: string, isPublic: boolean): Promise<void>;
+  releaseContext(id: string, revision: string, sourceProvenance: SourceProvenance): Promise<void>;
   recordContext(id: string, context: { personalOnly?: true; sourceProvenance?: SourceProvenance }): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
   setAppliedVersion(id: string, version: number, placedCommit?: string): Promise<void>;
@@ -451,6 +468,15 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     },
     async setConnectors(id, connectors) {
       await backingMap.merge(id, { connectors });
+    },
+    async releaseContext(id, revision, sourceProvenance) {
+      const saved = await backingMap.update(id, (app) => {
+        if (!app.personalOnly || appSharingRevision(app) !== revision)
+          throw new Error("The selected app changed after approval. Read it again before sharing.");
+        const { personalOnly: _personalOnly, ...released } = app;
+        return { ...released, sourceProvenance };
+      });
+      if (!saved) throw new Error("The selected app no longer exists.");
     },
     async recordContext(id, context) {
       await backingMap.update(id, (app) => ({

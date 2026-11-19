@@ -1,3 +1,5 @@
+import { createAppDisclosure } from "../src/deploy/app-disclosure.ts";
+import { createCurrentScopeMembers, createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { createServer as createHttpServer } from "node:http";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -25,7 +27,9 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings } from "./support/test-database.ts";
 
-async function fixture(options: { port?: number; logs?: () => Promise<string> } = {}) {
+async function fixture(
+  options: { port?: number; logs?: () => Promise<string>; liveEdit?: true; sharingPosture?: "open" | "isolated" } = {},
+) {
   const ownerScopeId = scopeId("personal", "alice");
   const backings = testDeployBackings();
   const databaseUrl = backings.databaseUrl;
@@ -35,7 +39,16 @@ async function fixture(options: { port?: number; logs?: () => Promise<string> } 
   const deployStore = createDeployStore(backings);
   const acl = createAclStore(createPostgresGrantStore(databaseUrl));
   let applied = 0;
+  const directory = createPostgresDirectoryStore(databaseUrl);
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const deps = {
+    discloseApp: createAppDisclosure({
+      classify: identity.classify,
+      orgScopeId: "org:test",
+      config: { resolveSharingPostureDurable: async () => options.sharingPosture ?? "isolated" },
+      currentScopeMembers: createCurrentScopeMembers({ directory, identity }, true),
+      isCurrentSharedScopeMember: createIsCurrentSharedScopeMember({ directory, identity }),
+    }),
     ...singleProcessDeps(),
     advisoryLock: lock,
     sessions,
@@ -48,19 +61,20 @@ async function fixture(options: { port?: number; logs?: () => Promise<string> } 
         return { host: "127.0.0.1", port: options.port ?? 5000 };
       },
       destroy: async () => {},
+      ...(options.liveEdit ? { liveEdit: async () => true } : {}),
       ...(options.logs ? { logs: options.logs } : {}),
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "private-app-")),
   };
   const service = () => createDeployService(deps);
-  const directory = createPostgresDirectoryStore(databaseUrl);
   const app = createApp({
     deploy: service(),
+    auditLog: deps.auditLog,
     acl,
     sessions,
     directory,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity,
   } as unknown as Parameters<typeof createApp>[0]);
   return {
     app,
@@ -178,7 +192,12 @@ test("revoking an automatic grant does not remove the app's implicit creation-sc
 test("source edits recheck privacy after preparation and private publish cannot roll back a shared app", async () => {
   const f = await fixture();
   const service = f.service();
-  const app = await service.deployOrUpdate({ ...f.input, name: "callback-app" });
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "ordinary",
+    sources: [f.ownerScopeId],
+    sourceUnknown: false,
+  });
+  const app = await service.deployOrUpdate({ ...f.input, name: "callback-app", context: f.context() });
   await service.shareApp(app.id, "personal:bob", "read", { createdBy: "alice" }, { notify: false });
   await assert.rejects(
     createAppFiles({
@@ -503,4 +522,316 @@ test("private management responses taint a fresh personal session before a subse
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("selected private app sharing preserves the app and private conversation while granting only the approved audience", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "ordinary",
+    sources: [f.ownerScopeId],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const original = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const { createControlService } = await import("../src/api/control-service.ts");
+  const control = createControlService(f.app, {} as Parameters<typeof createControlService>[1]);
+  const claims = { ...f.context(), threadRef: f.session.threadRef, liveActor: true, exp: Date.now() + 60_000 };
+  const request = { type: "deploy" as const, id: original.id, scope: "personal:bob", notify: false };
+  const preflight = await control.shareArtifact(request, claims);
+  assert.equal(preflight.ok, false);
+  if (preflight.ok) assert.fail("private sharing must first request approval");
+  assert.deepEqual(preflight.privateRelease, {
+    id: original.id,
+    revision: (await f.app.getArtifactHome("deploy", original.id))!.privateRevision,
+    scope: "personal:bob",
+  });
+  assert.deepEqual(await f.service().appGrantees(original.id), []);
+  const result = await control.shareArtifact(
+    { ...request, privateRevision: preflight.privateRelease!.revision },
+    claims,
+  );
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const saved = (await f.service().getApp(original.id))!;
+  assert.equal(saved.personalOnly, undefined);
+  assert.equal(saved.id, original.id);
+  assert.deepEqual(saved.versions, original.versions);
+  assert.deepEqual(saved.endpoint, original.endpoint);
+  assert.equal(f.applied(), 1);
+  assert.deepEqual(await f.service().appGrantees(original.id), [{ scope: "personal:bob", permission: "read" }]);
+  assert.equal((await f.sessions.get(f.session.id))!.personalOnly, true);
+  assert.deepEqual(saved.sourceProvenance, {
+    sensitivity: "ordinary",
+    sources: [],
+    sourceUnknown: false,
+  });
+});
+
+test("private app release refuses stale revisions, shared conversation and restricted sources without granting access", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const original = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const { createControlService } = await import("../src/api/control-service.ts");
+  const control = createControlService(f.app, {} as Parameters<typeof createControlService>[1]);
+  const claims = { ...f.context(), threadRef: f.session.threadRef, liveActor: true, exp: Date.now() + 60_000 };
+  const revision = (await f.app.getArtifactHome("deploy", original.id))!.privateRevision!;
+  const request = {
+    type: "deploy" as const,
+    id: original.id,
+    scope: "personal:bob",
+    privateRevision: revision,
+    notify: false,
+  };
+  const refused = await control.shareArtifact(request, claims);
+  assert.equal(refused.ok, false);
+  assert.match(!refused.ok ? refused.message : "", /source restrictions/);
+  const shared = await f.sessions.getOrCreateByThread("release-shared", "channel", "channel:other");
+  assert.equal(
+    (
+      await control.shareArtifact(
+        { ...request, privateRevision: undefined },
+        {
+          ...claims,
+          scopeId: shared.scopeId,
+          sessionId: shared.id,
+        },
+      )
+    ).ok,
+    false,
+  );
+  await f.service().setAppDisplayName(original.id, "Changed after approval", f.context());
+  const stale = await control.shareArtifact(request, claims);
+  assert.equal(stale.ok, false);
+  assert.match(!stale.ok ? stale.message : "", /changed/);
+  assert.deepEqual(await f.service().appGrantees(original.id), []);
+  assert.equal((await f.service().getApp(original.id))!.personalOnly, true);
+});
+
+test("a live private edit invalidates the selected sharing revision without publishing a new version", async () => {
+  const f = await fixture({ liveEdit: true });
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "ordinary",
+    sources: [f.ownerScopeId],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const selected = (await f.app.getArtifactHome("deploy", app.id))!;
+  const edit = await f.service().editSource(app.id, f.context(), async () => ({
+    files: [{ path: "server.js", data: "changed private source" }],
+    deletedPaths: [],
+  }));
+  assert.ok(edit.liveEdit);
+  assert.equal((await f.service().getApp(app.id))!.currentVersion, app.currentVersion);
+  const current = (await f.app.getArtifactHome("deploy", app.id))!;
+  assert.notEqual(current.privateRevision, selected.privateRevision);
+  await assert.rejects(
+    f.service().releasePrivateApp(
+      {
+        ownerScopeId: f.ownerScopeId,
+        ref: selected.grantRef,
+        granteeScopeId: "personal:bob",
+        permission: "read",
+        grantedBy: "alice",
+      },
+      selected.privateRevision!,
+      f.context(),
+    ),
+    /changed after approval/,
+  );
+  assert.deepEqual(await f.service().appGrantees(app.id), []);
+  assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
+});
+
+test("a failed private release cannot expose a later edit to a stranded earlier grantee", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "ordinary",
+    sources: [f.ownerScopeId],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const releaseContext = f.deployStore.releaseContext;
+  f.deployStore.releaseContext = async () => {
+    throw new Error("injected release write failure");
+  };
+  const selected = (await f.app.getArtifactHome("deploy", app.id))!;
+  const grant = {
+    ownerScopeId: f.ownerScopeId,
+    ref: selected.grantRef,
+    granteeScopeId: "personal:bob",
+    permission: "read" as const,
+    grantedBy: "alice",
+  };
+  await assert.rejects(
+    f.service().releasePrivateApp(grant, selected.privateRevision!, f.context()),
+    /injected release write failure/,
+  );
+  f.deployStore.releaseContext = releaseContext;
+  await f.service().editSource(app.id, "alice", async () => ({
+    files: [{ path: "server.js", data: "later private edit" }],
+    deletedPaths: [],
+  }));
+  const latest = (await f.app.getArtifactHome("deploy", app.id))!;
+  await assert.rejects(
+    f.service().releasePrivateApp({ ...grant, granteeScopeId: "personal:carol" }, latest.privateRevision!, f.context()),
+    /pending grants/,
+  );
+  assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
+  assert.deepEqual(await f.service().appGrantees(app.id), [{ scope: "personal:bob", permission: "read" }]);
+  const denied = await f.app.reachApp(app.id, "bob");
+  assert.equal(denied.status, "denied");
+});
+
+test("released app source restrictions still constrain later grants, public access and ownership transfer", async () => {
+  const f = await fixture();
+  await f.directory.replace([
+    { principalId: "alice", displayName: "Alice", type: "internal" },
+    { principalId: "bob", displayName: "Bob", type: "internal" },
+    { principalId: "carol", displayName: "Carol", type: "internal" },
+  ]);
+  await f.directory.upsertGroup("restricted", ["alice", "bob"], "web");
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const home = (await f.app.getArtifactHome("deploy", app.id))!;
+  const grant = {
+    ownerScopeId: f.ownerScopeId,
+    ref: home.grantRef,
+    granteeScopeId: "group:restricted",
+    permission: "read" as const,
+    grantedBy: "alice",
+  };
+  await f.service().releasePrivateApp(grant, home.privateRevision!, f.context());
+  await assert.rejects(
+    f.service().shareApp(app.id, "personal:carol", "read", { createdBy: "alice" }, { notify: false }),
+    /source restrictions/,
+  );
+  await assert.rejects(
+    f.service().grantAppAccess({ ...grant, granteeScopeId: "personal:carol" }),
+    /source restrictions/,
+  );
+  await assert.rejects(
+    f.service().setAppPublic(app.id, true, { createdBy: "alice", personAtKeyboard: true }),
+    /source restrictions/,
+  );
+  await assert.rejects(
+    f.service().transferAppOwner(app.id, "personal:carol", { callerId: "alice" }),
+    /source restrictions/,
+  );
+  assert.deepEqual(await f.service().appGrantees(app.id), [{ scope: "group:restricted", permission: "read" }]);
+  assert.deepEqual((await f.service().getApp(app.id))!.sourceProvenance, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: false,
+  });
+});
+
+test("private release respects a foreign source's sharing posture even for an entitled recipient", async () => {
+  for (const sharingPosture of ["isolated", "open"] as const) {
+    const f = await fixture({ sharingPosture });
+    await f.directory.replace([
+      { principalId: "alice", displayName: "Alice", type: "internal" },
+      { principalId: "bob", displayName: "Bob", type: "internal" },
+    ]);
+    await f.directory.upsertGroup("foreign", ["alice", "bob"], "web");
+    await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+      sensitivity: "restricted",
+      sources: ["group:foreign"],
+      sourceUnknown: false,
+      personalOnly: true,
+    });
+    const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+    const home = (await f.app.getArtifactHome("deploy", app.id))!;
+    const release = () =>
+      f.service().releasePrivateApp(
+        {
+          ownerScopeId: f.ownerScopeId,
+          ref: home.grantRef,
+          granteeScopeId: "personal:bob",
+          permission: "read",
+          grantedBy: "alice",
+        },
+        home.privateRevision!,
+        f.context(),
+      );
+    if (sharingPosture === "isolated") {
+      await assert.rejects(release(), /source restrictions/);
+      assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
+      assert.deepEqual(await f.service().appGrantees(app.id), []);
+    } else {
+      await release();
+      assert.equal((await f.service().getApp(app.id))!.personalOnly, undefined);
+      assert.deepEqual(await f.service().appGrantees(app.id), [{ scope: "personal:bob", permission: "read" }]);
+    }
+  }
+});
+
+test("new restricted context cannot update an app already released to an unentitled recipient", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "ordinary",
+    sources: [f.ownerScopeId],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const home = (await f.app.getArtifactHome("deploy", app.id))!;
+  await f.service().releasePrivateApp(
+    {
+      ownerScopeId: f.ownerScopeId,
+      ref: home.grantRef,
+      granteeScopeId: "personal:bob",
+      permission: "read",
+      grantedBy: "alice",
+    },
+    home.privateRevision!,
+    f.context(),
+  );
+  const before = (await f.service().getApp(app.id))!;
+  const session = await f.sessions.getOrCreateByThread("restricted-edit", "dm", f.ownerScopeId);
+  await f.sessions.recordContextProvenance(session.id, f.ownerScopeId, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: false,
+  });
+  let edited = false;
+  await assert.rejects(
+    f.service().editSource(app.id, { actorId: "alice", scopeId: f.ownerScopeId, sessionId: session.id }, async () => {
+      edited = true;
+      return { files: [{ path: "server.js", data: "restricted content" }], deletedPaths: [] };
+    }),
+    /source restrictions/,
+  );
+  assert.equal(edited, false);
+  const after = (await f.service().getApp(app.id))!;
+  assert.deepEqual(after.versions, before.versions);
+  assert.deepEqual(after.sourceProvenance, before.sourceProvenance);
+  assert.equal(f.applied(), 1);
+});
+
+test("creation refuses an automatic audience before granting or running restricted content", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "restricted",
+    sources: ["group:restricted"],
+    sourceUnknown: false,
+  });
+  await assert.rejects(
+    f.service().deployOrUpdate({ ...f.input, createdInScope: "channel:elsewhere", context: f.context() }),
+    /audience could not be verified|source restrictions/,
+  );
+  assert.deepEqual(await f.service().listApps(), []);
+  assert.equal(f.applied(), 0);
+  const { allGrants } = await import("./support/acl-grants.ts");
+  assert.deepEqual(await allGrants(f.databaseUrl), []);
 });

@@ -1,3 +1,4 @@
+import { appSharingRevision } from "../deploy/deploy-store.ts";
 import { contextualFiles } from "../files/context-files.ts";
 import { inheritSessionContext } from "../sessions/private-context.ts";
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
@@ -401,6 +402,10 @@ export function createSessionMethods(
     }));
   }
 
+  const currentScopeMembers = createCurrentScopeMembers(
+    { managedGroups: deps.managedGroups ?? deps.projects, directory: deps.directory, identity: deps.identity },
+    true,
+  );
   return {
     async getSessionContext(sessionId) {
       const session = await deps.sessions.get(sessionId);
@@ -1035,14 +1040,7 @@ export function createSessionMethods(
       return principalCanManageScope(principalId, scope);
     },
 
-    currentScopeMembers: createCurrentScopeMembers(
-      {
-        managedGroups: deps.managedGroups ?? deps.projects,
-        directory: deps.directory,
-        identity: deps.identity,
-      },
-      true,
-    ),
+    currentScopeMembers,
     isCurrentSharedScopeMember(principalId, scope) {
       const { kind } = parseScopeId(scope);
       return kind === "channel" || kind === "group"
@@ -1270,7 +1268,9 @@ export function createSessionMethods(
               (await h.directoryMember(email))?.type === "internal",
           ),
         };
-        await deps.deploy.grantAppAccess(g);
+        if (opts?.privateRevision && opts.context) {
+          await deps.deploy.releasePrivateApp(g, opts.privateRevision, opts.context);
+        } else await deps.deploy.grantAppAccess(g);
       }
       if (ref.kind === "cron") {
         await deps.advisoryLock.withLock(`cron-access:${ref.id}`, async () => {
@@ -1360,7 +1360,15 @@ export function createSessionMethods(
       }
       const d = await deps.deploy.getApp(idOrName);
       return d
-        ? { id: d.id, ownerScopeId: d.ownerScopeId, createdBy: d.createdBy, grantRef: encodeRef(deployRef(d.id)) }
+        ? {
+            id: d.id,
+            ownerScopeId: d.ownerScopeId,
+            createdBy: d.createdBy,
+            grantRef: encodeRef(deployRef(d.id)),
+            ...(d.personalOnly
+              ? { privateRevision: appSharingRevision(d, (await deps.deploy.liveEditOf(d.id))?.draft) }
+              : {}),
+          }
         : null;
     },
 

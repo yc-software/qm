@@ -22,6 +22,31 @@ import { parseScopeId, personalScope } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 
+export async function nativeDocumentSources(
+  documents: Pick<DocumentConversations, "knowledgeGroups">,
+  nativeScopes: readonly string[],
+  scopes: readonly string[],
+): Promise<string[]> {
+  const native = new Set(nativeScopes);
+  const refs = (items: readonly string[]) =>
+    items.flatMap((scope) => {
+      const parsed = parseScopeId(scope);
+      return parsed.kind === "group" && parsed.ref.startsWith(DOCUMENT_GROUP_PREFIX) ? [parsed.ref] : [];
+    });
+  const foreign = refs(scopes.filter((scope) => !native.has(scope)));
+  if (!foreign.length) return [];
+  const groups = await documents.knowledgeGroups([...new Set([...foreign, ...refs(nativeScopes)])]);
+  const projects = new Set(
+    nativeScopes.flatMap((scope) => {
+      const parsed = parseScopeId(scope);
+      const id = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
+      return id ? [id] : [];
+    }),
+  );
+  for (const group of groups) if (native.has(`group:${group.groupRef}`)) projects.add(group.projectId);
+  return [...groups.filter((group) => projects.has(group.projectId)).map((group) => `group:${group.groupRef}`)];
+}
+
 export function createDocumentMemory(
   memory: MemoryService,
   documents: DocumentConversations,
@@ -62,27 +87,7 @@ export function createDocumentMemory(
     withDisclosure: (access: MemoryDisclosure) => {
       const nativeSources = async (scopes: readonly string[]) => {
         const inherited = (await access.nativeSources?.(scopes)) ?? [];
-        const native = new Set(access.nativeScopes);
-        const refs = (items: readonly string[]) =>
-          items.flatMap((scope) => {
-            const parsed = parseScopeId(scope);
-            return parsed.kind === "group" && parsed.ref.startsWith(DOCUMENT_GROUP_PREFIX) ? [parsed.ref] : [];
-          });
-        const foreign = refs(scopes.filter((scope) => !native.has(scope)));
-        if (!foreign.length) return inherited;
-        const groups = await documents.knowledgeGroups([...new Set([...foreign, ...refs(access.nativeScopes)])]);
-        const projects = new Set(
-          access.nativeScopes.flatMap((scope) => {
-            const parsed = parseScopeId(scope);
-            const id = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
-            return id ? [id] : [];
-          }),
-        );
-        for (const group of groups) if (native.has(`group:${group.groupRef}`)) projects.add(group.projectId);
-        return [
-          ...inherited,
-          ...groups.filter((group) => projects.has(group.projectId)).map((group) => `group:${group.groupRef}`),
-        ];
+        return [...inherited, ...(await nativeDocumentSources(documents, access.nativeScopes, scopes))];
       };
       return createDocumentMemory(disclosedMemory(memory, { ...access, nativeSources }), documents, auditLog, sessions);
     },

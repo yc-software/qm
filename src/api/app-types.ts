@@ -502,7 +502,11 @@ export interface App {
     ownScopeBotWork: boolean,
     context?: import("../sessions/private-context.ts").PrivateContext,
   ): Promise<OpenedFile | null>;
-  grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
+  grant(
+    tenant: Tenant,
+    g: Grant,
+    opts?: { notify?: boolean; privateRevision?: string; context?: PrivateContext },
+  ): Promise<void>;
   revokeGrant(
     tenant: Tenant,
     ownerScopeId: ScopeId,

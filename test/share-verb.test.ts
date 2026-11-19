@@ -809,3 +809,17 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
   assert.equal(orgRecords.length, 1);
 });
+
+test("POST /v1/share cannot manufacture private-output release authority", async () => {
+  const state = await ownerState();
+  const before = await grantsOf(state);
+  const result = await callShareRoute(state, cap("U1"), {
+    type: "deploy",
+    id: "D1",
+    toScope: "personal:U2",
+    privateRevision: "selected-revision",
+  });
+  assert.equal(result.status, 400);
+  assert.match(result.body.message, /native approval flow/);
+  assert.deepEqual(await grantsOf(state), before);
+});

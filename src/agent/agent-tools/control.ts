@@ -374,6 +374,16 @@ export function controlPlaneTools(kit: ToolKit) {
               ),
             }
           : {}),
+        ...(type === "deploy"
+          ? {
+              privateRevision: Type.Optional(
+                Type.String({
+                  description:
+                    "Exact private revision from the sharing preflight; requires approval to share this app, including its stored data and history.",
+                }),
+              ),
+            }
+          : {}),
         permission: Type.Optional(
           Type.Union([Type.Literal("read"), Type.Literal("write")], {
             description: "read (default) or write (manage).",
@@ -388,6 +398,7 @@ export function controlPlaneTools(kit: ToolKit) {
           public?: boolean;
           permission?: "read" | "write";
           notify?: boolean;
+          privateRevision?: string;
         };
         const tc = ref.current;
         if (!tc) return text("[error] no active tool context");
@@ -422,6 +433,7 @@ export function controlPlaneTools(kit: ToolKit) {
           ...(params.email !== undefined ? { email: params.email } : {}),
           ...(params.permission !== undefined ? { permission: params.permission } : {}),
           ...(params.notify !== undefined ? { notify: params.notify } : {}),
+          ...(params.privateRevision !== undefined ? { privateRevision: params.privateRevision } : {}),
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
         if (!r.ok) {
@@ -431,7 +443,9 @@ export function controlPlaneTools(kit: ToolKit) {
           return recordResult(
             callId,
             { tool, action: "share", error: r.code },
-            text(`[error] ${r.message}${candidates}`),
+            text(
+              `[error] ${r.message}${candidates}${r.privateRelease ? `\nSelected private output: ${JSON.stringify(r.privateRelease)}. Request share again using this id, revision as privateRevision, and scope as toScope.` : ""}`,
+            ),
             true,
           );
         }

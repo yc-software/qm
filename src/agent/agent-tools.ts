@@ -1,3 +1,4 @@
+import { isObj } from "../util/objects.ts";
 import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -179,10 +180,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       write,
       ...(controlTools ? { share: sharingTool("file") } : {}),
     }),
-    resourceTool("apps", {
-      publish,
-      ...(controlTools ? { share: sharingTool("deploy") } : {}),
-    }),
+    {
+      ...resourceTool("apps", {
+        publish,
+        ...(controlTools ? { share: sharingTool("deploy") } : {}),
+      }),
+      needsApproval: (params: unknown) =>
+        isObj(params) && params.action === "share" && params.privateRevision !== undefined,
+      approvalReason:
+        "Share this selected private app, including its stored data and history, with the specified audience; its private conversation and other outputs remain private",
+    },
     ...(ref.current?.appFiles ? [resourceTool("app_files", appFileTools(kit))] : []),
     memory,
     history,

@@ -5163,3 +5163,49 @@ test("publishing private learning requires once-only approval of the exact selec
   await call(memory, request);
   assert.equal(published.length, 1);
 });
+
+test("private app sharing requires once-only approval bound to the exact revision and audience", async () => {
+  const requests: unknown[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async shareArtifact(req) {
+        requests.push(req);
+        return {
+          ok: true,
+          verb: "share",
+          type: "deploy",
+          id: req.id,
+          target: { scope: req.scope!, label: req.scope! },
+          permission: "read",
+        };
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((tool) => tool.name === "apps")!;
+  const args = {
+    action: "share",
+    id: "selected-app",
+    toScope: "group:project",
+    privateRevision: "selected-revision",
+    notify: false,
+  };
+  assert.match(textOut(await call(apps, args)), /needs human approval/);
+  assert.equal(requests.length, 0);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.call, { tool: "apps", input: args });
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  ref.toolApprovalGate = (_, key) => key === approval.approvalKey;
+  ref.pausedOnApproval = false;
+  await call(apps, { ...args, toScope: "group:different" });
+  await call(apps, { ...args, privateRevision: "different" });
+  assert.equal(requests.length, 0);
+  ref.pausedOnApproval = false;
+  const approvedResult = textOut(await call(apps, args));
+  assert.match(approvedResult, /Shared deploy/, approvedResult);
+  assert.deepEqual(requests, [
+    { type: "deploy", id: "selected-app", scope: "group:project", privateRevision: "selected-revision", notify: false },
+  ]);
+});

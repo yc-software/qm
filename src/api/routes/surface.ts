@@ -1294,6 +1294,11 @@ async function publishSkillFromBrowser(ctx: ApiCtx): Promise<void> {
 
 export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
+  if (isObj(body) && body.privateRevision !== undefined)
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "Private output sharing requires the native approval flow.",
+    });
   if (!capability)
     return sendJson(res, 403, { error: "forbidden", message: "sharing requires an agent capability token" });
   const b = (isObj(body) ? body : {}) as {

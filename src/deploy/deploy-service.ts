@@ -1,3 +1,5 @@
+import { mergeSourceProvenance } from "../memory/facts.ts";
+import type { createAppDisclosure } from "./app-disclosure.ts";
 import {
   refreshPrivateContext,
   privateSourceAllowed,
@@ -23,6 +25,7 @@ import { personOrOwningBot } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
 import {
+  appSharingRevision,
   appUrlOf,
   currentVersionOf,
   deployCurrentGitRef,
@@ -173,6 +176,7 @@ export interface DeployService {
   deployOrUpdate(input: DeployOrUpdateInput): Promise<PublishedAppWithLiveEdit>;
   appGrantees(idOrName: string): Promise<AppGrantee[]>;
   canManageApp(idOrName: string, caller: PrivateContext, actingScopeId?: ScopeId): Promise<boolean>;
+  releasePrivateApp(grant: Grant, revision: string, context: PrivateContext): Promise<void>;
   shareApp(
     idOrName: string,
     grantee: ScopeId,
@@ -221,6 +225,7 @@ export class DeployAccessError extends Error {
 }
 
 export interface DeployServiceDeps {
+  discloseApp?: ReturnType<typeof createAppDisclosure>;
   sessions?: Pick<SessionStore, "get" | "getMany" | "recordContextProvenance">;
   deliveries?: DeliveryStore;
   deployAppsDomain?: string;
@@ -300,6 +305,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         "human_consent_required",
         "Share this private app explicitly before granting access.",
       );
+    await discloseApp(d, grantee, grantedBy);
     if (d.connectors && !samePerson(d.createdBy, grantedBy))
       throw new DeployAccessError(
         "forbidden",
@@ -309,6 +315,19 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     if (kind !== "personal" || !ref?.includes("@")) return;
     if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(d.ownerScopeId))) return;
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
+  }
+  async function discloseApp(
+    app: Pick<PublishedApp, "sourceProvenance">,
+    target: ScopeId | undefined,
+    actorId: string,
+  ) {
+    if (!app.sourceProvenance) return undefined;
+    if (!deps.discloseApp) throw new DeployAccessError("forbidden", "App source authorization is unavailable.");
+    try {
+      return await deps.discloseApp(app, target, actorId);
+    } catch (error) {
+      throw new DeployAccessError("forbidden", errMessage(error));
+    }
   }
   const recordAudit = (e: AuditEvent): void => recordAuditInBinding(deps.auditLog, e);
   async function withdrawLoan(d: PublishedApp, actor: string | undefined, detail: string): Promise<void> {
@@ -380,6 +399,19 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         "forbidden",
         "Private context cannot update a shared app. Create a personal app instead.",
       );
+    const provenance = context.sourceProvenance
+      ? mergeSourceProvenance([...(app.sourceProvenance ? [app.sourceProvenance] : []), context.sourceProvenance])
+      : app.sourceProvenance;
+    if (provenance) {
+      const audiences = new Set([
+        app.ownerScopeId,
+        ...(app.createdInScope ? [app.createdInScope] : []),
+        ...(await grantsOn(ambientTenant(), app)).map((grant) => grant.granteeScopeId),
+      ]);
+      audiences.delete(owner);
+      for (const audience of audiences) await discloseApp({ sourceProvenance: provenance }, audience, context.actorId);
+      if (app.public) await discloseApp({ sourceProvenance: provenance }, undefined, context.actorId);
+    }
     if (context.personalOnly || context.sourceProvenance) await deps.deployStore.recordContext(app.id, context);
   }
 
@@ -588,6 +620,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
       const context = await creationContext(input);
+      if (context?.sourceProvenance) {
+        const audiences = new Set([input.ownerScopeId, ...(input.createdInScope ? [input.createdInScope] : [])]);
+        audiences.delete(scopeId("personal", context.actorId));
+        for (const audience of audiences)
+          await discloseApp({ sourceProvenance: context.sourceProvenance }, audience, context.actorId);
+      }
       if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
         await deps.acl.grant(ambientTenant(), {
           ownerScopeId: input.ownerScopeId,
@@ -865,6 +903,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             "human_consent_required",
             "Share this private app explicitly before enabling public access.",
           );
+        if (isPublic) await discloseApp(d, undefined, actor.createdBy);
         if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
           throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
         if (isPublic && deps.publicLinksAvailable === false)
@@ -1204,6 +1243,53 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
+    async releasePrivateApp(grant, revision, caller) {
+      const ref = parseRef(grant.ref);
+      if (ref.kind !== "deploy") throw new DeployAccessError("forbidden", "An app grant is required.");
+      await withDeployLock(ref.id, async () => {
+        const app = await deps.deployStore.get(ref.id);
+        await currentContext(caller);
+        const context = caller;
+        if (
+          !app?.personalOnly ||
+          app.ownerScopeId !== grant.ownerScopeId ||
+          !samePerson(grant.grantedBy, context.actorId) ||
+          !privateSourceAllowed(context, app.ownerScopeId)
+        )
+          throw new DeployAccessError("forbidden", "Only the private app's owner can share it from personal context.");
+        if (appSharingRevision(app, await deps.deployStore.draftOf(app.id)) !== revision)
+          throw new DeployAccessError(
+            "forbidden",
+            "The selected app changed after approval. Read it again before sharing.",
+          );
+        await assertShareAllowed(
+          { ...app, personalOnly: undefined },
+          grant.granteeScopeId,
+          grant.permission,
+          context.actorId,
+        );
+        await inheritContextSources(deps.sessions!, context, [app]);
+        if ((await grantsOn(ambientTenant(), app)).length)
+          throw new DeployAccessError(
+            "forbidden",
+            "A previous private sharing attempt did not finish. Revoke its pending grants before sharing again.",
+          );
+        const provenance = await discloseApp(app, grant.granteeScopeId, context.actorId);
+        if (!provenance)
+          throw new DeployAccessError("forbidden", "The private app has no verifiable source provenance.");
+        await deps.acl.grant(ambientTenant(), grant, app.createdBy, true);
+        await deps.deployStore.releaseContext(app.id, appSharingRevision(app), provenance);
+        recordAudit({
+          at: Date.now(),
+          principalId: context.actorId,
+          action: "deploy_private_release",
+          resource: grant.ref,
+          scopeLabel: grant.granteeScopeId,
+          detail: JSON.stringify({ revision, permission: grant.permission }),
+        });
+      });
+    },
+
     async shareApp(idOrName, grantee, permission, actor, opts) {
       const found = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!found) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
@@ -1260,6 +1346,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             "human_consent_required",
             "Share this private app explicitly before transferring it.",
           );
+        await discloseApp(d, toScope, actor.callerId);
         if (toScope !== scopeId("personal", d.createdBy))
           await withdrawLoan(d, actor.callerId, "withdrawn: the app moved out of its publisher's library");
         const ref = appRef(d.id);

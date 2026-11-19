@@ -936,6 +936,39 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
 
+      if (
+        home.privateRevision &&
+        (!privateSourceAllowed(capability, home.ownerScopeId) ||
+          !privateSourceAllowed(await currentContext(capability), home.ownerScopeId))
+      )
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "Open the output from your personal conversation before sharing it.",
+        };
+      if (home.privateRevision && !req.privateRevision)
+        return {
+          ok: false,
+          code: "human_consent_required",
+          message: "Sharing this private output requires approval for its selected revision and canonical destination.",
+          privateRelease: { id: home.id, revision: home.privateRevision, scope: toScope },
+        };
+      if (
+        req.privateRevision &&
+        (req.type !== "deploy" ||
+          req.move ||
+          req.email ||
+          req.id !== home.id ||
+          req.scope !== toScope ||
+          !personAtKeyboard(capability) ||
+          req.privateRevision !== home.privateRevision)
+      )
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "The private output or destination changed. Read it again before sharing.",
+        };
+
       try {
         if (orgSkillCede) {
           const promoted = await app.promoteSkill(
@@ -1011,7 +1044,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
               permission,
               grantedBy: capability.actorId,
             },
-            notify,
+            {
+              ...notify,
+              ...(req.privateRevision ? { privateRevision: req.privateRevision, context: capability } : {}),
+            },
           );
         return {
           ok: true,
