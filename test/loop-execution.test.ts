@@ -11,7 +11,6 @@ import { testMap } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const GATED = "rm -rf ./ship-target && printf shipped";
-
 for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
     const built = buildApp(testConfig());
