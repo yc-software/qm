@@ -10,7 +10,7 @@ import { grantAppRole } from "../src/persistence/app-role-grants.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { ambientTenant } from "../src/tenants/context.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { ownerUrl, APP_ROLE } from "./support/test-tenant.ts";
+import { ownerUrl, APP_ROLE, testTenant } from "./support/test-tenant.ts";
 
 async function readyDatabase() {
   const databaseUrl = testDatabaseUrl();
@@ -74,10 +74,14 @@ test(
       id: "unrelated-fact",
     };
     const sensitive = { ...turn(1), inheritedFacts: [inherited] };
-    await Promise.all([first.enqueue(sensitive), sibling.enqueue(turn(2)), first.enqueue(sensitive)]);
+    await Promise.all([
+      first.enqueue(testTenant, sensitive),
+      sibling.enqueue(testTenant, turn(2)),
+      first.enqueue(testTenant, sensitive),
+    ]);
     await Promise.all([first.stop(), sibling.stop()]);
     assert.equal(captured.length, 0);
-    await recovered.enqueue(turn(3));
+    await recovered.enqueue(testTenant, turn(3));
     await recovered.start();
     await completed.promise;
     await recovered.stop();
@@ -121,10 +125,10 @@ test(
       release.resolve();
       await Promise.all([first.stop(), sibling.stop()]);
     });
-    await first.enqueue(turn(1));
+    await first.enqueue(testTenant, turn(1));
     await first.start();
     await started.promise;
-    await sibling.enqueue(turn(2));
+    await sibling.enqueue(testTenant, turn(2));
     await sibling.start();
     release.resolve();
     await finished.promise;
@@ -181,7 +185,7 @@ test(
       lateResult.resolve("- Late private fact");
       await Promise.all([first.stop(), replacement.stop()]);
     });
-    await first.enqueue(turn(1));
+    await first.enqueue(testTenant, turn(1));
     await first.start();
     await attempted.promise;
     await first.stopClaims();
@@ -231,7 +235,7 @@ test(
     release.resolve();
     await pending;
     assert.equal(work.mock.callCount(), 0);
-    await queue.enqueue(turn(1));
+    await queue.enqueue(testTenant, turn(1));
     await queue.start();
     await captured.promise;
   },
@@ -272,7 +276,7 @@ test(
       fail.resolve();
       await Promise.all([first.stop(), replacement.stop()]);
     });
-    await first.enqueue(turn(1));
+    await first.enqueue(testTenant, turn(1));
     const lookedUp = Promise.withResolvers<void>();
     const releaseLookup = Promise.withResolvers<void>();
     const findJobs = PgBoss.prototype.findJobs;
@@ -287,7 +291,7 @@ test(
       return jobs;
     });
     t.after(() => releaseLookup.resolve());
-    const enqueue = replacement.enqueue(turn(2));
+    const enqueue = replacement.enqueue(testTenant, turn(2));
     await lookedUp.promise;
     await first.start();
     await attempted.promise;
@@ -325,19 +329,19 @@ test("completed capture handoffs remain idempotent after queue recreation", { ti
     await first.stop();
     await recovered.stop();
   });
-  await first.enqueue(turn(91));
+  await first.enqueue(testTenant, turn(91));
   await first.start();
   await done.promise;
   await first.stop();
-  await recovered.enqueue(turn(91));
-  await recovered.enqueue(turn(92));
+  await recovered.enqueue(testTenant, turn(91));
+  await recovered.enqueue(testTenant, turn(92));
   await recovered.start();
   await t.waitFor(() => assert.equal(captured.length, 2));
   assert.deepEqual(
     captured.flatMap((batch) => batch.map((item) => item.idempotencyKey)),
     ["turn-91", "turn-92"],
   );
-  await recovered.enqueue({ ...turn(91), reply: "Different rendered answer" });
+  await recovered.enqueue(testTenant, { ...turn(91), reply: "Different rendered answer" });
   await recovered.stop();
   assert.equal(captured.length, 2);
   assert.equal(captured[0]![0]!.reply, "Noted");
@@ -364,8 +368,8 @@ test("a failed job insert rolls its capture receipt back", { timeout: 20_000 }, 
     }
     return send.apply(this, args);
   });
-  await assert.rejects(queue.enqueue(turn(93)), /job insert unavailable/);
-  await queue.enqueue(turn(93));
+  await assert.rejects(queue.enqueue(testTenant, turn(93)), /job insert unavailable/);
+  await queue.enqueue(testTenant, turn(93));
   await queue.start();
   await t.waitFor(() => assert.equal(captured.length, 1));
   assert.equal(captured[0]![0]!.idempotencyKey, "turn-93");

@@ -5,8 +5,8 @@ import { createHash } from "node:crypto";
 import type { PgBoss } from "pg-boss";
 import { memoryCaptureGroup, type MemoryCaptureTurn } from "./capture-context.ts";
 import { poolBoss, assertJobQueueInstalled } from "../persistence/job-queue.ts";
-import { createPgPool, queryPoolSize, withPgTransaction } from "../persistence/pg-pool.ts";
-import { ambientTenant, withoutTenant } from "../tenants/context.ts";
+import { createPgPool, queryPoolSize } from "../persistence/pg-pool.ts";
+import { type Tenant, withoutTenant } from "../tenants/context.ts";
 import { reportFailure, swallowAs } from "../util/errors.ts";
 
 const MEMORY_CAPTURE_QUEUE = "memory-capture";
@@ -111,7 +111,7 @@ export function createMemoryCaptureQueue(input: {
   };
 
   return {
-    async enqueue(original: MemoryCaptureTurn): Promise<void> {
+    async enqueue(tenant: Tenant, original: MemoryCaptureTurn): Promise<void> {
       const turn: MemoryCaptureTurn = {
         ...original,
         ...(original.document
@@ -129,10 +129,10 @@ export function createMemoryCaptureQueue(input: {
               inheritedFacts: original.inheritedFacts.length ? [mergeProvenance(original.inheritedFacts)] : [],
             }),
       };
-      const tenantId = ambientTenant().id;
+      const tenantId = tenant.id;
       const key = memoryCaptureKey(tenantId, turn);
       await initialize();
-      await withPgTransaction(await pg.pool(), async (client) => {
+      await pg.forTenant(tenant).transaction(async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`memory-capture:${key}`]);
         if (turn.idempotencyKey) {
           const id = `${key}:${turn.idempotencyKey}`;

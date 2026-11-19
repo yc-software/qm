@@ -13,10 +13,11 @@ import {
 import { createAgentOnlyStrategy } from "./strategies/agent-only.ts";
 import { withModelRequestContext } from "../model/request-context.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export interface MemoryStrategy {
   onTurnEnd?(ctx: MemoryCaptureTurn): Promise<void>;
-  enqueueTurnEnd?(ctx: MemoryCaptureTurn): Promise<void>;
+  enqueueTurnEnd?(tenant: Tenant, ctx: MemoryCaptureTurn): Promise<void>;
   start?(): Promise<void>;
   stopClaims?(): Promise<void>;
   stop?(): Promise<void>;

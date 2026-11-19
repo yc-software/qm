@@ -96,3 +96,40 @@ The staging owner restores the highest durable revision before resuming; result 
 Migration `sessions/store/0067-attachment-staging` reconstructs snapshots only for pending/running turns with same-tenant session/run ownership, sequential recorded calls, deduplicated tuple keys, and provable output alignment. It leaves completed history and turns with delivery receipts unchanged. Unknown historical cleanup ownership is false. Overlapping or unmappable in-flight selections receive `ToolResult.body.stagingRecoveryError=true`; recovery reports that files must be attached again in a new turn. No runtime reconstruction from old call arguments or artifact existence remains. No SQL columns, indexes, settings or providers are added. Drain old writers before applying the migration and starting updated workers.
 
 Migration `sessions/store/0068-attachment-receipts` canonicalizes authoritative files-only receipts for pending/running turns with matching tenant/session/run ownership. Each prefix contains the exact cumulative acknowledged file list, with unknown cleanup ownership false and revisions above prior staging snapshots. Completed history is unchanged. New receipt writers require the staging owner's snapshot; runtime conversion from old files-only receipts is removed. This migration adds no columns, indexes, configuration or item variants.
+
+## Capture handoff tenant token
+
+The internal queued handoff changes from
+`enqueueTurnEnd(turn: MemoryCaptureTurn): Promise<void>` to
+`enqueueTurnEnd(tenant: Tenant, turn: MemoryCaptureTurn): Promise<void>`.
+The queue's matching method changes from `enqueue(turn)` to
+`enqueue(tenant, turn)`. The existing turn boundary supplies the token; receipt
+writes use `pg.forTenant(tenant).transaction(...)` and retain their explicit
+`tenant_id` insert value. A token for another bound tenant is refused by the
+existing database API.
+
+Every `MemoryCaptureTurn` field is retained. The persisted job remains
+`{ tenantId: string, turns: MemoryCaptureTurn[] }`; the token is not serialized.
+For example, an invented job before and after this change is identical:
+
+```json
+{
+  "tenantId": "00000000-0000-4000-8000-000000000001",
+  "turns": [
+    {
+      "scopeId": "personal:alice",
+      "conversationScopeId": "personal:alice",
+      "sessionId": "session-a",
+      "actorId": "alice",
+      "input": "Remember the selected procedure",
+      "reply": "Noted",
+      "idempotencyKey": "run-a"
+    }
+  ]
+}
+```
+
+There are no new tables, columns, keys, indexes, constraints, settings, providers,
+or backfills. Queue grouping, receipt identity, worker retry and private-context
+fields are unchanged. The worker still reconstructs its tenant binding from the
+persisted `tenantId` before extraction.

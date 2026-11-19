@@ -667,7 +667,7 @@ test("recorded answers retry a failed capture handoff without repeating the mode
   const captured: MemoryCaptureTurn[] = [];
   let failed = false;
   const { orchestrator, sessions, runs, turns, input } = buildScenario(false, undefined, {
-    enqueueTurnEnd: async (context) => {
+    enqueueTurnEnd: async (_tenant, context) => {
       if (!failed) {
         failed = true;
         throw new Error("capture handoff unavailable");
@@ -708,7 +708,7 @@ test("capture handoff uses the same saved payload before and after reply link re
     false,
     undefined,
     {
-      enqueueTurnEnd: async (context) => {
+      enqueueTurnEnd: async (_tenant, context) => {
         captured.push(context);
       },
     },
@@ -733,7 +733,7 @@ test("persisted stopped replies do not start capture on either attempt", async (
     false,
     undefined,
     {
-      enqueueTurnEnd: async (context) => {
+      enqueueTurnEnd: async (_tenant, context) => {
         captured.push(context);
       },
     },

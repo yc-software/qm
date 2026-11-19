@@ -134,7 +134,7 @@ export async function startMemoryCapture(turn: {
     };
     if (enqueueTurnEnd) {
       try {
-        await enqueueTurnEnd(context);
+        await enqueueTurnEnd(tenant, context);
       } catch (error) {
         deps.errors.record(
           tenant,
