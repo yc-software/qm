@@ -87,7 +87,8 @@ A channel or group that pins a persona uses the persona's notebook in place of i
 automatic capture and the `memory` tool save there, and the room's own notebook is kept but
 not read until the persona is unpinned. Every conversation that uses the persona reads the
 persona's notebook, so what one pinned room remembers is shown in the others and to
-everyone who can use the persona, including people who are not in that room.
+everyone who can use the persona, including people who are not in that room. A room with
+someone from outside the organization present keeps its own notebook.
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
