@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
@@ -50,6 +51,7 @@ const entry = (record: unknown, seq: number): Item =>
 test("a full first-provider batch leaves room for a relevant hit from the next provider", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   await notebook.capture(
+    captureTenant,
     "personal:a",
     Array.from({ length: 20 }, (_, i) => `launch note ${i}`),
     AT,
@@ -74,7 +76,7 @@ test("search shows a brain ref only for a provider QM can forget through", async
 
 test("equal fact ids from two brains and the notebook stay separate copies, and only the notebook copy is withdrawn", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
-  await notebook.capture("personal:a", ["Notebook copy"], AT);
+  await notebook.capture(captureTenant, "personal:a", ["Notebook copy"], AT);
   const [own] = await notebook.facts!("personal:a");
   const memory = routed(notebook, {
     alpha: gbrain(() => [{ id: own!.id, text: "Alpha copy" }]),
@@ -117,8 +119,8 @@ test("equal fact ids from two brains and the notebook stay separate copies, and 
 
 test("one claim in two notebooks prints once, as the first notebook's copy with that scope's own id", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
-  await notebook.capture("personal:a", ["Dana prefers email"], AT);
-  await notebook.capture("org:acme", ["dana prefers email ", "Offsite is in May"], AT);
+  await notebook.capture(captureTenant, "personal:a", ["Dana prefers email"], AT);
+  await notebook.capture(captureTenant, "org:acme", ["dana prefers email ", "Offsite is in May"], AT);
   const [mine] = await notebook.facts!("personal:a");
   const [theirs, offsite] = await notebook.facts!("org:acme");
   const recalled = await recallAcrossScopes(notebook, ["personal:a", "org:acme"], { query: "dana" });
@@ -137,7 +139,7 @@ test("one claim in two notebooks prints once, as the first notebook's copy with 
 
 test("an id-less provider keeps its own lines and order, and an exact copy of a notebook claim prints once", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
-  await notebook.capture("personal:a", ["Dana prefers email"], AT);
+  await notebook.capture(captureTenant, "personal:a", ["Dana prefers email"], AT);
   const memory = routed(notebook, { plain: textProvider(["zeta first", "Dana prefers email", "alpha last"]) });
   const recalled = await recallAcrossScopes(memory, ["personal:a"], { query: "q" });
   assert.deepEqual(
@@ -153,7 +155,7 @@ test("an id-less provider keeps its own lines and order, and an exact copy of a 
 test("a dual-written duplicate prints once as the notebook copy and gains no rank, and search names the brain copy", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   for (const [i, text] of ["alpha duplicate", "alpha one", "alpha two", "alpha three"].entries())
-    await notebook.capture("personal:a", [text], AT + i);
+    await notebook.capture(captureTenant, "personal:a", [text], AT + i);
   const memory = routed(notebook, {
     acme: gbrain(() => [
       { id: "1", text: "alpha brain one" },
@@ -189,7 +191,7 @@ test("a dual-written duplicate prints once as the notebook copy and gains no ran
 test("a duplicate the brain ranks first keeps the notebook copy's own place, and the brain's next fact takes its turn", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   for (const [i, text] of ["alpha duplicate", "alpha one", "alpha two"].entries())
-    await notebook.capture("personal:a", [text], AT + i);
+    await notebook.capture(captureTenant, "personal:a", [text], AT + i);
   const memory = routed(notebook, {
     acme: gbrain(() => [
       { id: "77", text: "alpha duplicate" },
@@ -224,10 +226,10 @@ test("a duplicate the brain ranks first keeps the notebook copy's own place, and
 
 test("a claim in two notebooks keeps the first notebook copy's own place, and the other notebook's next fact takes its turn", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
-  await notebook.capture("personal:a", ["Shared claim X"], AT);
-  for (let i = 0; i < 3; i++) await notebook.capture("personal:a", [`filler ${i}`], AT + 1 + i);
-  await notebook.capture("org:acme", ["Offsite is in May"], AT + 5);
-  await notebook.capture("org:acme", ["shared claim x"], AT + 10);
+  await notebook.capture(captureTenant, "personal:a", ["Shared claim X"], AT);
+  for (let i = 0; i < 3; i++) await notebook.capture(captureTenant, "personal:a", [`filler ${i}`], AT + 1 + i);
+  await notebook.capture(captureTenant, "org:acme", ["Offsite is in May"], AT + 5);
+  await notebook.capture(captureTenant, "org:acme", ["shared claim x"], AT + 10);
   const recalled = await recallAcrossScopes(notebook, ["personal:a", "org:acme"], { query: "q" });
   assert.deepEqual(
     recalled.map(({ scope, text }) => [scope, text]),
@@ -250,10 +252,10 @@ test("a provider serving two scopes prints its fact once in search, without nami
 
 test("a kept copy that no longer fits the budget gives way to a copy in a block already open", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
-  await notebook.capture("personal:a", ["Shared claim X"], AT);
-  await notebook.capture("personal:a", ["x".repeat(400)], AT + 1);
-  await notebook.capture("org:acme", ["shared claim x"], AT);
-  await notebook.capture("org:acme", ["Offsite is in May"], AT + 1);
+  await notebook.capture(captureTenant, "personal:a", ["Shared claim X"], AT);
+  await notebook.capture(captureTenant, "personal:a", ["x".repeat(400)], AT + 1);
+  await notebook.capture(captureTenant, "org:acme", ["shared claim x"], AT);
+  await notebook.capture(captureTenant, "org:acme", ["Offsite is in May"], AT + 1);
   const recalled = await recallAcrossScopes(notebook, ["personal:a", "org:acme"], { query: "q", maxChars: 110 });
   assert.deepEqual(
     recalled.map(({ scope, text }) => [scope, text]),
@@ -269,7 +271,7 @@ test("every scope gets a turn and the 6,000 character budget holds, headings and
     const notebook = createPostgresMemoryService(testDatabaseUrl());
     const scopes = Array.from({ length: count }, (_, i) => `channel:c${count}x${i}`);
     const facts = (scope: string) => Array.from({ length: 30 }, (_, i) => `${scope} fact ${i} ${"y".repeat(80)}`);
-    for (const scope of scopes) await notebook.capture(scope, facts(scope), AT);
+    for (const scope of scopes) await notebook.capture(captureTenant, scope, facts(scope), AT);
     const brain = gbrain(() => facts(scopes[0]!).map((text, i) => ({ id: `fact-${i}`, text: `brain ${text}` })));
     const memory = routed(notebook, { acme: brain }, ["channel"]);
     const out = renderRecall(await recallAcrossScopes(memory, scopes, { query: "fact" }), new Map());

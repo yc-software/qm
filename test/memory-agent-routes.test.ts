@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -77,7 +78,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   const ORG = scopeId("org", "default-org");
 
   it("reads and searches another authorized notebook but never writes it", async () => {
-    await built.memory.capture(ORG, ["other scope fact"], Date.parse("2026-10-01T12:00:00Z"));
+    await built.memory.capture(captureTenant, ORG, ["other scope fact"], Date.parse("2026-10-01T12:00:00Z"));
     const headers = { "x-agent-capability": await capFor("U1", { read: [U1, ORG] }) };
     const read = await get(`/v1/memory/self?scope=${ORG}`, headers);
     assert.equal(read.status, 200);
@@ -113,21 +114,22 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
 
   it("derives capture provenance from the capability rather than request metadata", async () => {
     const source = scopeId("personal", "provenance-user");
+    const session = await built.sessions.getOrCreateByThread("trusted-session", "dm", source);
     const cap = await mintCapabilityToken(
       {
         actorId: "provenance-user",
         scopeId: source,
-        sessionId: "trusted-session",
+        sessionId: session.id,
         exp: Date.now() + CAPABILITY_TTL_MS,
         memory: { write: source, orgWrite: ORG, read: [source, ORG] },
       },
       SECRET,
     );
     const capture = built.memory.capture;
-    let context: Parameters<typeof capture>[4];
-    built.memory.capture = async (scope, facts, at, author, metadata) => {
+    let context: Parameters<typeof capture>[5];
+    built.memory.capture = async (tenant, scope, facts, at, author, metadata) => {
       context = metadata;
-      return capture(scope, facts, at, author, metadata);
+      return capture(tenant, scope, facts, at, author, metadata);
     };
     try {
       const res = await post(
@@ -144,7 +146,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       );
       assert.equal(res.status, 200);
       assert.equal(context?.conversationScopeId, source);
-      assert.equal(context?.sessionId, "trusted-session");
+      assert.equal(context?.sessionId, session.id);
       assert.equal(context?.sensitivity, undefined);
       assert.equal(context?.inheritedFacts, undefined);
     } finally {
@@ -163,7 +165,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   });
 
   it("searches across every readable scope, labeling hits by scope", async () => {
-    await built.memory.capture(ORG, ["The org all-hands is on Fridays."], Date.now());
+    await built.memory.capture(captureTenant, ORG, ["The org all-hands is on Fridays."], Date.now());
     const cap = await capFor("U1", { write: U1, read: [U1, ORG] });
     const res = await post("/v1/memory/search", { query: "all-hands" }, { "x-agent-capability": cap });
     assert.equal(res.status, 200);
@@ -174,7 +176,12 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   });
 
   it("cannot search a scope the token does not carry", async () => {
-    await built.memory.capture(scopeId("personal", "U2"), ["U2's private fact about kumquats."], Date.now());
+    await built.memory.capture(
+      captureTenant,
+      scopeId("personal", "U2"),
+      ["U2's private fact about kumquats."],
+      Date.now(),
+    );
     const cap = await capFor("U1", { write: U1, read: [U1, ORG] });
     const res = await post("/v1/memory/search", { query: "kumquats" }, { "x-agent-capability": cap });
     const { results } = (await res.json()) as any;
@@ -523,7 +530,7 @@ describe("agent memory routes report provider failures as problem+json", () => {
       async query() {
         throw new McpCallError("mcp tools/call failed (HTTP 503)", { status: 503 });
       },
-      async capture() {
+      async capture(_tenant) {
         throw new TimeoutError("memory provider timed out after 3000ms");
       },
       async read() {
@@ -546,7 +553,12 @@ describe("agent memory routes report provider failures as problem+json", () => {
     after(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const url = `http://localhost:${(server.address() as AddressInfo).port}`;
     const U1 = scopeId("personal", "U1");
-    await built.memory.capture(U1, ["launch checklist lives in docs/launch.md"], Date.parse("2026-10-01T12:00:00Z"));
+    await built.memory.capture(
+      captureTenant,
+      U1,
+      ["launch checklist lives in docs/launch.md"],
+      Date.parse("2026-10-01T12:00:00Z"),
+    );
     const headers = {
       "content-type": "application/json",
       "x-agent-capability": await mintCapabilityToken(

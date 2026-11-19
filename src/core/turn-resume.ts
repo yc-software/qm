@@ -69,6 +69,10 @@ export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn
       };
       continue;
     }
+    if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
+      answer ??= { seq: e.seq, text: "" };
+      continue;
+    }
     if (e.kind === "ToolCall" || e.kind === "ToolResult" || e.kind === "SteeringMessage") {
       workEntries += 1;
       continue;

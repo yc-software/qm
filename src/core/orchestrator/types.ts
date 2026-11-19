@@ -1,3 +1,4 @@
+import type { DocumentConversations } from "../../documents/conversations.ts";
 import type { PersonaService } from "../../personas/persona-service.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -121,6 +122,8 @@ export interface OrchestratorDeps {
   files: FileArtifactStore;
   toolOutput: ToolOutputStore;
   sandbox: Sandbox;
+  sandboxForTurn?: (resources: SandboxResources) => Sandbox;
+  cleanupSandbox?: Sandbox;
   sandboxResources?: SandboxResources;
   advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
@@ -146,6 +149,7 @@ export interface OrchestratorDeps {
   memory: MemoryService;
   mcp?: McpToolService;
   memoryPolicy?: MemoryPolicy;
+  documentConversations?: Pick<DocumentConversations, "knowledgeForSession" | "publishLearning">;
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;

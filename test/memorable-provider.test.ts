@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorableMemoryProvider } from "../src/memory/memorable/provider.ts";
@@ -57,6 +58,7 @@ test("automatic capture derives a redacted procedure from the session and relays
     },
   });
   const count = await provider.capture(
+    captureTenant,
     personal,
     ["ignored fact"],
     Date.now(),
@@ -89,6 +91,7 @@ test("explicit writes and captures without a session are ignored", async () => {
   });
   assert.equal(
     await provider.capture(
+      captureTenant,
       personal,
       ["fact"],
       1,
@@ -98,7 +101,14 @@ test("explicit writes and captures without a session are ignored", async () => {
     0,
   );
   assert.equal(
-    await provider.capture(personal, ["fact"], 1, { actorId: "U1", context: "conversation" }, { mode: "automatic" }),
+    await provider.capture(
+      captureTenant,
+      personal,
+      ["fact"],
+      1,
+      { actorId: "U1", context: "conversation" },
+      { mode: "automatic" },
+    ),
     0,
   );
   assert.equal(relays, 0);
@@ -113,6 +123,7 @@ test("a refused relay surfaces as an error", async () => {
   });
   await assert.rejects(
     provider.capture(
+      captureTenant,
       personal,
       [],
       1,

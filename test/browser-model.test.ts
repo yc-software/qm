@@ -84,13 +84,14 @@ test("company browser inference runs on the session route through the gateway", 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
+  const session = await built.sessions.getOrCreateByThread("session-browser", "dm", "personal:U1");
   const claims = {
     actorId: "U1",
     scopeId: "personal:U1" as const,
     browserModel: model,
     aud: BROWSER_MODEL_AUD,
     browserAccount: "company" as const,
-    sessionId: "session-browser",
+    sessionId: session.id,
     origin: "conversation" as const,
     exp: Date.now() + 60_000,
   };
@@ -112,7 +113,7 @@ test("company browser inference runs on the session route through the gateway", 
     auth: `Bearer ${key}`,
     model: "anthropic/claude-opus-5",
     context: {
-      "x-qm-session-id": "session-browser",
+      "x-qm-session-id": session.id,
       "x-qm-actor": gatewayActorId("U1", built.modelRoutes.gateway!.actorKey!),
       "x-qm-scope": `personal:${gatewayActorId("U1", built.modelRoutes.gateway!.actorKey!)}`,
       "x-qm-purpose": "browser",

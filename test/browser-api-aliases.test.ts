@@ -247,3 +247,30 @@ test("the public front door hands every browser request to core in-process", asy
   assert.equal(((await webhook.json()) as { message?: string }).message, "verification requires a scheme");
   assert.equal((await read(`http://127.0.0.1:${port}/api/sessions`)).status, 200);
 });
+
+test("browser skill sharing applies ownership and audience grants", async (t) => {
+  let app: ReturnType<typeof buildApp>["app"];
+  const base = await core(t, (built) => {
+    app = built.app;
+  });
+  const skill = await app!.createOwnedSkill({
+    principalId: "alice",
+    name: "cash",
+    description: "Cash",
+    body: "Match.",
+  });
+  assert.ok(skill);
+  const share = (person: string, toScope = "personal:bob") =>
+    fetch(`${base}/api/skills/${skill.id}/share`, {
+      method: "POST",
+      headers: { cookie: browserSessionCookie(person), origin: "https://qm.test", "content-type": "application/json" },
+      body: JSON.stringify({ toScope }),
+    });
+  assert.equal((await share("bob")).status, 403);
+  assert.equal((await share("alice")).status, 200);
+  assert.ok((await app!.listVisibleSkills("bob", false)).some((row) => row.skill?.id === skill.id));
+  assert.equal((await share("alice", "org")).status, 403);
+  const promoted = await share("admin-alice", "org");
+  assert.equal(promoted.status, 200);
+  assert.equal(((await promoted.json()) as { verb: string }).verb, "promote");
+});

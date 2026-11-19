@@ -1,3 +1,4 @@
+import type { Tenant } from "../src/tenants/context.ts";
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
@@ -47,7 +48,7 @@ describe("deployment redeploy route", () => {
     const app = {
       getApp: async (id: string) => (id === publishedApp.id || id === publishedApp.name ? publishedApp : null),
       canManageApp: async () => true,
-      redeploy: async (_id: string, input: RedeployInput) => {
+      redeploy: async (_tenant: Tenant, _id: string, input: RedeployInput) => {
         received = input;
         return publishedApp;
       },

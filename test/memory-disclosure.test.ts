@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
 import { test } from "node:test";
@@ -258,7 +259,7 @@ test("each routed provider is filtered independently and a failure does not invo
     ["#2 (2026-01-02) FIRST_ORDINARY_SENTINEL", "#2 (2026-01-02) SECOND_ORDINARY_SENTINEL"],
   );
   assert.doesNotMatch(recallText(await view.recall("personal:alice")), /PRIVATE_SENTINEL/);
-  await view.capture("personal:alice", ["new fact"], 1);
+  await view.capture(captureTenant, "personal:alice", ["new fact"], 1);
   assert.equal(captures, 1);
 });
 

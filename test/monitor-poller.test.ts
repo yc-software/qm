@@ -1,3 +1,14 @@
+import {
+  createSandboxResources,
+  type SandboxResources,
+  type SandboxResource,
+  type SandboxDefault,
+} from "../src/sandbox/sandbox-resources.ts";
+import {
+  upgradePrivateSandboxDefaults,
+  type SandboxResourceUpgradeMarker,
+} from "../src/sandbox/sandbox-resource-upgrade.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 import type { TurnOrigin } from "../src/types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -106,6 +117,7 @@ async function agent(opts?: {
   heartbeatMs?: number;
   minFireIntervalMs?: number;
   onRun?: () => Promise<void>;
+  sandboxResources?: SandboxResources;
 }) {
   const fake = fakeSandbox();
   const monitors = createMonitorStore(testMap());
@@ -127,6 +139,7 @@ async function agent(opts?: {
     idempotency: createIdempotencyStore(testMap()),
     identity,
     run,
+    ...(opts?.sandboxResources ? { sandboxResources: opts.sandboxResources } : {}),
     ...(opts?.leaderLease ? { leaderLease: opts.leaderLease } : {}),
     ...(opts?.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),
     ...(opts?.minFireIntervalMs !== undefined ? { minFireIntervalMs: opts.minFireIntervalMs } : {}),
@@ -555,3 +568,69 @@ test("watch wakes and Slack notices use the saved purpose with a legacy command 
     assert.ok(notices[0]?.text.includes(purpose ?? "bg: npm run build"));
   }
 });
+
+for (const scenario of ["output", "lost", "unavailable", "missing", "foreign", "shared-destination"] as const) {
+  test(`historical private-computer watch protects ${scenario} output before any wake`, async (t) => {
+    const records = testMap<SandboxResource>();
+    const defaults = testMap<SandboxDefault>();
+    const marker = testMap<SandboxResourceUpgradeMarker>();
+    const lock = testAdvisoryLock();
+    await records.put("sandbox-1", {
+      id: "sandbox-1",
+      backend: "local",
+      backingScopeId: "old-personal",
+      ownerScopeId: scenario === "foreign" ? "personal:U2" : SCOPE,
+      name: "Old computer",
+      createdBy: "U1",
+      createdAt: new Date().toISOString(),
+      legacy: true,
+      state: "ready",
+    });
+    const sandboxResources = createSandboxResources({
+      records,
+      defaults,
+      loads: testMap(),
+      lock,
+      backends: {},
+      defaultBackend: "local",
+      canUseScope: async () => true,
+    });
+    const h = await agent({ sandboxResources });
+    const destination =
+      scenario === "shared-destination"
+        ? { type: "slack" as const, target: "C1", audienceScopeId: "channel:C1" }
+        : { type: "principal" as const, target: "U1", onBehalfOf: "U1", audienceScopeId: SCOPE };
+    const m = await h.arm({ destination });
+    const updates = t.mock.method(h.monitors, "update");
+    await upgradePrivateSandboxDefaults({ records, defaults, marker, lock });
+    h.append("p-1", "PrivateWatchSpruce7301\n");
+    if (scenario === "lost") h.vanish("p-1");
+    if (scenario === "missing") {
+      await h.monitors.advance(m.id, { cursor: 0, tail: "PrivateWatchSpruce7301" });
+      await h.processes.delete("p-1");
+    }
+    if (scenario === "unavailable")
+      h.sandbox.provision = async () => {
+        throw new Error("synthetic unavailable VM");
+      };
+    await h.poller.tick();
+    const saved = (await h.monitors.get(m.id))!;
+    if (["missing", "foreign", "shared-destination"].includes(scenario)) {
+      assert.equal(h.calls.length, 0);
+      assert.equal(saved.enabled, false);
+    } else {
+      assert.equal(saved.personalOnly, true);
+      assert.equal(saved.sourceProvenance?.sourceUnknown, true);
+      assert.ok(saved.sourceProvenance?.sources.includes(SCOPE));
+      assert.equal(h.calls.length, scenario === "unavailable" ? 0 : 1);
+      for (const call of h.calls) assert.equal(call.contextProvenance?.personalOnly, true);
+      if (scenario === "output") {
+        assert.equal(updates.mock.callCount(), 1);
+        await h.poller.tick();
+        assert.equal(updates.mock.callCount(), 1);
+        assert.equal(h.calls.length, 1);
+      }
+    }
+    assert.equal((await h.deliveries.pending("slack")).length, 0);
+  });
+}

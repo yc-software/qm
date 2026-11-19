@@ -1,3 +1,10 @@
+import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
+import {
+  refreshPrivateContext,
+  privateSourceAllowed,
+  inheritContextSources,
+  type PrivateContext,
+} from "../sessions/private-context.ts";
 import { isDeepStrictEqual } from "node:util";
 import { authoredNow, reauthored } from "../cron/authority.ts";
 import type { Destination } from "../types.ts";
@@ -141,12 +148,14 @@ export interface ControlService {
     claims: CapabilityClaims,
   ): Promise<ControlOk<CronRunsResult> | ControlErr<"not_found" | "forbidden" | "bad_request">>;
   patchCron(
+    tenant: Tenant,
     id: string,
     req: CronPatchRequest,
     claims: CapabilityClaims,
     trial?: CronScriptTrial,
   ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">>;
   noteCron(
+    tenant: Tenant,
     id: string,
     text: string,
     claims: CapabilityClaims,
@@ -156,6 +165,7 @@ export interface ControlService {
     claims: CapabilityClaims,
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden">>;
   setCronEnabled(
+    tenant: Tenant,
     id: string,
     enabled: boolean,
     claims: CapabilityClaims,
@@ -168,6 +178,7 @@ export interface ControlService {
     | ControlErr<"not_found" | "forbidden" | "unavailable" | "bad_request" | "already_running">
   >;
   retargetCron(
+    tenant: Tenant,
     id: string,
     destinationKey: string,
     claims: CapabilityClaims,
@@ -194,7 +205,7 @@ export interface ControlService {
     expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<SoulWriteFailureCode>>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
-  shareAccess(type: ArtifactType, id: string, claims: CapabilityClaims, tenant: Tenant): Promise<ShareAccessResult>;
+  shareAccess(type: ArtifactType, id: string, claims: PrivateContext, tenant: Tenant): Promise<ShareAccessResult>;
 }
 
 type SoulWriteFailureCode = "soul_update_denied" | "soul_version_conflict" | "soul_update_failed";
@@ -209,7 +220,7 @@ async function mayShare(
   app: App,
   home: ArtifactHome,
   cron: Cron | null,
-  capability: CapabilityClaims,
+  capability: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
   if (!(await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)))
     return false;
@@ -234,9 +245,10 @@ export async function canAdministerCron(
     "samePerson" | "isCurrentSharedScopeMember" | "artifactGrantPermission" | "membershipControlsScope" | "managesScope"
   >,
   cron: Cron,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  actor: PrivateContext,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
+  if (cron.personalOnly && !privateSourceAllowed(actor, cron.ownerScopeId)) return false;
   const owns = () => (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actor.actorId));
   if (!(await personOrOwningBot(actor, owns, cron))) return false;
   if (await ownsCron(app, cron, actor.actorId, isActor)) return true;
@@ -263,25 +275,28 @@ export async function editWebhookTask(
   app: App,
   id: string,
   action: string,
-  principalId: string,
+  principal: string | PrivateContext,
 ): Promise<ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request">> {
+  const context = typeof principal === "string" ? { actorId: principal } : principal;
+  const principalId = context.actorId;
   if (!action.trim()) return { ok: false, code: "bad_request", message: "task cannot be empty" };
   const webhook = await app.getWebhook(id);
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
-  if (!(await canAdministerWebhook(app, webhook, { actorId: principalId })))
+  if (!(await canAdministerWebhook(app, webhook, context)))
     return { ok: false, code: "forbidden", message: "not your webhook" };
   if (!(await app.samePerson(webhook.owner, principalId)))
     return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
-  const updated = await app.updateWebhook(id, { action });
+  const updated = await app.updateWebhook(id, { action }, context);
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
 }
 
 export async function canAdministerWebhook(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  webhook: Pick<Webhook, "ownerScopeId" | "owner" | "botActor">,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  webhook: Pick<Webhook, "ownerScopeId" | "owner" | "botActor" | "personalOnly">,
+  actor: PrivateContext,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
+  if (webhook.personalOnly && !privateSourceAllowed(actor, webhook.ownerScopeId)) return false;
   const owns = () => (isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actor.actorId));
   if (!(await personOrOwningBot(actor, owns, webhook))) return false;
   if (await app.membershipControlsScope(webhook.ownerScopeId))
@@ -378,8 +393,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       changeSummary,
       ...(detail ? { detail } : {}),
     });
+  const currentContext = (capability: CapabilityClaims) =>
+    refreshPrivateContext(
+      { get: app.getSessionContext, recordContextProvenance: app.recordContextProvenance },
+      capability,
+    );
   return {
     async createCron(req, capability, trial): Promise<CronCreateResult> {
+      const context = await currentContext(capability);
       if (req.action === undefined && req.text === undefined) {
         return { ok: false, code: "bad_request", message: "task (what to do) or text (exact text to send) required" };
       }
@@ -412,7 +433,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       let resolvedChannel: { channelId: string; name: string } | undefined;
       let resolvedGroup: { groupId: string } | undefined;
 
-      if (wantsPersonal) {
+      if (
+        wantsPersonal ||
+        (context.personalOnly &&
+          req.recipient === undefined &&
+          req.channel === undefined &&
+          !hasParticipants &&
+          req.destinationKey === undefined)
+      ) {
         destination = principalDestination(capability.actorId, capability.actorId);
         ownerScopeId = destination.audienceScopeId ?? ownerScopeId;
       } else if (req.recipient !== undefined || req.channel !== undefined || hasParticipants) {
@@ -496,6 +524,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
 
       const input: CreateCronInput = {
+        context,
         schedule: withDefaultTimezone(req.schedule, capability),
         ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
         ...(req.action !== undefined ? { action: req.action } : {}),
@@ -526,20 +555,25 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async listCrons(capability) {
-      const { visible } = await app.listCronsForViewer(capability.actorId);
+      const { visible } = await app.listCronsForViewer(capability);
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
       const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
       const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
-      return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
+      const blocked = await inheritContextSources(app, capability, administered);
+      return { crons: administered.filter((c) => !blocked.has(c.id)), visible: visible.filter((c) => !ids.has(c.id)) };
     },
 
     async getCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (await canAdministerCron(app, cron, capability)) return { ok: true, cron: await app.cronSharing(cron) };
-      const { visible } = await app.listCronsForViewer(capability.actorId);
+      if (await canAdministerCron(app, cron, capability)) {
+        if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
+          return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: true, cron: await app.cronSharing(cron) };
+      }
+      const { visible } = await app.listCronsForViewer(capability);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
       return { ok: false, code: "forbidden", message: "not your cron" };
     },
@@ -549,17 +583,34 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
+        return { ok: false, code: "forbidden", message: "not your cron" };
       if (req.limit !== undefined && (!Number.isSafeInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
       const { runs, total } = await app.listCronFires(id, req.limit !== undefined ? { limit: req.limit } : {});
-      return { ok: true, cron, runs, total };
+      const current = await app.getCron(cron.id);
+      if (
+        !current ||
+        !(await canAdministerCron(app, current, capability)) ||
+        (await inheritContextSources(app, capability, [current])).has(current.id)
+      )
+        return { ok: false, code: "forbidden", message: "not your cron" };
+      const blocked = await app.inheritSessionContext(
+        capability,
+        runs.flatMap((run) => (run.sessionId ? [run.sessionId] : [])),
+        runs.filter((run) => run.reply !== undefined || run.sessionId !== undefined).map((run) => run.threadRef),
+      );
+      if (blocked.size) return { ok: false, code: "forbidden", message: "not your cron" };
+      return { ok: true, cron: current, runs, total };
     },
 
-    async patchCron(id, req, capability, trial) {
+    async patchCron(tenant, id, req, capability, trial) {
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, before, capability)))
+        return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((await inheritContextSources(app, capability, [before])).has(before.id))
         return { ok: false, code: "forbidden", message: "not your cron" };
       const patch = patchFromCronPatchRequest(before, req, capability);
       if ("ok" in patch) return patch;
@@ -577,7 +628,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
-        const cron = await app.updateCron(id, patch, capability, trial);
+        const cron = await app.updateCron(tenant, id, patch, capability, trial);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");
@@ -600,7 +651,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
     },
 
-    async noteCron(id, text, capability) {
+    async noteCron(tenant, id, text, capability) {
       const flattened = flattenFireNote(text);
       if (!flattened)
         return { ok: false, code: "bad_request", message: "the note is empty — say what the next fire should know" };
@@ -623,6 +674,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
+        return { ok: false, code: "forbidden", message: "not your cron" };
       if (cron.archived) {
         return {
           ok: false,
@@ -640,6 +693,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
       const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
       const outcome = await app.setCronFireNote(
+        tenant,
         id,
         {
           text: flattened,
@@ -658,20 +712,30 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
+        return { ok: false, code: "forbidden", message: "not your cron" };
       await app.deleteCron(id, capability);
       await notifyEdit(cron, capability, ["deleted"]);
       return { ok: true };
     },
 
-    async setCronEnabled(id, enabled, capability) {
+    async setCronEnabled(tenant, id, enabled, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
+        return { ok: false, code: "forbidden", message: "not your cron" };
       if (cron.enabled === enabled) return { ok: true, cron };
-      await app.setCronEnabled(id, enabled);
+      await app.setCronEnabled(tenant, id, enabled, capability);
       await notifyEdit(cron, capability, [`enabled=${enabled}`]);
       const after = await app.getCron(id);
+      if (
+        after &&
+        (!(await canAdministerCron(app, after, capability)) ||
+          (await inheritContextSources(app, capability, [after])).has(after.id))
+      )
+        return { ok: false, code: "forbidden", message: "not your cron" };
       return { ok: true, cron: after ?? cron };
     },
 
@@ -679,6 +743,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
+        return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (!scheduler)
         return {
@@ -700,10 +766,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       return { ok: true, fireKey: result.fireKey };
     },
 
-    async retargetCron(id, destinationKey, capability) {
+    async retargetCron(tenant, id, destinationKey, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
+        return { ok: false, code: "forbidden", message: "not your cron" };
+      if ((await inheritContextSources(app, capability, [cron])).has(cron.id))
         return { ok: false, code: "forbidden", message: "not your cron" };
       const resolved = resolveCapabilityDestination(capability, destinationKey);
       if (!resolved.ok) {
@@ -714,13 +782,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
-      const updated = await app.setCronDestination(id, resolved.destination, capability);
+      const updated = await app.setCronDestination(tenant, id, resolved.destination, capability);
       const destLabel = capability.destinations?.find((d) => d.key === destinationKey)?.label;
       await notifyEdit(cron, capability, ["destination"], destLabel ? { destinationLabel: destLabel } : undefined);
       return { ok: true, cron: updated ?? cron };
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
+      const context = await currentContext(capability);
       if (!personAtKeyboard(capability)) {
         return {
           ok: false,
@@ -736,14 +805,19 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           message: "destinationKey is not one of the destinations available for this conversation",
         };
       }
+      const destination =
+        context.personalOnly && req.destinationKey === undefined
+          ? principalDestination(capability.actorId, capability.actorId)
+          : resolved.destination;
       const input: CreateWebhookInput = {
+        context,
         action: req.action,
         verification: req.verification,
         owner: capability.actorId,
         createdBy: capability.actorId,
         ownerScopeId: capability.scopeId,
         ...(req.filters?.length ? { filters: req.filters } : {}),
-        ...(resolved.destination ? { destination: resolved.destination } : {}),
+        ...(destination ? { destination } : {}),
       };
       try {
         const webhook = await app.createWebhook(input);
@@ -764,7 +838,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const all = await app.listWebhooks();
       const isActor = await app.personMatcher(capability.actorId);
       const allowed = await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, capability, isActor)));
-      return all.filter((_webhook, index) => allowed[index]);
+      const visible = all.filter((_webhook, index) => allowed[index]);
+      const blocked = await inheritContextSources(app, capability, visible);
+      return visible.filter((webhook) => !blocked.has(webhook.id));
     },
 
     async disableWebhook(id, capability) {
@@ -772,14 +848,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
       if (!(await canAdministerWebhook(app, webhook, capability)))
         return { ok: false, code: "forbidden", message: "not your webhook" };
-      await app.setWebhookEnabled(id, false);
+      await app.setWebhookEnabled(id, false, capability);
       return { ok: true };
     },
 
     async updateWebhook(id, patch, capability) {
       if (!personAtKeyboard(capability))
         return { ok: false, code: "forbidden", message: "editing a webhook requires a live turn started by its owner" };
-      return editWebhookTask(app, id, patch.action, capability.actorId);
+      return editWebhookTask(app, id, patch.action, capability);
     },
 
     readSoul(capability) {
@@ -809,6 +885,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareAccess(type, id, capability, tenant): Promise<ShareAccessResult> {
+      await refreshPrivateContext(
+        { get: app.getSessionContext, recordContextProvenance: app.recordContextProvenance },
+        capability,
+      );
       const home = await app.getArtifactHome(type, id);
       if (!home) return { ok: false, code: "not_found", message: `no ${type} "${id}"` };
       const cron = type === "cron" ? await app.getCron(home.id) : null;
@@ -818,6 +898,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           code: "forbidden",
           message: `only the ${type}'s owner can see and change who it is shared with`,
         };
+      if ((await inheritContextSources(app, capability, [home])).has(home.id))
+        return { ok: false, code: "forbidden", message: "This output is private to its owner." };
       return {
         ok: true,
         type,
@@ -919,25 +1001,84 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
 
+      if (
+        home.privateRevision &&
+        (!privateSourceAllowed(capability, home.ownerScopeId) ||
+          !privateSourceAllowed(await currentContext(capability), home.ownerScopeId))
+      )
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "Open the output from your personal conversation before sharing it.",
+        };
+      if (
+        home.privateRevision &&
+        toKind === "personal" &&
+        (await app.samePerson(parseScopeId(home.ownerScopeId).ref, parseScopeId(toScope).ref))
+      )
+        return { ok: false, code: "bad_request", message: "The selected output is already personal to you." };
+      if (home.privateRevision && cron && (cron.loopId || cron.script))
+        return {
+          ok: false,
+          code: "bad_request",
+          message: "Loop and script schedules require their own publication controls.",
+        };
+      if (home.privateRevision && cron && toKind !== "group")
+        return {
+          ok: false,
+          code: "bad_request",
+          message: "Publish this schedule into a shared Team or workbook context.",
+        };
+      if (home.privateRevision && !req.privateRevision)
+        return {
+          ok: false,
+          code: "human_consent_required",
+          message: "Sharing this private output requires approval for its selected revision and canonical destination.",
+          privateRelease: { id: home.id, revision: home.privateRevision, scope: toScope },
+        };
+      if (
+        req.privateRevision &&
+        ((req.type !== "deploy" && req.type !== "file" && req.type !== "skill" && req.type !== "cron") ||
+          req.move ||
+          req.email ||
+          req.id !== home.id ||
+          req.scope !== toScope ||
+          !personAtKeyboard(capability) ||
+          (req.type !== "cron" && req.privateRevision !== home.privateRevision))
+      )
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "The private output or destination changed. Read it again before sharing.",
+        };
+
       const tenant = ambientTenant();
       const shared = { type: req.type, id: home.id, target: { scope: toScope, label: target.label }, permission };
       try {
         if (copyTo && remove) await app.unshareCron(home.id, copyTo);
-        if (copyTo && !remove) {
+        if (copyTo && !remove && !req.privateRevision) {
           if (await app.samePerson(copyTo, capability.actorId))
             return { ok: false, code: "bad_request", message: "that cron is already yours" };
           const { copy, existed, note } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
           return {
             ok: true,
             verb: "share",
-            type: req.type,
-            id: home.id,
-            target: { scope: toScope, label: target.label },
-            permission,
+            ...shared,
             copy: { id: copy.id, enabled: copy.enabled, existed, ...(note ? { note } : {}) },
           };
         }
-        if (orgSkillCede) {
+        if (req.type === "cron" && req.privateRevision) {
+          const published = await app.publishPrivateCron(home.id, req.privateRevision, toScope, capability);
+          return {
+            ok: true,
+            verb: "share",
+            type: "cron",
+            id: published.id,
+            target: { scope: toScope, label: target.label },
+            permission,
+          };
+        }
+        if (orgSkillCede && !req.privateRevision) {
           const promoted = await app.promoteSkill(
             home.id,
             toScope,
@@ -981,7 +1122,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
-          await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId);
+          await app.moveArtifactHome(tenant, req.type, home.id, toScope, capability.actorId);
           return { ok: true, verb: "move", ...shared };
         }
 
@@ -1007,11 +1148,18 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
               permission,
               grantedBy: capability.actorId,
             },
-            notify,
+            {
+              ...notify,
+              ...(req.privateRevision ? { privateRevision: req.privateRevision, context: capability } : {}),
+            },
           );
         return { ok: true, verb, ...shared };
       } catch (e) {
-        if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
+        if (
+          e instanceof MemoryDisclosureDenied ||
+          e instanceof AdminError ||
+          (e instanceof DeployAccessError && e.code === "forbidden")
+        ) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         if (e instanceof DeployAccessError) return { ok: false, code: e.code, message: errMessage(e) };

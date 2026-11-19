@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 import { outermostJsonObject } from "../util/text.ts";
 import type { MemoryStrategy, MemoryStrategyKind } from "./strategy.ts";
@@ -45,12 +46,13 @@ export function parseBenchConversation(raw: unknown, source: string): BenchConve
 }
 
 export async function replayConversation(
+  tenant: Tenant,
   strategy: MemoryStrategy,
   scopeId: ScopeId,
   conversation: BenchConversation,
 ): Promise<void> {
   for (const turn of conversation.turns) {
-    await strategy.onTurnEnd?.({ scopeId, input: turn.input, reply: turn.reply });
+    await strategy.onTurnEnd?.(tenant, { scopeId, input: turn.input, reply: turn.reply });
   }
 }
 

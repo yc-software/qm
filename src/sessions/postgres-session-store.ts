@@ -1,3 +1,5 @@
+import type { PoolClient } from "pg";
+import type { Tenant } from "../tenants/context.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
@@ -23,6 +25,7 @@ import { createSessionParticipants, participantSessionsSql } from "./session-par
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { authoredUserTurn, TENANT } from "./items.ts";
+import { mergeSourceProvenance, type MemoryProvenance, type SourceProvenance } from "../memory/facts.ts";
 import {
   GENERIC_CHAT_TENANT,
   SERVING_SLACK_TENANTS,
@@ -34,18 +37,73 @@ import {
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
+  const recordContextProvenance = async (
+    sessionId: string,
+    ownerScopeId: ScopeId,
+    provenance: MemoryProvenance,
+  ): Promise<SourceProvenance> => {
+    if (provenance.personalOnly && !ownerScopeId.startsWith("personal:"))
+      throw new Error("Private context requires a personal scope");
+    return withPgTransaction(await pool(), async (client) => {
+      const result = await client.query(
+        "SELECT context_provenance, personal_only FROM sessions WHERE id = $1 AND scope_id = $2 FOR UPDATE",
+        [sessionId, ownerScopeId],
+      );
+      if (!result.rows[0]) throw new Error("Private context owner does not match the session");
+      const merged = mergeSourceProvenance([
+        ...(result.rows[0].context_provenance ? [result.rows[0].context_provenance as SourceProvenance] : []),
+        provenance,
+      ]);
+      if (
+        canonicalJson(merged) !== canonicalJson(result.rows[0].context_provenance) ||
+        (provenance.personalOnly && !result.rows[0].personal_only)
+      )
+        await client.query(
+          "UPDATE sessions SET context_provenance = $3::jsonb, personal_only = personal_only OR $4 WHERE id = $1 AND scope_id = $2",
+          [sessionId, ownerScopeId, JSON.stringify(merged), provenance.personalOnly === true],
+        );
+      return merged;
+    });
+  };
+  const markPersonalOnly = async (sessionId: string, ownerScopeId: ScopeId): Promise<void> => {
+    await recordContextProvenance(sessionId, ownerScopeId, {
+      sensitivity: "ordinary",
+      sources: [],
+      sourceUnknown: false,
+      personalOnly: true,
+    });
+  };
 
-  async function getMany({
-    ids,
-    threadRefs,
-  }: {
-    ids: readonly string[];
-    threadRefs: readonly string[];
-  }): Promise<Session[]> {
+  async function inheritContextFrom(tenant: Tenant, sessionId: string, sourceSessionId: string): Promise<void> {
+    const source = (
+      await db
+        .forTenant(tenant)
+        .q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE tenant_id = $1 AND id = $2", [
+          tenant.id,
+          sourceSessionId,
+        ])
+    )[0];
+    if (!source) throw new Error("The source conversation no longer exists");
+    if (source.personal_only || source.context_provenance)
+      await recordContextProvenance(sessionId, source.scope_id as ScopeId, {
+        ...((source.context_provenance as SourceProvenance) ?? {
+          sensitivity: "ordinary",
+          sources: [],
+          sourceUnknown: false,
+        }),
+        ...(source.personal_only ? { personalOnly: true as const } : {}),
+      });
+  }
+
+  async function getMany(
+    { ids, threadRefs }: { ids: readonly string[]; threadRefs: readonly string[] },
+    transaction?: PoolClient,
+  ): Promise<Session[]> {
     if (!ids.length && !threadRefs.length) return [];
-    return (
-      await q("SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])", [ids, threadRefs])
-    ).map(rowToSession);
+    if (transaction) await db.ready();
+    const sql = "SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])";
+    const rows = transaction ? (await transaction.query(sql, [ids, threadRefs])).rows : await q(sql, [ids, threadRefs]);
+    return rows.map(rowToSession);
   }
 
   const descendantsOf = async (rootIds: readonly string[]): Promise<SessionDescendant[]> => {
@@ -196,9 +254,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       );
     },
 
-    async setParentSession(sessionId, parentSessionId): Promise<void> {
-      await q("UPDATE sessions SET parent_session_id = $2 WHERE id = $1", [sessionId, parentSessionId]);
+    async setParentSession(tenant, sessionId, parentSessionId): Promise<void> {
+      if (parentSessionId) await inheritContextFrom(tenant, sessionId, parentSessionId);
+      await db
+        .forTenant(tenant)
+        .query("UPDATE sessions SET parent_session_id = $3 WHERE tenant_id = $1 AND id = $2", [
+          tenant.id,
+          sessionId,
+          parentSessionId,
+        ]);
     },
+    markPersonalOnly,
+    recordContextProvenance,
+    inheritContextFrom,
 
     async setSpawnMeta(sessionId, meta): Promise<void> {
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);

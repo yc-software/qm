@@ -1,3 +1,5 @@
+import { contextualFiles } from "../files/context-files.ts";
+import { type PrivateContext } from "../sessions/private-context.ts";
 import { recordAuditInBinding, type AuditEvent } from "../audit/audit-log.ts";
 import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
@@ -314,7 +316,23 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         .filter((project) => deps.identity.isInternal(deps.identity.classify(project.ownerId)))
         .map((project) => project.id),
     );
-    return new Map([...projectScopes].map(([scope, id]) => [scope, allowed.has(id)]));
+    const result = new Map([...projectScopes].map(([scope, id]) => [scope, allowed.has(id)]));
+    const otherManaged = scopes.flatMap((scope) => {
+      const { kind, ref } = parseScopeId(scope);
+      return kind === "group" && !projectScopes.has(scope) && deps.managedGroups?.recognizes(ref)
+        ? [{ scope, ref }]
+        : [];
+    });
+    if (otherManaged.length && deps.managedGroups) {
+      const rosters = await deps.managedGroups.membersMany(otherManaged.map(({ ref }) => ref));
+      for (const { scope, ref } of otherManaged)
+        result.set(
+          scope,
+          deps.identity.isInternal(deps.identity.classify(principalId)) &&
+            (rosters.get(ref)?.some((member) => samePerson(member, principalId)) ?? false),
+        );
+    }
+    return result;
   }
 
   async function managedProjectMembership(scope: ScopeId, principalId: string): Promise<boolean | undefined> {
@@ -420,10 +438,16 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ownScopeBotWork: boolean,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
+    context?: PrivateContext,
   ): Promise<FileListPage> {
     const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
     const handles = await deps.acl.handlesFor(tenant, myScopes);
-    const page = await deps.files.listDocuments(
+    const files = contextualFiles(
+      deps.files,
+      deps.sessions,
+      context ?? { actorId: principalId, botActor: ownScopeBotWork },
+    );
+    const page = await files.listDocuments(
       myScopes,
       handles.map((h) => ({ ownerScopeId: h.ownerScopeId, id: h.fileId })),
       {
@@ -473,7 +497,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   const scopeMembershipDeps = {
-    ...(deps.projects ? { managedGroups: deps.projects } : {}),
+    ...(deps.managedGroups || deps.projects ? { managedGroups: deps.managedGroups ?? deps.projects } : {}),
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.identity ? { identity: deps.identity } : {}),
     ...(deps.teams ? { teams: deps.teams } : {}),
@@ -731,7 +755,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         {
           directory: deps.directory,
           ...(deps.identity ? { identity: deps.identity } : {}),
-          ...(deps.projects ? { managedGroups: deps.projects } : {}),
+          ...(deps.managedGroups || deps.projects ? { managedGroups: deps.managedGroups ?? deps.projects } : {}),
           ...(deps.personas ? { personas: deps.personas } : {}),
           ...(deps.teams
             ? {

@@ -1,5 +1,6 @@
+import { privateSourceAllowed, type PrivateContext } from "../sessions/private-context.ts";
 import type { App, AppDeps } from "./app-types.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import { samePersonInDirectory } from "../directory/person.ts";
 import {
@@ -11,9 +12,10 @@ import type { TriggerBase } from "../triggers/types.ts";
 
 export async function canAdministerLoop(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  loop: Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  loop: Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor" | "personalOnly">,
+  actor: PrivateContext,
 ): Promise<boolean> {
+  if (loop.personalOnly && !privateSourceAllowed(actor, loop.ownerScopeId)) return false;
   const { actorId } = actor;
   if (!(await personOrOwningBot(actor, async () => app.samePerson(loop.owner, actorId), loop))) return false;
   if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actorId, loop.ownerScopeId);
@@ -23,8 +25,8 @@ export async function canAdministerLoop(
 
 export async function loopAdministration(
   deps: AppDeps,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-  loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
+  actor: PrivateContext,
+  loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor" | "personalOnly">[],
 ) {
   if (!loops.length) return [];
   const { actorId } = actor;
@@ -32,7 +34,7 @@ export async function loopAdministration(
     {
       directory: deps.directory,
       identity: deps.identity,
-      ...(deps.projects ? { managedGroups: deps.projects } : {}),
+      ...(deps.managedGroups || deps.projects ? { managedGroups: deps.managedGroups ?? deps.projects } : {}),
       ...(deps.personas ? { personas: deps.personas } : {}),
     },
     actorId,

@@ -4,6 +4,7 @@ import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
 import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { sweepUnreadMailWakes } from "../src/sessions/subagent-mail.ts";
 import { currentTenant, withTenant } from "../src/tenants/context.ts";
@@ -13,14 +14,19 @@ import { describeTwoTenants } from "./support/two-tenants.ts";
 
 describeTwoTenants("mail wakes, memory indexing and job computers bind each row's tenant", (db) => {
   it("wakes each tenant's parent for unread mail under that tenant", async () => {
-    const mailbox = createSessionMailbox(db.maps.map<SessionMessage>("session_mailbox", ["recipientId", "wake"]));
+    const sessions = createPostgresSessionStore(db.appDatabaseUrl);
+    const mailbox = createSessionMailbox(
+      db.maps.map<SessionMessage>("session_mailbox", ["recipientId", "wake"]),
+      sessions,
+    );
     for (const tenant of db.tenants)
       await withTenant(tenant, async () => {
+        const sender = await sessions.getOrCreateByThread("child", "dm", "personal:internal:U1");
         for (const id of ["m1", "m2"])
           await mailbox.send({
             id,
             recipientId: "parent",
-            senderId: "child",
+            senderId: sender.id,
             actor: { id: "internal:U1", type: "internal" },
             text: "hi",
             audience: [],

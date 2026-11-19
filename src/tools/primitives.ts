@@ -1,3 +1,4 @@
+import { writableNotebook, type MemoryAccess } from "../memory/policy.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
@@ -10,7 +11,8 @@ import {
   processCredentialFiles,
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
-import type { MemoryCaptureMetadata } from "../memory/facts.ts";
+import { mergeSourceProvenance, type MemoryCaptureMetadata } from "../memory/facts.ts";
+import type { PrivateContext } from "../sessions/private-context.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -191,13 +193,21 @@ export interface CommandCredential {
 }
 
 interface AttachedFileMeta {
+  artifactViewerId?: string;
   name: string;
   mimetype: string;
   sizeBytes: number;
   artifactId?: string;
 }
 
-export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number } | { ok: false; message: string };
+export interface StagedFileMeta extends AttachedFileMeta {
+  key: ["path", string | null, string] | ["file", string];
+  created: boolean;
+}
+
+export type AttachResult =
+  | { ok: true; files: AttachedFileMeta[]; staged: number; stagedFiles: StagedFileMeta[]; stagedRevision: number }
+  | { ok: false; message: string };
 
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
@@ -252,9 +262,10 @@ export interface ToolContext extends SurfaceToolDeps {
     scope?: ScopeId,
   ): Promise<{ hits: string[]; problems: MemoryProviderProblem[] } | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
-  memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
-  memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
-  memoryDelete(ids: string[], callId: string): Promise<MemoryForget | null>;
+  memoryAdd(facts: string[], scope?: ScopeId): Promise<MemoryWrite | null>;
+  memoryPublish?(facts: MemoryEdit[], applicability: "team" | "workbook"): Promise<MemoryWrite | null>;
+  memoryEdit(edits: MemoryEdit[], scope?: ScopeId): Promise<true | null>;
+  memoryDelete(ids: string[], callId: string, scope?: ScopeId): Promise<MemoryForget | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
@@ -518,7 +529,8 @@ export interface ToolContextDeps {
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
-  memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
+  publishMemory?: (facts: MemoryEdit[], applicability: "team" | "workbook") => Promise<MemoryWrite | null>;
+  memoryAccess?: MemoryAccess;
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
@@ -651,6 +663,21 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     }
   };
 
+  const outputContext = (): PrivateContext => {
+    const metadata = deps.memoryCaptureMetadata?.();
+    return {
+      actorId: deps.createdBy,
+      privateRead: deps.controlClaims?.privateRead ?? true,
+      ...(deps.controlClaims?.computer ? { computer: deps.controlClaims.computer } : {}),
+      scopeId: writableScopeId,
+      audienceScopeId: deps.audienceScopeId,
+      sessionId: deps.sessionId,
+      botActor: deps.botActor,
+      ...(metadata?.personalOnly ? { personalOnly: true } : {}),
+      ...(metadata?.inheritedFacts?.length ? { sourceProvenance: mergeSourceProvenance(metadata.inheritedFacts) } : {}),
+    };
+  };
+
   const runId = deps.runId;
 
   const trialOn =
@@ -754,12 +781,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.editingApp
       ? {
-          appFiles: createAppFiles({
+          appFiles: createAppFiles(deps.tenant, {
             deploy: deps.deploy,
             app: deps.editingApp,
             actorId: deps.createdBy,
             botActor: deps.botActor,
             actingScopeId: writableScopeId,
+            context: outputContext,
           }),
         }
       : {}),
@@ -1099,7 +1127,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           )
         : {};
 
-      const d = await deps.deploy.deployOrUpdate({
+      const d = await deps.deploy.deployOrUpdate(deps.tenant, {
+        context: outputContext(),
         ownerScopeId: owner,
         createdBy: deps.createdBy,
         botActor: deps.botActor,
@@ -1176,10 +1205,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return scope !== undefined ? `### ${target}\n${quotedData(body)}` : quotedData(body);
     },
 
-    async memoryAdd(facts: string[]) {
-      const write = deps.memoryAccess?.write;
+    async memoryAdd(facts: string[], scope?: ScopeId) {
+      const write = writableNotebook(deps.memoryAccess, scope);
       if (!memory || !write) return null;
       return writeFacts(
+        deps.tenant,
         memory,
         write,
         facts,
@@ -1194,8 +1224,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
-      const write = deps.memoryAccess?.write;
+    ...(deps.publishMemory ? { memoryPublish: deps.publishMemory } : {}),
+
+    async memoryEdit(edits: MemoryEdit[], scope?: ScopeId): Promise<true | null> {
+      const write = writableNotebook(deps.memoryAccess, scope);
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
         ...deps.memoryCaptureMetadata?.(),
@@ -1204,8 +1236,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return true;
     },
 
-    async memoryDelete(ids: string[], callId: string) {
-      const write = deps.memoryAccess?.write;
+    async memoryDelete(ids: string[], callId: string, scope?: ScopeId) {
+      const write = writableNotebook(deps.memoryAccess, scope);
       if (!memory?.delete || !write) return null;
       return forgetFacts(
         memory,
@@ -1358,13 +1390,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
     cronPatch(id, req) {
-      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
+      return controlOp((c, cl) => c.patchCron(deps.tenant, id, req, cl, trialOn(this)));
     },
-    cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
+    cronNote: (id, note) => controlOp((c, cl) => c.noteCron(deps.tenant, id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
-    cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
+    cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(deps.tenant, id, enabled, cl)),
     cronRun: (id) => controlOp((c, cl) => c.runCron(id, cl)),
-    cronRetarget: (id, destinationKey) => controlOp((c, cl) => c.retargetCron(id, destinationKey, cl)),
+    cronRetarget: (id, destinationKey) => controlOp((c, cl) => c.retargetCron(deps.tenant, id, destinationKey, cl)),
     webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),

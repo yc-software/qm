@@ -1,3 +1,13 @@
+import { cronSharingRevision } from "../cron/cron-store.ts";
+import { skillSharingRevision } from "../skills/skill-store.ts";
+import { appSharingRevision } from "../deploy/deploy-store.ts";
+import { contextualFiles } from "../files/context-files.ts";
+import {
+  privateSourceAllowed,
+  refreshPrivateContext,
+  inheritContextSources,
+  inheritSessionContext,
+} from "../sessions/private-context.ts";
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { loadsScopeContext } from "../resolution/context-filter.ts";
@@ -13,7 +23,7 @@ import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.t
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { ambientTenant } from "../tenants/context.ts";
-import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
+import { fileSharingRevision, fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
@@ -75,6 +85,9 @@ export function createSessionMethods(
   h: AppHelpers,
 ): Pick<
   App,
+  | "inheritSessionContext"
+  | "getSessionContext"
+  | "recordContextProvenance"
   | "getSession"
   | "getSessionForViewer"
   | "canViewSessionSnapshot"
@@ -398,7 +411,26 @@ export function createSessionMethods(
     }));
   }
 
+  const currentScopeMembers = createCurrentScopeMembers(
+    { managedGroups: deps.managedGroups ?? deps.projects, directory: deps.directory, identity: deps.identity },
+    true,
+  );
   return {
+    async getSessionContext(sessionId) {
+      const session = await deps.sessions.get(sessionId);
+      return session
+        ? {
+            id: session.id,
+            scopeId: session.scopeId,
+            personalOnly: session.personalOnly,
+            sourceProvenance: session.sourceProvenance,
+          }
+        : null;
+    },
+    inheritSessionContext: (context, sourceIds, threadRefs) =>
+      inheritSessionContext(deps.sessions, context, sourceIds, threadRefs),
+    recordContextProvenance: (sessionId, scope, provenance) =>
+      deps.sessions.recordContextProvenance(sessionId, scope, provenance),
     async getSession(sessionId, window) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;
@@ -432,7 +464,12 @@ export function createSessionMethods(
     async getSessionForViewer(sessionId, viewer, window) {
       const principalId = viewer.actorId;
       const found = await sessionForViewer(sessionId, principalId);
-      if (!found || !sessionVisibleTo(viewer, found)) return null;
+      if (
+        !found ||
+        !sessionVisibleTo(viewer, found) ||
+        (found.personalOnly && !privateSourceAllowed(viewer, found.scopeId))
+      )
+        return null;
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals, latestPromptAt, run] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
@@ -464,6 +501,7 @@ export function createSessionMethods(
       const pins = await decoratedPins(pinRecords, visible, (seqs) =>
         viewerStoredItemsAt(sessionId, principalId, seqs),
       );
+      if ((await inheritSessionContext(deps.sessions, viewer, [sessionId])).has(sessionId)) return null;
       return {
         session,
         items: w.items,
@@ -528,8 +566,8 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork) {
-      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork, context) {
+      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope, context);
     },
 
     async uploadFileForViewer(tenant, principalId, input) {
@@ -548,6 +586,7 @@ export function createSessionMethods(
         path,
         mimetype,
         data: input.data,
+        ...(input.contextSessionId ? { contextSessionIds: [input.contextSessionId] } : {}),
         direction: "in",
         createdInScope,
         maxBytes: MAX_ATTACHMENT_BYTES,
@@ -571,7 +610,7 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork, context) {
       const art = await deps.files.get(id);
       if (!art) return null;
       const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
@@ -581,13 +620,27 @@ export function createSessionMethods(
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
-      const opened = await deps.files.open(id);
+      const files = contextualFiles(
+        deps.files,
+        deps.sessions,
+        context ?? { actorId: principalId, botActor: ownScopeBotWork },
+      );
+      const opened = await files.open(id);
       if (!opened) return null;
       return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
     },
 
     async listSessions(viewer) {
-      return decorateSessions(viewer.actorId, await sessionsForViewer(viewer));
+      const sessions = await sessionsForViewer(viewer);
+      const blocked = await inheritSessionContext(
+        deps.sessions,
+        viewer,
+        sessions.map((session) => session.id),
+      );
+      return decorateSessions(
+        viewer.actorId,
+        sessions.filter((session) => !blocked.has(session.id)),
+      );
     },
 
     async listSessionPage(principalId, query) {
@@ -1003,14 +1056,7 @@ export function createSessionMethods(
       return principalCanManageScope(principalId, scope);
     },
 
-    currentScopeMembers: createCurrentScopeMembers(
-      {
-        managedGroups: deps.projects,
-        directory: deps.directory,
-        identity: deps.identity,
-      },
-      true,
-    ),
+    currentScopeMembers,
     isCurrentSharedScopeMember(principalId, scope) {
       const { kind } = parseScopeId(scope);
       return kind === "channel" || kind === "group"
@@ -1039,16 +1085,18 @@ export function createSessionMethods(
       const principalId = viewer.actorId;
       const session = await sessionForViewer(sessionId, principalId);
       if (!session || !sessionVisibleTo(viewer, session)) return null;
+      if ((await inheritSessionContext(deps.sessions, viewer, [sessionId])).has(sessionId)) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       const updated = await sessionForViewer(sessionId, principalId);
-      return updated && { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
+      if (!updated || (await inheritSessionContext(deps.sessions, viewer, [sessionId])).has(sessionId)) return null;
+      return { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
     },
 
-    async detachSession(sessionId, principalId) {
+    async detachSession(tenant, sessionId, principalId) {
       const detach = async () => {
         const session = await sessionForViewer(sessionId, principalId);
         if (!session?.parentSessionId || !(await principalCanWriteScope(principalId, session.scopeId))) return null;
-        await deps.sessions.setParentSession(sessionId, null);
+        await deps.sessions.setParentSession(tenant, sessionId, null);
         return { detached: true as const };
       };
       return deps.advisoryLock.withLock("session-tree-admission", detach);
@@ -1103,7 +1151,7 @@ export function createSessionMethods(
       return deps.orchestrator.suggestNextPrompt(sessionId, principalId);
     },
 
-    async forkSession(sessionId, principalId, opts) {
+    async forkSession(tenant, sessionId, principalId, opts) {
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
       if (!source) return null;
@@ -1125,6 +1173,7 @@ export function createSessionMethods(
           source.channelName,
           "web",
         );
+        await deps.sessions.inheritContextFrom(tenant, forked.id, sessionId);
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
           copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
@@ -1237,9 +1286,53 @@ export function createSessionMethods(
               (await h.directoryMember(email))?.type === "internal",
           ),
         };
-        await deps.deploy.assertShareAllowed(publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
+        if (opts?.privateRevision && opts.context) {
+          await deps.deploy.releasePrivateApp(tenant, g, opts.privateRevision, opts.context);
+        } else await deps.deploy.grantAppAccess(tenant, g);
       }
-      await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
+      if (ref.kind === "file" && opts?.privateRevision && opts.context) {
+        const context = await refreshPrivateContext(deps.sessions, opts.context);
+        if (!privateSourceAllowed(context, g.ownerScopeId) || !samePerson(context.actorId, g.grantedBy))
+          throw new Error("Only the private file's owner can share it from personal context.");
+        const file = await deps.files.get(ref.id);
+        if (
+          !file?.personalOnly ||
+          file.ownerScopeId !== g.ownerScopeId ||
+          fileSharingRevision(file) !== opts.privateRevision
+        )
+          throw new Error("The selected private file changed after approval. Read it again before sharing.");
+        if ((await inheritContextSources(deps.sessions, context, [file])).has(file.id))
+          throw new Error("The selected file is private to its owner's personal context.");
+        if (!deps.discloseArtifact) throw new Error("File source authorization is unavailable.");
+        const provenance = await deps.discloseArtifact(file, g.granteeScopeId, g.grantedBy);
+        if (!provenance) throw new Error("The selected private file has no source provenance.");
+        const writeGrant = await deps.acl.preparePrivateGrant(tenant, g, file.createdBy);
+        await deps.files.releasePrivate(tenant, ref.id, opts.privateRevision, provenance, writeGrant);
+      } else if (ref.kind === "skill" && opts?.privateRevision && opts.context) {
+        const context = await refreshPrivateContext(deps.sessions, opts.context);
+        if (!privateSourceAllowed(context, g.ownerScopeId) || !samePerson(context.actorId, g.grantedBy))
+          throw new Error("Only the private skill's owner can share it from personal context.");
+        if (parseScopeId(g.granteeScopeId).kind === "org") {
+          if (
+            !deps.admin ||
+            !(await deps.admin.adminStatusOf(tenant, { id: context.actorId, type: "internal" })).isAdmin
+          )
+            throw new AdminError(403, "only an org admin can share a skill org-wide");
+        }
+        const skill = await deps.skills.get(ref.id);
+        if (
+          !skill?.personalOnly ||
+          skill.scopeId !== g.ownerScopeId ||
+          skillSharingRevision(skill) !== opts.privateRevision
+        )
+          throw new Error("The selected private skill changed after approval. Read it again before sharing.");
+        await inheritContextSources(deps.sessions, context, [{ ...skill, ownerScopeId: skill.scopeId }]);
+        if (!deps.discloseArtifact) throw new Error("Skill source authorization is unavailable.");
+        const provenance = await deps.discloseArtifact(skill, g.granteeScopeId, g.grantedBy);
+        if (!provenance) throw new Error("The selected private skill has no source provenance.");
+        const writeGrant = await deps.acl.preparePrivateGrant(tenant, g, skill.createdBy);
+        await deps.skills.releasePrivate(ref.id, opts.privateRevision, provenance, writeGrant);
+      } else if (ref.kind !== "deploy") await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,
@@ -1281,7 +1374,16 @@ export function createSessionMethods(
       if (!deps.admin) throw new Error("org promotion requires an admin service");
       const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");
-      const promoted = await deps.skills.promote(id, targetScopeId);
+      const selected = await deps.skills.get(id);
+      if (selected?.sourceProvenance) {
+        if (!deps.discloseArtifact) throw new Error("Skill source authorization is unavailable.");
+        await deps.discloseArtifact(selected, targetScopeId, actorId);
+      }
+      const promoted = await deps.skills.promote(
+        id,
+        targetScopeId,
+        selected ? skillSharingRevision(selected) : undefined,
+      );
       h.recordAudit({
         at: Date.now(),
         principalId: actorId,
@@ -1308,28 +1410,61 @@ export function createSessionMethods(
       if (type === "skill") {
         const s = await deps.skills.get(idOrName);
         return s
-          ? { id: s.id, ownerScopeId: s.scopeId, createdBy: s.createdBy, grantRef: encodeRef(skillRef(s.id)) }
+          ? {
+              id: s.id,
+              ownerScopeId: s.scopeId,
+              createdBy: s.createdBy,
+              grantRef: encodeRef(skillRef(s.id)),
+              ...(s.sourceProvenance ? { sourceProvenance: s.sourceProvenance } : {}),
+              ...(s.personalOnly ? { personalOnly: true as const, privateRevision: skillSharingRevision(s) } : {}),
+            }
           : null;
       }
       if (type === "cron") {
         const c = await deps.crons.get(idOrName);
         return c
-          ? { id: c.id, ownerScopeId: c.ownerScopeId, createdBy: c.createdBy, grantRef: encodeRef(cronRef(c.id)) }
+          ? {
+              id: c.id,
+              ownerScopeId: c.ownerScopeId,
+              createdBy: c.createdBy,
+              grantRef: encodeRef(cronRef(c.id)),
+              ...(c.sourceProvenance ? { sourceProvenance: c.sourceProvenance } : {}),
+              ...(c.personalOnly ? { personalOnly: true as const, privateRevision: cronSharingRevision(c) } : {}),
+            }
           : null;
       }
       if (type === "file") {
         const f = await deps.files.get(idOrName);
         return f
-          ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.id)) }
+          ? {
+              id: f.id,
+              ownerScopeId: f.ownerScopeId,
+              createdBy: f.createdBy,
+              grantRef: encodeRef(fileRef(f.id)),
+              ...(f.sourceProvenance ? { sourceProvenance: f.sourceProvenance } : {}),
+              ...(f.personalOnly ? { personalOnly: true as const, privateRevision: fileSharingRevision(f) } : {}),
+            }
           : null;
       }
       const d = await deps.deploy.getApp(idOrName);
       return d
-        ? { id: d.id, ownerScopeId: d.ownerScopeId, createdBy: d.createdBy, grantRef: encodeRef(deployRef(d.id)) }
+        ? {
+            id: d.id,
+            ownerScopeId: d.ownerScopeId,
+            createdBy: d.createdBy,
+            grantRef: encodeRef(deployRef(d.id)),
+            ...(d.sourceProvenance ? { sourceProvenance: d.sourceProvenance } : {}),
+            ...(d.personalOnly
+              ? {
+                  personalOnly: true as const,
+                  privateRevision: appSharingRevision(d, (await deps.deploy.liveEditOf(d.id))?.draft),
+                }
+              : {}),
+          }
         : null;
     },
 
-    async moveArtifactHome(type, id, toScope, movedBy) {
+    async moveArtifactHome(tenant, type, id, toScope, movedBy) {
       if (type === "deploy") {
         await deps.deploy.transferAppOwner(id, toScope, { callerId: movedBy });
         return;
@@ -1337,7 +1472,19 @@ export function createSessionMethods(
       if (type !== "skill") {
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       }
-      await deps.skills.move(id, toScope);
+      const selected = await deps.skills.get(id);
+      if (selected?.sourceProvenance && toScope !== selected.scopeId) {
+        const audiences = new Set([
+          toScope,
+          ...(await deps.acl.grantsFor(tenant, toScope, `skill:${id}`)).map((grant) => grant.granteeScopeId),
+        ]);
+        audiences.delete(scopeId("personal", movedBy));
+        for (const audience of audiences) {
+          if (!deps.discloseArtifact) throw new Error("Skill source authorization is unavailable.");
+          await deps.discloseArtifact(selected, audience, movedBy);
+        }
+      }
+      await deps.skills.move(id, toScope, selected ? skillSharingRevision(selected) : undefined);
       h.recordAudit({
         at: Date.now(),
         principalId: movedBy,

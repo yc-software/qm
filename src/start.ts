@@ -1,3 +1,5 @@
+import type { Tenant } from "./tenants/context.ts";
+import { jobQueueMisconfigured } from "./persistence/job-queue.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -12,7 +14,7 @@ import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin 
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
 import type { SlackPluginConfig } from "./slack/config.ts";
-import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
+import { installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
 import { loadTenant, perTenant } from "./tenants/cache.ts";
@@ -35,7 +37,7 @@ function tenantBranding(load: () => Promise<OrgBranding>): () => Promise<OrgBran
 function envSlackAccountRuntimes(
   env: NodeJS.ProcessEnv,
   tenant: string | undefined,
-  startPlugin: (config: SlackPluginConfig, tenant: string) => Promise<{ stop(): Promise<void> }>,
+  startPlugin: (config: SlackPluginConfig, tenant: Tenant) => Promise<{ stop(): Promise<void> }>,
 ) {
   const accounts = slackAccountConfigsFromEnv(env);
   if (!tenant) {
@@ -47,7 +49,11 @@ function envSlackAccountRuntimes(
     createSlackRuntimeReconciler({
       startPaused: true,
       load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
-      startPlugin: (config) => startPlugin(config, tenant),
+      startPlugin: (config) =>
+        inBootTenant(tenant, (token) => {
+          if (!token) throw new Error("Slack account startup requires a tenant");
+          return startPlugin(config, token);
+        }),
       onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
     }),
   );
@@ -61,7 +67,11 @@ export async function startQm(
   await migrateRegisteredPgSchemas(config.databaseUrl);
   if (config.databaseUrl)
     await installCronQueue(config.databaseUrl).catch((error: unknown) => {
-      if (!cronQueueMisconfigured(error)) throw error;
+      if (
+        !jobQueueMisconfigured(error) ||
+        (config.backgroundWorkEnabled && config.memoryStrategy === "per-turn" && config.memoryCapture !== "off")
+      )
+        throw error;
       console.error(`[scheduler] misconfiguration: could not install the cron job queue: ${errMessage(error)}`);
     });
   const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
@@ -155,7 +165,7 @@ export async function startQm(
   if (!config.backgroundWorkEnabled)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 
-  const slackRuntimeFor = (slackTenant: string) =>
+  const slackRuntimeFor = (slackTenant: string, slackToken: Tenant) =>
     createSlackRuntimeReconciler({
       startPaused: true,
       load: async () => {
@@ -181,7 +191,7 @@ export async function startQm(
         if (slackConfig && slackTenant === tenant) return { version: "environment", config: slackConfig };
         return null;
       },
-      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, slackTenant),
+      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, slackToken),
       onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${slackTenant}`),
     });
   const slackRuntime = createTenantSlackRuntimes({

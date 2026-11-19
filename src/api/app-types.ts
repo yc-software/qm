@@ -1,3 +1,6 @@
+import type { DeployGitContext } from "../deploy/access-token.ts";
+import type { PrivateContext } from "../sessions/private-context.ts";
+import type { ManagedGroupDirectory } from "../resolution/scope-membership.ts";
 import type { PersonaHandover } from "../personas/persona-handover.ts";
 import type { Tenant } from "../tenants/context.ts";
 import type { PersonaService } from "../personas/persona-service.ts";
@@ -210,7 +213,7 @@ export interface CronCopy {
 
 export type VisibleCron = Cron & { scopeName?: string; copies?: CronCopy[]; sharedBy?: string };
 
-export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
+export type CronEditor = PrivateContext & Pick<CapabilityClaims, "runId">;
 
 export type ProjectView = Project & {
   scopeId: ScopeId;
@@ -312,7 +315,9 @@ export interface App {
   getRun(
     runId: string,
     viewer?: string,
+    options?: { clientTools?: boolean },
   ): Promise<{
+    clientToolsFor?: string | null;
     status: Run["status"];
     attempt: number;
     result: TurnResult | null;
@@ -361,13 +366,23 @@ export interface App {
     run: Run,
     signal: RunSignal,
   ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
+  getSessionContext(
+    sessionId: string,
+  ): Promise<Pick<Session, "id" | "scopeId" | "personalOnly" | "sourceProvenance"> | null>;
+  inheritSessionContext(
+    context: PrivateContext,
+    sourceIds: readonly string[],
+    threadRefs?: readonly string[],
+  ): Promise<Set<string>>;
+  recordContextProvenance: SessionStore["recordContextProvenance"];
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
   ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor"> &
+      Partial<Pick<CapabilityClaims, "scopeId" | "sessionId" | "personalOnly">>,
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
@@ -387,7 +402,10 @@ export interface App {
   ): Promise<PinItemResult>;
   listConversationPins(threadRef: string, reader: string): Promise<SessionPinView[] | null>;
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
-  listSessions(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<Session[]>;
+  listSessions(
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor"> &
+      Partial<Pick<CapabilityClaims, "scopeId" | "audienceScopeId" | "sessionId" | "personalOnly">>,
+  ): Promise<Session[]>;
   listSessionPage(principalId: string, query: SessionPageQuery): Promise<SessionPageResult>;
   sideChats(principalId: string, sessionId: string): Promise<Session[] | null>;
   expandSideChat(principalId: string, sessionId: string): Promise<Session | null>;
@@ -398,13 +416,19 @@ export interface App {
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
-  searchConversations: CoreSearch["search"];
+  searchConversations(
+    input: Parameters<CoreSearch["search"]>[0],
+    context?: import("../sessions/private-context.ts").PrivateContext,
+  ): ReturnType<CoreSearch["search"]>;
   searchSessions(
     viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
     query: string,
     limit?: number,
   ): Promise<SessionSearchHit[]>;
-  search: CoreSearch["search"];
+  search(
+    input: Parameters<CoreSearch["search"]>[0],
+    context?: import("../sessions/private-context.ts").PrivateContext,
+  ): ReturnType<CoreSearch["search"]>;
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(
     sessionId: string,
@@ -436,7 +460,7 @@ export interface App {
     sessionId: string,
     principalId: string,
   ): Promise<{ enabled: boolean; suggestion: string | null } | null>;
-  detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
+  detachSession(tenant: Tenant, sessionId: string, principalId: string): Promise<{ detached: true } | null>;
   cancelSessionGoal(
     sessionId: string,
     principalId: string,
@@ -448,6 +472,7 @@ export interface App {
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(
+    tenant: Tenant,
     sessionId: string,
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
@@ -458,16 +483,23 @@ export interface App {
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
     ownScopeBotWork?: boolean,
+    context?: import("../sessions/private-context.ts").PrivateContext,
   ): Promise<FileListPage>;
   uploadFileForViewer(
     tenant: Tenant,
     principalId: string,
-    input: { scopeId?: ScopeId; name: string; mimetype?: string; data: AsyncIterable<Uint8Array> },
+    input: {
+      scopeId?: ScopeId;
+      name: string;
+      mimetype?: string;
+      data: AsyncIterable<Uint8Array>;
+      contextSessionId?: string;
+    },
   ): Promise<FileListItem | null>;
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   loopAdministration(
-    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-    loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
+    actor: PrivateContext,
+    loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor" | "personalOnly">[],
   ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
@@ -482,8 +514,13 @@ export interface App {
     id: string,
     principalId: string,
     ownScopeBotWork: boolean,
+    context?: import("../sessions/private-context.ts").PrivateContext,
   ): Promise<OpenedFile | null>;
-  grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
+  grant(
+    tenant: Tenant,
+    g: Grant,
+    opts?: { notify?: boolean; privateRevision?: string; context?: PrivateContext },
+  ): Promise<void>;
   revokeGrant(
     tenant: Tenant,
     ownerScopeId: ScopeId,
@@ -497,7 +534,7 @@ export interface App {
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
-  moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
+  moveArtifactHome(tenant: Tenant, type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
   getSoul(
     scopeId: ScopeId,
     reader: { actorId: string; ownScopeBotWork: boolean },
@@ -517,9 +554,10 @@ export interface App {
     opts?: { allowSharedScope?: boolean; botActor?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
+  publishPrivateCron(id: string, revision: string, target: ScopeId, by: CronEditor): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
-  listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
+  listCronsForViewer(principalId: string | PrivateContext): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
   shareCron(
     tenant: Tenant,
     id: string,
@@ -530,21 +568,42 @@ export interface App {
   cronCopies(id: string): Promise<CronCopy[]>;
   cronSharing(cron: VisibleCron): Promise<VisibleCron>;
   unshareCron(id: string, recipient: string): Promise<void>;
-  updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
+  updateCron(
+    tenant: Tenant,
+    id: string,
+    patch: CronPatch,
+    by: CronEditor,
+    trial?: CronScriptTrial,
+  ): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
-  setCronEnabled(id: string, enabled: boolean): Promise<void>;
-  setCronFireNote(id: string, note: CronFireNote, by: CronEditor): Promise<"applied" | "superseded" | "missing">;
+  setCronEnabled(tenant: Tenant, id: string, enabled: boolean, by?: CronEditor): Promise<void>;
+  setCronFireNote(
+    tenant: Tenant,
+    id: string,
+    note: CronFireNote,
+    by: CronEditor,
+  ): Promise<"applied" | "superseded" | "missing">;
   listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
-  setCronDestination(id: string, destination: Destination | undefined, by: CronEditor): Promise<Cron | null>;
+  setCronRuntime(
+    tenant: Tenant,
+    id: string,
+    runtime: Exclude<Cron["runtime"], undefined>,
+    by?: CronEditor,
+  ): Promise<Cron | null>;
+  setCronDestination(
+    tenant: Tenant,
+    id: string,
+    destination: Destination | undefined,
+    by: CronEditor,
+  ): Promise<Cron | null>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
-  setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
-  updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
+  setWebhookEnabled(id: string, enabled: boolean, by?: PrivateContext): Promise<void>;
+  updateWebhook(id: string, patch: { action: string }, by?: PrivateContext): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
@@ -618,39 +677,49 @@ export interface App {
   directoryChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
+  preparePrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
   recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
   reachNow(input: ReachNowInput): Promise<ReachNowResult>;
   resolveReachTarget(target: ReachTarget, authorityId: string, opts?: ReachOpts): Promise<ReachResolution>;
   deploy(input: DeployInput): Promise<PublishedApp>;
-  redeploy(id: string, input: RedeployInput): Promise<PublishedApp>;
+  redeploy(tenant: Tenant, id: string, input: RedeployInput): Promise<PublishedApp>;
   listApps(): Promise<PublishedApp[]>;
   getApp(idOrName: string): Promise<PublishedApp | null>;
-  listAppsForViewer(tenant: Tenant, viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<ViewerApp[]>;
+  listAppsForViewer(tenant: Tenant, viewer: PrivateContext): Promise<ViewerApp[]>;
   effectiveAppPermission(d: PublishedApp, principalId: string): Promise<Permission | null>;
-  appGitPermissionFor(
-    idOrName: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null>;
+  appGitPermissionFor(idOrName: string, viewer: PrivateContext): Promise<"read" | "write" | null>;
   appGitPermissionsFor(
     tenant: Tenant,
     publishedApps: readonly PublishedApp[],
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: PrivateContext,
   ): Promise<Array<"read" | "write" | null>>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
+  listVisibleSkills(
+    principalId: string,
+    ownScopeBotWork: boolean,
+    contextScopeId?: ScopeId,
+  ): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   updateOwnedSkill(
+    tenant: Tenant,
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean; botActor?: boolean },
-  ): Promise<Skill | "trigger_blocked" | null>;
+    opts?: {
+      liveActor?: boolean;
+      botActor?: boolean;
+      personalOnly?: true;
+      contextScopeId?: ScopeId;
+      context?: PrivateContext;
+      sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
+    },
+  ): Promise<Skill | "trigger_blocked" | "private_context" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean; botActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean; contextScopeId?: ScopeId; personalOnly?: true },
   ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
@@ -662,6 +731,8 @@ export interface App {
   removeSkillPack(id: string): Promise<{ removed: number }>;
   createOwnedSkill(input: {
     principalId: string;
+    sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
+    personalOnly?: true;
     homeScope?: ScopeId;
     name: string;
     description: string;
@@ -673,32 +744,40 @@ export interface App {
     id: string;
     liveActor?: boolean;
     botActor?: boolean;
+    contextScopeId?: ScopeId;
+    personalOnly?: true;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
-  rollbackApp(id: string, version: number, actor?: string): Promise<void>;
-  archiveApp(id: string): Promise<void>;
-  restoreApp(id: string, actorId?: string): Promise<PublishedApp>;
-  canManageApp(
-    idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-    actingScopeId?: ScopeId,
-  ): Promise<boolean>;
-  renameApp(id: string, name: string): Promise<PublishedApp>;
-  setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
-  setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
-  setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
+  rollbackApp(tenant: Tenant, id: string, version: number, actor?: string): Promise<void>;
+  archiveApp(tenant: Tenant, id: string, context?: PrivateContext): Promise<void>;
+  restoreApp(tenant: Tenant, id: string, actorId?: string, context?: PrivateContext): Promise<PublishedApp>;
+  canManageApp(idOrName: string, caller: PrivateContext, actingScopeId?: ScopeId): Promise<boolean>;
+  renameApp(tenant: Tenant, id: string, name: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppDisplayName(tenant: Tenant, id: string, displayName: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppAlwaysOn(tenant: Tenant, id: string, alwaysOn: boolean, context?: PrivateContext): Promise<PublishedApp>;
+  setAppEmbedAncestors(
+    tenant: Tenant,
+    id: string,
+    embedAncestors: string[],
+    context?: PrivateContext,
+  ): Promise<PublishedApp>;
   setAppPublic(
     idOrName: string,
     isPublic: boolean,
     actor: AppActor & { personAtKeyboard: boolean },
   ): Promise<PublishedApp>;
-  setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
+  setAppConnectors(
+    tenant: Tenant,
+    idOrName: string,
+    connectors: string[],
+    actor: { createdBy: string; context?: PrivateContext },
+  ): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
   appLiveEdit(id: string): Promise<{ draft: AppDraft | null } | null>;
-  reachApp(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
+  reachApp(id: string, principalId: string | PrivateContext, opts?: ReachOptions): Promise<Reach>;
   appLogsFor(
     id: string,
-    principalId: string,
+    principalId: string | PrivateContext,
     opts: { tailLines: number },
   ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }>;
   shareApp(
@@ -720,17 +799,24 @@ export interface App {
   appGrantees(idOrName: string): Promise<AppGrantee[]>;
   appUrl(publishedApp: PublishedApp): string | undefined;
   appGitRepoPath(id: string): Promise<string | null>;
+  runAppGitRead<T>(id: string, runUploadPack: () => Promise<T>): Promise<T>;
   runAppGitPush<T>(
+    tenant: Tenant,
     id: string,
-    actor: string | undefined,
+    actor: string | PrivateContext | undefined,
     runReceivePack: () => Promise<{ result: T; ok: boolean }>,
   ): Promise<T>;
   appGitUrlFor(
     idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: PrivateContext,
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<AppGitUrl | null>;
-  authorizesAppGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
+  authorizesAppGitAccess(
+    id: string,
+    principalId: string,
+    permission: "read" | "write",
+    context?: DeployGitContext,
+  ): Promise<boolean>;
   reapIdleApps(ttlMs: number, now?: number): Promise<number>;
   listEnvironments(): Promise<{ environment: Environment; attachments: EnvironmentAttachment[] }[]>;
   createEnvironment(input: { scopeId: ScopeId; name: string; actorId: string }): Promise<Environment>;
@@ -747,6 +833,7 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
+  discloseArtifact?: ReturnType<typeof import("../memory/artifact-disclosure.ts").createArtifactDisclosure>;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;
@@ -793,6 +880,7 @@ export interface AppDeps {
   teams?: Pick<TeamStore, "isMember" | "memberTeams">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
+  managedGroups?: ManagedGroupDirectory & Pick<ProjectStore, "membersMany">;
   deploy: DeployService;
   deployAppsDomain?: string;
   appGitPrincipals?: AppGitPrincipals;

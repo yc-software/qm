@@ -1,7 +1,13 @@
+import {
+  privateSourceAllowed,
+  inheritContextSources,
+  inheritSearchContext,
+  type PrivateContext,
+} from "../sessions/private-context.ts";
 import { samePerson } from "../directory/person.ts";
 import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { createCoreSearch, type BackendSearchHit, type SearchBackend } from "../search/core-search.ts";
+import { createCoreSearch, type BackendSearchHit, type SearchBackend, type CoreSearch } from "../search/core-search.ts";
 import { createIntersectionBackend } from "../search/backends.ts";
 import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import type { Principal } from "../types.ts";
@@ -46,11 +52,15 @@ function searchableFile(mimetype: string, name: string): boolean {
     /\.(?:txt|md|markdown|json|jsonl|csv|tsv|xml|ya?ml)$/i.test(name)
   );
 }
-function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBackend {
+function fileBackend(deps: AppDeps, helpers: AppHelpers, context?: PrivateContext): SearchBackend {
   return {
     name: "files",
     async search(request) {
       const tenant = ambientTenant();
+      const actorId = context?.actorId ?? request.principals[0]?.id;
+      if (!actorId) return [];
+      const receiving = context ?? { actorId, botActor: request.botActor };
+      const privateAudience = request.principals.every((person) => samePerson(person.id, actorId));
       const libraries = await Promise.all(
         request.principals.map(async (p) => {
           const scopes = await helpers.currentResourceScopesForViewer(p.id, request.ownScopeBotWork === true);
@@ -70,18 +80,17 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
       const [first, ...rest] = libraries;
       if (!first) return [];
       const common = rest.map((files) => new Set(files.map((file) => file.id)));
-      const files = first.filter((file) => common.every((ids) => ids.has(file.id)));
+      const files = first.filter(
+        (file) =>
+          common.every((ids) => ids.has(file.id)) &&
+          (!file.personalOnly || (privateAudience && privateSourceAllowed(receiving, file.ownerScopeId))),
+      );
       const terms = searchTerms(request.query);
       const hits: BackendSearchHit[] = [];
       for (const file of files) {
         let text = file.name;
         if (searchableFile(file.mimetype, file.name)) {
-          const opened = await app.openFileForViewer(
-            tenant,
-            file.id,
-            request.principals[0]!.id,
-            request.ownScopeBotWork === true,
-          );
+          const opened = await deps.files.open(file.id);
           if (opened) {
             const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(
               swallowAs("app search: read file contents", null),
@@ -100,7 +109,20 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
         });
         if (hits.length >= request.limit) break;
       }
-      return hits;
+      const selected = new Set(hits.map((hit) => hit.id));
+      const blocked = await inheritContextSources(
+        deps.sessions,
+        receiving,
+        files
+          .filter((file) => selected.has(file.id))
+          .map((file) => ({
+            id: file.id,
+            ownerScopeId: file.ownerScopeId,
+            personalOnly: file.personalOnly,
+            sourceProvenance: file.sourceProvenance,
+          })),
+      );
+      return hits.filter((hit) => !blocked.has(hit.id));
     },
   };
 }
@@ -162,10 +184,20 @@ export function createSearchMethods(
       ),
   };
   const conversationsBackend = conversationBackend(app, deps.publicWebUrl);
-  const core = createCoreSearch(
-    [conversationsBackend, ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
-    options,
-  );
   const conversations = createCoreSearch([conversationsBackend], options);
-  return { search: core.search, searchConversations: conversations.search };
+  const contextual =
+    (search: CoreSearch["search"]) => async (input: Parameters<CoreSearch["search"]>[0], context?: PrivateContext) => {
+      const result = await search(input);
+      return context ? inheritSearchContext(deps.sessions, context, result) : result;
+    };
+  return {
+    search: (input, context) =>
+      contextual(
+        createCoreSearch(
+          [conversationsBackend, ...(slack ? [slack] : []), fileBackend(deps, helpers, context)],
+          options,
+        ).search,
+      )(input, context),
+    searchConversations: contextual(conversations.search),
+  };
 }

@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -78,23 +79,27 @@ test("deploy-service: redeploy inherits the current version's env and home files
   });
   const versionAt = async (n: number) => (await s.deployStore.get(d.id))!.versions[n - 1]!;
 
-  await s.service.redeploy(d.id, { entrypoint: "node x", files: [] });
+  await s.service.redeploy(appWriteTenant, d.id, { entrypoint: "node x", files: [] });
   assert.deepEqual((await versionAt(2)).env, { DB_URL: "postgres://one" }, "omitted env inherits");
   assert.equal((await versionAt(2)).homeDir, (await versionAt(1)).homeDir, "omitted homeFiles inherit");
   assert.deepEqual(s.applied?.env, { DB_URL: "postgres://one", VIEWER_IDENTITY_KEY: "viewer" }, "appEnv on top");
 
-  await s.service.redeploy(d.id, { entrypoint: "node x", files: [], env: { DB_URL: "postgres://two" } });
+  await s.service.redeploy(appWriteTenant, d.id, {
+    entrypoint: "node x",
+    files: [],
+    env: { DB_URL: "postgres://two" },
+  });
   assert.deepEqual((await versionAt(3)).env, { DB_URL: "postgres://two" }, "provided env replaces");
 
-  await s.service.redeploy(d.id, { entrypoint: "node x", files: [], env: {}, homeFiles: [] });
+  await s.service.redeploy(appWriteTenant, d.id, { entrypoint: "node x", files: [], env: {}, homeFiles: [] });
   assert.deepEqual((await versionAt(4)).env, {}, "an empty env clears");
   assert.equal((await versionAt(4)).homeDir, undefined, "empty homeFiles clear");
   assert.deepEqual(s.applied?.env, { VIEWER_IDENTITY_KEY: "viewer" });
 
-  await s.service.rollbackApp(d.id, 3);
-  await s.service.redeploy(d.id, { entrypoint: "node x", files: [] });
+  await s.service.rollbackApp(appWriteTenant, d.id, 3);
+  await s.service.redeploy(appWriteTenant, d.id, { entrypoint: "node x", files: [] });
   assert.deepEqual((await versionAt(5)).env, { DB_URL: "postgres://two" }, "inherits from the rolled-back version");
 
-  await s.service.redeploy(d.id, { entrypoint: "node x", files: [], stampEnv: { STAMP: "s" } });
+  await s.service.redeploy(appWriteTenant, d.id, { entrypoint: "node x", files: [], stampEnv: { STAMP: "s" } });
   assert.deepEqual((await versionAt(6)).env, { DB_URL: "postgres://two", STAMP: "s" }, "stampEnv merges on top");
 });

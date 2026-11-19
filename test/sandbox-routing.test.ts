@@ -85,6 +85,7 @@ function stubResources(defaults: Record<string, SandboxResource | null>, extra: 
   let held = 0;
   const stub = {
     locks,
+    authorizeScratch: async () => {},
     isLocked: () => held > 0,
     resolve: async (scopeId: string) => defaults[scopeId] ?? null,
     defaultBackend: async () => "aws" as const,

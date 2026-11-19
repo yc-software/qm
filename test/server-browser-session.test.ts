@@ -11,6 +11,13 @@ import type { ApiCtx, Route } from "../src/api/routes/route.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../src/auth/portal-identity.ts";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { createHash } from "node:crypto";
+import { developmentImpersonation } from "../plugins/portal/src/development-impersonation.ts";
+import { browserIdentity } from "../src/api/browser-session.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { orgId } from "../src/config.ts";
 
 const SIGNING = "browser-session-signing-secret-0123456789";
 const PORTAL_IDENTITY = "browser-session-identity-secret-0123456789";
@@ -233,6 +240,64 @@ test("impersonation is ignored on requests from another origin", async () => {
     const own = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie, origin: ORIGIN } });
     assert.equal(own.status, 200);
     assert.equal(seen[1]?.principalId, "carol");
+  });
+});
+
+test("only portal-verified development views carry impersonation across origins", async () => {
+  await withTenant("00000000-0000-0000-0000-000000000001", async (tenant) => {
+    const session = {
+      k: "session" as const,
+      sub: "admin-alice",
+      org: orgId(),
+      t: tenant.id,
+      iat: nowS(),
+      exp: nowS() + 600,
+    };
+    const key = deriveKey(SESSION, "portal.impersonate.v1");
+    const selected = seal(
+      { k: "impersonate", actor: session.sub, target: "carol", org: session.org, iat: nowS(), exp: nowS() + 600 },
+      key,
+    );
+    const name = `portal_development_${createHash("sha256").update("view-a").digest("hex")}`;
+    const req = new IncomingMessage(new Socket());
+    req.method = "GET";
+    req.url = "/me?development_view=view-a&development_impersonating=1";
+    req.headers = {
+      origin: "https://embedder.example.com",
+      cookie: `${sessionCookie(session)}; ${name}=${encodeURIComponent(selected)}`,
+    };
+    const deps = {
+      signingSecret: SIGNING,
+      portalUrl: ORIGIN,
+      admin,
+      portalSession: { secret: SESSION, maxAgeSeconds: 3600 },
+    } as ServerDeps;
+    const before = await browserIdentity(req, "GET", deps, false, tenant);
+    assert.equal("p" in before && before.p, "admin-alice");
+    assert.equal(
+      await developmentImpersonation({
+        req,
+        res: new ServerResponse(req),
+        url: new URL(req.url, ORIGIN),
+        session,
+        enabled: true,
+        allowedOrigin: true,
+        key,
+        secure: true,
+        ttlSeconds: 600,
+        isAdmin: async () => true,
+        canonical: async () => null,
+        impersonate: async () => ({ ok: true, status: 200 }),
+      }),
+      false,
+    );
+    const verified = await browserIdentity(req, "GET", deps, false, tenant);
+    assert.equal("p" in verified && verified.p, "carol");
+    assert.equal("imp" in verified && verified.imp, "admin-alice");
+    const other = new IncomingMessage(new Socket());
+    other.headers = { ...req.headers, "x-development-identity": "carol" };
+    const unverified = await browserIdentity(other, "GET", deps, false, tenant);
+    assert.equal("p" in unverified && unverified.p, "admin-alice");
   });
 });
 

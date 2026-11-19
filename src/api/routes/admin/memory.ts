@@ -1,10 +1,12 @@
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.ts";
-import { renderFacts } from "../../../memory/facts.ts";
+import { UNTRACKED_PROVENANCE, renderFacts } from "../../../memory/facts.ts";
 import type { MemoryAuthority } from "../../../memory/memory-service.ts";
 import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
 import { tenantOf, type ApiCtx } from "../route.ts";
 import { discoverScopes } from "./common.ts";
+import { personalScope } from "../../../types.ts";
+import { inheritRequestSources } from "../../private-context.ts";
 
 export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
   const { res, app, deps } = ctx;
@@ -53,14 +55,21 @@ export async function adminMemory(ctx: ApiCtx): Promise<void> {
   const memory = deps.memory;
   if (!memory) return sendJson(res, 404, { error: "not_found" });
   const by: MemoryAuthority = { actorId: actor.id, context: "admin" };
+  const protectedContext = ctx.capability?.personalOnly || ctx.capability?.memory?.personalOnly;
+  if (protectedContext && method !== "GET" && scope !== personalScope(actor.id))
+    return sendJson(res, 403, { error: "forbidden", message: "Private conversation learning must remain personal." });
+  const provenance = {
+    ...(protectedContext ? { personalOnly: true as const } : {}),
+    ...(ctx.sourceProvenance ? { inheritedFacts: [UNTRACKED_PROVENANCE, ctx.sourceProvenance] } : {}),
+  };
   if (method === "POST") {
     const facts = parseFacts(body);
     if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    await memory.capture(scope, facts, Date.now(), by, { mode: "explicit" });
+    await memory.capture(tenantOf(ctx), scope, facts, Date.now(), by, { mode: "explicit", ...provenance });
   } else if (method === "PATCH") {
     const edits = parseEdits(body);
     if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-    await memory.edit?.(scope, edits, by);
+    await memory.edit?.(scope, edits, by, provenance);
   } else if (method === "DELETE") {
     const ids = parseIds(body);
     if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
@@ -68,7 +77,20 @@ export async function adminMemory(ctx: ApiCtx): Promise<void> {
   }
   const action = method === "GET" ? "memory.read" : "memory.update";
   audit(ctx, { principalId: actor.id, action, resource: "memory", scopeLabel: scope });
-  const facts = await memoryFacts(memory, scope);
+  const privateVisible =
+    scope === personalScope(actor.id) && (!ctx.capability || (ctx.capability.scopeId === scope && protectedContext));
+  const raw = ((await memory.facts?.(scope)) ?? []).filter((fact) => !fact.personalOnly || Boolean(privateVisible));
+  const blocked = await inheritRequestSources(
+    ctx,
+    raw.map((fact) => ({
+      id: fact.id,
+      ownerScopeId: scope,
+      personalOnly: fact.personalOnly,
+      sourceProvenance: fact,
+    })),
+    actor.id,
+  );
+  const facts = await memoryFacts({ ...memory, facts: async () => raw.filter((fact) => !blocked.has(fact.id)) }, scope);
   return sendJson(res, 200, {
     scopeId: scope,
     content: memory.facts ? renderFacts(facts) : await memory.read(scope),

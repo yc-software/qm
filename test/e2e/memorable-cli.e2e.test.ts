@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "../support/test-tenant.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -102,6 +103,7 @@ describe(
     it("automatic capture records a redacted procedure into the qm backend", { timeout: 120_000 }, () =>
       withTenant(TEST_TENANT, async () => {
         const stored = await memory.capture(
+          captureTenant,
           personal,
           ["Josh's project is Osprey"],
           Date.now(),

@@ -1,3 +1,5 @@
+import type { Tenant } from "../src/tenants/context.ts";
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
@@ -15,7 +17,7 @@ function fixture(fail?: Error) {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const notes: string[] = [];
   const core = {
-    noteSurfaceHistoryGap: async (container: string, note: string) => {
+    noteSurfaceHistoryGap: async (_tenant: Tenant, container: string, note: string) => {
       notes.push(`${container}:${note}`);
     },
     readSurfaceMessages: cache.readMessages,
@@ -48,7 +50,7 @@ function fixture(fail?: Error) {
       },
     },
   };
-  const readHistory = createSlackHistoryReader({ core, ids, historyClient });
+  const readHistory = createSlackHistoryReader(captureTenant, { core, ids, historyClient });
   return { cache, calls, notes, readHistory };
 }
 
@@ -137,7 +139,7 @@ test("the history gap note lands in the conversation's own scope memory", async 
   const client = createSlackCoreClient({
     surfaceCache: cache,
     memory: {
-      capture: async (scope: string, facts: string[]) => {
+      capture: async (_tenant: Tenant, scope: string, facts: string[]) => {
         captured.push(`${scope}=${facts.join()}`);
         return facts.length;
       },
@@ -145,8 +147,8 @@ test("the history gap note lands in the conversation's own scope memory", async 
     turnStream: createTurnStream(),
     runs: {},
   } as any);
-  await client.noteSurfaceHistoryGap!("C1", "gap");
-  await client.noteSurfaceHistoryGap!("G1", "gap");
+  await client.noteSurfaceHistoryGap!(captureTenant, "C1", "gap");
+  await client.noteSurfaceHistoryGap!(captureTenant, "G1", "gap");
   assert.deepEqual(captured, ["channel:C1=gap", "group:G1=gap"]);
 });
 

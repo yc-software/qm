@@ -220,7 +220,7 @@ test("an explicit public-channel write grant retains write permission", async ()
 test("canManage: a member acting in the creation channel's context may rename", async () => {
   const { f, d } = await setup();
   try {
-    const renamed = await f.deploy.deployOrUpdate({
+    const renamed = await f.deploy.deployOrUpdate(tenant, {
       ownerScopeId: scopeId("personal", "U2"),
       createdBy: "U2",
       renameFrom: d.name ?? d.id,
@@ -244,7 +244,7 @@ test("canManage: acting in a different (shared-into) channel does NOT confer man
       grantedBy: "U1",
     });
     await assert.rejects(
-      f.deploy.deployOrUpdate({
+      f.deploy.deployOrUpdate(tenant, {
         ownerScopeId: scopeId("personal", "U3"),
         createdBy: "U3",
         renameFrom: d.name ?? d.id,
@@ -329,7 +329,7 @@ test("removed channel members keep stale-session read reach but lose write and m
 test("canManage: the creator may still rename", async () => {
   const { f, d } = await setup();
   try {
-    const renamed = await f.deploy.deployOrUpdate({
+    const renamed = await f.deploy.deployOrUpdate(tenant, {
       ownerScopeId: scopeId("personal", "U1"),
       createdBy: "U1",
       renameFrom: d.name ?? d.id,
@@ -383,7 +383,7 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
     const ownGit = await fetch(`${f.base}/v1/apps/${encodeURIComponent(own.id)}/git-url`, { headers: bot });
     assert.equal(((await ownGit.json()) as { permission: string }).permission, "write");
     const publish = (input: { name: string; renameFrom?: string; rollbackTo?: number }) =>
-      f.deploy.deployOrUpdate({
+      f.deploy.deployOrUpdate(tenant, {
         ownerScopeId: scopeId("personal", "release-bot"),
         createdBy: "release-bot",
         botActor: true,
@@ -416,7 +416,7 @@ test("bot work that runs as a shared system actor cannot republish, open up or s
       name: "ambient-app",
     });
     const asBot = { createdBy: actor, botActor: true };
-    const republish = f.deploy.deployOrUpdate({
+    const republish = f.deploy.deployOrUpdate(tenant, {
       ownerScopeId,
       ...asBot,
       entrypoint: "node server.js",

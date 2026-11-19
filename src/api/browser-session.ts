@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { deriveKey, impersonationFor, openSession, readCookie } from "../../plugins/portal/src/session.ts";
+import { verifiedDevelopmentIdentity } from "../../plugins/portal/src/development-impersonation.ts";
 import { originOf, sameOriginRequest } from "../../plugins/chassis/src/http.ts";
 import type { PortalIdentity } from "../auth/portal-identity.ts";
 import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
@@ -81,6 +82,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/sessions/:id/expand", "/v1/sessions/:id/expand"],
   ["POST /api/sessions/:id/fork", "/v1/sessions/:id/fork"],
   ["PUT /api/ui-state", "/v1/ui-state"],
+  ["POST /api/skills/:id/share", "/v1/skills/:id/share"],
   ["POST /api/skills", "/v1/skills"],
   ["PUT /api/skills/:id", "/v1/skills/:id"],
   ["DELETE /api/skills/:id", "/v1/skills/:id"],
@@ -108,6 +110,9 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
   ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
   ["POST /api/turn", "/v1/web/turn"],
+  ["POST /api/documents/resolve", "/v1/web/documents/resolve"],
+  ["POST /api/documents/:sessionId/restart", "/v1/web/documents/:sessionId/restart"],
+  ["PUT /api/admin/documents/surface", "/v1/admin/documents/surface"],
   ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
   ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
   ["GET /api/deliveries/events", "/v1/web/events"],
@@ -296,7 +301,7 @@ export async function browserIdentity(
   const sub = canonicalPerson(session.sub);
   const foreign = req.headers.origin !== undefined && !sameOriginRequest(req, originOf(deps.portalUrl!));
   const imp = foreign
-    ? null
+    ? verifiedDevelopmentIdentity(req)
     : impersonationFor({ sub, org: session.org }, cookies, deriveKey(secret, "portal.impersonate.v1"), now);
   const target = imp && (await isAdmin(deps, tenant, sub)) ? imp.target : null;
   return {

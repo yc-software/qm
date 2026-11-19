@@ -1,3 +1,4 @@
+import { artifactProvenance } from "../memory/facts.ts";
 import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -15,7 +16,7 @@ const WRITE_GIVEUP_MS = 10 * 60_000;
 
 type WebTranscriptSessions = Pick<
   SessionStore,
-  "appendDelivery" | "get" | "getByThread" | "getItems" | "participantsOf"
+  "appendDelivery" | "get" | "getByThread" | "getItems" | "participantsOf" | "recordContextProvenance"
 >;
 
 export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
@@ -101,6 +102,15 @@ export function withWebTranscriptDeliveries(
 
   const recordedForDelivery = async (d: Delivery): Promise<boolean> => {
     if (recorded.has(d.idempotencyKey)) return true;
+    const note = d.destination.webTranscript;
+    const session =
+      note?.kind === "slack_reply"
+        ? await sessions.get(note.sessionId)
+        : await sessions.getByThread(d.destination.target);
+    if (d.provenance?.contextProvenance) {
+      if (!session) throw new Error("Delivery context requires its recipient conversation.");
+      await sessions.recordContextProvenance(session.id, session.scopeId, d.provenance.contextProvenance);
+    }
     if (overdue(d)) {
       console.error(
         `[delivery] web delivery ${d.idempotencyKey} was not recorded in ${d.destination.target} within ${WRITE_GIVEUP_MS}ms — delivering as a nudge only`,
@@ -108,11 +118,6 @@ export function withWebTranscriptDeliveries(
       remember(d.idempotencyKey);
       return true;
     }
-    const note = d.destination.webTranscript;
-    const session =
-      note?.kind === "slack_reply"
-        ? await sessions.get(note.sessionId)
-        : await sessions.getByThread(d.destination.target);
     if (!session) {
       console.error(
         `[delivery] web delivery ${d.idempotencyKey} targets ${d.destination.target}, which has no session — delivering as a nudge only`,
@@ -138,7 +143,7 @@ export function withWebTranscriptDeliveries(
         }
         if (disposition === "deliver" || (await recordedForDelivery(d))) out.push(d);
       } catch (err) {
-        if (overdue(d)) {
+        if (overdue(d) && !d.provenance?.contextProvenance) {
           reportFailure(
             "web delivery: transcript write gave up (delivering as a nudge only)",
             err,
@@ -157,6 +162,18 @@ export function withWebTranscriptDeliveries(
   return {
     ...store,
     async enqueue(input) {
+      const provenance = input.provenance;
+      if (provenance?.sourceSessionId && !provenance.contextProvenance) {
+        const source = await sessions.get(provenance.sourceSessionId);
+        if (source && (source.personalOnly || source.sourceProvenance))
+          input = {
+            ...input,
+            provenance: {
+              ...provenance,
+              contextProvenance: artifactProvenance(source.scopeId, source.sourceProvenance, source.personalOnly),
+            },
+          };
+      }
       const delivery = await store.enqueue(input);
       if (delivery.destination.webTranscript?.kind === "slack_reply") {
         try {

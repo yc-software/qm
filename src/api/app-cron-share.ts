@@ -1,3 +1,4 @@
+import { withCronAccess } from "../cron/cron-store.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { App, AppDeps, CronCopy, VisibleCron } from "./app-types.ts";
 import type { CronPatch } from "../cron/cron-store.ts";
@@ -130,54 +131,83 @@ export function createCronShareMethods(
     cronCopies: async (id) => (await deps.crons.copiesOf(id)).map(asCopy),
     cronSharing: (cron) => sharingFor(deps.crons, cron),
     async unshareCron(id, recipient) {
-      const copy = (await deps.crons.copiesOf(id)).find((c) => samePerson(c.owner, recipient));
-      if (copy) await deps.crons.update(copy.id, { sharedFrom: null });
+      await withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const copy = (await deps.crons.copiesOf(id)).find((c) => samePerson(c.owner, recipient));
+        if (copy) await deps.crons.update(copy.id, { sharedFrom: null });
+      });
     },
     async shareCron(tenant, id, recipient, by) {
-      const source = await deps.crons.get(id);
-      if (!source) throw new Error(`no cron ${id}`);
-      if (source.script)
-        throw new Error("a cron with a script can't be shared with a person: its script runs with the owner's access");
-      const linkedTo = source.sharedFrom && !source.forkedAt ? source.sharedFrom : id;
-      const existing = (await deps.crons.copiesOf(linkedTo)).find((c) => samePerson(c.owner, recipient));
-      if (existing) return { copy: existing, existed: true };
-      const started = (await deps.admin?.adminStatusOf(tenant, { id: by, type: "internal" }))?.isAdmin === true;
-      const ownerScopeId = scopeId("personal", recipient);
-      const title = source.title ?? "Shared cron";
-      const onChat = (await app.directoryMember(recipient)) !== null;
-      const home = onChat ? null : await app.spawnSession(recipient, { scopeId: ownerScopeId, title });
-      const destination: Destination = home
-        ? { type: "web", target: home.session.threadRef }
-        : principalDestination(recipient, recipient);
-      const copy = await app.createCron({
-        ownerScopeId,
-        owner: recipient,
-        createdBy: recipient,
-        destination,
-        schedule: source.schedule,
-        enabled: started,
-        sharedFrom: linkedTo,
-        title,
-        ...(source.action !== undefined ? { action: source.action } : {}),
-        ...(source.message !== undefined ? { message: source.message } : {}),
-        ...(source.runtime ? { runtime: source.runtime } : {}),
-        ...(home ? { sessionRef: home.session.threadRef } : {}),
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const source = await deps.crons.get(id);
+        if (!source) throw new Error(`no cron ${id}`);
+        if (source.personalOnly) throw new Error("Private schedules require selected publication before sharing.");
+        if (source.script)
+          throw new Error(
+            "a cron with a script can't be shared with a person: its script runs with the owner's access",
+          );
+        const linkedTo = source.sharedFrom && !source.forkedAt ? source.sharedFrom : id;
+        const existing = (await deps.crons.copiesOf(linkedTo)).find((c) => samePerson(c.owner, recipient));
+        if (existing) return { copy: existing, existed: true };
+        const started = (await deps.admin?.adminStatusOf(tenant, { id: by, type: "internal" }))?.isAdmin === true;
+        const ownerScopeId = scopeId("personal", recipient);
+        let sourceProvenance = source.sourceProvenance;
+        if (sourceProvenance) {
+          if (!deps.discloseArtifact) throw new Error("Schedule source authorization is unavailable.");
+          sourceProvenance = (await deps.discloseArtifact(source, ownerScopeId, by)) ?? sourceProvenance;
+        }
+        const title = source.title ?? "Shared cron";
+        const onChat = (await app.directoryMember(recipient)) !== null;
+        const home = onChat ? null : await app.spawnSession(recipient, { scopeId: ownerScopeId, title });
+        if (home && sourceProvenance)
+          await deps.sessions.recordContextProvenance(home.session.id, ownerScopeId, sourceProvenance);
+        const destination: Destination = home
+          ? { type: "web", target: home.session.threadRef }
+          : principalDestination(recipient, recipient);
+        const copy = await app.createCron({
+          ownerScopeId,
+          owner: recipient,
+          createdBy: recipient,
+          destination,
+          schedule: source.schedule,
+          enabled: started,
+          sharedFrom: linkedTo,
+          ...(sourceProvenance ? { sourceProvenance } : {}),
+          title,
+          ...(source.action !== undefined ? { action: source.action } : {}),
+          ...(source.message !== undefined ? { message: source.message } : {}),
+          ...(source.runtime ? { runtime: source.runtime } : {}),
+          ...(home ? { sessionRef: home.session.threadRef } : {}),
+        });
+        const sharer = (await app.directoryMember(by))?.displayName ?? by;
+        const origin = linkedTo === id ? source : ((await deps.crons.get(linkedTo)) ?? source);
+        const { personaId } = await originOf(origin, ownerScopeId);
+        const persona = await lendPersona(personaId, origin.ownerScopeId, recipient, by, sharer);
+        const what = source.action ?? source.message ?? "";
+        const linked = `${persona?.toRecipient ? `${persona.toRecipient} ` : ""}It stays linked to ${sharer}'s cron, so their edits reach it until it is edited here; then it is a separate copy of its own.`;
+        const text = started
+          ? `${sharer} shared their cron "${title}" with you, and it is on: it runs as you, ${scheduleText(source.schedule)}, posting here.\n> ${what}\n${linked} To stop it, pause or delete cron ${copy.id}.`
+          : `${sharer} wants to share their cron "${title}" with you. It would run as you, ${scheduleText(source.schedule)}, posting here.\n> ${what}\nIt is in your crons, paused. Accept by turning cron ${copy.id} on (patch enabled: true); decline by deleting it. ${linked}`;
+        await app.enqueueDelivery({
+          destination: home
+            ? { ...destination, webTranscript: { kind: "reply" } }
+            : principalDestination(recipient, by),
+          text,
+          idempotencyKey: `cron-shared:${copy.id}`,
+          ...(sourceProvenance
+            ? {
+                provenance: {
+                  trigger: "cron",
+                  surface: "cron",
+                  fireKey: `cron-shared:${copy.id}`,
+                  sourceScopeId: source.ownerScopeId,
+                  sourceThreadRef: `cron:${source.id}`,
+                  contextProvenance: sourceProvenance,
+                },
+              }
+            : {}),
+        });
+        return { copy, existed: false, ...(persona ? { note: persona.toSharer } : {}) };
       });
-      const sharer = (await app.directoryMember(by))?.displayName ?? by;
-      const origin = linkedTo === id ? source : ((await deps.crons.get(linkedTo)) ?? source);
-      const { personaId } = await originOf(origin, ownerScopeId);
-      const persona = await lendPersona(personaId, origin.ownerScopeId, recipient, by, sharer);
-      const what = source.action ?? source.message ?? "";
-      const linked = `${persona?.toRecipient ? `${persona.toRecipient} ` : ""}It stays linked to ${sharer}'s cron, so their edits reach it until it is edited here; then it is a separate copy of its own.`;
-      const text = started
-        ? `${sharer} shared their cron "${title}" with you, and it is on: it runs as you, ${scheduleText(source.schedule)}, posting here.\n> ${what}\n${linked} To stop it, pause or delete cron ${copy.id}.`
-        : `${sharer} wants to share their cron "${title}" with you. It would run as you, ${scheduleText(source.schedule)}, posting here.\n> ${what}\nIt is in your crons, paused. Accept by turning cron ${copy.id} on (patch enabled: true); decline by deleting it. ${linked}`;
-      await app.enqueueDelivery({
-        destination: home ? { ...destination, webTranscript: { kind: "reply" } } : principalDestination(recipient, by),
-        text,
-        idempotencyKey: `cron-shared:${copy.id}`,
-      });
-      return { copy, existed: false, ...(persona ? { note: persona.toSharer } : {}) };
     },
   };
 }

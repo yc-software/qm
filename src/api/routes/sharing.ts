@@ -1,3 +1,4 @@
+import { requestPrivateContext } from "../private-context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -40,7 +41,7 @@ function claimsOf(ctx: ApiCtx): CapabilityClaims | null {
 }
 
 async function shareView(ctx: ApiCtx, type: ArtifactType, id: string, claims: CapabilityClaims) {
-  const r = await ctx.deps.control.shareAccess(type, id, claims, tenantOf(ctx));
+  const r = await ctx.deps.control.shareAccess(type, id, requestPrivateContext(ctx, claims.actorId), tenantOf(ctx));
   if (!r.ok) return r;
   const view = { ok: true as const, owner: r.owner, offers: r.offers, grantees: r.access };
   if (type !== "deploy") return view;

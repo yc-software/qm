@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { testTenant } from "./support/test-tenant.ts";
+import { testTenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,7 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { routedTo, startMcpTestServer, type McpTestServer } from "./support/mcp-test-server.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { sleep } from "../src/util/async.ts";
 
@@ -118,6 +118,7 @@ test("an already-built memory service serves a new binding, then stops at its re
     registryFetch: routedTo(brain.url),
   });
   await memory.capture(
+    testTenant,
     "personal:U1",
     ["Alice prefers tea."],
     Date.now(),
@@ -143,6 +144,7 @@ test("an already-built memory service serves a new binding, then stops at its re
   assert.equal(brain.requests.at(-1)?.actor, "U1");
 
   await memory.capture(
+    testTenant,
     "personal:U1",
     ["Alice's anchor is HMS-OSPREY-7."],
     Date.now(),
@@ -171,7 +173,14 @@ test("the first binding keeps notebook memory for other members, projects and ex
     ["personal:U2", "Bob bikes to work."],
     ["group:web-project-1", "The project ships on Fridays."],
   ] as const)
-    await memory.capture(scope, [fact], Date.now(), { actorId: "U1", context: "conversation" }, { mode: "automatic" });
+    await memory.capture(
+      testTenant,
+      scope,
+      [fact],
+      Date.now(),
+      { actorId: "U1", context: "conversation" },
+      { mode: "automatic" },
+    );
   await registry.update(personalBrain());
   await registry.update((record) =>
     putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
@@ -184,6 +193,7 @@ test("the first binding keeps notebook memory for other members, projects and ex
   assert.deepEqual(await recalled("group:web-project-1", "U1"), ["The project ships on Fridays."]);
   assert.equal(
     await memory.capture(
+      testTenant,
       "personal:U2",
       ["Bob drinks coffee."],
       Date.now(),
@@ -310,6 +320,7 @@ test("a disabled binding reports a problem only for writes a served binding woul
   const problems = async (actorId: string, context: Omit<MemoryCaptureContext, "report">) =>
     (
       await writeFacts(
+        testTenant,
         memory,
         "personal:U1",
         ["Prefers aisle seats"],
@@ -366,6 +377,7 @@ test("a stored brain whose id an env provider took leaves the env provider servi
   assert.deepEqual(searched.problems, []);
   assert.ok((searched.value ?? []).some(({ text }) => text.includes(BRAIN_FACT)));
   const written = await writeFacts(
+    testTenant,
     memory,
     "personal:U1",
     ["Prefers aisle seats"],
@@ -564,6 +576,7 @@ test("an admin's agent can register and bind a brain but never carries its secre
   await recall();
   await memory.query("personal:U1", "codename", 5, { actorId: "U1", audienceScopeId: "personal:U1" });
   await memory.capture(
+    testTenant,
     "personal:U1",
     ["Alice's anchor is HMS-OSPREY-7."],
     Date.now(),
@@ -686,7 +699,7 @@ test("an agent reaches every registry route only where the registry may be shown
 
 test("blue-green: a binding written through one instance serves turns on the other, in both directions", async (t) => {
   const brain = await startBrain(t);
-  const databaseUrl = testDatabaseUrl();
+  const databaseUrl = testMigratedDatabaseUrl();
   const reach = { memoryRegistryFetch: routedTo(brain.url) };
   const blue = buildApp(testConfig({ databaseUrl }), reach);
   const green = buildApp(testConfig({ databaseUrl }), reach);
@@ -895,6 +908,7 @@ test("the nightly tidy changes the notebook alone, through its tools and its age
   };
   const { brain, built, api, bind } = await boundToBrain(t, agent);
   await built.memory.capture(
+    testTenant,
     ALICE_SCOPE,
     ["Alice drinks tea.", "Alice drinks tea daily.", "Alice sat at desk 3A."],
     Date.now(),
@@ -1017,7 +1031,7 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
   const [parent] = await built.runs.list({ threadRef: "dm:U1:forget", limit: 1 });
   const own = (await built.sessions.getByThread("dm:U1:forget"))!;
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:forget", "dm", ALICE_SCOPE);
-  await built.sessions.setParentSession(child.id, own.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, own.id);
   const { actor, conversation } = parent!.request;
   await built.sessions.setSpawnMeta(child.id, { actor, conversation, surface: "test" });
   await built.sessions.addParticipant(child.id, "U1");

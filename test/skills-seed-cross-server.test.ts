@@ -75,12 +75,13 @@ test("an admin archive racing another server's changed seed update leaves the sk
   const left = createSkillStore({
     backing: {
       ...copied,
-      async put(id, skill) {
-        if (skill.status === "draft" && skill.manifest.body === "Updated instructions.\n") {
+      async update(id, apply) {
+        const skill = await copied.update(id, apply);
+        if (skill?.status === "draft" && skill.manifest.body === "Updated instructions.\n") {
           seedWriting.resolve();
           await releaseSeed.promise;
         }
-        await copied.put(id, skill);
+        return skill;
       },
     },
     signingSecret: "s",

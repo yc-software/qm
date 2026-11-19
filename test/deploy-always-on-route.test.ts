@@ -1,3 +1,4 @@
+import type { Tenant } from "../src/tenants/context.ts";
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
@@ -49,7 +50,7 @@ describe("deployment always-on route", () => {
       authorizesCapabilityScope: async () => true,
       getApp: async (id: string) => (id === publishedApp.id || id === publishedApp.name ? publishedApp : null),
       canManageApp: async (_id: string, caller: { actorId: string }) => caller.actorId === "U1",
-      setAppAlwaysOn: async (_id: string, alwaysOn: boolean) => {
+      setAppAlwaysOn: async (_tenant: Tenant, _id: string, alwaysOn: boolean) => {
         flag = alwaysOn;
         return { ...publishedApp, ...(alwaysOn ? { alwaysOn: true } : {}) };
       },

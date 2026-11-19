@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
@@ -28,7 +29,7 @@ for (const size of [199, 200, 201]) {
       })),
     );
     const core = { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient;
-    const page = await createSlackHistoryReader({ core, ids })({}, "C1", ts(0));
+    const page = await createSlackHistoryReader(captureTenant, { core, ids })({}, "C1", ts(0));
     assert.deepEqual(
       page.raw.map((m) => m.ts),
       Array.from({ length: Math.min(size, 200) }, (_, i) => ts(i)),
@@ -49,7 +50,7 @@ test("before excludes future replies and a parent outside the requested window",
     })),
   );
   const core = { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient;
-  const read = createSlackHistoryReader({ core, ids });
+  const read = createSlackHistoryReader(captureTenant, { core, ids });
   const bounded = await read({}, "C1", ts(0), ts(199));
   assert.equal(bounded.raw.length, 199);
   assert.equal(bounded.raw.at(-1)?.ts, ts(198));
@@ -65,7 +66,7 @@ test("missing parent does not consume a reply slot when a bounded read permits m
     Array.from({ length: 201 }, (_, i) => ({ container: "C1", ts: ts(i + 1), sub: ts(0), text: "reply" })),
   );
   const core = { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient;
-  const page = await createSlackHistoryReader({ core, ids })({}, "C1", ts(0), ts(999));
+  const page = await createSlackHistoryReader(captureTenant, { core, ids })({}, "C1", ts(0), ts(999));
   assert.equal(page.raw.length, 200);
   assert.equal(page.raw[0]?.ts, ts(1));
   assert.equal(page.raw.at(-1)?.ts, ts(200));
@@ -80,7 +81,7 @@ test("channel pagination counts roots before expanding a truncated thread", asyn
     Array.from({ length: 201 }, (_, i) => ({ container: "C1", ts: ts(i + 1), sub: ts(0), text: "reply" })),
   );
   const core = { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient;
-  const page = await createSlackHistoryReader({ core, ids })({}, "C1", undefined, undefined, true);
+  const page = await createSlackHistoryReader(captureTenant, { core, ids })({}, "C1", undefined, undefined, true);
   assert.equal(page.raw.length, 200);
   assert.equal(page.hasMore, false);
   assert.equal(page.truncatedExpansions, 1);
@@ -99,7 +100,7 @@ test("channel overflow keeps newest roots, excludes deletions and preserves visi
   );
   await cache.ingest([{ container: "C1", ts: ts(201), deleted: true }]);
   const core = { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient;
-  const page = await createSlackHistoryReader({ core, ids })({}, "C1");
+  const page = await createSlackHistoryReader(captureTenant, { core, ids })({}, "C1");
   assert.equal(page.hasMore, true);
   assert.deepEqual(
     page.raw.map((m) => m.ts),

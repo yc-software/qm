@@ -1,11 +1,15 @@
+import type { PoolClient } from "pg";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { hashId } from "../util/crypto.ts";
 import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import { parseScopeId, personalScope } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { mergeSourceProvenance, type SourceProvenance } from "../memory/facts.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -53,6 +57,8 @@ export interface Skill {
   signature: string;
   status: SkillStatus;
   createdBy: string;
+  personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
   version: number;
   grantedCapabilities: string[];
   approvals: string[];
@@ -62,9 +68,25 @@ export interface Skill {
   pack?: { packId: string; commit: string; upstreamName: string };
 }
 
+export function skillSharingRevision(skill: Skill): string {
+  const { lastUsedAt: _lastUsedAt, ...selected } = skill;
+  return hashId([canonicalJson(selected)], 64);
+}
+
 export interface GrantedSkillRef {
   id: string;
   ownerScopeId: ScopeId;
+}
+
+export function skillAllowedInContext(
+  skill: Pick<Skill, "personalOnly" | "scopeId">,
+  actorId: string,
+  contextScopeId?: ScopeId,
+): boolean {
+  return (
+    !skill.personalOnly ||
+    (skill.scopeId === personalScope(actorId) && (contextScopeId === undefined || contextScopeId === skill.scopeId))
+  );
 }
 
 export interface SkillResolution {
@@ -80,8 +102,26 @@ export interface SkillStoreOptions {
 }
 
 export interface SkillStore {
-  create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
-  update(id: string, manifest: SkillManifest): Promise<Skill>;
+  releasePrivate(
+    id: string,
+    revision: string,
+    provenance: SourceProvenance,
+    writeGrant: (transaction: PoolClient) => Promise<void>,
+  ): Promise<Skill>;
+  create(input: {
+    scopeId: ScopeId;
+    manifest: SkillManifest;
+    createdBy: string;
+    personalOnly?: true;
+    sourceProvenance?: SourceProvenance;
+    pack?: Skill["pack"];
+  }): Promise<Skill>;
+  update(
+    id: string,
+    manifest: SkillManifest,
+    sourceProvenance?: SourceProvenance,
+    expectedRevision?: string,
+  ): Promise<Skill>;
   withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
@@ -92,10 +132,14 @@ export interface SkillStore {
   restore(skill: Skill): Promise<void>;
   delete(id: string): Promise<void>;
   recordUse(id: string, at?: number): Promise<void>;
-  resolve(name: string, orderedScopes: ScopeId[]): Promise<SkillResolution>;
-  visibleFor(orderedScopes: ScopeId[], granted?: readonly GrantedSkillRef[]): Promise<SkillResolution[]>;
-  promote(id: string, targetScopeId: ScopeId): Promise<Skill>;
-  move(id: string, toScopeId: ScopeId): Promise<Skill>;
+  resolve(name: string, orderedScopes: ScopeId[], personalScopeId?: ScopeId): Promise<SkillResolution>;
+  visibleFor(
+    orderedScopes: ScopeId[],
+    granted?: readonly GrantedSkillRef[],
+    personalScopeId?: ScopeId,
+  ): Promise<SkillResolution[]>;
+  promote(id: string, targetScopeId: ScopeId, expectedRevision?: string): Promise<Skill>;
+  move(id: string, toScopeId: ScopeId, expectedRevision?: string): Promise<Skill>;
 }
 
 export function foreignSkillCollision(
@@ -199,9 +243,28 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
   }
 
   return {
+    async releasePrivate(id, revision, provenance, writeGrant) {
+      const selected = await skills.get(id);
+      if (!selected) throw new Error("The selected skill no longer exists.");
+      return withNameLock(selected.scopeId, selected.manifest.name, async () => {
+        const released = await skills.updateInTransaction(id, async (current, transaction) => {
+          if (!current.personalOnly || current.status === "archived" || skillSharingRevision(current) !== revision)
+            throw new Error("The selected private skill changed after approval. Read it again before sharing.");
+          if (sign(current.manifest) !== current.signature)
+            throw new Error("The selected skill's signature is invalid.");
+          await writeGrant(transaction);
+          const { personalOnly: _personalOnly, ...shared } = current;
+          return { ...shared, sourceProvenance: provenance };
+        });
+        if (!released) throw new Error("The selected skill no longer exists.");
+        return released;
+      });
+    },
     withNameLock,
     async create(input) {
       assertSafeSkillName(input.manifest.name);
+      if (input.personalOnly && scopeKind(input.scopeId) !== "personal")
+        throw new Error("Private skills require a personal scope");
       const at = Date.now();
       const skill: Skill = {
         id: randomUUID(),
@@ -210,6 +273,8 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         signature: sign(input.manifest),
         status: "draft",
         createdBy: input.createdBy,
+        ...(input.personalOnly ? { personalOnly: true as const } : {}),
+        ...(input.sourceProvenance ? { sourceProvenance: input.sourceProvenance } : {}),
         version: 1,
         grantedCapabilities: [],
         approvals: [],
@@ -220,18 +285,27 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       await skills.put(skill.id, skill);
       return skill;
     },
-    async update(id, manifest) {
+    async update(id, manifest, sourceProvenance, expectedRevision) {
       assertSafeSkillName(manifest.name);
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
-      s.manifest = manifest;
-      s.signature = sign(manifest);
-      if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
-      s.version += 1;
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      const updated = await skills.update(id, (s) => {
+        if (expectedRevision && skillSharingRevision(s) !== expectedRevision)
+          throw new Error("The selected skill changed before editing.");
+        if (manifest.name !== s.manifest.name)
+          throw new Error("skill update cannot rename — create a new skill instead");
+        s.manifest = manifest;
+        if (sourceProvenance)
+          s.sourceProvenance = mergeSourceProvenance([
+            ...(s.sourceProvenance ? [s.sourceProvenance] : []),
+            sourceProvenance,
+          ]);
+        s.signature = sign(manifest);
+        if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
+        s.version += 1;
+        s.updatedAt = Date.now();
+        return s;
+      });
+      if (!updated) throw new Error(`unknown skill: ${id}`);
+      return updated;
     },
 
     get: (id) => skills.get(id),
@@ -283,7 +357,19 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
 
     async restore(skill) {
       assertSafeSkillName(skill.manifest.name);
-      await skills.put(skill.id, structuredClone(skill));
+      const current = await skills.get(skill.id);
+      if (current?.personalOnly && skill.scopeId !== current.scopeId)
+        throw new Error("Private skills cannot change audience");
+      const restored = structuredClone(skill);
+      if (current?.personalOnly) restored.personalOnly = true;
+      if (current?.sourceProvenance)
+        restored.sourceProvenance = mergeSourceProvenance([
+          current.sourceProvenance,
+          ...(restored.sourceProvenance ? [restored.sourceProvenance] : []),
+        ]);
+      if (restored.personalOnly && scopeKind(restored.scopeId) !== "personal")
+        throw new Error("Private skills require a personal scope");
+      await skills.put(skill.id, restored);
     },
 
     async delete(id) {
@@ -294,18 +380,28 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       await skills.merge(id, { lastUsedAt: at ?? Date.now() });
     },
 
-    async resolve(name, orderedScopes) {
-      return resolveFromIndex(publishedByScopeAndName(await inScopes(orderedScopes)), name, orderedScopes);
+    async resolve(name, orderedScopes, personalScopeId) {
+      const visible = (await inScopes(orderedScopes)).filter(
+        (skill) => !skill.personalOnly || skill.scopeId === personalScopeId,
+      );
+      return resolveFromIndex(publishedByScopeAndName(visible), name, orderedScopes);
     },
 
-    async visibleFor(orderedScopes, granted) {
+    async visibleFor(orderedScopes, granted, personalScopeId) {
       const all = await inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
-      return visibleSkillRows(all, orderedScopes, granted);
+      return visibleSkillRows(
+        all.filter((skill) => !skill.personalOnly || skill.scopeId === personalScopeId),
+        orderedScopes,
+        granted,
+      );
     },
 
-    async promote(id, targetScopeId) {
+    async promote(id, targetScopeId, expectedRevision) {
       const s = await skills.get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
+      if (expectedRevision && skillSharingRevision(s) !== expectedRevision)
+        throw new Error("The selected skill changed before promotion.");
+      if (s.personalOnly && targetScopeId !== s.scopeId) throw new Error("Private skills cannot change audience");
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
       if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — cannot promote");
@@ -324,6 +420,15 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
           signature: sign(s.manifest),
           status: "published",
           createdBy: s.createdBy,
+          ...(s.personalOnly || existing?.personalOnly ? { personalOnly: true as const } : {}),
+          ...(s.sourceProvenance || existing?.sourceProvenance
+            ? {
+                sourceProvenance: mergeSourceProvenance([
+                  ...(s.sourceProvenance ? [s.sourceProvenance] : []),
+                  ...(existing?.sourceProvenance ? [existing.sourceProvenance] : []),
+                ]),
+              }
+            : {}),
           version: (existing?.version ?? 0) + 1,
           grantedCapabilities: [...s.grantedCapabilities],
           approvals: [...s.approvals],
@@ -335,23 +440,31 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       });
     },
 
-    async move(id, toScopeId) {
+    async move(id, toScopeId, expectedRevision) {
       const s = await skills.get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
+      if (s.personalOnly && toScopeId !== s.scopeId) throw new Error("Private skills cannot change audience");
       assertSafeSkillName(s.manifest.name);
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
-      return withNameLock(toScopeId, s.manifest.name, async () => {
-        if (foreignSkillCollision(await inScopes([toScopeId]), toScopeId, s.manifest.name, (x) => x.id === id))
-          throw new Error(`a skill named ${s.manifest.name} already exists there`);
-        const current = await skills.get(id);
-        if (!current) throw new Error(`unknown skill: ${id}`);
-        current.scopeId = toScopeId;
-        current.updatedAt = Date.now();
-        await skills.put(current.id, current);
-        return current;
-      });
+      const moved = await advisoryLock.tryWithLocks(
+        [`skill-name:${s.scopeId}:${s.manifest.name}`, `skill-name:${toScopeId}:${s.manifest.name}`],
+        async () => {
+          if (foreignSkillCollision(await inScopes([toScopeId]), toScopeId, s.manifest.name, (x) => x.id === id))
+            throw new Error(`a skill named ${s.manifest.name} already exists there`);
+          const current = await skills.get(id);
+          if (!current) throw new Error(`unknown skill: ${id}`);
+          if (expectedRevision && skillSharingRevision(current) !== expectedRevision)
+            throw new Error("The selected skill changed before moving.");
+          current.scopeId = toScopeId;
+          current.updatedAt = Date.now();
+          await skills.put(current.id, current);
+          return current;
+        },
+      );
+      if (!moved) throw new Error("The skill is being changed. Try moving it again.");
+      return moved;
     },
   };
 }

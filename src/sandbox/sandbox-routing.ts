@@ -97,8 +97,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     return sandbox;
   };
 
-  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
-    handle.resourceId ? resources.use(handle.resourceId, action) : action();
+  const useHandle = async <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> => {
+    if (handle.resourceId) return resources.use(handle.resourceId, action);
+    if (handle.scratch) {
+      if (!handle.scopeId) throw new Error("Disposable computer owner is missing.");
+      await resources.authorizeScratch(handle.scopeId, handle.personalOnly === true);
+    }
+    return action();
+  };
 
   const resourceFor = (scopeId: string, sandboxId: string | undefined) =>
     sandboxId !== undefined ? resources.get(sandboxId) : resources.resolve(scopeId);
@@ -180,8 +186,15 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         }
       };
       if (provOpts?.scratch) {
+        await resources.authorizeScratch(scope, provOpts.scratch.personalOnly === true);
         const handle = await provision(scope);
-        return { ...handle, backend, scopeId: scope };
+        return {
+          ...handle,
+          scratch: true,
+          backend,
+          scopeId: scope,
+          ...(provOpts.scratch.personalOnly ? { personalOnly: true as const } : {}),
+        };
       }
       if (!resource) throw new NoDefaultSandboxError();
       const sized = resource.memoryGb ? { ...provOpts, memoryGb: resource.memoryGb } : provOpts;
@@ -191,7 +204,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
 
     async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
       const resourceId = handle.resourceId;
-      if (!resourceId) return forHandle(handle).run(handle, command, execOpts);
+      if (!resourceId) return useHandle(handle, () => forHandle(handle).run(handle, command, execOpts));
       const result = await resources.use(resourceId, () =>
         forHandle(handle).run(handle, withLoadProbe(command), execOpts),
       );

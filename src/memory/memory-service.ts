@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
@@ -93,6 +94,7 @@ export interface MemoryService {
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(
+    tenant: Tenant,
     scopeId: ScopeId,
     facts: string[],
     at: number,
@@ -102,6 +104,7 @@ export interface MemoryService {
   query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   read(scopeId: ScopeId): Promise<string>;
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
+  snapshotFacts?(scopeId: ScopeId): Promise<MemoryFact[]>;
   edit?(scopeId: ScopeId, edits: MemoryEdit[], by?: MemoryAuthority, context?: MemoryCaptureMetadata): Promise<void>;
   delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority, context?: MemoryForgetContext): Promise<void>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
@@ -145,6 +148,7 @@ function editedText(text: string): string {
 function sameProvenance(a: MemoryProvenance, b: MemoryProvenance): boolean {
   return (
     a.sensitivity === b.sensitivity &&
+    a.personalOnly === b.personalOnly &&
     a.sourceUnknown === b.sourceUnknown &&
     a.sources.length === b.sources.length &&
     a.sources.every((source) => b.sources.includes(source))
@@ -178,7 +182,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       return recentCandidates(await store.list(scopeId));
     },
 
-    async capture(scopeId, facts, at, by, context) {
+    async capture(_tenant, scopeId, facts, at, by, context) {
       const lines = cleanCapturedFacts(facts);
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);

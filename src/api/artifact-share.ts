@@ -1,3 +1,4 @@
+import type { SourceProvenance } from "../memory/facts.ts";
 import type { DeployAccessErrorCode } from "../deploy/deploy-service.ts";
 import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
@@ -100,11 +101,15 @@ export interface ArtifactHome {
   ownerScopeId: ScopeId;
   createdBy: string;
   grantRef: string;
+  privateRevision?: string;
+  personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
 }
 
 export interface ShareArtifactRequest {
   type: ArtifactType;
   id: string;
+  privateRevision?: string;
   scope?: string;
   recipient?: string;
   email?: string;
@@ -155,4 +160,5 @@ export type ShareArtifactResult =
       code: "bad_request" | "recipient_not_found" | "ambiguous_recipient" | "share_failed" | DeployAccessErrorCode;
       message: string;
       candidates?: Array<{ id: string; label: string }>;
+      privateRelease?: { id: string; revision: string; scope: ScopeId };
     };

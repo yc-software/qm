@@ -59,6 +59,7 @@ export function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
       own().set(id, next);
       return next;
     },
+    updateInTransaction: unsupported,
     mutateMany: unsupported,
     async deleteIf(id, predicate) {
       const existing = own().get(id);

@@ -1,3 +1,4 @@
+import { isProjectGroupRef } from "../../projects/project-store.ts";
 import { clientSurfaceOf } from "../../../plugins/chassis/src/client-surface.ts";
 import { appEditSlug } from "../../../plugins/chassis/src/app-edit.ts";
 import { LIVE_EDIT_PUBLISH_DELAY_MS } from "../../deploy/live-edits.ts";
@@ -202,6 +203,9 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
   const resolved = await resolveWebConversation(ctx, user, threadRef, scope, trimmed(p.channelName, 200));
   if ("error" in resolved) return sendJson(ctx.res, 403, resolved);
   const privateConversation = ownsWebThread(threadRef, user) && resolved.conversation.kind === "dm";
+  const projectConversation =
+    resolved.conversation.kind === "group" && isProjectGroupRef(resolved.conversation.channelRef ?? "");
+  const clientConversation = privateConversation || projectConversation;
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
   const desktopClientId =
     typeof p.desktopClientId === "string" && p.desktopClientId.length === 36 ? p.desktopClientId : undefined;
@@ -213,8 +217,8 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     ...(typeof p.thinkingLevel === "string" && p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
     ...(typeof p.fastMode === "boolean" ? { fastMode: p.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
-    ...(privateConversation && !ctx.actor?.imp && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
-    ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
+    ...(clientConversation && !ctx.actor?.imp && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
+    ...(clientConversation && !ctx.actor?.imp && surfaceBriefing ? { surfaceBriefing } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(approval ? { approval } : {}),
     ...(proactiveOpener ? { proactiveOpener: true } : {}),

@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/strategy.ts";
@@ -24,7 +25,7 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   };
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
+  await strategy.onTurnEnd!(captureTenant, { scopeId: SCOPE, input: "hi", reply: "hello" });
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.system, MEMORY_EXTRACTION_PROMPT);
@@ -43,13 +44,16 @@ test("parseFacts: bullets in, NONE/empty/prose out", () => {
   assert.deepEqual(parseFacts("-"), []);
 });
 
-test("per-turn swallows extraction failures and captures nothing", async () => {
+test("extraction failures remain retryable and capture nothing", async () => {
   const agent: ModelUtilities = {
     oneShot: () => Promise.reject(new Error("model down")),
   };
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
+  await assert.rejects(
+    strategy.onTurnEnd!(captureTenant, { scopeId: SCOPE, input: "hi", reply: "hello" }),
+    /model down/,
+  );
   assert.equal(await memory.read(SCOPE), "", "nothing captured");
 });
 
@@ -59,7 +63,7 @@ test("per-turn does not capture when the model says NONE", async () => {
   };
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
+  await strategy.onTurnEnd!(captureTenant, { scopeId: SCOPE, input: "hi", reply: "hello" });
   assert.equal(await memory.read(SCOPE), "");
 });
 
@@ -89,7 +93,7 @@ test("automatic capture carries the full turn and delivery context", async () =>
     agent: { oneShot: () => Promise.resolve("- Durable fact") },
     memory: wrapped,
   });
-  await strategy.onTurnEnd!({
+  await strategy.onTurnEnd!(captureTenant, {
     scopeId: SCOPE,
     conversationScopeId: "channel:C1",
     actorId: "U1",
@@ -98,8 +102,9 @@ test("automatic capture carries the full turn and delivery context", async () =>
     input: "question",
     reply: "answer",
   });
-  assert.deepEqual(captures[0]?.[3], { actorId: "U1", context: "conversation" });
-  assert.deepEqual(captures[0]?.[4], {
+  assert.equal(captures[0]?.[0], captureTenant);
+  assert.deepEqual(captures[0]?.[4], { actorId: "U1", context: "conversation" });
+  assert.deepEqual(captures[0]?.[5], {
     mode: "automatic",
     sensitivity: "unknown",
     conversationScopeId: "channel:C1",
@@ -122,16 +127,15 @@ test("turns of one session answered to different audiences are captured apart, e
   const strategy = createPerTurnStrategy({
     agent: { oneShot: () => Promise.resolve("- Durable fact") },
     memory: wrapped,
-    captureQuietMs: 30,
   });
   const turn = { scopeId: "personal:U1", actorId: "U1", sessionId: "session-1", reply: "answer" };
-  await strategy.onTurnEnd!({ ...turn, audienceScopeId: "personal:U1", input: "private question" });
-  await strategy.onTurnEnd!({ ...turn, input: "question answered to a channel" });
+  await strategy.onTurnEnd!(captureTenant, { ...turn, audienceScopeId: "personal:U1", input: "private question" });
+  await strategy.onTurnEnd!(captureTenant, { ...turn, input: "question answered to a channel" });
   await settle(async () => captures.length === 2);
 
   assert.deepEqual(
     captures
-      .map(([, , , , context]) => ({ input: context?.input, audienceScopeId: context?.audienceScopeId }))
+      .map(([, , , , , context]) => ({ input: context?.input, audienceScopeId: context?.audienceScopeId }))
       .sort((x, y) => String(x.input).localeCompare(String(y.input))),
     [
       { input: "private question", audienceScopeId: "personal:U1" },
@@ -139,3 +143,16 @@ test("turns of one session answered to different audiences are captured apart, e
     ],
   );
 });
+
+for (const unavailable of ["missing utility", "unavailable route"] as const) {
+  test(`${unavailable} cannot acknowledge an extraction as if the model returned NONE`, async () => {
+    const { memory } = freshMemory();
+    const agent: ModelUtilities = unavailable === "missing utility" ? {} : { oneShot: async () => undefined };
+    const strategy = createPerTurnStrategy({ agent, memory });
+    await assert.rejects(
+      strategy.onTurnEnd!(captureTenant, { scopeId: SCOPE, input: "hi", reply: "hello" }),
+      /utility model/,
+    );
+    assert.equal(await memory.read(SCOPE), "");
+  });
+}

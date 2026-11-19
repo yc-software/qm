@@ -1,10 +1,13 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
+import type { SessionStore } from "./session-store.ts";
+import { personalScope } from "../types.ts";
 
 export const PEER_TASK_BANNER =
   "Task handed to you by another conversation (see from/fromSessionId below). Decide whether to do it now, after your current task, or not at all; if you defer or decline it, tell the sender with sessions send_message and wake:false:";
 export interface SessionMessage {
+  personalOnly?: true;
   id: string;
   recipientId: string;
   senderId: string;
@@ -22,9 +25,25 @@ export interface SessionMessage {
   peerDepth?: number;
 }
 
-export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
+export function createSessionMailbox(
+  backing: DurableMap<SessionMessage>,
+  sessions: Pick<SessionStore, "get" | "markPersonalOnly" | "recordContextProvenance">,
+) {
   return {
     async send(message: SessionMessage): Promise<void> {
+      const source = await sessions.get(message.senderId);
+      if (!source) throw new Error("The sending session no longer exists");
+      if (source.personalOnly || message.personalOnly) {
+        const owner = personalScope(message.actor.id);
+        if (source.scopeId !== owner) throw new Error("Private message owner does not match the source session");
+        await sessions.markPersonalOnly(message.recipientId, owner);
+        message = { ...message, personalOnly: true };
+      }
+      if (source.sourceProvenance) {
+        const recipient = await sessions.get(message.recipientId);
+        if (!recipient) throw new Error("The receiving session no longer exists");
+        await sessions.recordContextProvenance(recipient.id, recipient.scopeId, source.sourceProvenance);
+      }
       await backing.putIfAbsent(message.id, message);
     },
     async pending(...recipientIds: string[]): Promise<SessionMessage[]> {

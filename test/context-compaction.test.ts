@@ -1,4 +1,4 @@
-import { testTenant } from "./support/test-tenant.ts";
+import { testTenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { test } from "node:test";
@@ -1092,7 +1092,7 @@ test("human child continuations respect non-fast category defaults", async () =>
   await built.config.setPurposeRuntime("subagent", category);
   const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
   const child = await built.sessions.getOrCreateByThread("subagent:review", "dm", PERSONAL);
-  await built.sessions.setParentSession(child.id, parent.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, parent.id);
   await built.orch.handleTurn({
     surface: "web",
     actor,

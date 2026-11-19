@@ -140,6 +140,8 @@ export interface SpawnMeta {
 }
 
 export interface Session {
+  sourceProvenance?: import("./memory/facts.ts").SourceProvenance;
+  personalOnly?: true;
   clientTools?: ClientToolDeclaration[];
   id: string;
   type: SessionType;
@@ -253,6 +255,7 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  contextProvenance?: import("./memory/facts.ts").MemoryProvenance;
   sourceRequestId?: string;
   sourceRunId?: string;
   sourceTitle?: string;
@@ -384,6 +387,7 @@ export interface ClientToolResult {
 }
 
 export interface TurnRequest {
+  contextProvenance?: import("./memory/facts.ts").MemoryProvenance;
   desktopClientId?: string;
   clientSurface?: ClientSurface;
   midTurn?: "steer" | "queue";

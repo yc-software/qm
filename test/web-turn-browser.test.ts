@@ -277,9 +277,12 @@ test("app editing adds app context beside the exact message, only on the person'
 const scroll = { name: "ui__scroll", description: "Scroll", inputSchema: { type: "object", properties: {} } };
 
 test("client tools and a surface briefing reach the agent only from the person's own private chat", async () => {
-  const own = await sentTurn({ clientTools: [scroll], surfaceBriefing: { name: "Panel", state: "URL: /inbox" } });
-  assert.deepEqual(own.clientTools, [scroll]);
-  assert.match(own.conversationHeader ?? "", /## Surface: Panel[\s\S]*URL: \/inbox/);
+  for (const scopeId of [undefined, "group:web-project-workbook"]) {
+    const own = await sentTurn({ scopeId, clientTools: [scroll], surfaceBriefing: { name: "Panel" } });
+    assert.deepEqual(own.clientTools, [scroll]);
+    assert.match(own.conversationHeader ?? "", /## Surface: Panel/);
+  }
+  assert.deepEqual((await sentTurn({ clientTools: [] })).clientTools, []);
   for (const bad of [
     { clientTools: { name: "x" }, surfaceBriefing: "x" },
     { surfaceBriefing: ["x"] },

@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -438,7 +439,7 @@ test("subdomain ingress: the SameSite=None twin is honoured only for framed requ
     assert.equal(notOptedIn.status, 401, "an app that has not opted in never honours the twin");
     assert.ok(!String(notOptedIn.headers["content-security-policy"] ?? "").includes("frame-ancestors"));
 
-    await app.setAppEmbedAncestors(d.id, ["https://internal.example.com", "https://mail.google.com"]);
+    await app.setAppEmbedAncestors(appWriteTenant, d.id, ["https://internal.example.com", "https://mail.google.com"]);
 
     const framed = await httpGet(port, "/", { Host: host, Cookie: twin, ...frameDoc });
     assert.equal(framed.status, 200, "the frame document authenticates with the twin");

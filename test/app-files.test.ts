@@ -1,3 +1,4 @@
+import type { SessionStore } from "../src/sessions/session-store.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -39,7 +40,7 @@ const OWNER = "U1";
 const INDEX = '<link rel="stylesheet" href="styles.css">\n<h1 class="title">Notes</h1>\n';
 const STYLES = ".title { color: black; }\n.card { color: black; }\n";
 
-function harness(opts: { liveEdits?: boolean } = {}) {
+function harness(opts: { liveEdits?: boolean; sessions?: SessionStore } = {}) {
   const writes: Array<{ files: Record<string, string>; deletedPaths: string[] }> = [];
   const placed: Array<string | undefined> = [];
   const audited: Array<{ principalId: string; action: string }> = [];
@@ -69,6 +70,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
   const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
+    ...(opts.sessions ? { sessions: opts.sessions } : {}),
     deployStore,
     provider,
     auditLog: { record: (_tenant, event) => void audited.push(event), events: async () => [], tail: async () => [] },
@@ -271,7 +273,7 @@ for (const [where, liveEdits] of [
     const h = harness({ liveEdits });
     const d = await h.publish("notes");
     await h.deploy.shareApp(d.id, scopeId("personal", "U2"), "write", { createdBy: OWNER }, { notify: false });
-    if (liveEdits) await h.deploy.archiveApp(d.id);
+    if (liveEdits) await h.deploy.archiveApp(testTenant, d.id);
     const chat = h.chat("notes", "U2");
 
     const out = await chat.call({
@@ -357,7 +359,8 @@ const SOURCE = {
 const RED = ".title { color: red; }\n";
 
 test("an app edit chat is shown the app's small text files once, then only the files that changed", async () => {
-  const h = harness();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const h = harness({ sessions });
   await h.publish("notes", SOURCE);
   const read: string[] = [];
   const { filesIn } = h.deployStore;
@@ -371,7 +374,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService("default-org", config, acl),
     config,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as unknown as Sandbox,
     auditLog: createPostgresAuditLog(testDatabaseUrl()),
@@ -435,7 +438,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
 test("a later turn includes changed files, and resends everything once the first showing left the context", async () => {
   const h = harness();
   await h.publish("notes");
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: h.deploy,
     app: "notes",
     actorId: OWNER,
@@ -470,7 +473,7 @@ test("app source budgets file headings, fences and skipped paths along with cont
   const { commitTreeOf } = h.deployStore;
   h.deployStore.getByName = (...args) => (appReads++, getByName(...args));
   h.deployStore.commitTreeOf = (...args) => (treeReads++, commitTreeOf(...args));
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: h.deploy,
     app: "notes",
     actorId: OWNER,

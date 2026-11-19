@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
@@ -147,7 +148,13 @@ test("skills: a private-channel member may edit + delete a shared skill; provena
   await deps.skills.review(planted.id, "system:test", []);
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
-  const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, { liveActor: true });
+  const edited = await app.updateOwnedSkill(
+    testTenant,
+    planted.id,
+    PRIV_MEMBER,
+    { description: "d2" },
+    { liveActor: true },
+  );
   assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
   assert.equal((edited as { createdBy: string }).createdBy, OWNER, "createdBy is never rewritten on a member edit");
   assert.equal(await app.deleteOwnedSkill({ principalId: PRIV_MEMBER, id: planted.id, liveActor: true }), "deleted");
@@ -163,7 +170,13 @@ test("skills: a member editing a normal shared skill auto-republishes it (stays 
   await deps.skills.review(planted.id, "system:test", []);
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
-  const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, { liveActor: true });
+  const edited = await app.updateOwnedSkill(
+    testTenant,
+    planted.id,
+    PRIV_MEMBER,
+    { description: "d2" },
+    { liveActor: true },
+  );
   assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
   assert.equal(
     (edited as { status: string }).status,
@@ -189,7 +202,7 @@ test("skills: a member CANNOT resurrect an admin-archived shared skill via an in
   await deps.skills.archive(planted.id);
   const app = createApp(deps as unknown as AppDeps);
   assert.equal(
-    await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "resurrect" }, { liveActor: true }),
+    await app.updateOwnedSkill(testTenant, planted.id, PRIV_MEMBER, { description: "resurrect" }, { liveActor: true }),
     null,
     "an archived skill is not a member's to edit",
   );
@@ -208,7 +221,7 @@ test("skills: a PUBLIC-channel member may NOT edit or delete a shared skill", as
   });
   const app = createApp(deps as unknown as AppDeps);
   assert.equal(
-    await app.updateOwnedSkill(planted.id, PUB_MEMBER, { description: "no" }),
+    await app.updateOwnedSkill(testTenant, planted.id, PUB_MEMBER, { description: "no" }),
     null,
     "public-channel member cannot edit",
   );
@@ -227,7 +240,11 @@ test("skills: a non-member may not edit or delete a shared scope's skill", async
     createdBy: OWNER,
   });
   const app = createApp(deps as unknown as AppDeps);
-  assert.equal(await app.updateOwnedSkill(planted.id, OUTSIDER, { description: "no" }), null, "outsider cannot edit");
+  assert.equal(
+    await app.updateOwnedSkill(testTenant, planted.id, OUTSIDER, { description: "no" }),
+    null,
+    "outsider cannot edit",
+  );
   assert.equal(
     await app.deleteOwnedSkill({ principalId: OUTSIDER, id: planted.id }),
     "forbidden",
@@ -418,7 +435,10 @@ test("skills: an archive landing mid-edit is not overwritten by the edit", async
     return seen;
   };
   const app = createApp(deps as unknown as AppDeps);
-  assert.equal(await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "late" }, { liveActor: true }), null);
+  assert.equal(
+    await app.updateOwnedSkill(testTenant, planted.id, PRIV_MEMBER, { description: "late" }, { liveActor: true }),
+    null,
+  );
   const after = await get(planted.id);
   assert.equal(after!.status, "archived");
   assert.equal(after!.manifest.description, "d");

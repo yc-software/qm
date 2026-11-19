@@ -1,5 +1,5 @@
 import type { Job } from "pg-boss";
-import { poolBoss } from "../cron/job-queue.ts";
+import { poolBoss } from "../persistence/job-queue.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { queryPoolSize, type PgPool } from "../persistence/pg-pool.ts";
 import { inTenant } from "../tenants/claim.ts";

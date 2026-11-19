@@ -13,6 +13,7 @@ function fixture(
     botActor?: true;
     external?: true;
     defaultOwners?: string[];
+    privacyCheck?: () => Promise<void>;
   } = {},
 ) {
   const provisions: Array<ProvisionOptions | undefined> = [];
@@ -23,6 +24,7 @@ function fixture(
   const gates: Array<Promise<void>> = [];
   const teardownGates: Array<Promise<void>> = [];
   let n = 0;
+  let privateMode = false;
   const sandbox: Partial<Sandbox> = {
     profile: { processSessions: false } as Sandbox["profile"],
     async provision(owner, opts) {
@@ -109,7 +111,12 @@ function fixture(
       ...(over.external ? { surfaceOrigin: { audience: "external" } } : {}),
     },
     actor: { id: "alice", type: "internal" },
-    session: { id: "s" },
+    session: {
+      id: "s",
+      get personalOnly() {
+        return privateMode ? true : undefined;
+      },
+    },
     resolution: { writableScopeId: OWN, readOnlyScopeIds: ["org:global"], orgScopeId: "org:global" },
     scopeId: OWN,
     memoryScopeId: OWN,
@@ -119,12 +126,24 @@ function fixture(
     connectorEnv: {},
     egressTokenForPolicy: async () => undefined,
     openResourceAccess: true,
+    privateContext: async () => {
+      await over.privacyCheck?.();
+      return {
+        actorId: "alice",
+        scopeId: OWN,
+        sessionId: "s",
+        ...(privateMode ? { personalOnly: true } : {}),
+      };
+    },
     visibleSkillsForTurn: async () => [],
   } as unknown as TurnSandboxContext);
   const released = () => Object.fromEntries(teardowns);
   const clearedTurnFiles = () => removed.filter(([, dir]) => dir === "turn/s/t").map(([id]) => id);
   return {
     turn,
+    markPrivate: () => {
+      privateMode = true;
+    },
     resource,
     notePersonUse: sandboxResources.notePersonUse,
     provisions,
@@ -384,3 +403,82 @@ test("concurrent opens of a background job's own computer share one provision", 
   assert.equal(a, b);
   assert.equal(f.provisions.length, 1);
 });
+
+test("late private context selects a different default handle and retains cleanup for the old one", async () => {
+  const f = fixture();
+  const ordinary = await f.turn.provision();
+  f.markPrivate();
+  const privateHandle = await f.turn.provision();
+  assert.notEqual(privateHandle.id, ordinary.id);
+  await f.turn.reclaimBox();
+  assert.equal(f.tornDown.filter((handle) => handle.id === ordinary.id).length, 1);
+  assert.equal(f.tornDown.filter((handle) => handle.id === privateHandle.id).length, 1);
+});
+
+test("privacy changing during ordinary provisioning returns only the private handle", async () => {
+  const f = fixture();
+  let release!: () => void;
+  f.gates.push(
+    new Promise((resolve) => {
+      release = resolve;
+    }),
+  );
+  const opening = f.turn.provision();
+  while (!f.provisions.length) await new Promise((resolve) => setImmediate(resolve));
+  const ordinaryBoxId = f.provisions[0]?.sandboxId;
+  assert.ok(ordinaryBoxId);
+  f.markPrivate();
+  const privateOpening = f.turn.provision();
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  const [first, privateHandle] = await Promise.all([opening, privateOpening]);
+  assert.equal(first.id, privateHandle.id);
+  assert.notEqual(privateHandle.resourceId, ordinaryBoxId);
+  assert.equal(f.provisions.length, 2);
+  await f.turn.reclaimBox();
+});
+
+test("a late private read replaces ordinary scratch instead of reusing its credentials or disk", async () => {
+  const f = fixture();
+  const ordinary = await f.turn.provisionScratch();
+  f.markPrivate();
+  const personal = await f.turn.provisionScratch();
+  assert.notEqual(personal.id, ordinary.id);
+  assert.notEqual(f.provisions[0]?.scratch?.key, f.provisions[1]?.scratch?.key);
+  assert.equal(f.provisions[1]?.scratch?.personalOnly, true);
+  await f.turn.reclaimBox();
+  assert.deepEqual(f.released(), { [ordinary.id]: { destroy: true }, [personal.id]: { destroy: true } });
+});
+
+for (const method of ["provision", "provisionScratch"] as const)
+  for (const cached of [false, true])
+    test(`reclaim includes a privacy redirect during ${cached ? "cached" : "new"} ${method}`, async () => {
+      const entered = Promise.withResolvers<void>(),
+        resume = Promise.withResolvers<void>();
+      let armed = false,
+        checks = 0,
+        reclaimed = false;
+      const f = fixture({
+        privacyCheck: async () => {
+          if (armed && ++checks === 2) {
+            entered.resolve();
+            await resume.promise;
+          }
+        },
+      });
+      if (cached) await f.turn[method]();
+      armed = true;
+      const opening = f.turn[method]();
+      await entered.promise;
+      const reclaim = f.turn.reclaimBox().then(() => {
+        reclaimed = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(reclaimed, false);
+      f.markPrivate();
+      resume.resolve();
+      const [handle] = await Promise.all([opening, reclaim]);
+      assert.ok(f.tornDown.some((item) => item.id === handle.id));
+      assert.equal(f.teardowns.length, f.provisions.length);
+      assert.equal(f.provisions.length, 2);
+    });

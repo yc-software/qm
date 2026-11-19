@@ -10,21 +10,23 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
+function swarmApp(fixture: Awaited<ReturnType<typeof swarmFixture>>) {
+  return {
+    swarms: fixture.service,
+    authorizesCapabilityScope: async () => true,
+    getSessionContext: (id: string) => fixture.sessions.get(id),
+  };
+}
+
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
   const fixture = await swarmFixture();
   if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
   const capabilitySecret = "swarm-regression-capability-secret";
-  const server = createServer(
-    {
-      swarms: fixture.service,
-      authorizesCapabilityScope: async () => true,
-    } as unknown as App,
-    {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: "swarm-regression-source-secret-distinct",
-      capabilitySecret,
-    },
-  );
+  const server = createServer(swarmApp(fixture) as unknown as App, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: "swarm-regression-source-secret-distinct",
+    capabilitySecret,
+  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
   const token = await mintCapabilityToken(fixture.caller.claims, capabilitySecret);
@@ -83,8 +85,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
   const capabilitySecret = "capability-test-secret".repeat(3);
   const portalIdentitySecret = "portal-test-secret".repeat(3);
   const app = {
-    swarms: fixture.service,
-    authorizesCapabilityScope: async () => true,
+    ...swarmApp(fixture),
     getSessionForViewer: async (id: string, viewer: { actorId: string }) => {
       const session = await fixture.sessions.getForParticipant(id, viewer.actorId);
       return session ? { session, items: [] } : null;
@@ -166,17 +167,11 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
     runLeaseToken: first.leaseToken!,
   };
   const secret = "swarm-attempt-regression-secret";
-  const server = createServer(
-    {
-      swarms: fixture.service,
-      authorizesCapabilityScope: async () => true,
-    } as unknown as App,
-    {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: "swarm-attempt-source-secret-distinct-long",
-      capabilitySecret: secret,
-    },
-  );
+  const server = createServer(swarmApp(fixture) as unknown as App, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: "swarm-attempt-source-secret-distinct-long",
+    capabilitySecret: secret,
+  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
   const token = await mintCapabilityToken(claims, secret);
@@ -207,17 +202,11 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
   const f = await swarmFixture();
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   const capabilitySecret = "swarm-atomic-http-test-secret";
-  const server = createServer(
-    {
-      swarms: f.service,
-      authorizesCapabilityScope: async () => true,
-    } as unknown as App,
-    {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: "swarm-atomic-http-source-secret-distinct",
-      capabilitySecret,
-    },
-  );
+  const server = createServer(swarmApp(f) as unknown as App, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: "swarm-atomic-http-source-secret-distinct",
+    capabilitySecret,
+  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
   const headers = {

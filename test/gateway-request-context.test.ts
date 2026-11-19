@@ -20,7 +20,7 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
-import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testTenant as tenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 const gateway = {
   url: "https://gateway.test",
@@ -322,7 +322,7 @@ test("app turns and their helper calls tell the gateway which session they serve
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:context", "dm", session.scopeId);
   const conversation = { kind: "dm" as const, threadRef: child.threadRef };
   const actor = { id: "U1", type: "internal" as const };
-  await built.sessions.setParentSession(child.id, cron.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, cron.id);
   await built.sessions.addParticipant(child.id, "U1");
   await built.sessions.setSpawnMeta(child.id, {
     surface: "test",
@@ -349,18 +349,22 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-  await built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), { actorId: "U2", context: "conversation" });
+  await built.memory.capture(tenant, "personal:U2", ["Prefers tea"], Date.now(), {
+    actorId: "U2",
+    context: "conversation",
+  });
   assert.deepEqual(sent("memory_classification"), {
     "x-qm-actor": pseudonym("U2"),
     "x-qm-scope": `personal:${pseudonym("U2")}`,
     "x-qm-purpose": "memory_classification",
   });
 
+  const session = await built.sessions.getOrCreateByThread("session-agent", "dm", "personal:U1");
   const capability = await mintCapabilityToken(
     {
       actorId: "U1",
       scopeId: "personal:U1",
-      sessionId: "session-agent",
+      sessionId: session.id,
       origin: "webhook",
       memory: { write: "personal:U1", read: ["personal:U1"] },
       exp: Date.now() + 60_000,
@@ -373,8 +377,8 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
     body: JSON.stringify({ facts: ["Prefers metric units"] }),
   });
   assert.equal(captured.status, 200, await captured.text());
-  assert.deepEqual(sent("memory_classification", "session-agent"), {
-    "x-qm-session-id": "session-agent",
+  assert.deepEqual(sent("memory_classification", session.id), {
+    "x-qm-session-id": session.id,
     "x-qm-actor": pseudonym("U1"),
     "x-qm-scope": `personal:${pseudonym("U1")}`,
     "x-qm-origin": "webhook",

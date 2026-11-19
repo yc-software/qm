@@ -1,8 +1,22 @@
+import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
+import { cronSharingRevision, cronPublicationId, withCronAccess } from "../cron/cron-store.ts";
+import type { Tenant } from "../tenants/context.ts";
+import { cronRef, encodeRef } from "../acl/resource-ref.ts";
+import { refreshPrivateContext, inheritContextSources, privateSourceAllowed } from "../sessions/private-context.ts";
+import { triggerPrivacy, assertPrivateTrigger } from "../triggers/trigger-store.ts";
+import type { CreateTriggerInput } from "../triggers/trigger-store.ts";
 import { loopAdministration } from "./loop-administration.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId } from "../types.ts";
-import { personIds, personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
+import { personalScope, parseScopeId, scopeId } from "../types.ts";
+import {
+  samePerson,
+  personIds,
+  personKey,
+  personKeys,
+  samePersonInDirectory,
+  samePersonMatcher,
+} from "../directory/person.ts";
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
@@ -68,6 +82,7 @@ export function createMessagingMethods(
 ): Pick<
   App,
   | "createCron"
+  | "publishPrivateCron"
   | "getCron"
   | "listCrons"
   | "listCronsForViewer"
@@ -128,6 +143,7 @@ export function createMessagingMethods(
   | "cronAdminUrl"
   | "channelName"
   | "ambientJudge"
+  | "preparePrincipalDelivery"
   | "recordPrincipalDelivery"
   | "reachNow"
   | "resolveReachTarget"
@@ -135,6 +151,10 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
+  const sharedMembers = createCurrentScopeMembers(
+    { managedGroups: deps.managedGroups ?? deps.projects, directory: deps.directory, identity: deps.identity },
+    true,
+  );
   const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
   const identityMembers = () =>
@@ -171,11 +191,157 @@ export function createMessagingMethods(
         : {}),
     });
 
+  const triggerInput = async <T extends CreateTriggerInput>(input: T): Promise<T> => {
+    const context = input.context;
+    if (!context) {
+      assertPrivateTrigger(input);
+      return input;
+    }
+    await refreshPrivateContext(deps.sessions, context);
+    const next = { ...input, ...triggerPrivacy(input, context) };
+    if (
+      next.personalOnly &&
+      (!privateSourceAllowed(context, input.ownerScopeId) ||
+        input.ownerScopeId !== personalScope(context.actorId) ||
+        !samePerson(input.owner, context.actorId))
+    )
+      throw new Error("Private scheduled outputs must belong to the current person.");
+    assertPrivateTrigger(next);
+    return next;
+  };
+
+  const cronPrivacy = async (
+    tenant: Tenant,
+    before: Cron,
+    by: CronEditor,
+    patch: Partial<Pick<Cron, "owner" | "destination" | "personalOnly" | "sourceProvenance">> = {},
+  ) => {
+    await refreshPrivateContext(deps.sessions, by);
+    if (before.loopId && (by.personalOnly || before.personalOnly))
+      throw new Error("Use loop controls to change a private loop schedule.");
+    if ((await inheritContextSources(deps.sessions, by, [before])).has(before.id))
+      throw new Error("This scheduled output is private to its owner.");
+    const desired = await triggerInput({ ...before, ...patch, context: by });
+    if (desired.personalOnly || desired.sourceProvenance) {
+      const copies = (await deps.crons.copiesOf(before.id)).filter((copy) => !copy.forkedAt);
+      const related = [desired, ...copies];
+      const grants = await deps.acl.find(tenant, {
+        resources: related.map((cron) => ({ ownerScopeId: cron.ownerScopeId, ref: encodeRef(cronRef(cron.id)) })),
+      });
+      if (desired.personalOnly && (copies.length || grants.length))
+        throw new Error("Private context cannot update a shared schedule. Create a personal schedule instead.");
+      if (!desired.personalOnly && desired.sourceProvenance) {
+        const targets = await deps.sessions.getMany({
+          ids: [],
+          threadRefs: [
+            ...new Set(related.flatMap((cron) => (cron.destination?.type === "web" ? [cron.destination.target] : []))),
+          ],
+        });
+        const webScopes = new Map(targets.map((session) => [session.threadRef, session.scopeId]));
+        for (const cron of related) {
+          const audiences = new Set([
+            cron.ownerScopeId,
+            ...grants
+              .filter((grant) => grant.ownerScopeId === cron.ownerScopeId && grant.ref === encodeRef(cronRef(cron.id)))
+              .map((grant) => grant.granteeScopeId),
+          ]);
+          const destination = cron.destination;
+          if (destination) {
+            if (destination.audienceScopeId) audiences.add(destination.audienceScopeId);
+            let actual = destination.audienceScopeId;
+            if (destination.type === "principal") actual = personalScope(destination.target);
+            else if (destination.type === "web") actual = webScopes.get(destination.target);
+            else if (destination.type === "slack") actual = scopeId("channel", destination.target);
+            if (!actual) throw new Error("Schedule destination context cannot be verified.");
+            audiences.add(actual);
+          }
+          audiences.delete(personalScope(by.actorId));
+          const output = { ...cron, ...triggerPrivacy(cron, desired) };
+          for (const audience of audiences) {
+            if (!deps.discloseArtifact) throw new Error("Schedule source authorization is unavailable.");
+            await deps.discloseArtifact(output, audience, by.actorId);
+          }
+        }
+      }
+    }
+    return {
+      ...triggerPrivacy(before, desired),
+      ...(desired.personalOnly && before.sharedFrom ? { sharedFrom: null, forkedAt: Date.now() } : {}),
+    };
+  };
+
+  const preparePrincipalDelivery = async (deliveryId: string, recipientThreadRef: string) => {
+    const delivery = await deps.deliveries.get(deliveryId);
+    if (!delivery || delivery.destination.type !== "principal") return null;
+    const recipientId = delivery.destination.target;
+    const recipientScope = scopeId("personal", recipientId);
+    const session = await deps.sessions.getOrCreateByThread(
+      recipientThreadRef,
+      "dm",
+      recipientScope,
+      undefined,
+      "slack",
+    );
+    if (delivery.provenance?.contextProvenance)
+      await deps.sessions.recordContextProvenance(session.id, recipientScope, delivery.provenance.contextProvenance);
+    await deps.sessions.addParticipant(session.id, recipientId);
+    return delivery;
+  };
+
   return {
+    async publishPrivateCron(id, revision, target, by) {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const context = await refreshPrivateContext(deps.sessions, by);
+        const selected = await deps.crons.get(id);
+        if (
+          !selected?.personalOnly ||
+          !privateSourceAllowed(context, selected.ownerScopeId) ||
+          !samePerson(selected.owner, context.actorId)
+        )
+          throw new Error("Only the private schedule's owner can publish it from personal context.");
+        const kind = parseScopeId(target).kind;
+        if (
+          kind !== "group" ||
+          !(deps.managedGroups ?? deps.projects)?.recognizes(parseScopeId(target).ref) ||
+          !(await h.principalCanAccessCurrentScope(context.actorId, target))
+        )
+          throw new Error("Choose a Team or workbook context you currently belong to for this schedule.");
+        const existing = await deps.crons.get(cronPublicationId(id, revision, target));
+        if (existing) {
+          if (
+            existing.ownerScopeId !== target ||
+            existing.personalOnly ||
+            existing.createdBy !== selected.createdBy ||
+            !existing.sourceProvenance
+          )
+            throw new Error("The saved schedule publication has incompatible access.");
+          return deps.crons.publishPrivate(id, revision, target, existing.sourceProvenance);
+        }
+        if (cronSharingRevision(selected) !== revision)
+          throw new Error("The selected private schedule changed after approval.");
+        if (!deps.discloseArtifact) throw new Error("Schedule source authorization is unavailable.");
+        const sourceProvenance = await deps.discloseArtifact(selected, target, context.actorId);
+        if (!sourceProvenance) throw new Error("The selected private schedule has no source provenance.");
+        await validateRuntime({ ...selected, ownerScopeId: target });
+        const members = await sharedMembers(target);
+        if (!members?.length) throw new Error("The shared schedule's current audience is unavailable.");
+        const sharedThread = `web:${selected.owner}:${cronPublicationId(id, revision, target)}`;
+        const sharedSession = await deps.sessions.getOrCreateByThread(sharedThread, kind, target, undefined, "web");
+        if (sharedSession.scopeId !== target || sharedSession.personalOnly)
+          throw new Error("The shared schedule conversation has incompatible access.");
+        await deps.sessions.recordContextProvenance(sharedSession.id, target, sourceProvenance);
+        await Promise.all(members.map((member) => deps.sessions.addParticipant(sharedSession.id, member.id)));
+        const published = await deps.crons.publishPrivate(id, revision, target, sourceProvenance);
+        auditCron("cron_publish", published, by);
+        return published;
+      });
+    },
     async createCron(input, trial) {
+      input = await triggerInput(input);
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
       await trialBeforeSave(input.script, input.schedule, trial);
+      input = await triggerInput(input);
       const cron = await deps.crons.create(input);
       auditCron("cron_create", cron, { actorId: cron.createdBy, botActor: cron.botActor });
       return cron;
@@ -196,6 +362,8 @@ export function createMessagingMethods(
       return deps.crons.list(ids);
     },
     async listCronsForViewer(principalId) {
+      const context = typeof principalId === "string" ? { actorId: principalId } : principalId;
+      principalId = context.actorId;
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
       const sharing = withSharing(all);
@@ -207,53 +375,80 @@ export function createMessagingMethods(
           const name = scopeNames.get(c.ownerScopeId);
           return sharing(name ? { ...c, scopeName: name } : c);
         });
-      return { owned, visible };
+      const blocked = await inheritContextSources(deps.sessions, context, [...owned, ...visible]);
+      return { owned: owned.filter((c) => !blocked.has(c.id)), visible: visible.filter((c) => !blocked.has(c.id)) };
     },
-    async updateCron(id, patch, by, trial) {
-      const before = await deps.crons.get(id);
-      if (!before) return null;
-      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
-      if (patch.schedule) validateUserSchedule(patch.schedule);
-      await trialBeforeSave(patch.script, patch.schedule, trial);
-      const linked = linkedChanges(before, patch);
-      const edited = Object.keys(linked).length > 0;
-      const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
-      const own = forks ? { ...patch, forkedAt: Date.now() } : patch;
-      const updated = edited
-        ? ((await deps.crons.updateLinked(id, own, linked))[0] ?? null)
-        : await deps.crons.update(id, own);
-      auditCron("cron_update", before, by);
-      return updated;
+    async updateCron(tenant, id, patch, by, trial) {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return null;
+        await cronPrivacy(tenant, before, by, patch);
+        if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
+        if (patch.schedule) validateUserSchedule(patch.schedule);
+        await trialBeforeSave(patch.script, patch.schedule, trial);
+        const privacy = await cronPrivacy(tenant, before, by, patch);
+        const linked = linkedChanges(before, patch);
+        const edited = Object.keys(linked).length > 0;
+        const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
+        const own = {
+          ...patch,
+          ...privacy,
+          ...(forks ? { forkedAt: Date.now() } : {}),
+        };
+        const updated = edited
+          ? ((await deps.crons.updateLinked(id, own, { ...linked, ...privacy }))[0] ?? null)
+          : await deps.crons.update(id, own);
+        auditCron("cron_update", before, by);
+        return updated;
+      });
     },
     async deleteCron(id, by) {
-      const before = await deps.crons.get(id);
-      await deps.crons.delete(id);
-      if (before) auditCron("cron_delete", before, by);
+      await withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const before = await deps.crons.get(id);
+        await deps.crons.delete(id);
+        if (before) auditCron("cron_delete", before, by);
+      });
     },
-    setCronEnabled(id, enabled) {
-      return deps.crons.setEnabled(id, enabled);
+    async setCronEnabled(tenant, id, enabled, by) {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return;
+        if (by) await deps.crons.update(id, await cronPrivacy(tenant, before, by));
+        await deps.crons.setEnabled(id, enabled);
+      });
     },
-    async setCronFireNote(id, note, by) {
-      const before = await deps.crons.get(id);
-      if (!before) return "missing";
-      const outcome = await deps.crons.setFireNote(id, note);
-      if (outcome === "applied") auditCron("cron_note", before, by);
-      return outcome;
+    async setCronFireNote(tenant, id, note, by) {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return "missing";
+        const privacy = await cronPrivacy(tenant, before, by);
+        await deps.crons.update(id, privacy);
+        const outcome = await deps.crons.setFireNote(id, note);
+        if (outcome === "applied") auditCron("cron_note", before, by);
+        return outcome;
+      });
     },
-    async setCronRuntime(id, runtime) {
-      const before = await deps.crons.get(id);
-      if (!before) return null;
-      await validateRuntime({ ...before, runtime });
-      return deps.crons.update(id, { runtime });
+    async setCronRuntime(tenant, id, runtime, by) {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return null;
+        await validateRuntime({ ...before, runtime });
+        const privacy = by ? await cronPrivacy(tenant, before, by) : {};
+        return deps.crons.update(id, { runtime, ...privacy });
+      });
     },
-    async setCronDestination(id, destination, by) {
-      const before = await deps.crons.get(id);
-      if (!before) return null;
-      await deps.crons.setDestination(id, destination);
-      auditCron("cron_retarget", before, by);
-      return deps.crons.get(id);
+    async setCronDestination(tenant, id, destination, by) {
+      return withCronAccess(deps.crons, deps.advisoryLock, id, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return null;
+        const privacy = await cronPrivacy(tenant, before, by, { destination });
+        await deps.crons.setDestination(id, destination, privacy);
+        auditCron("cron_retarget", before, by);
+        return deps.crons.get(id);
+      });
     },
     async createWebhook(input) {
+      input = await triggerInput(input);
       const webhook = await deps.webhooks.create(input);
       h.recordAudit({
         at: Date.now(),
@@ -280,11 +475,31 @@ export function createMessagingMethods(
     listWebhooks() {
       return deps.webhooks.list();
     },
-    setWebhookEnabled(id, enabled) {
-      return deps.webhooks.setEnabled(id, enabled);
+    async setWebhookEnabled(id, enabled, by) {
+      return deps.advisoryLock.withLock(`webhook-access:${id}`, async () => {
+        const before = await deps.webhooks.get(id);
+        if (!before) return;
+        if (by) {
+          await refreshPrivateContext(deps.sessions, by);
+          if ((await inheritContextSources(deps.sessions, by, [before])).has(id))
+            throw new Error("This webhook is private to its owner.");
+          const desired = await triggerInput({ ...before, context: by });
+          await deps.webhooks.update(id, { action: before.action, ...triggerPrivacy(before, desired) });
+        }
+        await deps.webhooks.setEnabled(id, enabled);
+      });
     },
-    updateWebhook(id, patch) {
-      return deps.webhooks.update(id, patch);
+    async updateWebhook(id, patch, by) {
+      return deps.advisoryLock.withLock(`webhook-access:${id}`, async () => {
+        const before = await deps.webhooks.get(id);
+        if (!before) return null;
+        if (!by) return deps.webhooks.update(id, patch);
+        await refreshPrivateContext(deps.sessions, by);
+        if ((await inheritContextSources(deps.sessions, by, [before])).has(id))
+          throw new Error("This webhook is private to its owner.");
+        const desired = await triggerInput({ ...before, ...patch, context: by });
+        return deps.webhooks.update(id, { ...patch, ...triggerPrivacy(before, desired) });
+      });
     },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
@@ -525,20 +740,12 @@ export function createMessagingMethods(
       return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;
     },
     ...(deps.ambientJudge ? { ambientJudge: deps.ambientJudge } : {}),
+    async preparePrincipalDelivery(deliveryId, recipientThreadRef) {
+      await preparePrincipalDelivery(deliveryId, recipientThreadRef);
+    },
     async recordPrincipalDelivery(deliveryId, recipientThreadRef) {
-      const delivery = await deps.deliveries.get(deliveryId);
-      if (!delivery || delivery.destination.type !== "principal") return;
-      const recipientId = delivery.destination.target;
-      const recipientScope = scopeId("personal", recipientId);
-      const session = await deps.sessions.getOrCreateByThread(
-        recipientThreadRef,
-        "dm",
-        recipientScope,
-        undefined,
-        "slack",
-      );
-      await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
-      await deps.sessions.addParticipant(session.id, recipientId);
+      const delivery = await preparePrincipalDelivery(deliveryId, recipientThreadRef);
+      if (delivery) await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
     },
 
     async reachNow(input): Promise<ReachNowResult> {

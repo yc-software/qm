@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { execFile } from "node:child_process";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { promisify } from "node:util";
@@ -332,7 +333,7 @@ test("Archiving revokes a runner credential and restoration creates a new one", 
   const f = await fixture(t);
   const version = f.d.versions[0]!;
   const manifest = await f.artifacts.prepare(f.d, version);
-  await f.deploy.archiveApp(f.d.id);
+  await f.deploy.archiveApp(appWriteTenant, f.d.id);
   assert.equal((await f.deployStore.get(f.d.id))!.status, "archived");
   const url = `${manifest.url}/info/refs?service=git-upload-pack`;
   assert.equal((await fetch(url, { headers: { authorization: `Bearer ${manifest.token}` } })).status, 403);

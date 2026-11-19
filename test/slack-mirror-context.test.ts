@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
@@ -22,7 +23,7 @@ function fixture() {
       await cache.ingest(events);
     },
   } as SlackCoreClient;
-  const readHistory = createSlackHistoryReader({
+  const readHistory = createSlackHistoryReader(captureTenant, {
     core,
     ids,
     managed: true,
@@ -421,7 +422,7 @@ for (const source of ["mirror", "explicit-live"] as const) {
       { user: "UBOT", ts: "3", text: "ordinary answer" },
       { user: "UOTHER", ts: "4", text: "other bot task", blocks: [{ type: "task_card", task_id: "qm_status:other" }] },
     ];
-    const read = createSlackHistoryReader({ core: f.core, ids });
+    const read = createSlackHistoryReader(captureTenant, { core: f.core, ids });
     const client = { conversations: { history: async () => ({ messages }), replies: async () => ({ messages }) } };
     const result = await read(client, "C1", "1", undefined, false, source === "explicit-live");
     assert.deepEqual(
@@ -459,7 +460,7 @@ test("explicit live context verifies reactions and never substitutes mirrored da
       replies: async () => ({ messages: [{ ts: "1.0", text: "waiting", user: "U1" }] }),
     },
   };
-  const readHistory = createSlackHistoryReader({ core, ids, historyClient });
+  const readHistory = createSlackHistoryReader(captureTenant, { core, ids, historyClient });
   let outcome: any;
   const fulfiller = createSurfaceContextFulfiller({
     core: {
@@ -526,7 +527,7 @@ test("explicit live context verifies reactions and never substitutes mirrored da
 
 test("explicit live reads reject truncated threads instead of returning an unusable backward cursor", async () => {
   const f = fixture();
-  const read = createSlackHistoryReader({ core: f.core, ids, managed: true });
+  const read = createSlackHistoryReader(captureTenant, { core: f.core, ids, managed: true });
   const client = {
     conversations: {
       replies: async ({ limit }: { limit: number }) => ({

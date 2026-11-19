@@ -1,9 +1,11 @@
 import { sessionTurnOrigin } from "../core/turn-origin.ts";
+import type { Tenant } from "../tenants/context.ts";
 import type { App } from "./app-types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { parseScopeId, type ScopeId, type Session, type TurnOrigin } from "../types.ts";
 
 export async function startSession(
+  tenant: Tenant,
   app: Pick<App, "turn" | "forkSession" | "spawnSession" | "discardSession">,
   sessions: Pick<SessionStore, "get" | "updateTitle">,
   actorId: string,
@@ -18,7 +20,7 @@ export async function startSession(
   },
 ): Promise<{ session: Session; refused?: string } | { error: string }> {
   const out = input.forkOf
-    ? await app.forkSession(input.forkOf, actorId)
+    ? await app.forkSession(tenant, input.forkOf, actorId)
     : await app.spawnSession(actorId, { scopeId: input.scopeId, ...(input.title ? { title: input.title } : {}) });
   if (!out) return { error: "cannot start a session in this context" };
   if (input.forkOf && input.title) await sessions.updateTitle(out.session.id, input.title);

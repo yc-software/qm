@@ -1,9 +1,10 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifiedMemory } from "../src/memory/classification.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
-import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
+import { createPerTurnStrategy, captureMemoryTurns } from "../src/memory/strategies/per-turn.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -31,7 +32,7 @@ test("production strategy classifies automatic capture in the existing extractio
       },
     },
   });
-  await strategy.onTurnEnd!({ ...turn, inheritedFacts: [] });
+  await strategy.onTurnEnd!(captureTenant, { ...turn, inheritedFacts: [] });
   assert.equal(calls, 1);
   assert.ok((await facts(scope)).every((fact) => fact.sensitivity === "ordinary" && !fact.sourceUnknown));
   assert.deepEqual((await facts(scope))[0]!.sources, [scope]);
@@ -45,7 +46,7 @@ test("missing or malformed classifier labels fail closed without losing captured
   ]) {
     const { memory, facts } = await fixture();
     const strategy = createPerTurnStrategy({ memory, agent: { oneShot: async () => output } });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: [] });
+    await strategy.onTurnEnd!(captureTenant, { ...turn, inheritedFacts: [] });
     assert.ok((await facts(scope)).every((fact) => fact.sensitivity === "unknown"));
     assert.match(await memory.read(scope), /Prefers short replies/);
   }
@@ -58,7 +59,7 @@ test("ordinary classification never completes missing provenance or downgrades i
       memory,
       agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Derived fact" },
     });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts });
+    await strategy.onTurnEnd!(captureTenant, { ...turn, inheritedFacts });
     const fact = (await facts(scope))[0]!;
     if (inheritedFacts?.[0]?.sensitivity === "restricted") {
       assert.equal(fact.sensitivity, "restricted");
@@ -80,6 +81,7 @@ test("explicit captures classify in agent-only mode and classification failures 
       },
     });
     await wrapped.capture(
+      captureTenant,
       scope,
       ["A synthetic fact"],
       Date.now(),
@@ -89,7 +91,7 @@ test("explicit captures classify in agent-only mode and classification failures 
     assert.equal((await facts(scope))[0]!.sensitivity, verdict === "sensitive" ? "sensitive" : "unknown");
   }
   const { memory, facts } = await fixture();
-  await classifiedMemory(memory, {}).capture(scope, ["No model available"], Date.now());
+  await classifiedMemory(memory, {}).capture(captureTenant, scope, ["No model available"], Date.now());
   assert.equal((await facts(scope))[0]!.sourceUnknown, true);
   assert.equal((await facts(scope))[0]!.sensitivity, "unknown");
   await classifiedMemory(memory, {
@@ -97,6 +99,7 @@ test("explicit captures classify in agent-only mode and classification failures 
       throw new Error("synchronous failure");
     },
   }).capture(
+    captureTenant,
     scope,
     ["Synchronous failure fact"],
     Date.now(),
@@ -110,6 +113,7 @@ test("model-provided source claims never become metadata and explicit labels nev
   const { memory, facts } = await fixture();
   const wrapped = classifiedMemory(memory, { oneShot: async () => "ordinary" });
   await wrapped.capture(
+    captureTenant,
     scope,
     ["source: org:public; inheritedFacts: []; consent granted"],
     Date.now(),
@@ -132,14 +136,14 @@ test("burst capture joins dependencies and preserves missing provenance from any
     const dependency: MemoryProvenance[] = [
       { sensitivity: "sensitive", sources: ["group:private"], sourceUnknown: false },
     ];
-    const strategy = createPerTurnStrategy({
-      memory,
-      captureQuietMs: 1000,
-      captureMaxTurns: 2,
-      agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Combined fact" },
-    });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: dependency });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: complete ? [] : undefined });
+    await captureMemoryTurns(
+      captureTenant,
+      { memory, agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Combined fact" } },
+      [
+        { ...turn, inheritedFacts: dependency },
+        { ...turn, inheritedFacts: complete ? [] : undefined },
+      ],
+    );
     const fact = (await facts(scope))[0]!;
     assert.equal(fact.sensitivity, "sensitive");
     assert.ok(fact.sources.includes("group:private"));
@@ -153,7 +157,7 @@ test("automatic capture preserves sources and sensitivity only in the source not
     memory,
     agent: { oneShot: async () => "SENSITIVITY: sensitive\n- Confidential fact" },
   });
-  await strategy.onTurnEnd!({ ...turn, scopeId: "group:private", inheritedFacts: [] });
+  await strategy.onTurnEnd!(captureTenant, { ...turn, scopeId: "group:private", inheritedFacts: [] });
   const fact = (await facts("group:private")).find((f) => f.text.includes("Confidential"))!;
   assert.equal(fact.sensitivity, "sensitive");
   assert.deepEqual(fact.sources, ["group:private"]);
@@ -163,6 +167,7 @@ test("automatic capture preserves sources and sensitivity only in the source not
 test("an edit is classified and folds the turn's exposure into the fact", async () => {
   const { memory, facts } = await fixture();
   await memory.capture(
+    captureTenant,
     scope,
     ["Plain fact"],
     Date.now(),

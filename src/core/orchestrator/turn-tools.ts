@@ -84,6 +84,8 @@ export function createTurnBrokers(turn: {
     deps.monitors && deps.processes && readOutputTail
       ? createMonitorBroker({
           store: deps.monitors,
+          sessions: deps.sessions,
+          sessionId: session.id,
           registry: deps.processes,
           readOutputTail,
           scopeId: memoryScopeId,
@@ -135,7 +137,8 @@ export function createFileRegistration(turn: {
     seed: input.runId ?? `${session.id}:${Date.now()}`,
     ...(fileGrantees.length
       ? {
-          onRegistered: async ({ ownerScopeId, id }) => {
+          onRegistered: async ({ ownerScopeId, id, personalOnly }) => {
+            if (personalOnly) return;
             for (const granteeScopeId of fileGrantees) {
               await deps.acl.grant(tenant, {
                 ownerScopeId,
@@ -170,11 +173,9 @@ export function createArtifactAccess(turn: {
   conversation: OrchestratorInput["conversation"];
   scopeId: ScopeId;
   resolution: TurnResolution;
-  provision: TurnSandboxes["provision"];
-  provisionResource: TurnSandboxes["provisionResource"];
   ownScopeBotWork: boolean;
 }) {
-  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource, ownScopeBotWork } = turn;
+  const { tenant, deps, conversation, scopeId, resolution, ownScopeBotWork } = turn;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
   const mayReadArtifact = async (artifact: FileArtifact, storedById = false): Promise<boolean> => {
     const libraryReach = storedById && ownScopeBotWork;
@@ -195,13 +196,11 @@ export function createArtifactAccess(turn: {
     if (!storedById) readableHandles = handles;
     return handles.some((handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id);
   };
-  const provisionOutbound = (sandboxId?: string) =>
-    sandboxId !== undefined ? provisionResource(sandboxId) : provision();
   const openStoredOutbound = async (id: string) => {
     const artifact = await deps.files.get(id);
     if (!artifact || !(await mayReadArtifact(artifact, true))) return null;
     const opened = await deps.files.open(id);
     return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
   };
-  return { mayReadArtifact, provisionOutbound, openStoredOutbound };
+  return { mayReadArtifact, openStoredOutbound };
 }

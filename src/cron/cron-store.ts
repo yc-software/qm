@@ -1,5 +1,8 @@
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { isDeepStrictEqual } from "node:util";
-import type { Destination } from "../types.ts";
+import type { Destination, ScopeId } from "../types.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import type { SourceProvenance } from "../memory/facts.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import {
@@ -10,6 +13,8 @@ import {
 } from "./fire-store.ts";
 import {
   assertNoEscalation,
+  assertPrivateTrigger,
+  triggerPrivacy,
   buildTriggerBase,
   contentPart,
   createDeduped,
@@ -21,6 +26,62 @@ import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
+
+export function cronPublicationId(id: string, revision: string, target: ScopeId): string {
+  return hashId(["private-cron-publication", id, revision, target]);
+}
+
+export function cronSharingRevision(cron: Cron): string {
+  const {
+    id,
+    ownerScopeId,
+    owner,
+    createdBy,
+    ownerConsentedAt,
+    botActor,
+    taskAuthor,
+    personalOnly,
+    sourceProvenance,
+    enabled,
+    archived,
+    runtime,
+    schedule,
+    title,
+    action,
+    message,
+    loopId,
+    sessionRef,
+    script,
+    destination,
+  } = cron;
+  return hashId(
+    [
+      canonicalJson({
+        id,
+        ownerScopeId,
+        owner,
+        createdBy,
+        ownerConsentedAt,
+        botActor,
+        taskAuthor,
+        personalOnly,
+        sourceProvenance,
+        enabled,
+        archived,
+        runtime,
+        schedule,
+        title,
+        action,
+        message,
+        loopId,
+        sessionRef,
+        script,
+        destination,
+      }),
+    ],
+    64,
+  );
+}
 
 export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
@@ -36,6 +97,8 @@ export interface CreateCronInput extends CreateTriggerInput {
 }
 
 export interface CronPatch {
+  personalOnly?: true;
+  sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
   runtime?: Cron["runtime"];
   title?: string;
   action?: string;
@@ -59,6 +122,7 @@ export const STRANDED_FIRE_NOTE = "fire never completed — stranded by a restar
 export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 export interface CronStore {
+  publishPrivate(id: string, revision: string, target: ScopeId, provenance: SourceProvenance): Promise<Cron>;
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(ids?: readonly string[]): Promise<Cron[]>;
@@ -69,7 +133,11 @@ export interface CronStore {
   updateLinked(id: string, patch: CronPatch, linked: CronPatch): Promise<Cron[]>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
-  setDestination(id: string, destination: Destination | undefined): Promise<void>;
+  setDestination(
+    id: string,
+    destination: Destination | undefined,
+    privacy?: Pick<CronPatch, "personalOnly" | "sourceProvenance" | "sharedFrom" | "forkedAt">,
+  ): Promise<void>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
   runningFires(now: number): Promise<CronFireRecord[]>;
@@ -91,6 +159,23 @@ export interface CronStore {
     priorLastFiredAt: number | undefined,
   ): Promise<void>;
   due(now: number): Promise<Array<Cron & { scheduledAt: number; tenantId: string }>>;
+}
+
+export async function withCronAccess<T>(
+  crons: Pick<CronStore, "get">,
+  lock: Pick<AdvisoryLock, "withLock">,
+  id: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const root = (cron: Cron | null) => (cron?.sharedFrom && !cron.forkedAt ? cron.sharedFrom : id);
+  for (;;) {
+    const selected = root(await crons.get(id));
+    const result = await lock.withLock(`cron-access:${selected}`, async () => {
+      if (root(await crons.get(id)) !== selected) return { retry: true } as const;
+      return { retry: false, value: await work() } as const;
+    });
+    if (!result.retry) return result.value;
+  }
 }
 
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
@@ -144,8 +229,56 @@ export function createCronStore(
   const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts.fires;
   return {
+    async publishPrivate(id, revision, target, provenance) {
+      const publishedId = cronPublicationId(id, revision, target);
+      const existing = await backing.get(publishedId);
+      if (existing) return existing;
+      let published: Cron;
+      const results = await backing.mutateMany([
+        {
+          id,
+          apply: (current) => {
+            if (!current?.personalOnly || cronSharingRevision(current) !== revision)
+              throw new Error("The selected private schedule changed after approval.");
+            if (current.loopId || current.script)
+              throw new Error("Loop and script schedules require their own publication controls.");
+            const nextFireAt = recoverNextFireAt(
+              current.schedule,
+              current.createdAt,
+              current.lastFiredAt,
+              current.nextFireAt,
+            );
+            const finished =
+              !current.schedule.cron && current.schedule.everyMs === undefined && current.lastFiredAt !== undefined;
+            published = {
+              id: publishedId,
+              ownerScopeId: target,
+              owner: current.owner,
+              createdBy: current.createdBy,
+              createdAt: Date.now(),
+              enabled: current.enabled && !current.archived && !finished,
+              schedule: current.schedule,
+              ...(nextFireAt !== undefined && !finished ? { nextFireAt } : {}),
+              ...(current.title !== undefined ? { title: current.title } : {}),
+              ...(current.action !== undefined ? { action: current.action } : {}),
+              ...(current.message !== undefined ? { message: current.message } : {}),
+              ...(current.runtime !== undefined ? { runtime: current.runtime } : {}),
+              ...(current.ownerConsentedAt !== undefined ? { ownerConsentedAt: current.ownerConsentedAt } : {}),
+              ...(current.taskAuthor ? { taskAuthor: current.taskAuthor } : {}),
+              ...(current.botActor ? { botActor: current.botActor } : {}),
+              sourceProvenance: provenance,
+              destination: { type: "web", target: `web:${current.owner}:${publishedId}`, audienceScopeId: target },
+            };
+            return { ...current, enabled: false };
+          },
+        },
+        { id: publishedId, apply: (current) => current ?? published },
+      ]);
+      return results[1]!;
+    },
     async create(input) {
       assertNoEscalation(input);
+      assertPrivateTrigger(input);
       assertCronRuntime(input);
       const now = Date.now();
       const title = normalizeTitle(input.title);
@@ -161,6 +294,7 @@ export function createCronStore(
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
         ...(input.script ? [contentPart(input.script)] : []),
+        ...(input.personalOnly || input.sourceProvenance ? [contentPart(triggerPrivacy({}, input))] : []),
         ...(input.sharedFrom ? [contentPart(input.sharedFrom)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
@@ -193,7 +327,11 @@ export function createCronStore(
       const before = await backing.get(id);
       if (!before) return null;
       assertCronRuntime({ ...before, ...patch });
-      return backing.merge(id, cronFields(patch));
+      return backing.update(id, (current) => {
+        const next = { ...current, ...cronFields(patch), ...triggerPrivacy(current, patch) };
+        assertPrivateTrigger(next);
+        return next;
+      });
     },
     async updateLinked(id, patch, linked) {
       const before = await backing.get(id);
@@ -205,16 +343,43 @@ export function createCronStore(
       const own = cronFields(patch);
       const shared = cronFields(linked);
       return backing.mutateMany([
-        { id, apply: (c) => ({ ...c!, ...own }) },
-        ...copies.map((copy) => ({ id: copy, apply: (c: Cron | null) => (c!.forkedAt ? c! : { ...c!, ...shared }) })),
+        {
+          id,
+          apply: (current) => {
+            if (!current) throw new Error("Schedule no longer exists.");
+            const next = { ...current, ...own, ...triggerPrivacy(current!, patch) };
+            assertPrivateTrigger(next);
+            if (next.personalOnly && copies.length) throw new Error("Private context cannot update a shared schedule.");
+            return next;
+          },
+        },
+        ...copies.map((copy) => ({
+          id: copy,
+          apply: (c: Cron | null) => {
+            if (!c) throw new Error("Shared schedule copy no longer exists.");
+            if (c.forkedAt || c.sharedFrom !== id) return c;
+            const next = { ...c!, ...shared, ...triggerPrivacy(c!, linked) };
+            assertPrivateTrigger(next);
+            return next;
+          },
+        })),
       ]);
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {
       await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
     },
-    async setDestination(id, destination) {
-      await backing.merge(id, { destination });
+    async setDestination(id, destination, privacy) {
+      await backing.update(id, (current) => {
+        const next = {
+          ...current,
+          destination,
+          ...cronFields(privacy ?? {}),
+          ...triggerPrivacy(current, privacy ?? {}),
+        };
+        assertPrivateTrigger(next);
+        return next;
+      });
     },
     async beginFire(id, entry, opts) {
       if ((await backing.get(id)) === null) return { begun: false };

@@ -1,3 +1,5 @@
+import type { Tenant } from "../src/tenants/context.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { test } from "node:test";
@@ -124,19 +126,20 @@ async function call(
       w.crons.set(cron.id, cron);
       return cron;
     },
-    updateCron: async (id: string, patch: Record<string, unknown>) => {
+    updateCron: async (_tenant: Tenant, id: string, patch: Record<string, unknown>) => {
       const cur = w.crons.get(id);
       if (!cur) return null;
       const next = { ...cur, ...patch } as Cron;
       w.crons.set(id, next);
       return next;
     },
-    setCronEnabled: async (id: string, enabled: boolean) => {
+    setCronEnabled: async (_tenant: Tenant, id: string, enabled: boolean) => {
       const cur = w.crons.get(id);
       if (cur) w.crons.set(id, { ...cur, enabled });
     },
   };
   const ctx = {
+    tenant: testTenant,
     res,
     url,
     pathname: url.pathname,

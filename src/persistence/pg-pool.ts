@@ -141,6 +141,7 @@ export interface TenantDb {
 }
 
 export interface PgPool {
+  ready(): Promise<void>;
   pool(): Promise<Pool>;
   sessionPool(): Promise<Pool>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
@@ -672,5 +673,5 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(connectionString, definePgMigration(definition));
   }
-  return { pool, sessionPool, q, query, forTenant, registerMigration, migrate, close };
+  return { ready, pool, sessionPool, q, query, forTenant, registerMigration, migrate, close };
 }

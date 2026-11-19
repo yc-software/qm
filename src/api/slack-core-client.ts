@@ -42,7 +42,7 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import type { DeliveryLane, SlackDeliveryJobs } from "../slack/delivery-jobs.ts";
 
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
@@ -94,7 +94,7 @@ export interface SlackCoreClient {
   readBlob(blobId: string): Promise<Buffer>;
   readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
   rememberSurfaceHistory?(events: IngestEvent[]): Promise<void>;
-  noteSurfaceHistoryGap?(container: string, note: string): Promise<void>;
+  noteSurfaceHistoryGap?(tenant: Tenant, container: string, note: string): Promise<void>;
   readSurfaceMessages?(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
@@ -104,6 +104,7 @@ export interface SlackCoreClient {
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
+  prepareDelivery(id: string, recipientThreadRef: string): Promise<void>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<void>;
@@ -257,11 +258,14 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       await deps.surfaceCache?.ingest(events);
     },
 
-    async noteSurfaceHistoryGap(container, note) {
+    async noteSurfaceHistoryGap(tenant, container, note) {
       if (!deps.memory) return;
       const kind = (await deps.surfaceCache?.containerState(container))?.kind;
       const scope = scopeId(kind === "group" ? "group" : "channel", container);
-      await deps.memory.capture(scope, [note], Date.now(), { actorId: scopeActor(scope), context: "maintenance" });
+      await deps.memory.capture(tenant, scope, [note], Date.now(), {
+        actorId: scopeActor(scope),
+        context: "maintenance",
+      });
     },
 
     async readSurfaceMessages(container, opts) {
@@ -357,6 +361,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
     stagedEnvelopes: deps.stagedEnvelopes,
 
+    prepareDelivery: (id, recipientThreadRef) => deps.app.preparePrincipalDelivery(id, recipientThreadRef),
     async ackDelivery(id, body) {
       if (body?.recipientThreadRef) await deps.app.recordPrincipalDelivery(id, body.recipientThreadRef);
       await deps.app.ackDelivery(id, body?.slackApiMs);

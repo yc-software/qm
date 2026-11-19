@@ -23,6 +23,29 @@ const manifest = (name: string): SkillManifest => ({
   body: `# ${name}`,
 });
 
+test("a shared context skips a private skill override and resolves its shared fallback", async () => {
+  const store = createSkillStore({ backing: testMap<Skill>(), advisoryLock: testAdvisoryLock() });
+  const shared = await publishedSkill(store, ORG, "procedure");
+  const personal = await store.create({
+    scopeId: JOSH,
+    manifest: manifest("procedure"),
+    createdBy: "josh",
+    personalOnly: true,
+  });
+  await store.review(personal.id, "josh", []);
+  await store.publish(personal.id);
+  assert.equal((await store.resolve("procedure", [JOSH, ORG])).skill?.id, shared.id);
+  assert.equal((await store.resolve("procedure", [JOSH, ORG], JOSH)).skill?.id, personal.id);
+  const visible = await store.visibleFor([JOSH, ORG], [{ id: personal.id, ownerScopeId: JOSH }]);
+  assert.deepEqual(
+    visible
+      .flatMap((row) => [row.skill, ...row.shadowed])
+      .filter(Boolean)
+      .map((skill) => skill!.id),
+    [shared.id],
+  );
+});
+
 async function publishedSkill(store: SkillStore, scope: ScopeId, name: string) {
   const s = await store.create({ scopeId: scope, manifest: manifest(name), createdBy: "josh" });
   await store.review(s.id, "reviewer", []);

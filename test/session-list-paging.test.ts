@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -60,7 +61,7 @@ test("the session list pages top-level chats newest first and keeps pinned, arch
     const archived = await chat(built, "web:U1:archived", "Archived");
     await built.sessions.updateParticipantView(archived.id, "U1", { archived: true });
     const child = await chat(built, "subagent:c0:1", "Child");
-    await built.sessions.setParentSession(child.id, chats[0]!.id);
+    await built.sessions.setParentSession(ancestryTenant, child.id, chats[0]!.id);
     const cron = await built.sessions.getOrCreateByThread("cron:job:1", "dm", "personal:U1", undefined, "cron");
     await built.sessions.addParticipant(cron.id, "U1", "Cron run");
     await chat(built, "web:U2:theirs", "Someone else's", "U2");
@@ -106,9 +107,9 @@ test("a parent row counts its running subagents and its children load on demand"
   await withServer(async (built, get) => {
     const parent = await chat(built, "web:U1:parent", "Parent");
     const child = await chat(built, "subagent:parent:1", "Researcher");
-    await built.sessions.setParentSession(child.id, parent.id);
+    await built.sessions.setParentSession(ancestryTenant, child.id, parent.id);
     const grandchild = await chat(built, "subagent:child:1", "Helper");
-    await built.sessions.setParentSession(grandchild.id, child.id);
+    await built.sessions.setParentSession(ancestryTenant, grandchild.id, child.id);
     await built.runs.enqueue({ sessionId: grandchild.threadRef, request: enqueueRequest(grandchild.threadRef) });
 
     const page = (await get("/v1/sessions?principalId=U1")).body as Page;

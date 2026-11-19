@@ -38,3 +38,180 @@ Tenant separation is moving from an implicit binding to an explicit argument. Po
 10. Tables that are not per tenant (the tenant registry, migrations ledger, instance heartbeats and the other tables `test/tenant-tables.test.ts` lists as untenanted) move to an explicit untenanted handle, so the remaining implicit queries are all genuinely tenanted.
 11. Ambient reads and caches: replace the remaining `boundTenant` and `currentTenant` reads and the binding-keyed caches with token-keyed state.
 12. Remove the implicit path: `PgPool.q` and `PgPool.query` stop reading the binding, `withPgTransaction` loses its binding form, and `AsyncLocalStorage`, `boundTenant`, `currentTenant`, `ambientTenant` and `pinTenant` are deleted. `withTenant` remains only as the mint at boundaries, and the ratchet is retired once the query, read and cache counts reach zero; `mintSites` stays above zero by design.
+
+## Document-context inheritance slice
+
+Unreleased internal session APIs now carry the existing request/turn token:
+
+| Before                                                        | After                                                    |
+| ------------------------------------------------------------- | -------------------------------------------------------- |
+| `SessionStore.inheritContextFrom(sessionId, sourceSessionId)` | `inheritContextFrom(tenant, sessionId, sourceSessionId)` |
+| `SessionStore.setParentSession(sessionId, parentSessionId)`   | `setParentSession(tenant, sessionId, parentSessionId)`   |
+| `App.detachSession(sessionId, principalId)`                   | `detachSession(tenant, sessionId, principalId)`          |
+| `App.forkSession(sessionId, principalId, options?)`           | `forkSession(tenant, sessionId, principalId, options?)`  |
+| `startSession(app, sessions, actorId, input)`                 | `startSession(tenant, app, sessions, actorId, input)`    |
+| `SessionSyscallsFactory.forTurn(binding)`                     | `forTurn(tenant, binding)`                               |
+| `conversations.start(actorId, input)`                         | `start(tenant, actorId, input)`                          |
+
+All remaining arguments and return types are retained. The request route or turn
+supplies `Tenant`; it is separate from `SessionSyscallBinding` and saved requests.
+The source lookup and parent update carry explicit SQL tenant predicates. The
+provenance target writer is still part of the pending conversion; this slice does
+not claim complete session tenant isolation.
+
+`PgPool` additionally exposes its existing `ready(): Promise<void>` initializer.
+Its old methods retain their signatures and behavior. Transactional session batch
+reads await this initializer and continue reading through the supplied client,
+without retaining an unused raw query pool. `ready` checks only that pool's own
+migrations and closed-store state; it adds no tenant authorization or new state.
+
+No HTTP or stored JSON fields, tables, columns, keys, indexes, constraints,
+settings, providers, or backfills change. Internal source callers must supply the
+token in the same core build; existing HTTP clients remain compatible. The real
+Postgres foreign-parent regression exercises a database owner and verifies that a
+foreign source cannot set a parent or propagate private context. Ancestry/fork/
+syscall checks and the affected persistence initialization checks pass. Focused
+independent review accepted the implemented slice95/100; it excludes the pending
+provenance writer and transactional-reader authorization conversion.
+
+The related skill-audience entry points also retain all old arguments and gain
+leading `Tenant`: `App.moveArtifactHome(type, id, toScope, movedBy)` becomes
+`moveArtifactHome(tenant, type, id, toScope, movedBy)`, and
+`App.updateOwnedSkill(id, principalId, patch, options?)` becomes
+`updateOwnedSkill(tenant, id, principalId, patch, options?)`. The HTTP skill editor
+supplies its request token; the move controller reuses its existing token. Their
+ACL audience queries use that token without another ambient read. Return types,
+patch/options fields, authorization, locks, revisions, and stored/HTTP JSON remain
+unchanged. Existing deployment/provenance operations called by these methods are
+still legacy paths. Five affected authorization/release/control files pass;
+focused independent review accepted this slice96/100.
+
+## Schedule-edit token forwarding
+
+These internal methods gain a leading `tenant: Tenant`; all previously listed
+arguments and return types remain unchanged:
+
+| Owner            | Before                                     | After                                              |
+| ---------------- | ------------------------------------------ | -------------------------------------------------- |
+| `App`            | `updateCron(id, patch, by, trial?)`        | `updateCron(tenant, id, patch, by, trial?)`        |
+| `App`            | `setCronEnabled(id, enabled, by?)`         | `setCronEnabled(tenant, id, enabled, by?)`         |
+| `App`            | `setCronFireNote(id, note, by)`            | `setCronFireNote(tenant, id, note, by)`            |
+| `App`            | `setCronRuntime(id, runtime, by?)`         | `setCronRuntime(tenant, id, runtime, by?)`         |
+| `App`            | `setCronDestination(id, destination, by)`  | `setCronDestination(tenant, id, destination, by)`  |
+| `ControlService` | `patchCron(id, req, claims, trial?)`       | `patchCron(tenant, id, req, claims, trial?)`       |
+| `ControlService` | `noteCron(id, text, claims)`               | `noteCron(tenant, id, text, claims)`               |
+| `ControlService` | `setCronEnabled(id, enabled, claims)`      | `setCronEnabled(tenant, id, enabled, claims)`      |
+| `ControlService` | `retargetCron(id, destinationKey, claims)` | `retargetCron(tenant, id, destinationKey, claims)` |
+
+HTTP routes forward `tenantOf(ctx)` and turn tools forward `deps.tenant`. The
+locked schedule privacy check uses that token for its ACL audience query. No
+additional ambient read or tenant mint is introduced. Existing locks, privacy
+refreshes, linked-copy checks, trial checks, revisions and audit behavior remain.
+No tenant token enters tool inputs, HTTP bodies, saved claims or stored records.
+There are no table, column, key, index, constraint, JSON, setting, provider,
+migration or backfill changes. Core source callers must update together; HTTP
+clients need no changes. Other schedule stores remain on their legacy tenant APIs.
+
+## App grant token forwarding
+
+`DeployService.grantAppAccess(grant)` becomes
+`grantAppAccess(tenant: Tenant, grant)`, and
+`DeployService.releasePrivateApp(grant, revision, context)` becomes
+`releasePrivateApp(tenant: Tenant, grant, revision, context)`. All other argument
+and return types remain unchanged. `App.grant` already receives the request/turn
+token and forwards it to both paths. Existing locked ACL queries and writes use
+that token; no tenant mint or ambient bridge is added. Revision, disclosure,
+owner and current-session checks retain their behavior. Other deployment and
+session operations remain on legacy tenant APIs.
+
+No table, column, key, index, constraint, stored JSON, HTTP/tool/job payload,
+setting, provider, migration or backfill changes. Core callers update in the same
+build; HTTP clients are unchanged. The token remains a separate argument and is
+never added to grants or private context.
+
+`publishDocumentLearning(documents, memory, auditLog, input)` similarly becomes
+`publishDocumentLearning(tenant: Tenant, documents, memory, auditLog, input)`.
+The orchestrator supplies its existing turn token for the publication audit.
+All input fields, publication checks, return types and stored/HTTP/tool payloads
+are unchanged. No configuration, schema, migration or backfill changes. Automatic
+memory capture remains a separate legacy tenant path.
+
+## Deployment write token forwarding
+
+Each listed internal signature gains a leading `tenant: Tenant`; all previous
+arguments and return types remain unchanged:
+
+| Owner              | Before                                               | After                                                        |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------ |
+| DeployService, App | `redeploy(id, input)`                                | `redeploy(tenant, id, input)`                                |
+| DeployService      | `rollbackApp(id, version, options?)`                 | `rollbackApp(tenant, id, version, options?)`                 |
+| App                | `rollbackApp(id, version, actor?)`                   | `rollbackApp(tenant, id, version, actor?)`                   |
+| DeployService, App | `archiveApp(id, context?)`                           | `archiveApp(tenant, id, context?)`                           |
+| DeployService, App | `restoreApp(id, actorId?, context?)`                 | `restoreApp(tenant, id, actorId?, context?)`                 |
+| DeployService, App | `renameApp(id, name, context?)`                      | `renameApp(tenant, id, name, context?)`                      |
+| DeployService, App | `setAppDisplayName(id, displayName, context?)`       | `setAppDisplayName(tenant, id, displayName, context?)`       |
+| DeployService, App | `setAppAlwaysOn(id, alwaysOn, context?)`             | `setAppAlwaysOn(tenant, id, alwaysOn, context?)`             |
+| DeployService, App | `setAppEmbedAncestors(id, embedAncestors, context?)` | `setAppEmbedAncestors(tenant, id, embedAncestors, context?)` |
+| DeployService, App | `setAppConnectors(idOrName, connectors, actor)`      | `setAppConnectors(tenant, idOrName, connectors, actor)`      |
+| DeployService      | `pushGit(id, runReceivePack, actor?)`                | `pushGit(tenant, id, runReceivePack, actor?)`                |
+| App                | `runAppGitPush(id, actor, runReceivePack)`           | `runAppGitPush(tenant, id, actor, runReceivePack)`           |
+| DeployService      | `editSource(idOrName, actor, edit)`                  | `editSource(tenant, idOrName, actor, edit)`                  |
+| DeployService      | `deployOrUpdate(input)`                              | `deployOrUpdate(tenant, input)`                              |
+| Function           | `createAppFiles(deps)`                               | `createAppFiles(tenant, deps)`                               |
+
+Request routes supply `tenantOf(ctx)` and turn tools supply their existing
+`deps.tenant`. `createAppFiles` retains that token in the per-turn file helper;
+it is not a globally shared service. Deployment methods forward it through the
+existing locked output-context checks and internal deployment calls. The two
+ACL audience queries use it without a new ambient bridge. No token enters
+private context, Git claims, deployment inputs or saved files. Existing locks,
+source checks, approvals, revisions, provider operations and return values remain.
+Other deployment authorization/store operations still use legacy tenant APIs.
+
+No table, column, key, index, constraint, stored JSON, HTTP/tool/job payload,
+setting, provider, migration or backfill changes. Core source callers update
+together; HTTP clients remain compatible.
+
+## Memory capture token forwarding
+
+These internal signatures prepend `tenant: Tenant`; every previous argument and
+return type remains unchanged:
+
+| Owner                | Before                                                            | After                                                                     |
+| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| MemoryService        | `capture(scopeId, facts, at, by?, context?)`                      | `capture(tenant, scopeId, facts, at, by?, context?)`                      |
+| MemoryStrategy       | `onTurnEnd?(ctx)`                                                 | `onTurnEnd?(tenant, ctx)`                                                 |
+| Queue input callback | `capture(turns, id, signal)`                                      | `capture(tenant, turns, id, signal)`                                      |
+| Function             | `captureMemoryTurns(deps, turns, id?, signal?)`                   | `captureMemoryTurns(tenant, deps, turns, id?, signal?)`                   |
+| Function             | `writeFacts(memory, scope, facts, by, context, turn)`             | `writeFacts(tenant, memory, scope, facts, by, context, turn)`             |
+| Function             | `replayConversation(strategy, scopeId, conversation)`             | `replayConversation(tenant, strategy, scopeId, conversation)`             |
+| Function             | `setOnboardingStatus(memory, scope, status, today, by, version?)` | `setOnboardingStatus(tenant, memory, scope, status, today, by, version?)` |
+| SlackCoreClient      | `noteSurfaceHistoryGap?(container, note)`                         | `noteSurfaceHistoryGap?(tenant, container, note)`                         |
+| Function             | `createSlackHistoryReader(deps)`                                  | `createSlackHistoryReader(tenant, deps)`                                  |
+
+`startSlackPlugin(cfg, core, tenantId: string)` becomes
+`startSlackPlugin(cfg, core, tenant: Tenant)`. Its middleware and delivery lane
+continue using `tenant.id` where the existing boundary takes an ID.
+`createTenantSlackRuntimes`'s `runtimeFor(tenantId)` callback becomes
+`runtimeFor(tenantId, token: Tenant)`; the existing `withTenant` callback supplies
+that token. The environment-account starter's internal `startPlugin(config,
+tenantId)` callback likewise becomes `startPlugin(config, token: Tenant)`, bound
+from its existing authoritative single-tenant ID through `inBootTenant`.
+
+Request routes and turn tools supply their existing token. The durable capture
+worker forwards the token from its existing `inTenant(job.data.tenantId, …)`
+boundary. It is never saved in the job or capture metadata. Classification,
+provider routing, registry, tidy and disclosure wrappers preserve the argument.
+The document capture audit uses it; audit destination/count/session/private
+fields retain their shapes and still contain no fact text. Notebook stores and
+provider protocols remain unchanged; this is not full memory-store conversion.
+
+The standalone memory benchmark now reads the database's boot tenant and runs
+inside that tenant binding, refusing a database without a single boot tenant.
+It adds no environment variable; the existing DATABASE_URL selects the database.
+The local live-provider qualification forwards its existing boot callback token.
+
+No table, column, key, index, constraint, stored row/JSON, HTTP/tool/job/provider
+payload, setting, provider selection, migration or backfill changes. Tokens stay
+separate from scopes, grants, capture data and external calls. Core source callers
+and typed integrations update together; HTTP/provider clients remain compatible.

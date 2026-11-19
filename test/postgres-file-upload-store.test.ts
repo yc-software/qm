@@ -1,3 +1,6 @@
+import { withTenant } from "../src/tenants/context.ts";
+import { twoTenants } from "./support/two-tenants.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -9,6 +12,24 @@ import {
 } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 
+function uploadRow(actorId: string): FileUpload {
+  return {
+    id: randomUUID().replaceAll("-", ""),
+    actorId,
+    scopeId: scopeId("personal", actorId),
+    name: "file",
+    mimetype: "text/plain",
+    sizeBytes: 1,
+    partSize: 64 * 1024 * 1024,
+    checksums: ["hash"],
+    uploadId: "provider-upload",
+    state: "pending",
+    expiresAt: Date.now() + 60_000,
+    createdAt: Date.now(),
+    lastActivityAt: Date.now(),
+  };
+}
+
 const url = process.env.DATABASE_URL;
 test(
   "upload sessions survive recreation; quota and state transitions serialize across cores",
@@ -17,21 +38,7 @@ test(
     const actorId = `upload-test-${randomUUID()}`;
     const first = createPostgresFileUploadStore(url!);
     const second = createPostgresFileUploadStore(url!);
-    const row = (): FileUpload => ({
-      id: randomUUID().replaceAll("-", ""),
-      actorId,
-      scopeId: scopeId("personal", actorId),
-      name: "file",
-      mimetype: "text/plain",
-      sizeBytes: 1,
-      partSize: 64 * 1024 * 1024,
-      checksums: ["hash"],
-      uploadId: "provider-upload",
-      state: "pending",
-      expiresAt: Date.now() + 60_000,
-      createdAt: Date.now(),
-      lastActivityAt: Date.now(),
-    });
+    const row = () => uploadRow(actorId);
     const uploads = Array.from({ length: MAX_ACTIVE_UPLOADS + 3 }, row);
     const results = await Promise.allSettled(uploads.map((r, i) => (i % 2 ? first : second).insert(r)));
     assert.equal(results.filter((r) => r.status === "fulfilled").length, MAX_ACTIVE_UPLOADS);
@@ -43,6 +50,12 @@ test(
     }
     const accepted = uploads[results.findIndex((r) => r.status === "fulfilled")]!;
     assert.deepEqual(await second.get(accepted.id), accepted);
+    await Promise.all([
+      first.addContext(testTenant, accepted.id, "private-context-a"),
+      second.addContext(testTenant, accepted.id, "private-context-b"),
+    ]);
+    const restored = await createPostgresFileUploadStore(url!).get(accepted.id);
+    assert.deepEqual(restored?.contextSessionIds?.sort(), ["private-context-a", "private-context-b"]);
     const claims = await Promise.all([
       first.transition(accepted.id, ["pending"], "completing"),
       second.transition(accepted.id, ["pending"], "aborting"),
@@ -152,3 +165,36 @@ test(
     assert.equal((await store.get(aborted.id))!.lastActivityAt, now);
   },
 );
+
+test("completion and context writes keep colliding upload IDs in their own tenants without row security", async () => {
+  const db = await twoTenants();
+  try {
+    const store = createPostgresFileUploadStore(db.ownerDatabaseUrl);
+    const id = randomUUID();
+    for (const tenantId of db.tenants)
+      await withTenant(tenantId, () =>
+        store.insert({ ...uploadRow("same-person"), id, name: tenantId, state: "completing" }),
+      );
+    const [selected, other] = db.tenants;
+    await withTenant(selected, async (tenant) => {
+      assert.equal(await store.addContext(tenant, id, "private-source"), true);
+      await store.complete(tenant, id, async (upload) => {
+        assert.equal(upload.name, selected);
+        assert.deepEqual(upload.contextSessionIds, ["private-source"]);
+      });
+    });
+    const rows = await db.owner.q(
+      "SELECT tenant_id,state,data->'contextSessionIds' AS context FROM file_uploads WHERE id=$1 ORDER BY tenant_id",
+      [id],
+    );
+    assert.deepEqual(
+      rows,
+      [
+        { tenant_id: selected, state: "complete", context: ["private-source"] },
+        { tenant_id: other, state: "completing", context: null },
+      ].sort((a, b) => a.tenant_id.localeCompare(b.tenant_id)),
+    );
+  } finally {
+    await db.close();
+  }
+});

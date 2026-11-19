@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after, test } from "node:test";
 import assert from "node:assert/strict";
@@ -80,7 +81,7 @@ describe("agent conversations self-API", async () => {
   });
 
   it("new sessions start clean with only the seed text", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
+    const out = await startSession(ancestryTenant, built.app, built.sessions, "U1", {
       scopeId: scopeId("personal", "U1"),
       text: "investigate the flaky test",
       title: "Flaky test hunt",
@@ -105,7 +106,7 @@ describe("agent conversations self-API", async () => {
       ...(source ? { delegatingRunId: source.id } : {}),
     };
     for (const extra of [{}, { forkOf: mineId }]) {
-      const out = await startSession(built.app, built.sessions, "U1", {
+      const out = await startSession(ancestryTenant, built.app, built.sessions, "U1", {
         scopeId: scopeId("personal", "U1"),
         text: "follow up on the launch",
         ...extra,
@@ -120,7 +121,7 @@ describe("agent conversations self-API", async () => {
   });
 
   it("a blank fork starts no turn", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
+    const out = await startSession(ancestryTenant, built.app, built.sessions, "U1", {
       scopeId: scopeId("personal", "U1"),
       forkOf: mineId,
       origin: { kind: "human" },
@@ -149,7 +150,7 @@ describe("agent conversations self-API", async () => {
       [{ channelId: "C1", name: "engineering", isPrivate: true }],
       [{ channelId: "C1", principalId: "U1" }],
     );
-    const out = await startSession(built.app, built.sessions, "U1", {
+    const out = await startSession(ancestryTenant, built.app, built.sessions, "U1", {
       scopeId: scopeId("channel", "C1"),
       text: "investigate the channel deployment",
     });
@@ -170,11 +171,14 @@ describe("agent conversations self-API", async () => {
     const ids = async () => (await built.app.listSessions(asU1)).map((s) => s.id).sort();
     const before = await ids();
     assert.deepEqual(
-      await startSession(raced, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), text: "refused" }),
+      await startSession(ancestryTenant, raced, built.sessions, "U1", {
+        scopeId: scopeId("personal", "U1"),
+        text: "refused",
+      }),
       { error: "project membership changed" },
     );
     assert.deepEqual(await ids(), before);
-    const forked = await startSession(raced, built.sessions, "U1", {
+    const forked = await startSession(ancestryTenant, raced, built.sessions, "U1", {
       scopeId: scopeId("personal", "U1"),
       forkOf: mineId,
       text: "refused",
@@ -186,11 +190,17 @@ describe("agent conversations self-API", async () => {
   it("refuses a scope or fork source the actor can't use", async () => {
     assert.ok(
       "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U2"), text: "peek" })),
+        (await startSession(ancestryTenant, built.app, built.sessions, "U1", {
+          scopeId: scopeId("personal", "U2"),
+          text: "peek",
+        })),
     );
     assert.ok(
       "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), forkOf: theirsId })),
+        (await startSession(ancestryTenant, built.app, built.sessions, "U1", {
+          scopeId: scopeId("personal", "U1"),
+          forkOf: theirsId,
+        })),
     );
   });
 
@@ -257,7 +267,7 @@ describe("agent conversations self-API", async () => {
   });
 
   it("forks carry the source transcript into a new sidebar session", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
+    const out = await startSession(ancestryTenant, built.app, built.sessions, "U1", {
       scopeId: scopeId("personal", "U1"),
       forkOf: mineId,
     });

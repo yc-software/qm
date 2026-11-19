@@ -1,3 +1,4 @@
+import type { Tenant } from "../src/tenants/context.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync } from "node:fs";
@@ -532,7 +533,7 @@ test("publish never copies resident credentials into the app", async () => {
 
   let captured: DeployOrUpdateInput | undefined;
   const deploy = {
-    deployOrUpdate: async (input: DeployOrUpdateInput) => {
+    deployOrUpdate: async (_tenant: Tenant, input: DeployOrUpdateInput) => {
       captured = input;
       return {
         id: "d1",
@@ -595,7 +596,7 @@ function exportSandbox(entries: AgentComputerExportEntry[], workspace = appFile(
 function spyDeploy(): { deploy: DeployService; captured: () => DeployOrUpdateInput | undefined } {
   let captured: DeployOrUpdateInput | undefined;
   const deploy = {
-    deployOrUpdate: async (input: DeployOrUpdateInput) => {
+    deployOrUpdate: async (_tenant: Tenant, input: DeployOrUpdateInput) => {
       captured = input;
       return {
         id: "d1",

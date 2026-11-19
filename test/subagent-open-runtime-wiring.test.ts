@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
@@ -23,7 +24,7 @@ async function opener(
   if (scopeDefault) await built.config.setRuntimeSelection(defaultScope, { modelId: scopeDefault });
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
-  const syscalls = built.sessionSyscalls.forTurn({
+  const syscalls = built.sessionSyscalls.forTurn(ancestryTenant, {
     session: room,
     scopeId: scope,
     request: {

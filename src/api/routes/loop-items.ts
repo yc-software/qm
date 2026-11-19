@@ -1,3 +1,6 @@
+import { tenantOf } from "./route.ts";
+import { inheritRequestSources } from "../private-context.ts";
+import { triggerPrivacy } from "../../triggers/trigger-store.ts";
 import { z } from "zod";
 import type { Cron } from "../../triggers/types.ts";
 import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
@@ -11,6 +14,7 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   requireLoopAuthority,
   loadAdministrable,
+  recheckLoopRead,
   loopDeps,
   actingPrincipal,
   forInboxLoopsPeople,
@@ -118,6 +122,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
     const state = ledgerState(item);
     counts[state] = (counts[state] ?? 0) + 1;
   }
+  await recheckLoopRead(ctx, loop.id);
   sendJson(ctx.res, 200, { loop, items: items.map((item) => ledgerItemView(item, loop, !!ctx.capability)), counts });
 }
 
@@ -226,6 +231,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   }
   const bytes = Buffer.from(await upstream.arrayBuffer());
   if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
+  await recheckLoopRead(ctx, loop.id);
   ctx.res.writeHead(200, {
     "content-type": type,
     "content-length": String(bytes.length),
@@ -247,10 +253,9 @@ async function getItem(ctx: ApiCtx): Promise<void> {
 }
 
 async function itemDetail(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop, item: LoopItem) {
-  return {
-    item: ledgerItemView(item, loop, !!ctx.capability),
-    outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === loop.id),
-  };
+  const outputs = (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === loop.id);
+  await recheckLoopRead(ctx, loop.id);
+  return { item: ledgerItemView(item, loop, !!ctx.capability), outputs };
 }
 
 function sameProposalData(item: LoopItem, data: LoopSourcePayload): boolean {
@@ -496,7 +501,10 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
       (candidate) => candidate.owner === acting.actorId && candidate.surface === "inbox:gmail",
     ) ?? null;
   const cron = loop?.cronId ? await ctx.app.getCron(loop.cronId) : null;
-  sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });
+  const current = loop ? { ...loop, ...triggerPrivacy(loop, cron ?? {}) } : null;
+  if (current && (await inheritRequestSources(ctx, [current], acting.actorId)).has(current.id))
+    return sendJson(ctx.res, 404, { error: "not_found" });
+  sendJson(ctx.res, 200, { loop: current, syncCron: cronSummary(cron) });
 }
 
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
@@ -594,8 +602,8 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
         }
         if (cron) {
           if (enable && cron.action !== task)
-            await ctx.app.updateCron(cron.id, { action: task, title: `${loop.name} sync` }, acting);
-          await ctx.app.setCronEnabled(cron.id, enable);
+            await ctx.app.updateCron(tenantOf(ctx), cron.id, { action: task, title: `${loop.name} sync` }, acting);
+          await ctx.app.setCronEnabled(tenantOf(ctx), cron.id, enable);
           if (enable && current.state === "paused") await deps.store.setState(loop.id, "enabled");
         }
         results.push({

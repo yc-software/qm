@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -85,13 +86,13 @@ for (const operation of ["redeploy", "rollback"] as const) {
         },
       });
       const d = await deploy.deploy({ ...owner, entrypoint: "first", files: [], alwaysOn: initial });
-      await deploy.redeploy(d.id, { entrypoint: "second", files: [] });
+      await deploy.redeploy(appWriteTenant, d.id, { entrypoint: "second", files: [] });
       const accepted = (await deployStore.get(d.id))!;
       reject = true;
       await assert.rejects(
         operation === "redeploy"
-          ? deploy.redeploy(d.id, { entrypoint: "third", files: [], alwaysOn: !initial })
-          : deploy.rollbackApp(d.id, 1, { alwaysOn: !initial }),
+          ? deploy.redeploy(appWriteTenant, d.id, { entrypoint: "third", files: [], alwaysOn: !initial })
+          : deploy.rollbackApp(appWriteTenant, d.id, 1, { alwaysOn: !initial }),
         /publication failed/,
       );
       assert.equal(seen.at(-1), !initial);
@@ -99,7 +100,7 @@ for (const operation of ["redeploy", "rollback"] as const) {
       assert.equal(!!after.alwaysOn, initial);
       assert.equal(after.appliedVersion, accepted.appliedVersion);
       assert.deepEqual(after.endpoint, accepted.endpoint);
-      await deploy.setAppAlwaysOn(d.id, !initial);
+      await deploy.setAppAlwaysOn(appWriteTenant, d.id, !initial);
       assert.deepEqual(toggled, [!initial]);
       assert.equal((await deployStore.get(d.id))!.alwaysOn, !initial);
     });
@@ -111,24 +112,36 @@ test("setAppAlwaysOn flips the flag on and off, and persists", async () => {
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
   assert.equal((await deployStore.get(d.id))!.alwaysOn, undefined);
 
-  const on = await deploy.setAppAlwaysOn(d.id, true);
+  const on = await deploy.setAppAlwaysOn(appWriteTenant, d.id, true);
   assert.equal(on.alwaysOn, true);
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  const off = await deploy.setAppAlwaysOn(d.id, false);
+  const off = await deploy.setAppAlwaysOn(appWriteTenant, d.id, false);
   assert.ok(!off.alwaysOn);
   assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
 });
 
 test("deployOrUpdate carries alwaysOn on create and on update", async () => {
   const { deploy, deployStore } = svc();
-  const d = await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [], alwaysOn: true });
+  const d = await deploy.deployOrUpdate(appWriteTenant, {
+    ...owner,
+    name: "warm-app",
+    entrypoint: "x",
+    files: [],
+    alwaysOn: true,
+  });
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [] });
+  await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "warm-app", entrypoint: "x", files: [] });
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [], alwaysOn: false });
+  await deploy.deployOrUpdate(appWriteTenant, {
+    ...owner,
+    name: "warm-app",
+    entrypoint: "x",
+    files: [],
+    alwaysOn: false,
+  });
   assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
 });
 
@@ -151,19 +164,25 @@ test("alwaysOn is visible to the provider at first launch (not applied after the
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
-  await deploy.deployOrUpdate({ ...owner, name: "warm-launch", entrypoint: "x", files: [], alwaysOn: true });
+  await deploy.deployOrUpdate(appWriteTenant, {
+    ...owner,
+    name: "warm-launch",
+    entrypoint: "x",
+    files: [],
+    alwaysOn: true,
+  });
   assert.deepEqual(seen, [true]);
 });
 
 test("rename and rollback branches carry alwaysOn too", async () => {
   const { deploy, deployStore } = svc();
-  const d = await deploy.deployOrUpdate({ ...owner, name: "app-a", entrypoint: "x", files: [] });
-  await deploy.deployOrUpdate({ ...owner, name: "app-a", entrypoint: "x", files: [] });
+  const d = await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "app-a", entrypoint: "x", files: [] });
+  await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "app-a", entrypoint: "x", files: [] });
 
-  await deploy.deployOrUpdate({ ...owner, name: "app-b", renameFrom: "app-a", alwaysOn: true });
+  await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "app-b", renameFrom: "app-a", alwaysOn: true });
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  await deploy.deployOrUpdate({ ...owner, name: "app-b", rollbackTo: 1, alwaysOn: false });
+  await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "app-b", rollbackTo: 1, alwaysOn: false });
   assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
 });
 
@@ -204,7 +223,7 @@ test("maintainApps re-ensures a live endpoint only for running always-on apps", 
   const { deploy } = ctx;
   const cold = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
   const warm = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setAppAlwaysOn(warm.id, true);
+  await deploy.setAppAlwaysOn(appWriteTenant, warm.id, true);
   const resolvesBefore = ctx.resolves;
 
   const warmed = await deploy.maintainApps();
@@ -217,7 +236,7 @@ test("maintainApps skips an app whose flag was turned off after it was claimed",
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setAppAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(appWriteTenant, d.id, true);
   const realList = deployStore.list.bind(deployStore);
   deployStore.list = async () => {
     const listed = await realList();
@@ -234,7 +253,7 @@ test("maintainApps relaunches when the platform has torn the app down", async ()
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setAppAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(appWriteTenant, d.id, true);
   const appliesBefore = ctx.applies;
 
   const warmed = await deploy.maintainApps();
@@ -276,13 +295,13 @@ test("always-on reaches the provider before persisting and retains the flag on f
     },
   });
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setAppAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(appWriteTenant, d.id, true);
   assert.deepEqual(seen, [true]);
   reject = true;
-  await assert.rejects(deploy.setAppAlwaysOn(d.id, false), /provider unavailable/);
+  await assert.rejects(deploy.setAppAlwaysOn(appWriteTenant, d.id, false), /provider unavailable/);
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
-  await deploy.archiveApp(d.id);
-  await deploy.setAppAlwaysOn(d.id, false);
+  await deploy.archiveApp(appWriteTenant, d.id);
+  await deploy.setAppAlwaysOn(appWriteTenant, d.id, false);
   assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
   assert.deepEqual(seen, [true]);
 });
@@ -293,10 +312,21 @@ test("repair publication and rollback apply always-on with the version instead o
       throw new Error("old runtime is broken");
     },
   });
-  const d = await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "first", files: [] });
-  await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "fixed", files: [], alwaysOn: true });
+  const d = await deploy.deployOrUpdate(appWriteTenant, {
+    ...owner,
+    name: "repair-app",
+    entrypoint: "first",
+    files: [],
+  });
+  await deploy.deployOrUpdate(appWriteTenant, {
+    ...owner,
+    name: "repair-app",
+    entrypoint: "fixed",
+    files: [],
+    alwaysOn: true,
+  });
   assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
-  await deploy.deployOrUpdate({ ...owner, name: "repair-app", rollbackTo: 1, alwaysOn: false });
+  await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "repair-app", rollbackTo: 1, alwaysOn: false });
   assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
   assert.equal((await deployStore.get(d.id))!.appliedVersion, 1);
 });

@@ -8,7 +8,7 @@ import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import { isUserItem, messageTs, type Item } from "../src/sessions/items.ts";
-import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testTenant as tenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 test("identity grounding: the roster lists this conversation's participants by their canonical directory name", async () => {
   const { app, directory } = freshApp();
@@ -249,9 +249,9 @@ test("a subagent's wake of its web parent may finish silently; a sidebar session
     const session = async (ref: string) =>
       built.sessions.getOrCreateByThread(ref, "dm", parent.scopeId, undefined, "web");
     const child = await session("agent:main:subagent:child-wake");
-    await built.sessions.setParentSession(child.id, parent.id);
+    await built.sessions.setParentSession(ancestryTenant, child.id, parent.id);
     const sidebar = await session("dm:U1:child-wake:sidebar");
-    await built.sessions.setParentSession(sidebar.id, parent.id);
+    await built.sessions.setParentSession(ancestryTenant, sidebar.id, parent.id);
     const turnFrom = async (sessionSenderId: string) => {
       const { run } = await built.runs.enqueue({
         sessionId: threadRef,

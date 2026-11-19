@@ -38,6 +38,7 @@ async function openForViewer(ctx: ApiCtx) {
     ctx.params.id!,
     viewer,
     isOwnScopeBotWork(ctx.capability),
+    ctx.capability ?? undefined,
   );
   if (!opened) sendJson(ctx.res, 404, { error: "not_found" });
   return opened;

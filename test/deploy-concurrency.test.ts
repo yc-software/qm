@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -102,9 +103,9 @@ test("withDeployLock: redeploy/rollback/archive each acquire the advisory mutex 
   });
   assert.deepEqual(keys, [], "the initial create takes no deploy lock");
 
-  await deploy.redeploy(d.id, { entrypoint: "y", files: [] });
-  await deploy.rollbackApp(d.id, 1);
-  await deploy.archiveApp(d.id);
+  await deploy.redeploy(appWriteTenant, d.id, { entrypoint: "y", files: [] });
+  await deploy.rollbackApp(appWriteTenant, d.id, 1);
+  await deploy.archiveApp(appWriteTenant, d.id);
 
   const want = `deploy:${d.id}`;
   assert.deepEqual(keys, [want, want, want], "redeploy, rollback, archive each lock deploy:<id>");
@@ -140,8 +141,8 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
     files: [],
   });
   await Promise.all([
-    deploy.redeploy(d.id, { entrypoint: "a", files: [] }),
-    deploy.redeploy(d.id, { entrypoint: "b", files: [] }),
+    deploy.redeploy(appWriteTenant, d.id, { entrypoint: "a", files: [] }),
+    deploy.redeploy(appWriteTenant, d.id, { entrypoint: "b", files: [] }),
   ]);
   assert.equal(maxActive, 1, "two redeploys on one app never ran apply() concurrently");
 });
@@ -191,7 +192,7 @@ for (const [visit, stop, status] of [
       files: [],
       alwaysOn: visit === "keep-warm",
     });
-    const stopping = stop === "archive" ? deploy.archiveApp(d.id) : deploy.reapIdleApps(60_000, future);
+    const stopping = stop === "archive" ? deploy.archiveApp(appWriteTenant, d.id) : deploy.reapIdleApps(60_000, future);
     await destroying.promise;
     let settled = false;
     const visiting = (visit === "reach" ? deploy.reachApp(d.id, "U1") : deploy.maintainApps()).finally(() => {

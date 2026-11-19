@@ -1,3 +1,5 @@
+import type { Tenant } from "../tenants/context.ts";
+import type { PrivateContext } from "../sessions/private-context.ts";
 import type { AppSourceReader, DeployService, AppSource, SourceEdit, SourceSaved } from "../deploy/deploy-service.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -8,29 +10,33 @@ export interface AppFiles {
   save(edit: (read: (paths: string[]) => Promise<AppSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
 }
 
-export function createAppFiles(deps: {
-  deploy: DeployService;
-  app: string;
-  actorId: string;
-  botActor?: boolean;
-  actingScopeId: ScopeId;
-}): AppFiles {
+export function createAppFiles(
+  tenant: Tenant,
+  deps: {
+    deploy: DeployService;
+    app: string;
+    actorId: string;
+    botActor?: boolean;
+    actingScopeId: ScopeId;
+    context?: () => PrivateContext;
+  },
+): AppFiles {
   const { deploy, app } = deps;
-  const caller = { actorId: deps.actorId, botActor: deps.botActor };
-  const canManage = () => deploy.canManageApp(app, caller, deps.actingScopeId);
+  const caller = () => deps.context?.() ?? { actorId: deps.actorId, botActor: deps.botActor };
+  const canManage = () => deploy.canManageApp(app, caller(), deps.actingScopeId);
   const assertMayEdit = async (): Promise<void> => {
     if (!(await canManage()))
       throw new Error(`you need write access to the app ${JSON.stringify(app)} to read or change its files`);
   };
   const source: AppFiles["source"] = async (paths, commit) => {
-    const saved = await deploy.source(app, paths, commit);
-    if (!saved) throw new Error(`${app} has no saved source; publish it again first`);
-    return saved;
+    const reader = await deploy.sourceReader(app, caller(), deps.actingScopeId);
+    if (!reader) throw new Error(`${app} has no readable source in this conversation`);
+    return reader.source(paths, commit);
   };
   return {
     app,
     async sourceReader() {
-      return (await deploy.sourceReader(app, caller, deps.actingScopeId)) ?? undefined;
+      return (await deploy.sourceReader(app, caller(), deps.actingScopeId)) ?? undefined;
     },
     async source(paths, commit) {
       await assertMayEdit();
@@ -38,7 +44,7 @@ export function createAppFiles(deps: {
     },
     async save(edit) {
       await assertMayEdit();
-      return deploy.editSource(app, deps.actorId, edit);
+      return deploy.editSource(tenant, app, deps.context?.() ?? deps.actorId, edit);
     },
   };
 }

@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -80,7 +81,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
     deployDir: mkdtempSync(join(tmpdir(), "live-edits-")),
   });
   const save = (name: string, files: Array<{ path: string; data: string }>, by = OWNER) =>
-    deploy.deployOrUpdate({ ownerScopeId: scopeId("personal", by), createdBy: by, name, files });
+    deploy.deployOrUpdate(appWriteTenant, { ownerScopeId: scopeId("personal", by), createdBy: by, name, files });
   const dueNow = async (id: string) => {
     const draft = (await deployStore.draftOf(id))!;
     await deployStore.putDraft({ ...draft, publishAt: Date.now() - 1 });
@@ -159,6 +160,7 @@ test("a git push to a running app is saved live like a republish", async () => {
   const pushed = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
 
   await h.deploy.pushGit(
+    appWriteTenant,
     d.id,
     async () => {
       execFileSync("git", ["push", "--quiet", await h.deployStore.repoUrl(d.id), "HEAD:current"], { cwd: work });
@@ -283,7 +285,7 @@ test("a new entrypoint publishes a version at once and discards saved edits", as
   const h = harness();
   const d = await publishApp(h, "live-f");
   await h.save("live-f", tree(true, "v2"));
-  await h.deploy.deployOrUpdate({
+  await h.deploy.deployOrUpdate(appWriteTenant, {
     ownerScopeId: scopeId("personal", OWNER),
     createdBy: OWNER,
     name: "live-f",

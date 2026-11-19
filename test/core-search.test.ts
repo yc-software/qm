@@ -152,7 +152,19 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
 
 test("file search retains common artifact identities when viewers own different copies", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-copies-")) }));
-  const project = scopeId("group", "search-copy-project");
+  await built.app.upsertDirectory(
+    principals.map((person) => ({ principalId: person.id, type: person.type, displayName: person.id })),
+  );
+  await built.config.setSharingPosture("org:default-org", "open");
+  const team = await built.projects.create({ name: "Search copies", ownerId: principals[0]!.id });
+  await built.projects.addMember(team.id, principals[0]!.id, principals[1]!.id);
+  const project = scopeId("group", `web-project-${team.id}`);
+  const context = await built.sessions.getOrCreateByThread("search-copy-source", "group", project);
+  await built.sessions.recordContextProvenance(context.id, project, {
+    sensitivity: "ordinary",
+    sources: [project],
+    sourceUnknown: false,
+  });
   const ids = ["shared-copy-alice", "shared-copy-bob"];
   for (const [index, author] of principals.entries()) {
     const id = ids[index]!;
@@ -162,6 +174,7 @@ test("file search retains common artifact identities when viewers own different 
       ownerScopeId,
       createdBy: author.id,
       createdInScope: project,
+      contextSessionIds: [context.id],
       name: "pelican.txt",
       path: artifactPath(id, "pelican.txt"),
       mimetype: "text/plain",

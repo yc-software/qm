@@ -57,11 +57,12 @@ describe("agent app fetch", () => {
 
     const app = {
       authorizesCapabilityScope: async () => true,
-      reachApp: async (id: string, viewer: string) => {
+      reachApp: async (id: string, viewer: { actorId: string }) => {
         if (id !== "mine" && id !== "down") return { status: "not_found" as const };
-        if (viewer !== "U1") return { status: "denied" as const };
+        if (viewer.actorId !== "U1") return { status: "denied" as const };
         return {
           status: "ok" as const,
+          id,
           endpoint: { host: "127.0.0.1", port: id === "down" ? downPort : upstreamPort },
         };
       },

@@ -1,3 +1,7 @@
+import type { PoolClient } from "pg";
+import type { SessionStore } from "../sessions/session-store.ts";
+import { mergeProvenance, UNTRACKED_PROVENANCE, type SourceProvenance } from "../memory/facts.ts";
+import { personalScope } from "../types.ts";
 import { MIMEType } from "node:util";
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
@@ -5,6 +9,7 @@ import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
   FileArtifactDeletedError,
+  fileSharingRevision,
   clampLimit,
   decodeCursor,
   encodeCursor,
@@ -45,6 +50,63 @@ const SCHEMA = [
     ON file_artifacts (created_in_scope, created_at DESC, id DESC) WHERE enabled = TRUE`,
 ];
 
+export const FILE_ARTIFACT_MIGRATIONS = [
+  { id: "files/artifacts/0001", statements: SCHEMA },
+  {
+    id: "files/artifacts/0002",
+    statements: ["CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)"],
+  },
+  ...tenantTables("files/artifacts/0003-tenants", [
+    { table: "file_artifacts", primaryKey: "id" },
+    { table: "file_artifact_deletions", primaryKey: "id" },
+  ]),
+  {
+    id: "files/artifacts/0004-context",
+    statements: [
+      "SET LOCAL lock_timeout = '5s'",
+      "ALTER TABLE file_artifacts ADD COLUMN personal_only BOOLEAN NOT NULL DEFAULT false",
+      "ALTER TABLE file_artifacts ADD COLUMN source_provenance JSONB",
+    ],
+  },
+  {
+    id: "sessions/store/0069-file-recorded-origin",
+    statements: [
+      "SET LOCAL lock_timeout = '5s'",
+      `UPDATE file_artifacts SET source_provenance=jsonb_build_object('sensitivity','unknown',
+          'sources',jsonb_build_array(COALESCE(created_in_scope,owner_scope_id)),'sourceUnknown',true)
+          WHERE source_provenance IS NULL`,
+      `DO $$ BEGIN
+          IF to_regclass('sessions') IS NULL OR to_regclass('items') IS NULL OR to_regclass('document_conversations') IS NULL THEN RETURN; END IF;
+          WITH RECURSIVE private_sessions(tenant_id,id,scope_id) AS (
+            SELECT s.tenant_id,s.id,s.scope_id FROM sessions s
+            WHERE to_jsonb(s)->>'personal_only'='true' OR EXISTS (
+              SELECT 1 FROM document_conversations d WHERE d.tenant_id=s.tenant_id
+              AND d.id=encode(sha256(convert_to('["session",' || to_json(s.id)::text || ']', 'UTF8')),'hex')
+              AND d.json->>'kind'='session' AND d.json->>'mode'='private'
+              AND s.scope_id='personal:' || (d.json->>'principalId'))
+            UNION SELECT s.tenant_id,s.id,s.scope_id FROM sessions s JOIN private_sessions p
+              ON s.tenant_id=p.tenant_id AND s.scope_id=p.scope_id
+              AND (s.parent_session_id=p.id OR s.forked_from_session_id=p.id)
+          ), calls AS (
+            SELECT i.*,row_number() OVER (PARTITION BY i.tenant_id,i.session_id,i.turn_id ORDER BY i.seq)-1 AS ordinal
+            FROM items i WHERE i.kind='ToolCall' AND i.tool='attach' AND i.turn_id IS NOT NULL
+          ), created AS (
+            SELECT p.tenant_id,p.scope_id,a.file->>'artifactId' AS id,to_jsonb(s)->'context_provenance' AS provenance
+            FROM calls c JOIN private_sessions p ON p.tenant_id=c.tenant_id AND p.id=c.session_id
+            JOIN sessions s ON s.tenant_id=c.tenant_id AND s.id=c.session_id
+            JOIN items r ON r.tenant_id=c.tenant_id AND r.session_id=c.session_id AND r.call_id=c.call_id AND r.kind='ToolResult'
+            CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(r.body->'files')='array' THEN r.body->'files' ELSE '[]'::jsonb END) WITH ORDINALITY a(file,position)
+            WHERE a.file->>'artifactId'=left(encode(sha256(convert_to(c.turn_id::text || ':attach:' || c.ordinal::text || ':out:' || (a.position-1)::text,'UTF8')),'hex'),32)
+          ) UPDATE file_artifacts f SET personal_only=true,
+            source_provenance=CASE WHEN c.provenance IS NOT NULL AND c.provenance<>'null'::jsonb THEN jsonb_build_object(
+              'sensitivity',c.provenance->'sensitivity','sources',COALESCE(c.provenance->'sources','[]'::jsonb) || jsonb_build_array(c.scope_id),'sourceUnknown',true)
+              ELSE f.source_provenance END
+            FROM created c WHERE f.tenant_id=c.tenant_id AND f.id=c.id AND f.owner_scope_id=c.scope_id AND f.direction='out' AND f.personal_only=false;
+        END $$`,
+    ],
+  },
+];
+
 function storedMimetype(mimetype: string): string {
   try {
     return new MIMEType(mimetype).toString();
@@ -56,6 +118,8 @@ function storedMimetype(mimetype: string): string {
 function rowToArtifact(r: Record<string, unknown>): FileArtifact {
   return {
     id: r.id as string,
+    ...(r.personal_only ? { personalOnly: true as const } : {}),
+    ...(r.source_provenance ? { sourceProvenance: r.source_provenance as SourceProvenance } : {}),
     ownerScopeId: r.owner_scope_id as ScopeId,
     createdBy: r.created_by as string,
     name: r.name as string,
@@ -76,20 +140,10 @@ function rowToArtifact(r: Record<string, unknown>): FileArtifact {
 export function createPostgresFileArtifactStore(
   connectionString: string,
   byteStore: DurableByteStore,
+  sessionContexts?: Pick<SessionStore, "getMany">,
 ): FileArtifactStore {
-  const { q, query, pool } = createPgPool(connectionString, [
-    { id: "files/artifacts/0001", statements: SCHEMA },
-    {
-      id: "files/artifacts/0002",
-      statements: [
-        "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
-      ],
-    },
-    ...tenantTables("files/artifacts/0003-tenants", [
-      { table: "file_artifacts", primaryKey: "id" },
-      { table: "file_artifact_deletions", primaryKey: "id" },
-    ]),
-  ]);
+  const pg = createPgPool(connectionString, FILE_ARTIFACT_MIGRATIONS);
+  const { q, query, pool } = pg;
 
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
@@ -100,6 +154,7 @@ export function createPostgresFileArtifactStore(
     scopes: readonly ScopeId[],
     opts?: ListOwnedOptions,
     sharedRefs?: readonly FileArtifactRef[],
+    scopePriority = false,
   ): Promise<FilePage> {
     if (scopes.length === 0 && !sharedRefs?.length) return { files: [] };
     const limit = clampLimit(opts?.limit);
@@ -115,6 +170,7 @@ export function createPostgresFileArtifactStore(
     }
     const filters = [access];
     if (!opts?.includeDisabled) filters.push("enabled = TRUE");
+    if (opts?.excludePersonalOnly) filters.push("personal_only = FALSE");
     if (opts?.createdInScope != null) {
       params.push(opts.createdInScope);
       filters.push(`created_in_scope = $${params.length}::text`);
@@ -144,7 +200,7 @@ export function createPostgresFileArtifactStore(
     params.push(limit + 1);
     const rows = await q(
       `SELECT * FROM (${documents}) documents ${pageFilter}
-      ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
+      ORDER BY ${scopePriority ? "array_position($1::text[], owner_scope_id), " : ""}created_at DESC, id DESC LIMIT $${params.length}`,
       params,
     );
     const all = rows.map(rowToArtifact);
@@ -154,6 +210,26 @@ export function createPostgresFileArtifactStore(
   }
 
   return {
+    async releasePrivate(tenant, id, revision, provenance, writeGrant) {
+      return pg.forTenant(tenant).transaction(async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${id}`]);
+        const selected = await client.query(
+          "SELECT * FROM file_artifacts WHERE tenant_id=$1 AND id=$2 AND enabled=TRUE FOR UPDATE",
+          [tenant.id, id],
+        );
+        const file = selected.rows[0] && rowToArtifact(selected.rows[0]);
+        if (!file?.personalOnly || fileSharingRevision(file) !== revision)
+          throw new Error("The selected private file changed after approval. Read it again before sharing.");
+        if (!file.blobKey || !file.sha256)
+          throw new Error("The private file needs saved, verified bytes before it can be shared.");
+        await writeGrant(client);
+        const saved = await client.query(
+          "UPDATE file_artifacts SET personal_only=FALSE,source_provenance=$3::jsonb,updated_at=$4 WHERE tenant_id=$1 AND id=$2 RETURNING *",
+          [tenant.id, id, JSON.stringify(provenance), Date.now()],
+        );
+        return rowToArtifact(saved.rows[0]);
+      });
+    },
     async put(input) {
       const existing = await getRow(input.id);
       if (existing) return { artifact: existing, created: false };
@@ -165,10 +241,30 @@ export function createPostgresFileArtifactStore(
       return this.publish({ ...input, blobKey, sizeBytes, sha256 });
     },
 
-    async publish(input) {
-      const { blobKey, sizeBytes, sha256 } = input;
-      const at = input.createdAt ?? Date.now();
-      return withPgTransaction(await pool(), async (client) => {
+    async publish(input, transaction) {
+      const publish = async (client: PoolClient) => {
+        const ids = [...new Set(input.contextSessionIds ?? [])];
+        const contexts = ids.length ? await sessionContexts?.getMany({ ids, threadRefs: [] }, client) : [];
+        if (!contexts || contexts.length !== ids.length)
+          throw new Error("The file's conversation context no longer exists");
+        const provenance = contexts.length
+          ? mergeProvenance(
+              contexts.map((session) => ({
+                ...(session.sourceProvenance ?? UNTRACKED_PROVENANCE),
+                sources: [...new Set([session.scopeId, ...(session.sourceProvenance?.sources ?? [])])],
+                ...(session.personalOnly ? { personalOnly: true as const } : {}),
+              })),
+              "ordinary",
+            )
+          : { ...UNTRACKED_PROVENANCE, sources: [input.createdInScope ?? input.ownerScopeId] };
+        if (
+          provenance?.personalOnly &&
+          (input.ownerScopeId !== personalScope(input.createdBy) ||
+            contexts.some((session) => session.personalOnly && session.scopeId !== input.ownerScopeId))
+        )
+          throw new Error("Private files must remain in their owner's personal scope");
+        const { blobKey, sizeBytes, sha256 } = input;
+        const at = input.createdAt ?? Date.now();
         if (input.reuseExistingPath) {
           await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
             `file-path:${input.ownerScopeId}:${input.path}`,
@@ -185,8 +281,8 @@ export function createPostgresFileArtifactStore(
         const ins = await client.query(
           `INSERT INTO file_artifacts
            (id, kind, owner_scope_id, path, name, mimetype, size_bytes, blob_key, sha256,
-            direction, created_by, created_in_scope, created_at, updated_at, enabled, source)
-         VALUES ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,TRUE,'live')
+            direction, created_by, created_in_scope, created_at, updated_at, enabled, source, personal_only, source_provenance)
+         VALUES ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,TRUE,'live',$13,$14::jsonb)
          ON CONFLICT (tenant_id, id) DO NOTHING`,
           [
             input.id,
@@ -201,13 +297,34 @@ export function createPostgresFileArtifactStore(
             input.createdBy,
             input.createdInScope ?? null,
             at,
+            provenance?.personalOnly === true,
+            provenance
+              ? JSON.stringify({
+                  sensitivity: provenance.sensitivity,
+                  sources: provenance.sources,
+                  sourceUnknown: provenance.sourceUnknown,
+                })
+              : null,
           ],
         );
         const result = await client.query("SELECT * FROM file_artifacts WHERE id=$1", [input.id]);
         return { artifact: rowToArtifact(result.rows[0]), created: (ins.rowCount ?? 0) > 0 };
-      });
+      };
+      const instance = await pool();
+      return transaction ? publish(transaction) : withPgTransaction(instance, publish);
     },
 
+    async getMany(tenant, ids, opts) {
+      if (!ids.length) return [];
+      return (
+        await pg
+          .forTenant(tenant)
+          .q(
+            "SELECT * FROM file_artifacts WHERE tenant_id=$1 AND id=ANY($2::text[]) AND ($3::boolean OR enabled=TRUE)",
+            [tenant.id, ids, opts?.includeDisabled === true],
+          )
+      ).map(rowToArtifact);
+    },
     async get(id, opts) {
       const r = await getRow(id);
       if (!r) return null;
@@ -223,6 +340,7 @@ export function createPostgresFileArtifactStore(
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },
 
+    listContext: async (scopes, opts) => (await listFiles(scopes, opts, undefined, true)).files,
     listOwnedByScopes: (scopes, opts) => listFiles(scopes, opts),
 
     listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),

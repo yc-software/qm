@@ -6,6 +6,7 @@ import { isOverheard, isUserItem, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import { collectBytes } from "../util/bytes.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export const MAX_DOCUMENT_BYTES = 8_000_000;
 export const MAX_DOCUMENTS = 10;
@@ -146,6 +147,7 @@ export function turnDocumentMetas(history: readonly Item[], turnStartSeq: number
 }
 
 export async function loadDocumentInputs(
+  tenant: Tenant,
   files: FileArtifactStore,
   metas: readonly AttachmentMeta[],
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
@@ -175,6 +177,12 @@ export async function loadDocumentInputs(
       ]),
     ),
   );
+  const artifacts = new Map(
+    (await files.getMany(tenant, [...new Set(metas.flatMap((meta) => meta.artifactId ?? []))])).map((file) => [
+      file.id,
+      file,
+    ]),
+  );
   let remaining = maxBytes;
   let usedTokens = 0;
   for (const meta of [...metas].reverse()) {
@@ -182,7 +190,7 @@ export async function loadDocumentInputs(
     try {
       if (!meta.artifactId || !isDocumentAttachment(meta) || seen.has(meta.artifactId)) continue;
       seen.add(meta.artifactId);
-      const artifact = await files.get(meta.artifactId);
+      const artifact = artifacts.get(meta.artifactId);
       if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
       const contentKey = JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]);
       if (loadedContent.has(contentKey)) continue;

@@ -87,7 +87,7 @@ function fakeApp(state: FakeState): App {
     async revokeGrant(t: Tenant, ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string) {
       await state.acl.revoke(t, ownerScopeId, ref, granteeScopeId, revokedBy, authorOfGrant(state, ownerScopeId, ref));
     },
-    async moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string) {
+    async moveArtifactHome(_tenant: Tenant, type: ArtifactType, id: string, toScope: ScopeId, movedBy: string) {
       if (type !== "skill" && type !== "deploy")
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       state.moves.push({ type, id, toScope, movedBy });
@@ -826,4 +826,18 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   assert.equal(second.version, first.version + 1);
   const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
   assert.equal(orgRecords.length, 1);
+});
+
+test("POST /v1/share cannot manufacture private-output release authority", async () => {
+  const state = await ownerState();
+  const before = await grantsOf(state);
+  const result = await callShareRoute(state, cap("U1"), {
+    type: "deploy",
+    id: "D1",
+    toScope: "personal:U2",
+    privateRevision: "selected-revision",
+  });
+  assert.equal(result.status, 400);
+  assert.match(result.body.message, /native approval flow/);
+  assert.deepEqual(await grantsOf(state), before);
 });

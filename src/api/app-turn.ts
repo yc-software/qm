@@ -295,6 +295,7 @@ export function createTurnMethods(
       };
 
       const input = {
+        ...(req.contextProvenance ? { contextProvenance: req.contextProvenance } : {}),
         surface: req.surface,
         ...(req.surfaceOrigin ? { surfaceOrigin: req.surfaceOrigin } : {}),
         ...(req.spawned && req.sessionSenderId ? { sessionSenderId: req.sessionSenderId } : {}),
@@ -342,7 +343,7 @@ export function createTurnMethods(
           : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
-        ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
+        ...(req.clientTools !== undefined ? { clientTools: req.clientTools } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),
         ...(req.clientSurface ? { clientSurface: req.clientSurface } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
@@ -602,7 +603,7 @@ export function createTurnMethods(
       deps.runStreamEvents?.emit({ runId, kind: "sync", offset, reasoning });
     },
 
-    async getRun(runId, viewer) {
+    async getRun(runId, viewer, options) {
       const run = await deps.runs.get(runId);
       if (!run) return null;
       if (viewer && !(await viewerMayUseRun(run, viewer))) return null;
@@ -622,6 +623,17 @@ export function createTurnMethods(
           ? run.attempts > 0 && !plannedRequeue
           : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
+        ...(options?.clientTools
+          ? {
+              clientToolsFor:
+                viewer &&
+                samePerson(run.request.actor.id, viewer) &&
+                run.request.surface === "web" &&
+                run.request.clientTools?.length
+                  ? canonicalPerson(viewer)
+                  : null,
+            }
+          : {}),
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
         attempt: run.attempts,

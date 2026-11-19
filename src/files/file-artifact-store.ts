@@ -1,12 +1,19 @@
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { hashId } from "../util/crypto.ts";
+import type { PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import type { ScopeId } from "../types.ts";
+import type { SourceProvenance } from "../memory/facts.ts";
 import type { ByteSource } from "./durable-byte-store.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export type FileDirection = "in" | "out";
 export type FileSource = "live" | "backfill";
 
 export interface FileArtifact {
+  personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -24,7 +31,12 @@ export interface FileArtifact {
   enabled: boolean;
 }
 
+export function fileSharingRevision(file: FileArtifact): string {
+  return hashId([canonicalJson(file)], 64);
+}
+
 export interface PutFileInput {
+  contextSessionIds?: readonly string[];
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -51,6 +63,7 @@ export interface FilePage {
 }
 
 export interface ListOwnedOptions {
+  excludePersonalOnly?: boolean;
   limit?: number;
   cursor?: string;
   includeDisabled?: boolean;
@@ -68,13 +81,25 @@ export class FileArtifactDeletedError extends Error {
 }
 
 export interface FileArtifactStore {
+  releasePrivate(
+    tenant: Tenant,
+    id: string,
+    revision: string,
+    sourceProvenance: SourceProvenance,
+    writeGrant: (transaction: PoolClient) => Promise<void>,
+  ): Promise<FileArtifact>;
   put(input: PutFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
-  publish(input: PublishFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
+  publish(input: PublishFileInput, transaction?: PoolClient): Promise<{ artifact: FileArtifact; created: boolean }>;
 
   get(id: string, opts?: { includeDisabled?: boolean }): Promise<FileArtifact | null>;
+  getMany(tenant: Tenant, ids: readonly string[], opts?: { includeDisabled?: boolean }): Promise<FileArtifact[]>;
 
   open(id: string): Promise<{ artifact: FileArtifact; sizeBytes: number; stream: Readable } | null>;
 
+  listContext(
+    scopes: readonly ScopeId[],
+    opts?: Pick<ListOwnedOptions, "limit" | "excludePersonalOnly">,
+  ): Promise<FileArtifact[]>;
   listOwnedByScopes(scopes: readonly ScopeId[], opts?: ListOwnedOptions): Promise<FilePage>;
 
   listDocuments(

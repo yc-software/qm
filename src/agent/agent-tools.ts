@@ -1,3 +1,4 @@
+import { isObj } from "../util/objects.ts";
 import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -148,6 +149,21 @@ export function pauseStampAfterToolCall(
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
 
+function withPrivateSharingApproval(tool: ToolDefinition, label: "app" | "file" | "skill" | "schedule") {
+  return {
+    ...tool,
+    needsApproval: (params: unknown) =>
+      isObj(params) && params.action === "share" && params.privateRevision !== undefined,
+    approvalReason: (params: unknown) => {
+      const selected = isObj(params) ? params : {};
+      const contents = label === "app" ? "its stored data and history" : "the selected saved content";
+      if (label === "schedule")
+        return `Publish a new shared schedule from ${String(selected.id)} at private revision ${String(selected.privateRevision)} in ${String(selected.toScope)}. The original is paused; its private conversation and run history remain private. The copy keeps the selected task and schedule, starts only if the original is enabled, and posts future results to a new shared conversation.`;
+      return `Share ${label} ${String(selected.id)} at private revision ${String(selected.privateRevision)} with ${String(selected.toScope)} (${selected.permission === "write" ? "manage" : "read"} access). This includes ${contents}; the private conversation and other outputs remain private.${selected.notify === false ? " No notifications or invitations." : ""}`;
+    },
+  };
+}
+
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -167,22 +183,31 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const tools = [
     ...(!delegateWork ? [{ ...execute, handlesAbort: true }] : []),
-    resourceTool("skills", {
-      list: discoverSkills(false),
-      search: discoverSkills(true),
-      read: skill,
-      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
-      ...(controlTools ? { share: sharingTool("skill") } : {}),
-    }),
-    resourceTool("files", {
-      read,
-      write,
-      ...(controlTools ? { share: sharingTool("file") } : {}),
-    }),
-    resourceTool("apps", {
-      publish,
-      ...(controlTools ? { share: sharingTool("deploy") } : {}),
-    }),
+    withPrivateSharingApproval(
+      resourceTool("skills", {
+        list: discoverSkills(false),
+        search: discoverSkills(true),
+        read: skill,
+        ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
+        ...(controlTools ? { share: sharingTool("skill") } : {}),
+      }),
+      "skill",
+    ),
+    withPrivateSharingApproval(
+      resourceTool("files", {
+        read,
+        write,
+        ...(controlTools ? { share: sharingTool("file") } : {}),
+      }),
+      "file",
+    ),
+    withPrivateSharingApproval(
+      resourceTool("apps", {
+        publish,
+        ...(controlTools ? { share: sharingTool("deploy") } : {}),
+      }),
+      "app",
+    ),
     ...(ref.current?.appFiles ? [resourceTool("app_files", appFileTools(kit))] : []),
     memory,
     history,
@@ -191,14 +216,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     sandboxManagement,
     ...(controlTools
       ? [
-          resourceTool("cron", {
-            ...Object.fromEntries(
-              (cron.parameters.properties.action as { anyOf: Array<{ const: string }> }).anyOf.map(
-                ({ const: action }) => [action, cron],
+          withPrivateSharingApproval(
+            resourceTool("cron", {
+              ...Object.fromEntries(
+                (cron.parameters.properties.action as { anyOf: Array<{ const: string }> }).anyOf.map(
+                  ({ const: action }) => [action, cron],
+                ),
               ),
-            ),
-            share: sharingTool("cron"),
-          }),
+              share: sharingTool("cron"),
+            }),
+            "schedule",
+          ),
           webhook,
           admin,
         ]

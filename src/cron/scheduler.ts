@@ -1,3 +1,4 @@
+import { jobQueueMisconfigured } from "../persistence/job-queue.ts";
 import { ownerAuthored, cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
@@ -17,7 +18,7 @@ import { createSweeper } from "../util/sweeper.ts";
 import { claimThenBind, inTenant } from "../tenants/claim.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
 import { firesAtMostDaily, recoverNextFireAt } from "./schedule.ts";
-import { cronQueueMisconfigured, fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
+import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -675,7 +676,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             if (!stopped) leaseGuard.start();
           },
           (e: unknown) => {
-            if (cronQueueMisconfigured(e))
+            if (jobQueueMisconfigured(e))
               console.error(
                 `[scheduler] misconfiguration: the cron job queue is not installed or this login cannot use it; run the migrations as the database owner (falling back to interval ticks): ${errMessage(e)}`,
               );

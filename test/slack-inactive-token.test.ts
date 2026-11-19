@@ -25,7 +25,7 @@ test("an inactive bot token fails Slack startup without an unhandled rejection",
 
   let receiverStops = 0;
   await assert.rejects(
-    withTenant("00000000-0000-4000-8000-000000000001", () =>
+    withTenant("00000000-0000-4000-8000-000000000001", (tenant) =>
       startSlackPlugin(
         {
           botToken: "xoxb-inactive",
@@ -45,7 +45,7 @@ test("an inactive bot token fails Slack startup without an unhandled rejection",
           onScopeModelChanged: () => () => {},
           onChannelHeaderPinChanged: () => () => {},
         } as unknown as SlackCoreClient,
-        "00000000-0000-4000-8000-000000000001",
+        tenant,
       ),
     ),
     /account_inactive/,

@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -117,7 +118,7 @@ test("a provider without reconcile receives durable Git contents after a push", 
   writeFileSync(join(work, "server.js"), "v2");
   execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-aqm", "v2"], { cwd: work });
   execFileSync("git", ["push", "--quiet", repo!, "HEAD:current"], { cwd: work });
-  await deploy.pushGit(d.id, async () => ({ result: true, ok: true }));
+  await deploy.pushGit(appWriteTenant, d.id, async () => ({ result: true, ok: true }));
   assert.deepEqual(applied, ["v1", "v2"]);
 });
 
@@ -579,7 +580,7 @@ test("resident home files are held to the same path rules as app files", async (
     deployDir,
   });
   await assert.rejects(
-    deploy.deployOrUpdate({
+    deploy.deployOrUpdate(appWriteTenant, {
       ownerScopeId: scopeId("personal", "U1"),
       createdBy: "U1",
       entrypoint: "node app.js",

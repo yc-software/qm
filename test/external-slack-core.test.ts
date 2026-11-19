@@ -60,11 +60,11 @@ test("external Slack strips private and org preloads before the prompt, but keep
   });
   await b.config.setSharingPosture("org:default-org", "open");
   await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
-  await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), {
+  await b.memory.capture(tenant, "personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), {
     actorId: "U1",
     context: "conversation",
   });
-  await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), {
+  await b.memory.capture(tenant, "org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), {
     actorId: "U1",
     context: "conversation",
   });

@@ -1,3 +1,4 @@
+import { tenantOf } from "./route.ts";
 import { isCronRuntime } from "../../cron/runtime.ts";
 import { CRON_SCRIPT_TOOL_ONLY } from "../../cron/script.ts";
 import type { Cron } from "../../triggers/types.ts";
@@ -22,6 +23,9 @@ function defaultTimezoneFor(capability: CapabilityClaims | null): string {
 function isCreateCron(b: unknown): b is CreateCronInput {
   return (
     isObj(b) &&
+    b.context === undefined &&
+    b.personalOnly === undefined &&
+    b.sourceProvenance === undefined &&
     isCronRuntime(b.runtime) &&
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
@@ -225,7 +229,7 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   }
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
-  const { owned, visible } = await app.listCronsForViewer(viewer);
+  const { owned, visible } = await app.listCronsForViewer(capability ?? viewer);
   const decorate = async (cron: Cron) => ({
     ...cron,
     permission: (await canAdministerCron(app, cron, { actorId: viewer })) ? "manage" : "read",
@@ -241,14 +245,14 @@ function toggleCron(enabled: boolean): (ctx: ApiCtx) => Promise<void> {
     const { res, app, capability } = ctx;
     const id = ctx.params.id!;
     if (capability) {
-      const r = await ctx.deps.control.setCronEnabled(id, enabled, capability);
+      const r = await ctx.deps.control.setCronEnabled(tenantOf(ctx), id, enabled, capability);
       if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
       return sendJson(res, 200, { ok: true });
     }
     const cron = await gateSourceCron(ctx, id);
     if (!cron) return;
     if (enabled) return patchCronAsPerson(ctx, cron, { enabled: true, archived: false });
-    await app.setCronEnabled(id, false);
+    await app.setCronEnabled(tenantOf(ctx), id, false);
     return sendJson(res, 200, { ok: true });
   };
 }
@@ -261,7 +265,7 @@ async function retargetCron(ctx: ApiCtx): Promise<void> {
   const dk = isObj(body) ? body.destinationKey : undefined;
   if (typeof dk !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "destinationKey (string) required" });
-  const r = await ctx.deps.control.retargetCron(id, dk, capability);
+  const r = await ctx.deps.control.retargetCron(tenantOf(ctx), id, dk, capability);
   if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { cron: r.cron });
 }
@@ -273,7 +277,7 @@ async function noteCron(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 403, { error: "forbidden", message: "note requires an agent capability token" });
   const note = isObj(body) ? body.note : undefined;
   if (typeof note !== "string") return sendJson(res, 400, { error: "bad_request", message: "note (string) required" });
-  const r = await ctx.deps.control.noteCron(id, note, capability);
+  const r = await ctx.deps.control.noteCron(tenantOf(ctx), id, note, capability);
   if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { ok: true, applied: r.applied });
 }
@@ -350,6 +354,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       body.schedule !== undefined ? userScheduleFromBody(body.schedule, defaultTimezoneFor(capability))! : undefined;
     const task = body.action ?? body.task;
     const r = await ctx.deps.control.patchCron(
+      tenantOf(ctx),
       id,
       {
         ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
@@ -421,7 +426,7 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
     ...(body.archived !== undefined ? { archived: body.archived } : {}),
   };
   try {
-    const updated = await app.updateCron(cron.id, patch, { actorId: editor });
+    const updated = await app.updateCron(tenantOf(ctx), cron.id, patch, { actorId: editor });
     if (updated)
       await notifyOwnerOfCronEdit(app, {
         cron: { ...updated, owner: cron.owner },

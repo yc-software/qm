@@ -165,6 +165,7 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
   if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });
   try {
     const file = await app.uploadFileForViewer(tenantOf(ctx), principalId, {
+      ...(ctx.capability?.sessionId ? { contextSessionId: ctx.capability.sessionId } : {}),
       ...(scopeId ? { scopeId } : {}),
       name,
       mimetype,

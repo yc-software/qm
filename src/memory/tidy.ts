@@ -80,8 +80,8 @@ export function withMemoryTidy(memory: MemoryService, ensure: (scope: ScopeId) =
     ...(memory.withDisclosure
       ? { withDisclosure: (access) => withMemoryTidy(memory.withDisclosure!(access), ensure) }
       : {}),
-    async capture(scope, ...rest) {
-      const added = await memory.capture(scope, ...rest);
+    async capture(tenant, scope, ...rest) {
+      const added = await memory.capture(tenant, scope, ...rest);
       if (added > 0) await ensure(scope).catch((e: unknown) => reportFailure(`memory tidy: ensure ${scope}`, e));
       return added;
     },

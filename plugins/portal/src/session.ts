@@ -241,3 +241,51 @@ export function sanitizeReturnTo(value: string | null | undefined, publicOrigin:
     return "/";
   }
 }
+
+export interface ImpersonationResult {
+  ok: boolean;
+  status: number;
+  displayName?: string;
+  message?: string;
+}
+
+export async function updateImpersonation(input: {
+  actor: SessionClaims | null;
+  target: string | null;
+  raw: string | null;
+  cookieName: string;
+  key: Buffer;
+  secure: boolean;
+  ttlSeconds: number;
+  writeCookie: (cookie: string) => void;
+  apply: (action: "start" | "stop", actor: SessionClaims, target: string) => Promise<ImpersonationResult>;
+}): Promise<ImpersonationResult> {
+  const { actor, target } = input;
+  if (target === null) {
+    const selected = openImpersonation(input.raw, input.key, Date.now());
+    input.writeCookie(clearCookie(input.cookieName, "/", input.secure));
+    if (actor && selected?.actor === actor.sub && selected.org === actor.org)
+      await input.apply("stop", actor, selected.target);
+    return { ok: true, status: 200 };
+  }
+  if (!actor) return { ok: false, status: 401 };
+  const result = await input.apply("start", actor, target);
+  if (!result.ok) return result;
+  const now = Math.floor(Date.now() / 1000);
+  const claims: ImpersonationClaims = {
+    k: "impersonate",
+    actor: actor.sub,
+    target,
+    org: actor.org,
+    iat: now,
+    exp: now + input.ttlSeconds,
+  };
+  input.writeCookie(
+    setCookie(input.cookieName, seal(claims, input.key), {
+      path: "/",
+      maxAge: input.ttlSeconds,
+      secure: input.secure,
+    }),
+  );
+  return result;
+}

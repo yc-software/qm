@@ -1,21 +1,66 @@
+import type { SessionStore, SessionWriter } from "../../sessions/session-store.ts";
+import { isObj } from "../../util/objects.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { AgentTurnResult } from "../../agent/agent.ts";
-import type { MemoryProvenance } from "../../memory/facts.ts";
+import type { MemoryCaptureMetadata, MemoryProvenance } from "../../memory/facts.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import { isAgentReply, type Item } from "../../sessions/items.ts";
-import type { createSurfaceToolDeps, SpineState } from "../../surfaces/surface-tools.ts";
+import type { createSurfaceToolDeps } from "../../surfaces/surface-tools.ts";
 import type { PendingApproval, PendingApprovalRecord, ScopeId, Session, TurnResult } from "../../types.ts";
 import { hashId } from "../../util/crypto.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { commandApprovalId } from "../approval-id.ts";
 import { approvalBlocksInput, type deriveTurnOutcome, heldReplyResult } from "../turn-outcome.ts";
 import type { createApprovalLedger } from "./approvals.ts";
+import type { StagedAttachments } from "./attach-tool.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 type QuarantineReleaseApproval = Awaited<ReturnType<typeof createApprovalLedger>>["quarantineReleaseApprovals"][number];
 
-export function startMemoryCapture(turn: {
+export async function recordReplyFiles(
+  sessions: Pick<SessionStore, "append">,
+  writer: SessionWriter,
+  filesToRecord: readonly Pick<
+    NonNullable<TurnResult["attachments"]>[number],
+    "artifactId" | "name" | "mimetype" | "sizeBytes" | "artifactViewerId"
+  >[],
+  previous: readonly Item[],
+  snapshot: ReturnType<StagedAttachments["snapshot"]>,
+): Promise<boolean> {
+  if (!filesToRecord.length) return false;
+  const recorded = new Set(
+    previous.flatMap((item) =>
+      writer.turnId &&
+      item.turnId === writer.turnId &&
+      item.kind === "AgentMessage" &&
+      item.variant === "files_delivered" &&
+      Array.isArray(item.body.files)
+        ? item.body.files.flatMap((file) =>
+            isObj(file) && typeof file.artifactId === "string" ? [file.artifactId] : [],
+          )
+        : [],
+    ),
+  );
+  const files = filesToRecord.flatMap((file) => {
+    if (!file.artifactId || recorded.has(file.artifactId)) return [];
+    recorded.add(file.artifactId);
+    return [
+      {
+        artifactId: file.artifactId,
+        name: file.name,
+        mimetype: file.mimetype,
+        sizeBytes: file.sizeBytes,
+        ...(file.artifactViewerId ? { artifactViewerId: file.artifactViewerId } : {}),
+      },
+    ];
+  });
+  if (files.length)
+    await sessions.append(writer, { kind: "AgentMessage", variant: "files_delivered", body: { files, ...snapshot } });
+  return filesToRecord.every((file) => Boolean(file.artifactId));
+}
+
+export async function startMemoryCapture(turn: {
   tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
@@ -26,16 +71,18 @@ export function startMemoryCapture(turn: {
   audienceScopeId: ScopeId | undefined;
   memoryPolicy: MemoryPolicy;
   pendingCaptures: Map<ScopeId, Promise<void>>;
-  onTurnEnd: MemoryStrategy["onTurnEnd"];
+  onTurnEnd?: MemoryStrategy["onTurnEnd"];
+  enqueueTurnEnd: MemoryStrategy["enqueueTurnEnd"];
   pausing: boolean;
   cancelStopped: boolean;
   personConversationTurn: boolean;
   useMemory: boolean;
   captureDependencies: () => MemoryProvenance[];
+  document?: MemoryCaptureMetadata["document"];
   turnInput: string;
   reply: string;
-  spine: SpineState;
-}): void {
+  sourceUserSeq?: number;
+}): Promise<void> {
   const {
     tenant,
     deps,
@@ -48,6 +95,7 @@ export function startMemoryCapture(turn: {
     memoryPolicy,
     pendingCaptures,
     onTurnEnd,
+    enqueueTurnEnd,
     pausing,
     cancelStopped,
     personConversationTurn,
@@ -55,7 +103,7 @@ export function startMemoryCapture(turn: {
     captureDependencies,
     turnInput,
     reply,
-    spine,
+    sourceUserSeq,
   } = turn;
   if (
     !pausing &&
@@ -63,34 +111,63 @@ export function startMemoryCapture(turn: {
     personConversationTurn &&
     useMemory &&
     memoryPolicy.capture !== "off" &&
-    onTurnEnd
+    (onTurnEnd || enqueueTurnEnd)
   ) {
+    const current = await deps.sessions.get(session.id);
+    if (!current) return;
+    if (current.personalOnly) session.personalOnly = true;
+    session.sourceProvenance = current.sourceProvenance;
+    const context = {
+      scopeId: memoryScopeId,
+      ...(session.personalOnly ? { personalOnly: true as const } : {}),
+      ...(turn.document
+        ? { document: turn.document, ...(turn.document.mode === "private" ? { personalOnly: true as const } : {}) }
+        : {}),
+      conversationScopeId: scopeId,
+      ...(audienceScopeId ? { audienceScopeId } : {}),
+      inheritedFacts: [...captureDependencies(), ...(session.sourceProvenance ? [session.sourceProvenance] : [])],
+      input: turnInput,
+      reply,
+      actorId: actor.id,
+      sessionId: session.id,
+      idempotencyKey: input.runId ?? `${session.id}:${sourceUserSeq ?? "turn"}`,
+    };
+    if (enqueueTurnEnd) {
+      try {
+        await enqueueTurnEnd(tenant, context);
+      } catch (error) {
+        deps.errors.record(
+          tenant,
+          {
+            category: "memory",
+            code: "capture_handoff_failed",
+            message: errMessage(error),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          error,
+        );
+        throw error;
+      }
+      return;
+    }
+    if (!onTurnEnd) return;
     const prior = pendingCaptures.get(memoryScopeId);
     const capture = (async () => {
       if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
       try {
-        await onTurnEnd({
-          scopeId: memoryScopeId,
-          conversationScopeId: scopeId,
-          ...(audienceScopeId ? { audienceScopeId } : {}),
-          inheritedFacts: captureDependencies(),
-          input: turnInput,
-          reply,
-          actorId: actor.id,
-          sessionId: session.id,
-          idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
-        });
-      } catch (e) {
+        await onTurnEnd(tenant, context);
+      } catch (error) {
         deps.errors.record(
           tenant,
           {
             category: "memory",
             code: "capture_failed",
-            message: errMessage(e),
+            message: errMessage(error),
             scopeLabel: scopeId,
             sessionId: session.id,
           },
-          e,
+          error,
         );
       }
     })();

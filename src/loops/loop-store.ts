@@ -13,6 +13,8 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
+  triggerPrivacy,
+  assertPrivateTrigger,
   contentPart,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
@@ -36,6 +38,8 @@ export interface CreateLoopInput extends CreateTriggerInput {
 }
 
 export interface LoopPatch {
+  personalOnly?: true;
+  sourceProvenance?: Loop["sourceProvenance"];
   name?: string;
   icon?: string | null;
   purpose?: string;
@@ -168,6 +172,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         contentPart(input.ownerConsentedAt),
         contentPart(input.cronId),
         contentPart(input.schedule),
+        ...(input.personalOnly || input.sourceProvenance ? [contentPart(triggerPrivacy({}, input))] : []),
       ]);
       const candidate: Loop = {
         ...buildTriggerBase(input, contentId, now),
@@ -200,7 +205,11 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     async update(id, patch) {
       return atomicUpdate(id, (loop) => {
-        if (patch.restore !== undefined) return patch.restore;
+        if (patch.restore !== undefined) {
+          const restored = { ...patch.restore, ...triggerPrivacy(loop, patch.restore) };
+          assertPrivateTrigger(restored);
+          return restored;
+        }
         const fields: Partial<Loop> = {};
         let policyChanged = false;
         if (patch.icon !== undefined) fields.icon = normalizeIcon(patch.icon);
@@ -238,7 +247,9 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
           policyChanged = true;
         }
         if (policyChanged) fields.policyVersion = (loop.policyVersion ?? 1) + 1;
-        return { ...loop, ...fields };
+        const next = { ...loop, ...fields, ...triggerPrivacy(loop, patch) };
+        assertPrivateTrigger(next);
+        return next;
       });
     },
     async editPlaybook(id, edit) {

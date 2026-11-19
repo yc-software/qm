@@ -64,7 +64,7 @@ let callSeq = 0;
 async function scenario() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = createSessionMailbox(testMap<SessionMessage>(), sessions);
   const featureFlags = createFeatureFlagStore(testMap());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const sessionSyscalls = createSessionSyscalls({

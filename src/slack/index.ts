@@ -1,5 +1,5 @@
 import { continueInPrivate } from "./private-continuation.ts";
-import { withTenant } from "../tenants/context.ts";
+import { withTenant, type Tenant } from "../tenants/context.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
@@ -63,7 +63,7 @@ const slackAccountClients = perTenant(
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
   core: SlackCoreClient,
-  tenant: string,
+  tenant: Tenant,
 ): Promise<{ stop(): Promise<void> }> {
   const accounts = slackAccountClients();
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
@@ -191,7 +191,7 @@ export async function startSlackPlugin(
     logLevel: parseLogLevel(cfg.logLevel),
     clientOptions: { ...CLIENT_OPTIONS },
   });
-  app.use(({ next }) => withTenant(tenant, next));
+  app.use(({ next }) => withTenant(tenant.id, next));
   if (cfg.externalAccess)
     app.use(async ({ body, next }) => {
       const envelope = body as unknown as { team_id?: string; team?: { id?: string } };
@@ -266,7 +266,7 @@ export async function startSlackPlugin(
       ]),
     ) as Pick<typeof historyApi.conversations, "history" | "replies">,
   };
-  const readHistory = createSlackHistoryReader({
+  const readHistory = createSlackHistoryReader(tenant, {
     historyLimit: cfg.historyLimit,
     core,
     ids,
@@ -534,7 +534,7 @@ export async function startSlackPlugin(
   statusSweep.start();
   const stopServingDeliveries =
     CORE_SINGLETON || cfg.externalAccess
-      ? core.serveDeliveries(tenant, (d) => deliveries.deliver(deliveryClient, d))
+      ? core.serveDeliveries(tenant.id, (d) => deliveries.deliver(deliveryClient, d))
       : () => {};
 
   const contextRequestsInFlight = new Set<string>();

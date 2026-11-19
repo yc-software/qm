@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -92,7 +93,7 @@ async function gbrain(
     async recall() {
       return [{ text: "notebook fact" }];
     },
-    async capture(_scope, facts) {
+    async capture(tenant, _scope, facts) {
       notebookWrites.push(...facts);
       return facts.length;
     },
@@ -173,6 +174,7 @@ test("the documented gbrain recipe keeps the notebook first everywhere and sends
   });
 
   await memory.capture(
+    captureTenant,
     JORDAN,
     ["Prefers window seats"],
     1,
@@ -203,9 +205,17 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
       report,
     }),
   );
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, undefined);
+  await writeFacts(captureTenant, memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
+  await writeFacts(captureTenant, memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
+  await writeFacts(
+    captureTenant,
+    memory,
+    JORDAN,
+    ["Prefers aisle seats", "Takes notes by hand"],
+    by,
+    context,
+    undefined,
+  );
 
   const [recall, ...writes] = calls;
   assert.deepEqual(calls.flatMap(violations), []);
@@ -286,6 +296,7 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
   const write = async (result: CallToolResult) => {
     answer = result;
     const { outcomes } = await writeFacts(
+      captureTenant,
       memory,
       JORDAN,
       ["Prefers aisle seats"],
@@ -356,6 +367,7 @@ test("a registry gbrain brain forgets a member's fact with the contract's forget
 test("an attested gbrain write never speaks for anyone but the turn's member", async (t) => {
   const { calls, memory, notebookWrites } = await gbrain(t, () => committed(1, "8c1f7a0e-0000-5000-8000-000000000006"));
   const { outcomes } = await writeFacts(
+    captureTenant,
     memory,
     "personal:U0ALICE",
     ["Onboarding: completed v1"],
@@ -364,6 +376,7 @@ test("an attested gbrain write never speaks for anyone but the turn's member", a
     undefined,
   );
   const system = await writeFacts(
+    captureTenant,
     memory,
     "personal:U0ALICE",
     ["Channel history was missing"],
@@ -386,6 +399,7 @@ test("a gbrain write's provenance stays within the contract's limit for a long s
   });
   const scope = `personal:${signIn}` as const;
   const { outcomes } = await writeFacts(
+    captureTenant,
     memory,
     scope,
     ["Prefers aisle seats"],
@@ -411,7 +425,7 @@ test("automatic capture of more than 20 facts reaches gbrain as writes within th
     agent: { oneShot: async () => `SENSITIVITY: ordinary\n${facts.map((fact) => `- ${fact}`).join("\n")}` },
     memory,
   });
-  await strategy.onTurnEnd!({
+  await strategy.onTurnEnd!(captureTenant, {
     scopeId: JORDAN,
     actorId: "U0JORDAN",
     audienceScopeId: JORDAN,
@@ -452,7 +466,7 @@ test("a strict gbrain route that refuses a later batch still leaves every automa
     memory,
   });
   await assert.rejects(
-    strategy.onTurnEnd!({
+    strategy.onTurnEnd!(captureTenant, {
       scopeId: JORDAN,
       actorId: "U0JORDAN",
       audienceScopeId: JORDAN,

@@ -3,7 +3,7 @@ import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { factCandidate, fromOtherSession, recentCandidates, type MemoryCandidate, type MemoryFact } from "./facts.ts";
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
-import { disclosedMemory } from "./disclosure.ts";
+import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
 
 const TYPICAL_FACT_CHARS = 120;
@@ -46,38 +46,53 @@ export function createSemanticMemoryService(
     }
     return pending;
   }
-  function view(notebook: MemoryService): MemoryService {
+  function view(notebook: MemoryService, access?: MemoryDisclosure): MemoryService {
     return {
       ...notebook,
-      withDisclosure: (access) => view(disclosedMemory(notebook, access)),
+      withDisclosure: (access) => view(disclosedMemory(base, access), access),
       async recall(scope: string, context: MemoryRecallContext = {}): Promise<MemoryCandidate[]> {
         const pending = index && context.query?.trim() ? queryFor(context) : undefined;
         void pending?.catch(() => undefined);
         const recallable = (list: readonly MemoryFact[]) =>
           list.filter((fact) => fromOtherSession(fact, context.sessionId));
-        const facts = recallable((await context.disclosedFacts)?.get(scope) ?? (await notebook.facts?.(scope)) ?? []);
-        if (!facts.length) return [];
-        try {
-          const query = await pending;
-          if (query && index) {
-            const byId = new Map(facts.map((fact) => [fact.id, fact]));
-            const matches = await index.search({
-              scope,
-              ...query,
-              ids: facts.map((fact) => fact.id),
-              limit: RECALL_LIMIT,
-              minSimilarity: opts.minSimilarity,
-            });
-            return matches.flatMap((match) => {
-              const fact = byId.get(match.factId);
-              return fact?.updatedAt === match.updatedAt ? [factCandidate(fact)] : [];
-            });
+        let facts = recallable(
+          (await context.disclosedFacts)?.get(scope) ??
+            (await (notebook.snapshotFacts ?? notebook.facts)?.call(notebook, scope)) ??
+            [],
+        );
+        const selected = async (): Promise<MemoryCandidate[]> => {
+          if (!facts.length) return [];
+          try {
+            const query = await pending;
+            if (query && index) {
+              const byId = new Map(facts.map((fact) => [fact.id, fact]));
+              const matches = await index.search({
+                scope,
+                ...query,
+                ids: facts.map((fact) => fact.id),
+                limit: RECALL_LIMIT,
+                minSimilarity: opts.minSimilarity,
+              });
+              return matches.flatMap((match) => {
+                const fact = byId.get(match.factId);
+                return fact?.updatedAt === match.updatedAt ? [factCandidate(fact)] : [];
+              });
+            }
+            return recentCandidates(facts);
+          } catch (error) {
+            opts.onError?.(error);
+            facts = recallable((await (notebook.snapshotFacts ?? notebook.facts)?.call(notebook, scope)) ?? []);
+            return recentCandidates(facts);
           }
-          return recentCandidates(facts);
-        } catch (error) {
-          opts.onError?.(error);
-          return recentCandidates(recallable((await notebook.facts?.(scope)) ?? []));
+        };
+        const rows = await selected();
+        const ids = new Set(rows.map((row) => row.id));
+        const disclosed = facts.filter((fact) => ids.has(fact.id));
+        if (disclosed.length && (await access?.onDisclosure?.(disclosed)) === false) {
+          const privateIds = new Set(disclosed.filter((fact) => fact.personalOnly).map((fact) => fact.id));
+          return rows.filter((row) => !privateIds.has(row.id ?? ""));
         }
+        return rows;
       },
     };
   }

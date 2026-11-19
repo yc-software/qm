@@ -42,6 +42,7 @@ export interface CapabilityTurn {
   memoryPolicy: MemoryPolicy;
   memoryScopeId: TurnContext["memoryScopeId"];
   memoryAccess: TurnContext["memoryAccess"];
+  personalOnly?: true;
   baseRecallScopes: TurnContext["baseRecallScopes"];
   ownCredentialsAllowed: boolean;
   turnTimezone: string | undefined;
@@ -151,7 +152,12 @@ async function mintControlPlaneTokens(
   const securityPolicy = resolution.securityPolicy;
   let actorIsOrgAdmin = false;
   let orgMemoryWrite: ScopeId | undefined;
-  const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
+  const orgMemoryWritable =
+    useMemory &&
+    memoryPolicy.capture !== "off" &&
+    !turn.personalOnly &&
+    !memoryAccess?.personalOnly &&
+    resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
   const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(triggeredTurn ? { triggered: true } : {}) };
   const runBinding = {
@@ -172,11 +178,17 @@ async function mintControlPlaneTokens(
       if (actorIsOrgAdmin && liveTurn && !triggeredTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
     const memoryClaim = memoryAccess
-      ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
+      ? {
+          ...memoryAccess,
+          read: baseRecallScopes,
+          ...(turn.personalOnly ? { personalOnly: true as const } : {}),
+          ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}),
+        }
       : undefined;
     const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
     controlClaims = {
       ...scopeAttestation,
+      privateRead: true,
       aud: CONTROL_PLANE_AUD,
       ...(!external && allInternal && ownCredentialsAllowed ? { ownerConnections: true } : {}),
       exp: sandboxTokenExpiry,
@@ -194,6 +206,7 @@ async function mintControlPlaneTokens(
         ? { privateScope: true }
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
+      ...(turn.personalOnly || memoryAccess?.personalOnly ? { personalOnly: true as const } : {}),
       ...presence,
       ...runBinding,
       sessionId: session.id,

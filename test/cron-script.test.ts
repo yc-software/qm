@@ -108,6 +108,7 @@ test("a script needs a task cron and is removed by patch null or a switch to tex
     "set a cron's script with the cron tool, which runs it once first",
   );
   const elsewhere = await control.patchCron(
+    testTenant,
     created.cron.id,
     { script: { command: "./other.sh" } },
     { ...claims(), scopeId: scopeId("channel", "C9") },
@@ -117,12 +118,12 @@ test("a script needs a task cron and is removed by patch null or a switch to tex
   const kept = await control.getCron(created.cron.id, claims());
   assert.deepEqual(kept.ok && kept.cron.script, { command: "./check.sh", credentials: ["gh"] });
 
-  const removed = await control.patchCron(created.cron.id, { script: null }, claims());
+  const removed = await control.patchCron(testTenant, created.cron.id, { script: null }, claims());
   assert.ok(removed.ok);
   assert.equal(removed.cron.script, undefined);
 
-  await control.patchCron(created.cron.id, { script: { command: "./check.sh" } }, claims(), passes);
-  const relayed = await control.patchCron(created.cron.id, { text: "standup!" }, claims());
+  await control.patchCron(testTenant, created.cron.id, { script: { command: "./check.sh" } }, claims(), passes);
+  const relayed = await control.patchCron(testTenant, created.cron.id, { text: "standup!" }, claims());
   assert.ok(relayed.ok);
   assert.equal(relayed.cron.script, undefined);
 });

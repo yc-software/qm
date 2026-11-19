@@ -109,6 +109,76 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   const del = (path: string, headers: Record<string, string> = {}) =>
     fetch(`${base}${path}`, { method: "DELETE", headers });
 
+  it("private skills remain personal through authoring, edits, restore, grants and scope changes", async () => {
+    const own = scopeId("personal", "U1");
+    const context = await built.sessions.getOrCreateByThread("web:U1:protected", "dm", own);
+    await built.sessions.addParticipant(context.id, "U1");
+    const privateHeaders = {
+      "x-agent-capability": await capFor("U1", own, { sessionId: context.id, personalOnly: true, liveActor: true }),
+    };
+    const created = await post(
+      "/v1/skills",
+      { name: "private-procedure", description: "private", body: "Private steps" },
+      privateHeaders,
+    );
+    assert.equal(created.status, 201);
+    const {
+      skill: { id },
+    } = (await created.json()) as { skill: { id: string } };
+    const saved = await built.skills.get(id);
+    assert.equal(saved?.personalOnly, true);
+    assert.equal(saved?.scopeId, own);
+    assert.equal((await get(`/v1/skills/${id}`, privateHeaders)).status, 200);
+    const blocked = await post(
+      "/v1/skills",
+      { name: "private-shared", description: "d", body: "Private steps", scopeId: "channel:C" },
+      privateHeaders,
+    );
+    assert.equal(blocked.status, 403);
+    assert.equal((await get(`/v1/skills/${id}`, { "x-agent-capability": await capChannel("U1") })).status, 404);
+    const sharedEdit = await fetch(`${base}/v1/skills/${id}`, {
+      method: "PUT",
+      headers: {
+        "x-agent-capability": await capChannel("U1", { liveActor: true }),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ description: "shared rewrite" }),
+    });
+    assert.equal(sharedEdit.status, 404);
+    assert.equal((await built.skills.get(id))?.manifest.description, "private");
+    const edited = await fetch(`${base}/v1/skills/${id}`, {
+      method: "PUT",
+      headers: { ...privateHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ body: "Revised private steps" }),
+    });
+    assert.equal(edited.status, 200);
+    const current = await built.skills.get(id);
+    assert.ok(current);
+    await built.skills.restore({ ...current, personalOnly: undefined });
+    assert.equal((await built.skills.get(id))?.personalOnly, true);
+    await assert.rejects(built.skills.restore({ ...current, scopeId: scopeId("personal", "U2") }), /Private skills/);
+    const grant = {
+      ownerScopeId: own,
+      ref: `skill:${id}`,
+      granteeScopeId: scopeId("personal", "U2"),
+      permission: "read" as const,
+      grantedBy: "U1",
+    };
+    await assert.rejects(built.acl.grant(testTenant, grant), /Private artifacts/);
+    await assert.rejects(
+      built.acl.replaceGrantsIfCurrent(testTenant, own, grant.ref, [], [grant], "U1"),
+      /Private artifacts/,
+    );
+    await assert.rejects(built.skills.move(id, scopeId("channel", "C")), /Private skills/);
+    await assert.rejects(built.skills.promote(id, scopeId("org", "default-org")), /Private skills/);
+    assert.equal((await built.skills.promote(id, own)).personalOnly, true);
+    assert.equal((await built.acl.grantsFor(testTenant, own, grant.ref)).length, 0);
+    await built.skills.archive(id);
+    const unprotected = { "x-agent-capability": await capFor("U1") };
+    assert.equal((await get(`/v1/skills/${id}`, privateHeaders)).status, 200);
+    assert.equal((await get(`/v1/skills/${id}`, unprotected)).status, 404);
+  });
+
   const MEMBERS = [
     { id: "U1", type: "internal" as const },
     { id: "U2", type: "internal" as const },
@@ -656,6 +726,8 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       )
     ).json()) as any;
     const id = created.cron.id;
+    await built.sessions.getOrCreateByThread("t1", "dm", "personal:U1");
+    await built.sessions.getOrCreateByThread("t2", "dm", "personal:U1");
     await built.crons.recordFire(id, {
       fireKey: "k1",
       threadRef: "t1",
@@ -763,11 +835,11 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const control = createControlService(built.app, built.scheduler);
     const script = { command: "./standup.sh" };
     const passes = async () => undefined;
-    const byPreviousOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
+    const byPreviousOwner = await control.patchCron(testTenant, cron.id, { script }, channelClaims("U1"), passes);
     assert.equal(byPreviousOwner.ok ? "" : byPreviousOwner.code, "forbidden", "only the owner changes the script");
-    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
+    const byOwner = await control.patchCron(testTenant, cron.id, { script }, channelClaims("U2"), passes);
     assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
-    const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U1"));
+    const removed = await control.patchCron(testTenant, cron.id, { script: null }, channelClaims("U1"));
     assert.equal(removed.ok ? "" : removed.code, "forbidden");
     const overHttp = await patch(
       `/v1/crons/${cron.id}`,

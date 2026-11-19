@@ -100,7 +100,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   );
   databaseFixture.stop = () => built.runtime.stop();
   await migrateRegisteredPgSchemas(databaseUrl);
-  await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
+  await built.memory.capture(testTenant, "personal:unconfigured", ["a fact before model configuration"], Date.now());
   await built.memory.recall("personal:unconfigured", { query: "no model configured" });
   const inspector = new pg.Client({ connectionString: databaseUrl });
   await inspector.connect();
@@ -120,10 +120,10 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   );
   await built.config.setEmbeddingModel(embeddingId);
   const orgFact = "Browser regression tests should also cover Firefox.";
-  await built.memory.capture("org:default-org", [orgFact], Date.now());
+  await built.memory.capture(testTenant, "org:default-org", [orgFact], Date.now());
   const otherFact = "Another user's confidential browser preference";
-  await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
-  await built.memory.capture("personal:U2", [otherFact], Date.now());
+  await built.memory.capture(testTenant, "personal:U1", [fact, ...filler], Date.now());
+  await built.memory.capture(testTenant, "personal:U2", [otherFact], Date.now());
   await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, [
     "org:default-org",
     "personal:U1",
@@ -253,12 +253,13 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   }
   await built.config.setSharingPosture(denied, "isolated");
   await built.memory.capture(
+    testTenant,
     personal,
     ["0.7 LOCAL_NEAR", ...Array.from({ length: 120 }, (_, i) => `0.6 local ${i} ${"x".repeat(70)}`)],
     Date.now(),
   );
-  await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
-  await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
+  await built.memory.capture(testTenant, room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
+  await built.memory.capture(testTenant, denied, ["1 DENIED_NOTEBOOK"], Date.now());
   await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room, denied]);
   inputs.length = 0;
   const server = createInsecureTestServer(built.app);

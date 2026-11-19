@@ -820,3 +820,22 @@ test("a turn that PAUSED on an approval keeps a blocking card even when it carri
   const followUp = await app.turn(dm("unrelated follow-up"));
   assert.equal(followUp.status, "ok", "the card never holds up the next message");
 });
+
+test("requesting a denied command again issues a fresh approval and stale decisions cannot consume it", async () => {
+  const { app } = await withCommandRules(freshApp());
+  const text = "!run git push --force origin main";
+  const first = await app.turn(dm(text, { idempotencyKey: "approval-original" }));
+  const original = first.pendingApprovals![0]!;
+  const retried = await app.turn(dm(text, { idempotencyKey: "approval-original" }));
+  assert.equal(retried.pendingApprovals![0]!.requestId, original.requestId);
+  const denied = await app.turn(dm(text, { approval: { requestId: original.requestId, approved: false } }));
+  assert.equal(denied.status, "refused");
+  const second = await app.turn(dm(text, { idempotencyKey: "approval-reissued" }));
+  const reissued = second.pendingApprovals![0]!;
+  assert.notEqual(reissued.requestId, original.requestId);
+  const stale = await app.turn(dm(text, { approval: { requestId: original.requestId, approved: true } }));
+  assert.equal(stale.status, "pending_approval");
+  assert.equal(stale.pendingApprovals![0]!.requestId, reissued.requestId);
+  const approved = await app.turn(dm(text, { approval: { requestId: reissued.requestId, approved: true } }));
+  assert.equal(approved.status, "ok");
+});

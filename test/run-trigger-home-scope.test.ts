@@ -25,9 +25,24 @@ function unknownChannelDirectory() {
   };
 }
 
+function homeSessions(
+  sessions: Pick<NonNullable<TriggerDeps["sessions"]>, "participantScopes">,
+): NonNullable<TriggerDeps["sessions"]> {
+  return {
+    get: async () => {
+      throw new Error("Unexpected session content read");
+    },
+    getByThread: async () => null,
+    recordContextProvenance: async () => {
+      throw new Error("Unexpected session provenance write");
+    },
+    ...sessions,
+  };
+}
+
 function deps(
   dir: ReturnType<typeof unknownChannelDirectory>,
-  opts: { sessions?: TriggerDeps["sessions"]; onRun?: () => void } = {},
+  opts: { sessions?: Pick<NonNullable<TriggerDeps["sessions"]>, "participantScopes">; onRun?: () => void } = {},
 ): TriggerDeps {
   const run = async (_r: TurnRequest): Promise<TurnResult> => {
     opts.onRun?.();
@@ -40,7 +55,7 @@ function deps(
     run,
     directory: dir,
     currentScopeMembers: createCurrentScopeMembers({ directory: dir }),
-    ...(opts.sessions ? { sessions: opts.sessions } : {}),
+    ...(opts.sessions ? { sessions: homeSessions(opts.sessions) } : {}),
   };
 }
 
@@ -170,7 +185,7 @@ describe("runTrigger home-scope gate for group homes", () => {
         return { status: "ok", reply: "posted" };
       },
       directory: dir,
-      sessions,
+      sessions: homeSessions(sessions),
     };
     const out = await runTrigger(d, groupSpec("tri-state"));
     assert.equal(ranTurn, false);

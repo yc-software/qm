@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
@@ -15,7 +16,7 @@ function provider(name: string, calls: string[]): MemoryService {
       calls.push(`${name}:recall:${scope}:${context?.query ?? ""}`);
       return [{ text: `${name} memory` }];
     },
-    async capture(scope, facts, _at, _author, context?: MemoryCaptureContext) {
+    async capture(tenant, scope, facts, _at, _author, context?: MemoryCaptureContext) {
       calls.push(`${name}:capture:${scope}:${context?.mode ?? "explicit"}:${facts.join(",")}`);
       return facts.length;
     },
@@ -41,6 +42,7 @@ test("routes recall and capture independently by scope and policy", async () => 
   assert.equal(recallText(await memory.recall("org:acme", { query: "launch" })), "knowledge memory");
   assert.equal(
     await memory.capture(
+      captureTenant,
       "personal:u1",
       ["prefers terse replies"],
       1,
@@ -50,11 +52,25 @@ test("routes recall and capture independently by scope and policy", async () => 
     1,
   );
   assert.equal(
-    await memory.capture("org:acme", ["runbook"], 1, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
+    await memory.capture(
+      captureTenant,
+      "org:acme",
+      ["runbook"],
+      1,
+      { actorId: "u1", context: "conversation" },
+      { mode: "automatic" },
+    ),
     0,
   );
   assert.equal(
-    await memory.capture("org:acme", ["runbook"], 1, { actorId: "u1", context: "conversation" }, { mode: "explicit" }),
+    await memory.capture(
+      captureTenant,
+      "org:acme",
+      ["runbook"],
+      1,
+      { actorId: "u1", context: "conversation" },
+      { mode: "explicit" },
+    ),
     1,
   );
   assert.deepEqual(calls, [
@@ -122,6 +138,7 @@ test("external capture failures degrade to the remaining provider", async () => 
     onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
   });
   const stored = await memory.capture(
+    captureTenant,
     "org:acme",
     ["fact"],
     1,
@@ -143,7 +160,14 @@ test("external capture failures degrade to the remaining provider", async () => 
     ],
   });
   await assert.rejects(
-    strictMemory.capture("org:acme", ["fact"], 1, { actorId: "U1", context: "conversation" }, { mode: "automatic" }),
+    strictMemory.capture(
+      captureTenant,
+      "org:acme",
+      ["fact"],
+      1,
+      { actorId: "U1", context: "conversation" },
+      { mode: "automatic" },
+    ),
     /offline/,
   );
 });
@@ -161,6 +185,7 @@ test("cross-origin capture only reaches providers that preserve structured prove
   });
   assert.equal(
     await memory.capture(
+      captureTenant,
       "personal:alice",
       ["Synthetic fact"],
       1,
@@ -177,6 +202,7 @@ test("cross-origin capture only reaches providers that preserve structured prove
   assert.deepEqual(calls, ["notebook:capture:personal:alice:automatic:Synthetic fact"]);
   calls.length = 0;
   await memory.capture(
+    captureTenant,
     "personal:alice",
     ["Native fact"],
     1,
@@ -209,11 +235,15 @@ test("only a conversation's capture reaches a provider that isn't a notebook", a
   ];
   for (const by of authorities) {
     calls.length = 0;
-    assert.equal(await memory.capture("personal:alice", ["Prefers tea"], 1, by, { mode: "explicit" }), 1);
+    assert.equal(
+      await memory.capture(captureTenant, "personal:alice", ["Prefers tea"], 1, by, { mode: "explicit" }),
+      1,
+    );
     assert.deepEqual(calls, ["notebook:capture:personal:alice:explicit:Prefers tea"], JSON.stringify(by));
   }
   calls.length = 0;
   await memory.capture(
+    captureTenant,
     "personal:alice",
     ["Prefers tea"],
     1,

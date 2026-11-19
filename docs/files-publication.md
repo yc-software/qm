@@ -44,3 +44,39 @@ The core's S3 role needs `s3:GetObject`, `s3:PutObject`, `s3:AbortMultipartUploa
 The existing browser uploader remains on its existing attachment-size limit. It does not automatically use this protocol. A browser client adopting the protocol must configure appropriate bucket CORS for PUT and the checksum header; Python and other non-browser clients do not require CORS.
 
 Local and proxied S3 writes spool incoming bytes to temporary disk while hashing, with backpressure and the existing size checks. Local publication renames the completed temporary file atomically; S3 uploads the spool as bounded-memory parts. Temporary files are removed on success and failure. This fallback uses core disk proportional to the upload size; use the direct path for large files.
+
+## Completion tenant token
+
+Internal upload completion now takes the existing request or worker token:
+
+```ts
+type OldComplete = (id: string, contextSessionId?: string) => Promise<FileArtifact>;
+type Complete = (tenant: Tenant, id: string, contextSessionId?: string) => Promise<FileArtifact>;
+type OldStoreComplete = <T>(id: string, publish: (upload: FileUpload, client: PoolClient) => Promise<T>) => Promise<T>;
+type StoreComplete = <T>(
+  tenant: Tenant,
+  id: string,
+  publish: (upload: FileUpload, client: PoolClient) => Promise<T>,
+) => Promise<T>;
+type OldAddContext = (id: string, sessionId: string) => Promise<boolean>;
+type AddContext = (tenant: Tenant, id: string, sessionId: string) => Promise<boolean>;
+```
+
+The HTTP route supplies its authenticated tenant. Expiry recovery uses the token
+returned by the existing claim boundary. Retries retain that token. Context
+attachment, the locked completion read, and the completion update use explicit
+`tenant_id` predicates. Publication still receives the same transaction client.
+
+HTTP requests and responses, `FileUpload`, `FileArtifact`, and all stored JSON
+fields are unchanged. The token is not stored. There are no new settings,
+providers, tables, columns, keys, indexes, constraints, or backfills. Source
+callers of these internal methods must supply the token when updating core;
+existing clients of the HTTP protocol need no changes.
+
+The real-Postgres collision regression uses the database owner to bypass row
+security and verifies that completing one tenant's upload neither completes nor
+attaches context to another tenant's matching ID. It fails against the same
+method API with only the SQL tenant predicates removed. Multipart/recovery and
+store suites pass; focused independent review accepted this slice95/100. This
+qualification excludes the remaining legacy upload queries and the rest of the
+tenant conversion.

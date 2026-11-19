@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
@@ -149,7 +150,7 @@ test("memory capture runs only for a person's own turn in a human conversation",
     createMockAgent(),
     undefined,
     {
-      onTurnEnd: async ({ input }) => {
+      onTurnEnd: async (_tenant, { input }) => {
         captured.push(input);
       },
     },
@@ -159,7 +160,7 @@ test("memory capture runs only for a person's own turn in a human conversation",
   const run = randomUUID();
   const parent = await sessions.getOrCreateByThread(`web:U1:parent:${run}`, "dm", personal);
   const child = await sessions.getOrCreateByThread(`agent:main:subagent:${run}`, "dm", personal);
-  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setParentSession(ancestryTenant, child.id, parent.id);
   await sessions.addParticipant(child.id, "U1");
   await sessions.setSpawnMeta(child.id, {
     surface: "web",
@@ -263,4 +264,36 @@ test("an addressed turn asks memory with the message the member sent, not its wa
   assert.equal(result.status, "ok");
   assert.ok(contexts.length > 0);
   assert.deepEqual(new Set(contexts.map((context) => context?.input)), new Set([message]));
+});
+
+test("a turn acknowledges completion only after its capture handoff is durable", async () => {
+  const handedOff = Promise.withResolvers<void>();
+  const persist = Promise.withResolvers<void>();
+  let completed = false;
+  const orch = buildOrchestrator(createMockAgent(), undefined, {
+    enqueueTurnEnd: async () => {
+      handedOff.resolve();
+      await persist.promise;
+    },
+  });
+  const pending = orch.handleTurn(dm("dm:U1:durable-handoff", "remember this procedure")).then((result) => {
+    completed = true;
+    return result;
+  });
+  await handedOff.promise;
+  assert.equal(completed, false);
+  persist.resolve();
+  assert.equal((await pending).status, "ok");
+});
+
+test("a failed capture handoff cannot acknowledge a completed turn", async () => {
+  const orch = buildOrchestrator(createMockAgent(), undefined, {
+    enqueueTurnEnd: async () => {
+      throw new Error("capture store unavailable");
+    },
+  });
+  await assert.rejects(
+    orch.handleTurn(dm("dm:U1:failed-handoff", "remember this procedure")),
+    /capture store unavailable/,
+  );
 });

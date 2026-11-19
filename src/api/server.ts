@@ -76,6 +76,12 @@ async function capabilityAdminDenied(
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
   if (WRITE_METHODS.has(method) && !personAtKeyboard(claims)) return ADMIN_WRITE_NEEDS_PERSON;
+  const privateTarget =
+    access.privateRead &&
+    (access.privateRead !== "unless-org-scope" ||
+      parseScopeId(params.scope ?? url.searchParams.get("scope") ?? "").kind !== "org");
+  if (privateTarget && (claims.privateRead !== true || claims.computer?.personalOnly === false))
+    return "This admin read requires native or private-computer authority.";
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
     const target =
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
@@ -100,6 +106,7 @@ function canonicalPath(req: IncomingMessage, pathname: string): boolean {
 }
 
 interface GateResult {
+  sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
   body: unknown;
   capability: CapabilityClaims | null;
   actor: PortalIdentity | null;
@@ -133,14 +140,14 @@ async function verifyCapability(
   pathname: string,
   required: { aud: string; bearer?: true } | null,
   tenant: Tenant | undefined,
-): Promise<CapabilityClaims | null> {
+): Promise<{ capability: CapabilityClaims; sourceProvenance?: import("../memory/facts.ts").SourceProvenance } | null> {
   const requiredAud = required?.aud ?? null;
   const capToken = capabilityToken(req, required?.bearer === true);
   if (!capToken) {
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
   }
-  const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
+  let capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
   if (!capability) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
     return null;
@@ -200,13 +207,47 @@ async function verifyCapability(
     });
     return null;
   }
-  return personAtKeyboard(capability) && !(await runIsActive({ deps, capability }))
-    ? {
-        ...capability,
-        triggered: true,
-        ...(capability.memory ? { memory: { ...capability.memory, orgWrite: undefined } } : {}),
+  if (personAtKeyboard(capability) && !(await runIsActive({ deps, capability })))
+    capability = {
+      ...capability,
+      triggered: true,
+      ...(capability.memory ? { memory: { ...capability.memory, orgWrite: undefined, teamWrite: undefined } } : {}),
+    };
+  let sourceProvenance: import("../memory/facts.ts").SourceProvenance | undefined;
+  if (capability.sessionId) {
+    const context = await app.getSessionContext(capability.sessionId);
+    if (!context) {
+      sendJson(res, 403, { error: "forbidden", message: "The conversation context no longer exists." });
+      return null;
+    }
+    sourceProvenance = context.sourceProvenance;
+    if (context.personalOnly || capability.personalOnly || capability.memory?.personalOnly) {
+      if (capability.privateRead !== true || capability.computer?.personalOnly === false) {
+        sendJson(res, 403, { error: "forbidden", message: "This private conversation requires a private computer." });
+        return null;
       }
-    : capability;
+      const owner = scopeId("personal", capability.actorId);
+      if (
+        context.scopeId !== owner ||
+        capability.scopeId !== owner ||
+        (capability.audienceScopeId ?? owner) !== owner
+      ) {
+        sendJson(res, 403, { error: "forbidden", message: "Private context requires its owner's personal scope." });
+        return null;
+      }
+      if (!context.personalOnly)
+        await app.recordContextProvenance(context.id, owner, {
+          sensitivity: "ordinary",
+          sources: [],
+          sourceUnknown: false,
+          personalOnly: true,
+        });
+      capability.personalOnly = true;
+      if (capability.memory)
+        capability.memory = { ...capability.memory, personalOnly: true, orgWrite: undefined, teamWrite: undefined };
+    }
+  } else if (capability.memory?.personalOnly) capability.personalOnly = true;
+  return { capability, ...(sourceProvenance ? { sourceProvenance } : {}) };
 }
 
 async function gate(
@@ -228,12 +269,15 @@ async function gate(
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
+  let sourceProvenance: import("../memory/facts.ts").SourceProvenance | undefined;
   const capToken = capabilityToken(req, false);
   if (isPublicRoute) {
     void isPublicRoute;
   } else if (requiredAud || capToken) {
-    capability = await verifyCapability(req, res, wiring, method, pathname, requiredAuth, tenant);
-    if (!capability) return null;
+    const verified = await verifyCapability(req, res, wiring, method, pathname, requiredAuth, tenant);
+    if (!verified) return null;
+    capability = verified.capability;
+    sourceProvenance = verified.sourceProvenance;
     if (routeAuth === "either") {
       if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD) {
         sendJson(res, 403, { error: "forbidden", message: "capability token audience not valid for this route" });
@@ -354,7 +398,7 @@ async function gate(
       }
     }
   }
-  return { body, capability, actor };
+  return { body, capability, actor, ...(sourceProvenance ? { sourceProvenance } : {}) };
 }
 
 function assertedActorValues(field: string, url: URL, body: unknown): unknown[] {
@@ -446,6 +490,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
           ...base,
           body: g.body,
           capability: g.capability,
+          sourceProvenance: g.sourceProvenance,
           actor: g.actor,
         };
         await run(found.route, found.params, ctx);
@@ -516,6 +561,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       ...baseCtx(request.raw, reply.raw, wiring),
       body: g.body,
       capability: g.capability,
+      sourceProvenance: g.sourceProvenance,
       actor: g.actor,
     };
     try {
@@ -662,8 +708,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (raw) {
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
-        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth, base.tenant);
-        if (!base.capability) return void req.resume();
+        const verified = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth, base.tenant);
+        if (!verified) return void req.resume();
+        base.capability = verified.capability;
+        base.sourceProvenance = verified.sourceProvenance;
       }
       await run(raw.route, raw.params, base);
       return;

@@ -22,6 +22,7 @@ import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-u
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
@@ -39,12 +40,13 @@ export interface DirectFileUploads {
   begin(
     input: Pick<FileUpload, "actorId" | "scopeId" | "name" | "mimetype" | "sizeBytes" | "checksums"> & {
       requestId?: string;
+      contextSessionIds?: string[];
     },
   ): Promise<FileUpload>;
   get(id: string): Promise<FileUpload | null>;
   list(actorId: string): Promise<FileUpload[]>;
   sign(id: string, partNumber: number): Promise<{ url: string; headers: Record<string, string>; expiresAt: number }>;
-  complete(id: string): Promise<FileArtifact>;
+  complete(tenant: Tenant, id: string, contextSessionId?: string): Promise<FileArtifact>;
   abort(id: string): Promise<void>;
   sweep(): Promise<void>;
   start(): void;
@@ -164,6 +166,7 @@ export function createDirectFileUploads(options: {
       };
       const matches = (existing: FileUpload) =>
         existing.actorId === row.actorId &&
+        (row.contextSessionIds ?? []).every((id) => existing.contextSessionIds?.includes(id)) &&
         existing.scopeId === row.scopeId &&
         existing.name === row.name &&
         existing.mimetype === row.mimetype &&
@@ -225,7 +228,7 @@ export function createDirectFileUploads(options: {
         expiresAt: now() + expiresIn * 1000,
       };
     },
-    async complete(id) {
+    async complete(tenant, id, contextSessionId) {
       let row = await requireRow(id);
       if (row.state === "complete") {
         const artifact = await files.get(id, { includeDisabled: true });
@@ -242,13 +245,20 @@ export function createDirectFileUploads(options: {
       if (row.state !== "pending" && row.state !== "completing")
         throw new FileUploadError("upload cannot be completed", 409);
       if (row.state === "pending" && row.expiresAt <= now()) throw new FileUploadError("upload expired", 409);
+      if (contextSessionId) {
+        if (!(await store.addContext(tenant, id, contextSessionId))) {
+          if ((await requireRow(id)).state === "complete") return service.complete(tenant, id);
+          throw new FileUploadError("upload cannot be completed", 409);
+        }
+        row = await requireRow(id);
+      }
       if (!(await verifyObject(row))) {
         let parts: Part[];
         try {
           parts = await uploadedParts(row);
         } catch (error) {
           if (!(error instanceof Error) || error.name !== "NoSuchUpload") throw error;
-          if (await verifyObject(row)) return service.complete(id);
+          if (await verifyObject(row)) return service.complete(tenant, id);
           await store.transition(id, ["pending", "completing"], "failed");
           throw new FileUploadError("upload bytes are no longer available", 410);
         }
@@ -278,37 +288,40 @@ export function createDirectFileUploads(options: {
         }
         if (!(await verifyObject(row))) throw new FileUploadError("completed object is missing", 409);
       }
-      const current = await requireRow(id);
-      if (current.state !== "completing" && current.state !== "complete")
-        throw new FileUploadError("upload cannot be published", 409);
       let artifact: FileArtifact;
       try {
-        ({ artifact } = await files.publish({
-          id,
-          ownerScopeId: row.scopeId,
-          createdBy: row.actorId,
-          name: row.name,
-          path: artifactPath(id, row.name),
-          mimetype: row.mimetype,
-          blobKey: `files/uploads/${id}`,
-          sizeBytes: row.sizeBytes,
-          sha256: null,
-          direction: "out",
-          createdInScope: row.scopeId,
-          createdAt: row.createdAt,
-        }));
+        artifact = await store.complete(tenant, id, async (current, transaction) => {
+          const { artifact } = await files.publish(
+            {
+              id,
+              contextSessionIds: current.contextSessionIds,
+              ownerScopeId: current.scopeId,
+              createdBy: current.actorId,
+              name: current.name,
+              path: artifactPath(id, current.name),
+              mimetype: current.mimetype,
+              blobKey: `files/uploads/${id}`,
+              sizeBytes: current.sizeBytes,
+              sha256: null,
+              direction: "out",
+              createdInScope: current.scopeId,
+              createdAt: current.createdAt,
+            },
+            transaction,
+          );
+          if (
+            artifact.blobKey !== `files/uploads/${id}` ||
+            artifact.ownerScopeId !== current.scopeId ||
+            artifact.createdBy !== current.actorId
+          )
+            throw new FileUploadError("file identity conflict", 409);
+          return artifact;
+        });
       } catch (error) {
         if (!(error instanceof FileArtifactDeletedError)) throw error;
         await store.transition(id, ["completing"], "complete");
         throw new FileUploadError("published file was deleted", 410);
       }
-      if (
-        artifact.blobKey !== `files/uploads/${id}` ||
-        artifact.ownerScopeId !== row.scopeId ||
-        artifact.createdBy !== row.actorId
-      )
-        throw new FileUploadError("file identity conflict", 409);
-      await store.transition(id, ["completing"], "complete");
       return artifact;
     },
     async abort(id) {
@@ -329,10 +342,10 @@ export function createDirectFileUploads(options: {
     async sweep() {
       await claimThenBind(
         () => store.claimExpired(now()),
-        async (id) => {
+        async (id, tenant) => {
           try {
             const row = await store.get(id);
-            if (row?.state === "completing") await service.complete(id);
+            if (row?.state === "completing") await service.complete(tenant, id);
             else if (row) await service.abort(id);
           } catch (error) {
             if (error instanceof FileUploadError && error.status === 410) return;

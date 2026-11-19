@@ -1,3 +1,4 @@
+import { tenantOf } from "../route.ts";
 import { samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -37,7 +38,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   for (const c of await app.listCrons())
     if (!c.loopId && !c.archived && (await owns(c.owner, c.ownerScopeId)))
       step("cron", c.id, c.title ?? "", "disable_and_archive", () =>
-        app.updateCron(c.id, { enabled: false, archived: true }, { actorId }),
+        app.updateCron(tenantOf(ctx), c.id, { enabled: false, archived: true }, { actorId }),
       );
   const loops = deps.loops;
   for (const l of (await loops?.store.list()) ?? [])
@@ -54,7 +55,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
       step("keychain_grant", g.id, g.purpose, "revoke", () => deps.keychain!.revokeGrant(g.ownerId, g.id));
   for (const d of await app.listApps())
     if (d.status !== "archived" && (await personal(d.ownerScopeId)))
-      step("app", d.id, d.displayName || d.name, "archive", () => app.archiveApp(d.id));
+      step("app", d.id, d.displayName || d.name, "archive", () => app.archiveApp(tenantOf(ctx), d.id));
   for (const s of await app.listSkills())
     if (s.status !== "archived" && (await personal(s.scopeId)))
       step("skill", s.id, s.manifest.name, "archive", () => app.archiveSkill(s.id));

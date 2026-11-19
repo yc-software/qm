@@ -1,3 +1,4 @@
+import { testTenant as cronTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -54,7 +55,9 @@ test("a deploy marks crons still running what a bot-marked turn wrote and lists 
     const items: never[] = [];
     const steps = createStepRecorder({ emit: async (item: never) => void items.push(item) } as never, (w) => void w());
     const claims = { actorId: owner, scopeId: scope, exp: Date.now() + 60_000, botActor: bot === "refused" };
-    const current = { cronPatch: (c: string, req: never) => control.patchCron(c, req, claims, async () => undefined) };
+    const current = {
+      cronPatch: (c: string, req: never) => control.patchCron(cronTenant, c, req, claims, async () => undefined),
+    };
     const tools = createAgentTools({ current, emit: steps.emit, scopeLabel: scope } as never, { controlTools: true });
     const cron = recordingTools(tools, () => steps).find((t) => t.name === "cron")!;
     const call = { type: "toolCall", id: threadRef, name: "cron", arguments: { action: "patch", id, ...args } };

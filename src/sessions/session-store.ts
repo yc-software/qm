@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import type { TenantLookup } from "../tenants/lookup.ts";
 import type { Tenant } from "../tenants/context.ts";
@@ -405,13 +406,23 @@ export interface SessionStore {
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
-  getMany(refs: { ids: readonly string[]; threadRefs: readonly string[] }): Promise<Session[]>;
+  inheritContextFrom(tenant: Tenant, sessionId: string, sourceSessionId: string): Promise<void>;
+  markPersonalOnly(sessionId: string, ownerScopeId: ScopeId): Promise<void>;
+  recordContextProvenance(
+    sessionId: string,
+    ownerScopeId: ScopeId,
+    provenance: import("../memory/facts.ts").MemoryProvenance,
+  ): Promise<import("../memory/facts.ts").SourceProvenance>;
+  getMany(
+    refs: { ids: readonly string[]; threadRefs: readonly string[] },
+    transaction?: PoolClient,
+  ): Promise<Session[]>;
   userItemSeqs(
     ranges: readonly { sessionId: string; sinceSeq: number }[],
   ): Promise<Array<{ sessionId: string; seq: number }>>;
 
   updateTitle(sessionId: string, title: string): Promise<void>;
-  setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
+  setParentSession(tenant: Tenant, sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
   setPersona(sessionId: string, personaId: string | null): Promise<void>;

@@ -1,3 +1,5 @@
+import { personalScope } from "../types.ts";
+import { mergeSourceProvenance, type SourceProvenance } from "../memory/facts.ts";
 import type { Destination, ScopeId } from "../types.ts";
 import type { TriggerBase } from "./types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -7,6 +9,9 @@ import { fold } from "../identity/user-tenancy.ts";
 import { msOf } from "../sessions/items.ts";
 
 export interface CreateTriggerInput {
+  personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
+  context?: import("../sessions/private-context.ts").PrivateContext;
   ownerScopeId: ScopeId;
   owner: string;
   createdBy: string;
@@ -14,6 +19,48 @@ export interface CreateTriggerInput {
   ownerConsentedAt?: number;
   botActor?: boolean;
   taskAuthor?: "automation";
+}
+
+export function privateTriggerAllowed(
+  trigger: Pick<TriggerBase, "personalOnly" | "owner" | "ownerScopeId" | "destination" | "botActor">,
+): boolean {
+  if (!trigger.personalOnly) return true;
+  const ownerScope = personalScope(trigger.owner);
+  const destination = trigger.destination;
+  return (
+    trigger.botActor !== true &&
+    trigger.ownerScopeId === ownerScope &&
+    (!destination ||
+      (destination.type === "principal" &&
+        samePerson(destination.target, trigger.owner) &&
+        (destination.audienceScopeId === undefined || destination.audienceScopeId === ownerScope) &&
+        (destination.onBehalfOf === undefined || samePerson(destination.onBehalfOf, trigger.owner)) &&
+        Object.keys(destination).every((key) =>
+          ["type", "target", "audienceScopeId", "onBehalfOf", "unfurlLinks"].includes(key),
+        )))
+  );
+}
+
+export function assertPrivateTrigger(trigger: Parameters<typeof privateTriggerAllowed>[0]): void {
+  if (!privateTriggerAllowed(trigger))
+    throw new Error("Private scheduled outputs require their owner's personal scope and delivery.");
+}
+
+export function triggerPrivacy(
+  before: Pick<TriggerBase, "personalOnly" | "sourceProvenance">,
+  incoming: Pick<TriggerBase, "personalOnly" | "sourceProvenance">,
+) {
+  const provenance =
+    before.sourceProvenance || incoming.sourceProvenance
+      ? mergeSourceProvenance([
+          ...(before.sourceProvenance ? [before.sourceProvenance] : []),
+          ...(incoming.sourceProvenance ? [incoming.sourceProvenance] : []),
+        ])
+      : undefined;
+  return {
+    ...(before.personalOnly || incoming.personalOnly ? { personalOnly: true as const } : {}),
+    ...(provenance ? { sourceProvenance: { ...provenance, sources: provenance.sources.toSorted() } } : {}),
+  };
 }
 
 export function contentPart(value: unknown): string {
@@ -35,7 +82,9 @@ export function assertNoEscalation(input: { owner: string; createdBy: string; ow
 }
 
 export function buildTriggerBase(input: CreateTriggerInput, id: string, createdAt: number): TriggerBase {
+  assertPrivateTrigger(input);
   return {
+    ...triggerPrivacy({}, input),
     id,
     ownerScopeId: input.ownerScopeId,
     owner: input.owner,

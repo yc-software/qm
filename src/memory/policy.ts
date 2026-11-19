@@ -1,5 +1,19 @@
 import type { ScopeId } from "../types.ts";
 
+export interface MemoryAccess {
+  write?: ScopeId;
+  teamWrite?: ScopeId;
+  orgWrite?: ScopeId;
+  read: ScopeId[];
+  notebookOnly?: true;
+  personalOnly?: true;
+}
+
+export function writableNotebook(access: MemoryAccess | undefined, requested?: string): ScopeId | undefined {
+  const scope = requested === "team" ? access?.teamWrite : (requested ?? access?.write);
+  return scope && (scope === access?.write || scope === access?.teamWrite) ? scope : undefined;
+}
+
 export type MemoryRecallMode = "off" | "writable" | "visible";
 export type MemoryCaptureMode = "off" | "writable";
 

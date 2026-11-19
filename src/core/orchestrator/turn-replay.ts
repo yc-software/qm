@@ -1,3 +1,7 @@
+import type { OpenStoredFile } from "../attachments.ts";
+import { restoreAttachmentState, attachmentSnapshot } from "./attach-tool.ts";
+import { recordReplyFiles } from "./settle.ts";
+import type { SessionWriter } from "../../sessions/session-store.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import type { Item } from "../../sessions/items.ts";
 import { replayRecordedSurfaceAnswer, surfaceToolsActive } from "../../surfaces/surface-tools.ts";
@@ -17,6 +21,9 @@ export async function replayRecordedAnswer(
     defaultDestination: Destination | undefined;
     surfaceName: string;
     postProvenance: (deliveryKey: string) => DeliveryProvenance;
+    writer: SessionWriter;
+    withManagedRosterVersion: <T>(work: () => Promise<T>) => Promise<T>;
+    openStoredOutbound: OpenStoredFile;
     audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => unknown;
   },
   recorded: { items: Item[] },
@@ -57,11 +64,24 @@ export async function replayRecordedAnswer(
       });
     return held;
   }
-  return text.trim()
+  const restored = await restoreAttachmentState(
+    recorded.items,
+    input.runId,
+    deps.blobTransfer,
+    turn.openStoredOutbound,
+    input.actor.id,
+  );
+  const attachments = restored.entries.map((entry) => entry.attachment);
+  if (attachments.length)
+    await turn.withManagedRosterVersion(() =>
+      recordReplyFiles(deps.sessions, turn.writer, attachments, recorded.items, attachmentSnapshot(restored)),
+    );
+  return text.trim() || attachments.length
     ? {
         status: "ok",
         sessionId: session.id,
         reply: text,
+        ...(attachments.length ? { attachments } : {}),
         sourceUserSeq: recordedTurn.userSeq,
         sourceAssistantEntrySeq: recordedAnswer.seq,
         ...stopped,

@@ -1,3 +1,9 @@
+import { privateSourceAllowed } from "../../sessions/private-context.ts";
+import { cronRef, encodeRef } from "../../acl/resource-ref.ts";
+import { tenantOf } from "./route.ts";
+import { requestPrivateContext, inheritRequestSources } from "../private-context.ts";
+import { refreshPrivateContext } from "../../sessions/private-context.ts";
+import { triggerPrivacy, assertPrivateTrigger } from "../../triggers/trigger-store.ts";
 import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
@@ -16,7 +22,7 @@ import { collectVitals } from "../../loops/governor.ts";
 import { buildShipGrant } from "../../loops/ship-gate.ts";
 import { agentSourcePayload, consolidates, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { settleGroup } from "../../loops/triage.ts";
-import type { CronStore } from "../../cron/cron-store.ts";
+import { withCronAccess, type CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
@@ -57,7 +63,12 @@ export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
     handle: async (ctx) => {
       if (ctx.actor && !(await inboxPreviewEnabled(ctx.deps, ctx.actor.p)))
         return sendJson(ctx.res, 403, { error: "feature_disabled" });
-      return route.handle(ctx);
+      try {
+        return await route.handle(ctx);
+      } catch (error) {
+        if (error instanceof LoopReadDenied) return sendJson(ctx.res, 404, { error: "not_found" });
+        throw error;
+      }
     },
   }));
 }
@@ -89,6 +100,74 @@ export async function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): Pr
   return false;
 }
 
+async function loopContext(ctx: ApiCtx, actorId: string) {
+  return refreshPrivateContext(
+    { get: ctx.app.getSessionContext, recordContextProvenance: ctx.app.recordContextProvenance },
+    requestPrivateContext(ctx, actorId),
+  );
+}
+
+class LoopReadDenied extends Error {}
+
+async function effectiveLoop(deps: LoopServiceDeps, loop: Loop): Promise<Loop> {
+  const cron = loop.cronId ? await deps.crons?.get(loop.cronId) : null;
+  return { ...loop, ...triggerPrivacy(loop, cron ?? {}) };
+}
+
+export async function recheckLoopRead(ctx: ApiCtx, id = ctx.params.id): Promise<Loop> {
+  const deps = loopDeps(ctx);
+  const acting = actingPrincipal(ctx);
+  const raw = deps && id ? await deps.store.get(id) : null;
+  if (!deps || !acting || !raw) throw new LoopReadDenied();
+  const loop = await effectiveLoop(deps, raw);
+  if (
+    !(await canAdministerLoop(ctx.app, loop, acting.capability ?? acting)) ||
+    (await inheritRequestSources(ctx, [loop], acting.actorId)).has(loop.id)
+  )
+    throw new LoopReadDenied();
+  return loop;
+}
+
+async function prepareLoopWrite(
+  ctx: ApiCtx,
+  deps: LoopServiceDeps,
+  loop: Loop,
+  actorId: string,
+  patch: LoopPatch = {},
+): Promise<Loop> {
+  const write = async () => {
+    const current = await deps.store.get(loop.id);
+    if (!current) throw new LoopReadDenied();
+    const context = await loopContext(ctx, actorId);
+    const privacy = triggerPrivacy(await effectiveLoop(deps, current), context);
+    const next = {
+      ...current,
+      ...patch,
+      destination: patch.destination === null ? undefined : (patch.destination ?? current.destination),
+      ...privacy,
+    };
+    if (privacy.personalOnly && !privateSourceAllowed(context, next.ownerScopeId)) throw new LoopReadDenied();
+    assertPrivateTrigger(next);
+    const save = async () => {
+      if (next.cronId && deps.crons && (privacy.personalOnly || privacy.sourceProvenance)) {
+        const cron = await deps.crons.get(next.cronId);
+        if (!cron) throw new Error("Loop schedule is missing.");
+        if (
+          privacy.personalOnly &&
+          (await ctx.deps.acl?.grantsFor(tenantOf(ctx), cron.ownerScopeId, encodeRef(cronRef(cron.id))))?.length
+        )
+          throw new Error("Private context cannot change a shared loop schedule.");
+        await deps.crons.update(cron.id, triggerPrivacy(cron, privacy));
+      }
+      return Object.keys(patch).length || privacy.personalOnly || privacy.sourceProvenance
+        ? ((await deps.store.update(next.id, { ...patch, ...privacy })) ?? current)
+        : current;
+    };
+    return next.cronId && deps.lock && deps.crons ? withCronAccess(deps.crons, deps.lock, next.cronId, save) : save();
+  };
+  return deps.lock ? deps.lock.withLock(`loop-access:${loop.id}`, write) : write();
+}
+
 export async function loadAdministrable(
   ctx: ApiCtx,
 ): Promise<{ deps: LoopServiceDeps; loop: Loop; acting: ActingPrincipal } | null> {
@@ -99,7 +178,8 @@ export async function loadAdministrable(
   }
   const acting = actingPrincipal(ctx);
   if (!acting) return null;
-  const loop = await deps.store.get(ctx.params.id ?? "");
+  const rawLoop = await deps.store.get(ctx.params.id ?? "");
+  const loop = rawLoop ? await effectiveLoop(deps, rawLoop) : null;
   if (!loop) {
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
@@ -108,7 +188,14 @@ export async function loadAdministrable(
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }
-  return { deps, loop, acting };
+  if ((await inheritRequestSources(ctx, [loop], acting.actorId)).has(loop.id)) {
+    sendJson(ctx.res, 404, { error: "not_found" });
+    return null;
+  }
+  const current = ["POST", "PATCH", "PUT", "DELETE"].includes(ctx.method)
+    ? await prepareLoopWrite(ctx, deps, loop, acting.actorId)
+    : loop;
+  return { deps, loop: current, acting };
 }
 
 export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop): Promise<boolean> {
@@ -265,7 +352,9 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     destination = resolved.destination;
   }
   const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
+  const context = await loopContext(ctx, acting.actorId);
   const input: CreateLoopInput = {
+    ...triggerPrivacy({}, context),
     owner: acting.actorId,
     createdBy: acting.actorId,
     ownerScopeId,
@@ -296,6 +385,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     let cronId: string | undefined;
     try {
       const cron = await deps.crons.create({
+        ...triggerPrivacy({}, loop),
         owner: loop.owner,
         createdBy: loop.createdBy,
         ownerScopeId: loop.ownerScopeId,
@@ -322,10 +412,17 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  const all = await deps.store.list();
+  const rows = await deps.store.list();
+  const schedules = deps.crons ? await deps.crons.list(rows.flatMap((loop) => (loop.cronId ? [loop.cronId] : []))) : [];
+  const byId = new Map(schedules.map((cron) => [cron.id, cron]));
+  const all = rows.map((loop) => ({
+    ...loop,
+    ...triggerPrivacy(loop, loop.cronId ? (byId.get(loop.cronId) ?? {}) : {}),
+  }));
   const permissions = await ctx.app.loopAdministration(acting.capability ?? acting, all);
-  const visible = all.filter((_loop, i) => permissions[i]);
-  return sendJson(ctx.res, 200, { loops: visible });
+  const candidates = all.filter((_loop, i) => permissions[i]);
+  const blocked = await inheritRequestSources(ctx, candidates, acting.actorId);
+  return sendJson(ctx.res, 200, { loops: candidates.filter((loop) => !blocked.has(loop.id)) });
 }
 
 async function triageAvailable(ctx: ApiCtx, loop: Loop): Promise<boolean> {
@@ -343,8 +440,10 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
     collectVitals(loop, { items: deps.items, outputs: deps.outputs }, Date.now()),
     triageAvailable(ctx, loop),
   ]);
+  const current = await loadAdministrable(ctx);
+  if (!current) return;
   return sendJson(ctx.res, 200, {
-    loop,
+    loop: current.loop,
     items: sortLedgerItems(items, loop).map((item) =>
       ctx.capability
         ? {
@@ -473,7 +572,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       patch.destination = resolved.destination;
     }
   }
-  const updated = Object.keys(patch).length > 0 ? await deps.store.update(loop.id, patch) : loop;
+  const updated = await prepareLoopWrite(ctx, deps, loop, acting.actorId, patch);
   if (!updated) return sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
   if (patch.state !== undefined) {
     try {

@@ -3,7 +3,7 @@ import { sendJson } from "../http.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import { FileUploadError } from "../../files/file-upload-store.ts";
 import { isObj, audit } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { withActor, tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 type Uploads = NonNullable<ApiCtx["deps"]["fileUploads"]>;
 type Upload = NonNullable<Awaited<ReturnType<Uploads["get"]>>>;
@@ -85,6 +85,7 @@ const beginUpload = uploadRoute(async (ctx, uploads, actorId) => {
     throw new FileUploadError("name and optional mimetype must be valid strings");
   const upload = await uploads.begin({
     actorId,
+    ...(capability?.sessionId ? { contextSessionIds: [capability.sessionId] } : {}),
     scopeId: targetScope,
     name: body.name,
     mimetype: typeof body.mimetype === "string" ? body.mimetype : "",
@@ -102,8 +103,8 @@ const signPart = ownedUpload(async ({ res, params }, uploads, upload) =>
   sendJson(res, 200, await uploads.sign(upload.id, Number(params.part))),
 );
 
-const completeUpload = ownedUpload(async ({ res, deps, tenant }, uploads, upload, actorId) => {
-  const file = await uploads.complete(upload.id);
+const completeUpload = ownedUpload(async ({ res, deps, tenant, capability }, uploads, upload, actorId) => {
+  const file = await uploads.complete(tenantOf({ tenant }), upload.id, capability?.sessionId);
   audit(
     { deps, tenant },
     { principalId: actorId, action: "file.upload", resource: file.path, scopeLabel: upload.scopeId },

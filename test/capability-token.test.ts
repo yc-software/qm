@@ -35,7 +35,7 @@ test("large room capabilities fit an 8 KiB header without losing authorization c
     teamIds: ["engineering", `team-${i % 4}`],
   }));
   const c = claims({ members, keychainMembers: members.filter((p) => p.type === "internal") });
-  const value = { orgId: "default-org", ...c, ...tenantClaim() };
+  const value = { orgId: "default-org", ...c, ...tenantClaim(), privateRead: true };
   const legacy = await mintSignedPayload(value, SECRET);
   assert.ok(Buffer.byteLength(legacy) > 16 * 1024);
   assert.equal(await mintCapabilityToken(c, SECRET), legacy);
@@ -80,7 +80,7 @@ test("compressed capability envelopes reject malformed and oversized claims", as
 test("mint → verify round-trips the claims", async () => {
   const c = claims();
   const got = await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET);
-  assert.deepEqual(got, { orgId: "default-org", ...c, ...tenantClaim() });
+  assert.deepEqual(got, { orgId: "default-org", ...c, ...tenantClaim(), privateRead: true });
 });
 
 test("timezone claims must be valid IANA timezone strings", async () => {
@@ -89,6 +89,7 @@ test("timezone claims must be valid IANA timezone strings", async () => {
     orgId: "default-org",
     ...tenantClaim(),
     ...c,
+    privateRead: true,
   });
 
   for (const timezone of ["", " America/Los_Angeles ", "not-a-zone", "x".repeat(65), 12]) {
@@ -183,6 +184,7 @@ test("a deployment claim round-trips and must be a non-empty string", async () =
     orgId: "default-org",
     ...tenantClaim(),
     ...c,
+    privateRead: true,
   });
   for (const publishedApp of [7, "", null] as unknown[]) {
     const token = await mintCapabilityToken(claims({ deployment: publishedApp } as Partial<CapabilityClaims>), SECRET);
@@ -196,6 +198,7 @@ test("session and run-attempt claims round-trip and reject malformed values", as
     orgId: "default-org",
     ...tenantClaim(),
     ...bound,
+    privateRead: true,
   });
   for (const invalid of [
     { sessionId: "" },

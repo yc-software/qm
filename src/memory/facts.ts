@@ -8,7 +8,9 @@ export interface MemoryProvenance {
   sensitivity: MemorySensitivity;
   sources: ScopeId[];
   sourceUnknown: boolean;
+  personalOnly?: true;
 }
+export type SourceProvenance = Pick<MemoryProvenance, "sensitivity" | "sources" | "sourceUnknown">;
 
 export interface MemoryFact extends MemoryProvenance {
   id: string;
@@ -23,10 +25,24 @@ export interface MemoryCaptureMetadata {
   conversationScopeId?: ScopeId;
   sessionId?: string;
   sensitivity?: MemorySensitivity;
+  personalOnly?: true;
+  document?: { teamScopeId: ScopeId; documentScopeId: ScopeId; mode: "shared" | "private" };
   inheritedFacts?: readonly MemoryProvenance[];
 }
 
 export const UNTRACKED_PROVENANCE: MemoryProvenance = { sensitivity: "unknown", sources: [], sourceUnknown: true };
+
+export function artifactProvenance(
+  ownerScopeId: ScopeId,
+  provenance?: SourceProvenance,
+  personalOnly?: true,
+): MemoryProvenance {
+  return {
+    ...(provenance ?? UNTRACKED_PROVENANCE),
+    sources: provenance?.sources.length ? [...provenance.sources] : [ownerScopeId],
+    ...(personalOnly ? { personalOnly: true as const } : {}),
+  };
+}
 
 export class MemoryFactsMissing extends Error {
   readonly ids: readonly string[];
@@ -56,7 +72,12 @@ export function mergeProvenance(
       sensitivity = item.sensitivity;
     for (const source of item.sources) sources.add(source);
   }
-  return { sensitivity, sources: [...sources], sourceUnknown: items.some((item) => item.sourceUnknown) };
+  return {
+    sensitivity,
+    sources: [...sources],
+    sourceUnknown: items.some((item) => item.sourceUnknown),
+    ...(items.some((item) => item.personalOnly) ? { personalOnly: true } : {}),
+  };
 }
 
 export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
@@ -66,7 +87,13 @@ export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata
     sensitivity: merged.sensitivity,
     sources: merged.sources.includes(source) ? merged.sources : [...merged.sources, source],
     sourceUnknown: merged.sourceUnknown || context?.inheritedFacts === undefined,
+    ...(merged.personalOnly || context?.personalOnly ? { personalOnly: true } : {}),
   };
+}
+
+export function mergeSourceProvenance(items: readonly MemoryProvenance[]): SourceProvenance {
+  const { sensitivity, sources, sourceUnknown } = mergeProvenance(items, "ordinary");
+  return { sensitivity, sources, sourceUnknown };
 }
 
 type Shown = Pick<MemoryFact, "text" | "createdAt">;

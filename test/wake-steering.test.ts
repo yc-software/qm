@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -376,7 +377,7 @@ test("a Slack bot's stop on its own live run leaves a person's queued turn and s
     "channel",
     session.scopeId,
   );
-  await built.sessions.setParentSession(child.id, session.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, session.id);
   const { run: childRun } = await built.runs.enqueue({
     sessionId: child.threadRef,
     request: personRequest(child.threadRef, "background work"),
@@ -508,7 +509,7 @@ test("a bare stop stops a conversation's subagents even when its own turn is idl
   const built = freshApp();
   const root = await built.sessions.getOrCreateByThread("dm:D-TREE", "dm", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:tree-child", "dm", "personal:U1");
-  await built.sessions.setParentSession(child.id, root.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, root.id);
   const { run: childRun } = await built.runs.enqueue({
     sessionId: child.threadRef,
     request: {
@@ -535,7 +536,7 @@ test("the starter's un-mentioned bare stop reaches a conversation's subagents wh
   const threadRef = `ch:${channel}:${rootTs}`;
   const root = await built.sessions.getOrCreateByThread(threadRef, "channel", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:starter-child", "dm", "personal:U1");
-  await built.sessions.setParentSession(child.id, root.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, root.id);
   const { run: childRun } = await built.runs.enqueue({
     sessionId: child.threadRef,
     request: {

@@ -1,4 +1,4 @@
-import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
+import { disclosedMemory, MemoryRecallWithheld, MemoryDisclosureDenied } from "./disclosure.ts";
 import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
@@ -9,7 +9,7 @@ import {
   type MemoryService,
   resolveIds,
 } from "./memory-service.ts";
-import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
+import { MemoryForgetRefused, captureProvenance, type MemoryCandidate } from "./facts.ts";
 import {
   changeFailure,
   failedOutcome,
@@ -131,7 +131,13 @@ export function createRoutedMemoryService(opts: {
               scopeId,
               "recall",
               context,
-              () => providerFor(route).recall(scopeId, context),
+              () =>
+                providerFor(route).recall(
+                  scopeId,
+                  context?.disclosedFacts && providerFor(route) !== managerFor(scopeId)
+                    ? { ...context, disclosedFacts: undefined }
+                    : context,
+                ),
               (rows) => ({ outcome: rows.length ? "ok" : "empty" }),
               [],
             ),
@@ -141,10 +147,13 @@ export function createRoutedMemoryService(opts: {
       return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
-    async capture(scopeId, facts, at, by, context) {
+    async capture(tenant, scopeId, facts, at, by, context) {
       const mode = context?.mode ?? "explicit";
+      const personalOnly = captureProvenance(scopeId, context).personalOnly === true;
       const routes = routesFor(scopeId).filter((route) => captureAllowed(route.capture, mode));
+      if (personalOnly && !routes.some((route) => providerFor(route).facts)) throw new MemoryDisclosureDenied();
       const notebookOnly =
+        personalOnly ||
         changesNotebookOnly(by) ||
         (context?.conversationScopeId !== undefined && context.conversationScopeId !== scopeId);
       const counts = strict(
@@ -158,7 +167,7 @@ export function createRoutedMemoryService(opts: {
               scopeId,
               "capture",
               context,
-              () => provider.capture(scopeId, facts, at, by, context),
+              () => provider.capture(tenant, scopeId, facts, at, by, context),
               settleChange,
               0,
             );
@@ -195,6 +204,10 @@ export function createRoutedMemoryService(opts: {
 
     async facts(scopeId) {
       return (await managerFor(scopeId)?.facts?.(scopeId)) ?? [];
+    },
+    async snapshotFacts(scopeId) {
+      const manager = managerFor(scopeId);
+      return (await (manager?.snapshotFacts ? manager.snapshotFacts(scopeId) : manager?.facts?.(scopeId))) ?? [];
     },
 
     async edit(scopeId, edits, by, context) {

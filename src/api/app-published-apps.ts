@@ -1,3 +1,4 @@
+import { inheritContextSources, refreshPrivateContext, type PrivateContext } from "../sessions/private-context.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-email.ts";
 import { appShareScope } from "../deploy/email-access.ts";
@@ -9,7 +10,6 @@ import type { Tenant } from "../tenants/context.ts";
 import type { App, AppDeps, ViewerApp } from "./app-types.ts";
 import { appView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { appSubdomainUrlOf, type PublishedApp } from "../deploy/deploy-store.ts";
 
 export function createAppMethods(
@@ -46,6 +46,7 @@ export function createAppMethods(
   | "appLogsFor"
   | "appGitRepoPath"
   | "runAppGitPush"
+  | "runAppGitRead"
   | "appGitUrlFor"
   | "authorizesAppGitAccess"
   | "reapIdleApps"
@@ -57,7 +58,7 @@ export function createAppMethods(
   const { effectiveAppPermission, principalCanReadApp, principalGitPermission, appPermissions } = h;
   async function forCaller(
     d: PublishedApp,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: PrivateContext,
     permission: "read" | "write" | null,
   ): Promise<"read" | "write" | null> {
     if (permission !== "write" || caller.botActor !== true) return permission;
@@ -66,24 +67,29 @@ export function createAppMethods(
   async function callerGitPermissions(
     tenant: Tenant,
     publishedApps: readonly PublishedApp[],
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: PrivateContext,
   ): Promise<Array<"read" | "write" | null>> {
     const permissions = await appPermissions(tenant, publishedApps, caller.actorId);
-    return Promise.all(publishedApps.map((d, i) => forCaller(d, caller, permissions[i]!)));
+    const allowed = await Promise.all(publishedApps.map((d, i) => forCaller(d, caller, permissions[i]!)));
+    const blocked = await inheritContextSources(
+      deps.sessions,
+      caller,
+      publishedApps.filter((_, i) => allowed[i]),
+    );
+    return allowed.map((permission, i) => (blocked.has(publishedApps[i]!.id) ? null : permission));
   }
-  async function callerGitPermission(
-    d: PublishedApp,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null> {
-    return forCaller(d, caller, await principalGitPermission(d, caller.actorId));
+  async function callerGitPermission(d: PublishedApp, caller: PrivateContext): Promise<"read" | "write" | null> {
+    const permission = await forCaller(d, caller, await principalGitPermission(d, caller.actorId));
+    if (!permission) return null;
+    return (await inheritContextSources(deps.sessions, caller, [d])).has(d.id) ? null : permission;
   }
   const invitationLock = deps.advisoryLock;
   return {
     deploy(input) {
       return deps.deploy.deploy(input);
     },
-    redeploy(id, input) {
-      return deps.deploy.redeploy(id, input);
+    redeploy(tenant, id, input) {
+      return deps.deploy.redeploy(tenant, id, input);
     },
     listApps() {
       return deps.deploy.listApps();
@@ -165,35 +171,35 @@ export function createAppMethods(
     appGitPermissionsFor(tenant, publishedApps, viewer) {
       return callerGitPermissions(tenant, publishedApps, viewer);
     },
-    rollbackApp(id, version, actor) {
-      return deps.deploy.rollbackApp(id, version, actor ? { actor } : undefined);
+    rollbackApp(tenant, id, version, actor) {
+      return deps.deploy.rollbackApp(tenant, id, version, actor ? { actor } : undefined);
     },
     canManageApp(idOrName, caller, actingScopeId) {
       return deps.deploy.canManageApp(idOrName, caller, actingScopeId);
     },
-    archiveApp(id) {
-      return deps.deploy.archiveApp(id);
+    archiveApp(tenant, id, context) {
+      return deps.deploy.archiveApp(tenant, id, context);
     },
-    restoreApp(id, actorId) {
-      return deps.deploy.restoreApp(id, actorId);
+    restoreApp(tenant, id, actorId, context) {
+      return deps.deploy.restoreApp(tenant, id, actorId, context);
     },
-    renameApp(id, name) {
-      return deps.deploy.renameApp(id, name);
+    renameApp(tenant, id, name, context) {
+      return deps.deploy.renameApp(tenant, id, name, context);
     },
-    setAppDisplayName(id, displayName) {
-      return deps.deploy.setAppDisplayName(id, displayName);
+    setAppDisplayName(tenant, id, displayName, context) {
+      return deps.deploy.setAppDisplayName(tenant, id, displayName, context);
     },
-    setAppAlwaysOn(id, alwaysOn) {
-      return deps.deploy.setAppAlwaysOn(id, alwaysOn);
+    setAppAlwaysOn(tenant, id, alwaysOn, context) {
+      return deps.deploy.setAppAlwaysOn(tenant, id, alwaysOn, context);
     },
-    setAppEmbedAncestors(id, embedAncestors) {
-      return deps.deploy.setAppEmbedAncestors(id, embedAncestors);
+    setAppEmbedAncestors(tenant, id, embedAncestors, context) {
+      return deps.deploy.setAppEmbedAncestors(tenant, id, embedAncestors, context);
     },
     setAppPublic(idOrName, isPublic, actor) {
       return deps.deploy.setAppPublic(idOrName, isPublic, actor);
     },
-    setAppConnectors(idOrName, connectors, actor) {
-      return deps.deploy.setAppConnectors(idOrName, connectors, actor);
+    setAppConnectors(tenant, idOrName, connectors, actor) {
+      return deps.deploy.setAppConnectors(tenant, idOrName, connectors, actor);
     },
     maintainApps() {
       return deps.deploy.maintainApps();
@@ -205,10 +211,13 @@ export function createAppMethods(
       return deps.deploy.liveEditOf(id);
     },
     async reachApp(id, principalId, opts): Promise<Reach> {
-      if (opts?.bypassAcl) return deps.deploy.reachApp(id, principalId, opts);
+      const caller = typeof principalId === "string" ? { actorId: principalId } : principalId;
+      principalId = caller.actorId;
       const publishedApp = await deps.deploy.getApp(id);
       if (!publishedApp) return { status: "not_found" };
-      if (!(await principalCanReadApp(publishedApp, principalId))) return { status: "denied" };
+      if (!opts?.bypassAcl && !(await principalCanReadApp(publishedApp, principalId))) return { status: "denied" };
+      if ((await inheritContextSources(deps.sessions, caller, [publishedApp])).has(publishedApp.id))
+        return { status: "denied" };
       return deps.deploy.reachApp(id, principalId, { bypassAcl: true });
     },
     async appLogsFor(
@@ -216,16 +225,26 @@ export function createAppMethods(
       principalId,
       opts,
     ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }> {
-      const publishedApp = await deps.deploy.getApp(id);
-      if (!publishedApp) return { status: "not_found" };
-      if (!(await principalCanReadApp(publishedApp, principalId))) return { status: "denied" };
-      return { status: "ok", logs: await deps.deploy.appLogs(id, opts) };
+      const caller = typeof principalId === "string" ? { actorId: principalId } : principalId;
+      return deps.deploy.readApp(id, async (publishedApp) => {
+        if (!publishedApp) return { status: "not_found" };
+        if (!(await principalCanReadApp(publishedApp, caller.actorId))) return { status: "denied" };
+        if ((await inheritContextSources(deps.sessions, caller, [publishedApp])).has(publishedApp.id))
+          return { status: "denied" };
+        return { status: "ok", logs: await deps.deploy.appLogs(publishedApp.id, opts) };
+      });
     },
     appGitRepoPath(id) {
       return deps.deploy.gitRepoPath(id);
     },
-    runAppGitPush(id, actor, runReceivePack) {
-      return deps.deploy.pushGit(id, runReceivePack, actor);
+    runAppGitRead(id, runUploadPack) {
+      return deps.deploy.readApp(id, (app) => {
+        if (!app) throw new DeployAccessError("not_found", `no such app: ${id}`);
+        return runUploadPack();
+      });
+    },
+    runAppGitPush(tenant, id, actor, runReceivePack) {
+      return deps.deploy.pushGit(tenant, id, runReceivePack, actor);
     },
     async appGitUrlFor(idOrName, caller, opts) {
       const d = await deps.deploy.getApp(idOrName);
@@ -236,6 +255,15 @@ export function createAppMethods(
         deploymentId: d.id,
         permission,
         principalId: caller.actorId,
+        context: {
+          ...(caller.scopeId !== undefined ? { scopeId: caller.scopeId } : {}),
+          ...(caller.audienceScopeId !== undefined ? { audienceScopeId: caller.audienceScopeId } : {}),
+          ...(caller.sessionId !== undefined ? { sessionId: caller.sessionId } : {}),
+          privateRead: caller.privateRead === true || (caller.scopeId === undefined && caller.computer === undefined),
+          ...(caller.computer ? { computer: caller.computer } : {}),
+          ...(caller.personalOnly || d.personalOnly ? { personalOnly: true } : {}),
+          ...(caller.botActor !== undefined ? { botActor: caller.botActor } : {}),
+        },
         exp: Date.now() + (opts.ttlMs ?? 60 * 60 * 1000),
       });
       const url = new URL(`/v1/apps/${encodeURIComponent(d.id)}/git`, opts.baseUrl);
@@ -243,12 +271,16 @@ export function createAppMethods(
       url.password = token;
       return { url: url.toString(), permission };
     },
-    async authorizesAppGitAccess(id, principalId, permission) {
+    async authorizesAppGitAccess(id, principalId, permission, context) {
       const d = await deps.deploy.getApp(id);
       if (!d) return false;
       const external = await deps.appGitPrincipals?.authorizes(d, principalId, permission);
       if (external !== undefined) return external;
-      const current = await principalGitPermission(d, principalId);
+      if (d.personalOnly && (context?.personalOnly !== true || context.privateRead !== true)) return false;
+      if ((d.personalOnly || permission === "write") && !context) return false;
+      const caller = { ...context, actorId: principalId, privateRead: context?.privateRead === true };
+      await refreshPrivateContext(deps.sessions, caller);
+      const current = await callerGitPermission(d, caller);
       return permission === "write" ? current === "write" : current !== null;
     },
     reapIdleApps(ttlMs, now) {

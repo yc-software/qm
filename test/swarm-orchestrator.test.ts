@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
@@ -5,7 +6,7 @@ import * as modalClient from "../src/sandbox/modal-client.ts";
 import * as mockAgent from "./support/mock-agent.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { createServer } from "../src/api/server.ts";
@@ -131,7 +132,12 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
     });
     assert.equal(rootTurn.status, "ok");
     const root = (await built.sessions.get(rootTurn.sessionId!))!;
-    await built.memory.capture(root.scopeId, ["Root memory remains in the authorized notebook."], Date.now());
+    await built.memory.capture(
+      captureTenant,
+      root.scopeId,
+      ["Root memory remains in the authorized notebook."],
+      Date.now(),
+    );
     const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
     const forum = await built.sandboxResources.create("U1", root.scopeId, "sprites", "Integration forum");
     const service = built.app.swarms!;
@@ -187,7 +193,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
 });
 
 test("HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials", async () => {
-  const databaseUrl = testDatabaseUrl();
+  const databaseUrl = testMigratedDatabaseUrl();
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const config = testConfig({

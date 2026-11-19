@@ -226,9 +226,13 @@ describe("POST /v1/reach with files", () => {
       assert.equal(res.status, 403, sandbox_id);
       assert.equal(((await res.json()) as any).error, "forbidden");
     }
-    const access = built.sandboxResources.access;
-    built.sandboxResources.access = async () => {
-      throw new Error("record store unavailable");
+    const forTurn = built.sandboxResources.forTurn;
+    built.sandboxResources.forTurn = (turn) => {
+      const scoped = forTurn(turn);
+      scoped.access = async () => {
+        throw new Error("record store unavailable");
+      };
+      return scoped;
     };
     try {
       const failed = await post(
@@ -239,7 +243,7 @@ describe("POST /v1/reach with files", () => {
       );
       assert.equal(failed.status, 500, "a store failure is not reported as an access denial");
     } finally {
-      built.sandboxResources.access = access;
+      built.sandboxResources.forTurn = forTurn;
     }
     const malformed = await post(
       base,

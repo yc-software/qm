@@ -35,7 +35,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
-import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testTenant as tenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 const asMember = { actorId: "member" };
 const asOwner = { actorId: "owner" };
@@ -617,7 +617,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     regenerated.title,
   );
 
-  const forked = await built.app.forkSession(first.id, "owner");
+  const forked = await built.app.forkSession(ancestryTenant, first.id, "owner");
   assert.ok(forked);
   assert.match(JSON.stringify(forked.items), /secret-before-join/);
   assert.match(JSON.stringify(forked.items), /after joining/);
@@ -641,7 +641,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     }
     return appendForFork(writer, items);
   };
-  const racingForkPromise = built.app.forkSession(first.id, "owner");
+  const racingForkPromise = built.app.forkSession(ancestryTenant, first.id, "owner");
   await forkCopyStart;
   let addSettled = false;
   const addDuringFork = built.app.addProjectMember(project.id, "owner", "outsider").finally(() => {

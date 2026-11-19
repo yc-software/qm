@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { compactTranscript } from "../src/agent/context-compaction.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -106,7 +107,12 @@ test("recall checkpoint metadata never leaks into attachment-only compaction inp
 
 test("id-less provider lines inject only new lines over 20 turns, and timeouts or denials never claim removal", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
-  await notebook.capture(alice, ["NOTEBOOK_FACT prefers terse replies"], Date.parse("2026-10-01T12:00:00Z"));
+  await notebook.capture(
+    captureTenant,
+    alice,
+    ["NOTEBOOK_FACT prefers terse replies"],
+    Date.parse("2026-10-01T12:00:00Z"),
+  );
   const line = (i: number) => `provider line ${i}: ${"detail ".repeat(6).trim()}`;
   let window = 0;
   let failure: Error | undefined;
@@ -122,7 +128,7 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
       }
       return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k) }));
     },
-    async capture() {
+    async capture(_tenant) {
       return 0;
     },
     async query() {
@@ -239,7 +245,7 @@ test("a multi-line provider block that shares a line with an earlier one is inje
     async recall() {
       return [{ text: block }];
     },
-    async capture() {
+    async capture(_tenant) {
       return 0;
     },
     async query() {

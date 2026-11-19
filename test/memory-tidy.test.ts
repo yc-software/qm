@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "../src/memory/tidy.ts";
@@ -110,11 +111,11 @@ test("captures that add facts ensure the notebook's tidy cron, including through
   const memory = withMemoryTidy(base, async (scope) => {
     ensured.push(scope);
   });
-  await memory.capture(alice, ["fact"], 0);
+  await memory.capture(captureTenant, alice, ["fact"], 0);
   added = 0;
-  await memory.capture(scopeId("personal", "bob"), ["duplicate"], 0);
+  await memory.capture(captureTenant, scopeId("personal", "bob"), ["duplicate"], 0);
   added = 2;
-  await memory.withDisclosure!({} as never).capture(scopeId("channel", "C1"), ["fact"], 0);
+  await memory.withDisclosure!({} as never).capture(captureTenant, scopeId("channel", "C1"), ["fact"], 0);
   assert.deepEqual(ensured, [alice, scopeId("channel", "C1")]);
 });
 

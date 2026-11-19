@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
@@ -12,7 +13,7 @@ const defaultMemory: MemoryService = {
   async recall() {
     return [{ text: "personal notebook" }];
   },
-  async capture(_scope, facts) {
+  async capture(tenant, _scope, facts) {
     return facts.length;
   },
   async query() {
@@ -54,6 +55,7 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   assert.equal(recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1" })), "org knowledge");
   assert.equal(
     await memory.capture(
+      captureTenant,
       "org:acme",
       ["decision"],
       1,
@@ -63,7 +65,14 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
     0,
   );
   assert.equal(
-    await memory.capture("org:acme", ["decision"], 1, { actorId: "u1", context: "conversation" }, { mode: "explicit" }),
+    await memory.capture(
+      captureTenant,
+      "org:acme",
+      ["decision"],
+      1,
+      { actorId: "u1", context: "conversation" },
+      { mode: "explicit" },
+    ),
     1,
   );
 

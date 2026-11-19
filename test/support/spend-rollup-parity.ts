@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./test-tenant.ts";
 import assert from "node:assert/strict";
 import { scopeId, type SessionType } from "../../src/types.ts";
 import type { SessionStore, SpendRow } from "../../src/sessions/session-store.ts";
@@ -152,7 +153,10 @@ export async function assertSpendRollupParity(
   clock.at = BASE;
   const child = async (name: string, parentId: string) => {
     const session = await record(`agent:main:subagent:${prefix}-${name}`, "dm", alice, 0.01, `${prefix}-${name}`);
-    await store.setParentSession(session.id, parentId);
+    const parent = await store.get(parentId);
+    const temporary = parent ?? (await store.getOrCreateByThread(parentId, "dm", alice));
+    await store.setParentSession(ancestryTenant, session.id, temporary.id);
+    if (!parent) await store.deleteSession(temporary.id);
     return session;
   };
   const parents = {
@@ -174,9 +178,9 @@ export async function assertSpendRollupParity(
   await store.deleteSession(deleted.id);
   const cycleA = await child("cycle-a", `${prefix}-missing`);
   const cycleB = await child("cycle-b", cycleA.id);
-  await store.setParentSession(cycleA.id, cycleB.id);
+  await store.setParentSession(ancestryTenant, cycleA.id, cycleB.id);
   const self = await child("self-cycle", `${prefix}-missing`);
-  await store.setParentSession(self.id, self.id);
+  await store.setParentSession(ancestryTenant, self.id, self.id);
 
   const inherited = (await store.spendRollup({ from: BASE, to: BASE + DAY })).filter((r) =>
     r.model?.startsWith(`${prefix}-`),
@@ -212,7 +216,7 @@ export async function assertSpendRollupParity(
   assert.equal((await readChanging())[0]!.calls, 2);
   assert.equal((await readChanging())[0]!.costUsd, 2);
   const cronParent = await store.getOrCreateByThread(`cron:${prefix}-changing:fire:aaa`, "dm", bob);
-  await store.setParentSession(changing.id, cronParent.id);
+  await store.setParentSession(ancestryTenant, changing.id, cronParent.id);
   assert.equal((await readChanging())[0]!.origin, "cron");
   assert.equal((await readChanging())[0]!.cronId, `${prefix}-changing`);
   await store.deleteSession(cronParent.id);

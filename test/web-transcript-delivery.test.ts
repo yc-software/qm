@@ -497,3 +497,31 @@ test("concurrent Slack receipt writers record one item and preserve distinct equ
     ],
   );
 });
+
+test("a generated private reply retains source context before another recipient conversation can read it", async () => {
+  const { sessions, deliveries } = wired();
+  const source = await webSession(sessions, "web:private-generated-source");
+  const recipient = await webSession(sessions);
+  await sessions.recordContextProvenance(source.id, SCOPE, {
+    sources: ["group:restricted"],
+    sensitivity: "restricted",
+    sourceUnknown: true,
+    personalOnly: true,
+  });
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "PrivateGeneratedDeliverySpruce7301",
+    idempotencyKey: "private-generated-context",
+    provenance: cronProvenance({ sourceSessionId: source.id, sourceThreadRef: source.threadRef }),
+  });
+  const visible = await deliveries.pending("web");
+  assert.equal(visible[0]?.provenance?.contextProvenance?.personalOnly, true);
+  const persisted = (await sessions.get(recipient.id))!;
+  assert.equal(persisted.personalOnly, true);
+  assert.ok(persisted.sourceProvenance?.sources.includes("group:restricted"));
+  assert.ok(
+    (await sessions.getItems(recipient.id)).some(
+      (item) => item.kind === "AgentMessage" && item.text === "PrivateGeneratedDeliverySpruce7301",
+    ),
+  );
+});

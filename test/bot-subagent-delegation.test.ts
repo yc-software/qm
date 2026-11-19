@@ -100,7 +100,7 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
       advisoryLock: testAdvisoryLock(),
       sessions,
       runs,
-      mailbox: createSessionMailbox(testMap<SessionMessage>()),
+      mailbox: createSessionMailbox(testMap<SessionMessage>(), sessions),
       signals,
       steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
       maxAttempts: 1,

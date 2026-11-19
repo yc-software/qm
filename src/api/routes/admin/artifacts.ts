@@ -1,3 +1,5 @@
+import { tenantOf } from "../route.ts";
+import { inheritRequestSources, requestPrivateContext } from "../../private-context.ts";
 import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -7,6 +9,7 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { personNamer, requireScopedResource } from "./common.ts";
+import { skillAllowedInContext } from "../../../skills/skill-store.ts";
 
 function adminCronDestination(v: unknown, current: Destination | undefined): Destination | null {
   if (typeof v !== "object" || v === null) return null;
@@ -44,8 +47,10 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return name && name !== principalId ? name : undefined;
   };
   if (resource === "crons") {
-    const crons = (await app.listCrons())
-      .filter((c) => orgWide || c.ownerScopeId === scope)
+    const cronRows = (await app.listCrons()).filter((c) => orgWide || c.ownerScopeId === scope);
+    const blocked = await inheritRequestSources(ctx, cronRows, actor.id);
+    const crons = cronRows
+      .filter((c) => !blocked.has(c.id))
       .map((c) => ({
         id: c.id,
         ownerScopeId: c.ownerScopeId,
@@ -67,8 +72,10 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { scopeId: scope, crons });
   }
   if (resource === "apps") {
-    const publishedApps = (await app.listApps())
-      .filter((d) => orgWide || d.ownerScopeId === scope)
+    const appRows = (await app.listApps()).filter((d) => orgWide || d.ownerScopeId === scope);
+    const blocked = await inheritRequestSources(ctx, appRows, actor.id);
+    const publishedApps = appRows
+      .filter((d) => !blocked.has(d.id))
       .map((d) => ({
         id: d.id,
         ownerScopeId: d.ownerScopeId,
@@ -85,8 +92,21 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { scopeId: scope, apps: publishedApps });
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
-  const skills = (await app.listSkills())
-    .filter((s) => orgWide || s.scopeId === scope)
+  const skillRows = (await app.listSkills())
+    .filter((skill) => skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId))
+    .filter((s) => orgWide || s.scopeId === scope);
+  const blocked = await inheritRequestSources(
+    ctx,
+    skillRows.map((skill) => ({
+      id: skill.id,
+      ownerScopeId: skill.scopeId,
+      personalOnly: skill.personalOnly,
+      sourceProvenance: skill.sourceProvenance,
+    })),
+    actor.id,
+  );
+  const skills = skillRows
+    .filter((skill) => !blocked.has(skill.id))
     .map((s) => {
       const provenancePack = s.pack ? packsById.get(s.pack.packId) : undefined;
       return {
@@ -116,6 +136,8 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
     "cron",
   );
   if (!scoped) return;
+  if ((await inheritRequestSources(ctx, [scoped.record], scoped.actor.id)).has(id))
+    return sendJson(res, 404, { error: "not_found" });
   if (
     typeof body !== "object" ||
     body === null ||
@@ -126,7 +148,12 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
   )
     return sendJson(res, 400, { error: "bad_request", message: "runtime is required; use null to inherit" });
   try {
-    const updated = await app.setCronRuntime(id, body.runtime);
+    const updated = await app.setCronRuntime(
+      tenantOf(ctx),
+      id,
+      body.runtime,
+      requestPrivateContext(ctx, scoped.actor.id),
+    );
     audit(ctx, {
       principalId: scoped.actor.id,
       action: "cron.runtime.update",
@@ -150,6 +177,8 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: cron } = scoped;
+  if ((await inheritRequestSources(ctx, [cron], actor.id)).has(cron.id))
+    return sendJson(res, 404, { error: "not_found" });
   if (typeof body !== "object" || body === null || !("destination" in body)) {
     return sendJson(res, 400, { error: "bad_request", message: "destination is required; use null to clear" });
   }
@@ -164,7 +193,7 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   }
   if (isDeepStrictEqual(cron.destination, next))
     return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
-  const updated = await app.setCronDestination(id, next, { actorId: actor.id });
+  const updated = await app.setCronDestination(tenantOf(ctx), id, next, requestPrivateContext(ctx, actor.id));
   await notifyOwnerOfCronEdit(app, {
     cron,
     editorId: actor.id,
@@ -191,6 +220,25 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
+  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId))
+    return sendJson(res, 404, { error: "not_found" });
+  if (
+    (
+      await inheritRequestSources(
+        ctx,
+        [
+          {
+            id: skill.id,
+            ownerScopeId: skill.scopeId,
+            personalOnly: skill.personalOnly,
+            sourceProvenance: skill.sourceProvenance,
+          },
+        ],
+        actor.id,
+      )
+    ).has(skill.id)
+  )
+    return sendJson(res, 404, { error: "not_found" });
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
   audit(ctx, { principalId: actor.id, action: "skill.read", resource: id, scopeLabel: skill.scopeId });
@@ -222,6 +270,25 @@ export async function archiveAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
+  if (!skillAllowedInContext(skill, actor.id, ctx.capability?.scopeId))
+    return sendJson(res, 404, { error: "not_found" });
+  if (
+    (
+      await inheritRequestSources(
+        ctx,
+        [
+          {
+            id: skill.id,
+            ownerScopeId: skill.scopeId,
+            personalOnly: skill.personalOnly,
+            sourceProvenance: skill.sourceProvenance,
+          },
+        ],
+        actor.id,
+      )
+    ).has(skill.id)
+  )
+    return sendJson(res, 404, { error: "not_found" });
   await app.archiveSkill(id);
   audit(ctx, { principalId: actor.id, action: "skill.archive", resource: id, scopeLabel: skill.scopeId });
   return sendJson(res, 200, { ok: true });

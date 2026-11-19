@@ -38,6 +38,8 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
           sizeBytes: 1,
         })),
         staged: files.length,
+        stagedFiles: [],
+        stagedRevision: 1,
       };
     },
     async restartComputer() {},
@@ -5129,4 +5131,229 @@ test("a connector note over its budget shows every server, fills shorter tool li
   assert.deepEqual(lines.slice(-3), ["- Tiny [tiny] (2 tools)", "  - a // Do it.", "  - b // Do it."]);
   assert.ok(note.length <= 2_000 * 4 + 400);
   assert.equal(connectorToolsNote([...small, ...big]), note);
+});
+
+test("publishing private learning requires once-only approval of the exact selected text and destination", async () => {
+  const published: Array<{ facts: Array<{ id: string; text: string }>; applicability: string }> = [];
+  const approved = new Set<string>();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      memoryPublish: async (facts, applicability) => {
+        published.push({ facts, applicability });
+        return { added: facts.length, outcomes: [], problems: [] };
+      },
+    },
+    pendingApprovals: [],
+    scopeLabel: "personal:U1",
+    toolApprovalGate: (_tool, key) => !key || approved.delete(key),
+  };
+  const memory = createAgentTools(ref).find((tool) => tool.name === "memory")!;
+  const request = { action: "publish", scope: "team", facts: [{ id: "fact-id", text: "Selected procedure" }] };
+  assert.match(textOut(await call(memory, request)), /blocked: needs human approval/);
+  assert.deepEqual(published, []);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  approved.add(approval.approvalKey!);
+  await call(memory, { ...request, facts: [{ text: "Different private fact" }] });
+  await call(memory, { ...request, scope: "workbook" });
+  assert.deepEqual(published, []);
+  await call(memory, request);
+  assert.deepEqual(published, [{ facts: [{ id: "fact-id", text: "Selected procedure" }], applicability: "team" }]);
+  await call(memory, request);
+  assert.equal(published.length, 1);
+});
+
+test("private app sharing requires once-only approval bound to the exact revision and audience", async () => {
+  const requests: unknown[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async shareArtifact(req) {
+        requests.push(req);
+        return {
+          ok: true,
+          verb: "share",
+          type: "deploy",
+          id: req.id,
+          target: { scope: req.scope!, label: req.scope! },
+          permission: "read",
+        };
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((tool) => tool.name === "apps")!;
+  const args = {
+    action: "share",
+    id: "selected-app",
+    toScope: "group:project",
+    privateRevision: "selected-revision",
+    notify: false,
+  };
+  assert.match(textOut(await call(apps, args)), /needs human approval/);
+  assert.equal(requests.length, 0);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.call, { tool: "apps", input: args });
+  assert.ok(approval.reason?.includes(args.id));
+  assert.ok(approval.reason?.includes(args.privateRevision));
+  assert.ok(approval.reason?.includes(args.toScope));
+  assert.match(approval.reason!, /No notifications or invitations/);
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  ref.toolApprovalGate = (_, key) => key === approval.approvalKey;
+  ref.pausedOnApproval = false;
+  await call(apps, { ...args, toScope: "group:different" });
+  await call(apps, { ...args, privateRevision: "different" });
+  assert.equal(requests.length, 0);
+  ref.pausedOnApproval = false;
+  const approvedResult = textOut(await call(apps, args));
+  assert.match(approvedResult, /Shared deploy/, approvedResult);
+  assert.deepEqual(requests, [
+    { type: "deploy", id: "selected-app", scope: "group:project", privateRevision: "selected-revision", notify: false },
+  ]);
+});
+
+test("private file sharing requires once-only approval bound to the exact revision and audience", async () => {
+  const requests: unknown[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async shareArtifact(req) {
+        requests.push(req);
+        return {
+          ok: true,
+          verb: "share",
+          type: "file",
+          id: req.id,
+          target: { scope: req.scope!, label: req.scope! },
+          permission: "read",
+        };
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((tool) => tool.name === "files")!;
+  const args = {
+    action: "share",
+    id: "selected-file",
+    toScope: "group:project",
+    privateRevision: "selected-revision",
+  };
+  assert.match(textOut(await call(apps, args)), /needs human approval/);
+  assert.equal(requests.length, 0);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.call, { tool: "files", input: args });
+  assert.ok(approval.reason?.includes(args.id));
+  assert.ok(approval.reason?.includes(args.privateRevision));
+  assert.ok(approval.reason?.includes(args.toScope));
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  ref.toolApprovalGate = (_, key) => key === approval.approvalKey;
+  ref.pausedOnApproval = false;
+  await call(apps, { ...args, toScope: "group:different" });
+  await call(apps, { ...args, privateRevision: "different" });
+  assert.equal(requests.length, 0);
+  ref.pausedOnApproval = false;
+  const approvedResult = textOut(await call(apps, args));
+  assert.match(approvedResult, /Shared file/, approvedResult);
+  assert.deepEqual(requests, [
+    { type: "file", id: "selected-file", scope: "group:project", privateRevision: "selected-revision" },
+  ]);
+});
+
+test("private skill sharing requires once-only approval bound to the exact revision and audience", async () => {
+  const requests: unknown[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async shareArtifact(req) {
+        requests.push(req);
+        return {
+          ok: true,
+          verb: "share",
+          type: "skill",
+          id: req.id,
+          target: { scope: req.scope!, label: req.scope! },
+          permission: "read",
+        };
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((tool) => tool.name === "skills")!;
+  const args = {
+    action: "share",
+    id: "selected-skill",
+    toScope: "group:project",
+    privateRevision: "selected-revision",
+  };
+  assert.match(textOut(await call(apps, args)), /needs human approval/);
+  assert.equal(requests.length, 0);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.call, { tool: "skills", input: args });
+  assert.ok(approval.reason?.includes(args.id));
+  assert.ok(approval.reason?.includes(args.privateRevision));
+  assert.ok(approval.reason?.includes(args.toScope));
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  ref.toolApprovalGate = (_, key) => key === approval.approvalKey;
+  ref.pausedOnApproval = false;
+  await call(apps, { ...args, toScope: "group:different" });
+  await call(apps, { ...args, privateRevision: "different" });
+  assert.equal(requests.length, 0);
+  ref.pausedOnApproval = false;
+  const approvedResult = textOut(await call(apps, args));
+  assert.match(approvedResult, /Shared skill/, approvedResult);
+  assert.deepEqual(requests, [
+    { type: "skill", id: "selected-skill", scope: "group:project", privateRevision: "selected-revision" },
+  ]);
+});
+
+test("private schedule publication requires once-only approval bound to the exact revision and audience", async () => {
+  const requests: unknown[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async shareArtifact(req) {
+        requests.push(req);
+        return {
+          ok: true,
+          verb: "share",
+          type: "cron",
+          id: req.id,
+          target: { scope: req.scope!, label: req.scope! },
+          permission: "read",
+        };
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+  };
+  const apps = createAgentTools(ref, { controlTools: true }).find((tool) => tool.name === "cron")!;
+  const args = {
+    action: "share",
+    id: "selected-schedule",
+    toScope: "group:project",
+    privateRevision: "selected-revision",
+  };
+  assert.match(textOut(await call(apps, args)), /needs human approval/);
+  assert.equal(requests.length, 0);
+  const approval = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(approval.call, { tool: "cron", input: args });
+  assert.ok(approval.reason?.includes(args.id));
+  assert.ok(approval.reason?.includes(args.privateRevision));
+  assert.ok(approval.reason?.includes(args.toScope));
+  assert.deepEqual(approval.grantModes, { session: false, always: false });
+  ref.toolApprovalGate = (_, key) => key === approval.approvalKey;
+  ref.pausedOnApproval = false;
+  await call(apps, { ...args, toScope: "group:different" });
+  await call(apps, { ...args, privateRevision: "different" });
+  assert.equal(requests.length, 0);
+  ref.pausedOnApproval = false;
+  const approvedResult = textOut(await call(apps, args));
+  assert.match(approvedResult, /Shared cron/, approvedResult);
+  assert.deepEqual(requests, [
+    { type: "cron", id: "selected-schedule", scope: "group:project", privateRevision: "selected-revision" },
+  ]);
 });

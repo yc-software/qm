@@ -125,7 +125,13 @@ export interface ArtifactRegistration {
   createdBy: string;
   createdInScope?: ScopeId;
   seed: string;
-  onRegistered?: (a: { id: string; path: string; ownerScopeId: ScopeId; direction: FileDirection }) => Promise<void>;
+  onRegistered?: (a: {
+    id: string;
+    path: string;
+    ownerScopeId: ScopeId;
+    direction: FileDirection;
+    personalOnly?: true;
+  }) => Promise<void>;
   onError?: (e: unknown) => void;
 }
 
@@ -142,7 +148,7 @@ async function registerArtifact(
   try {
     const id = fileArtifactId(reg.seed, direction, batchIndex);
     const path = `artifacts/${id}/${name}`;
-    const { created } = await reg.store.put({
+    const { created, artifact } = await reg.store.put({
       id,
       ownerScopeId: reg.ownerScopeId,
       createdBy: reg.createdBy,
@@ -155,7 +161,7 @@ async function registerArtifact(
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
     const registered = { id, path, ownerScopeId: reg.ownerScopeId, direction, created };
-    await reg.onRegistered?.(registered);
+    await reg.onRegistered?.({ ...registered, ...(artifact.personalOnly ? { personalOnly: true as const } : {}) });
     return registered;
   } catch (e) {
     reg.onError?.(e);
@@ -396,7 +402,7 @@ export function parseOutboundFiles(
 
 export async function collectNamedOutbound(
   sandbox: Sandbox | undefined,
-  handle: SandboxHandle | (() => Promise<SandboxHandle>),
+  handle: SandboxHandle | (() => Promise<SandboxHandle>) | undefined,
   paths: readonly OutboundFile[],
   transfer: BlobTransferStore,
   register?: ArtifactRegistration,
@@ -431,7 +437,7 @@ export async function collectNamedOutbound(
       let bytes: Uint8Array | undefined;
       let stored: Awaited<ReturnType<OpenStoredFile>> = null;
       if (typeof file === "string") {
-        if (!sandbox) throw new Error("sandbox file access is not available");
+        if (!sandbox || !handle) throw new Error("sandbox file access is not available");
         target ??= typeof handle === "function" ? await handle() : handle;
         bytes = (await sandbox.readFileBytes(target, file)) ?? undefined;
       } else {

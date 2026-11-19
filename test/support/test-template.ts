@@ -1,3 +1,5 @@
+import { installCronQueue } from "../../src/cron/job-queue.ts";
+import { grantAppRole } from "../../src/persistence/app-role-grants.ts";
 import pg from "pg";
 import { buildApp } from "../../src/wiring.ts";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
@@ -7,7 +9,7 @@ import { createPostgresVectorStore } from "../../src/memory/postgres-vector-stor
 import { createPostgresBudgetTracker } from "../../src/ratelimit/postgres-budget.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
 import { testConfig } from "./test-config.ts";
-import { ownerUrl, TEST_TENANT } from "./test-tenant.ts";
+import { ownerUrl, TEST_TENANT, APP_ROLE } from "./test-tenant.ts";
 
 async function vectorAvailable(databaseUrl: string): Promise<boolean> {
   const client = new pg.Client({ connectionString: databaseUrl });
@@ -28,8 +30,10 @@ if (import.meta.main) {
   createPostgresProcessRegistry(databaseUrl);
   if (await vectorAvailable(databaseUrl)) createPostgresVectorStore(databaseUrl);
   await migrateRegisteredPgSchemas(databaseUrl);
+  await installCronQueue(ownerUrl(databaseUrl).toString());
   const owner = new pg.Client({ connectionString: ownerUrl(databaseUrl).toString() });
   await owner.connect();
+  await grantAppRole(async (text, values) => (await owner.query(text, values)).rows, APP_ROLE, "pgboss");
   await owner.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
   await owner.end();
   await runtime.stop();

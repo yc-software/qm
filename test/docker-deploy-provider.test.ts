@@ -6,13 +6,21 @@ import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
 
-test("Docker apps use isolated networks and remove them on destroy", async () => {
+test("Docker apps retain isolated networks and avoid occupied ports across provider reloads", async () => {
   const calls: string[][] = [];
+  const ports = new Map<string, number>();
+  let nextDaemonPort = 45000;
   const dockerExec: DockerExec = async (args) => {
     calls.push(args);
+    if (args[0] === "run") {
+      const requested = args[args.indexOf("-p") + 1]!.split(":")[1];
+      const port = requested ? Number(requested) : nextDaemonPort++;
+      if ([...ports.values()].includes(port)) return { code: 1, stdout: "", stderr: "port is already allocated" };
+      ports.set(args[args.indexOf("--name") + 1]!, port);
+    }
     return {
       code: args[1] === "inspect" ? 1 : 0,
-      stdout: "",
+      stdout: args[0] === "port" ? `127.0.0.1:${ports.get(args[1]!)}\n` : "",
       stderr: args[1] === "inspect" ? "No such network" : "",
     };
   };
@@ -31,8 +39,11 @@ test("Docker apps use isolated networks and remove them on destroy", async () =>
   });
   const provider = createDockerDeployProvider({ dockerExec });
 
-  await provider.apply(first, first.versions[0]!);
-  await provider.apply(second, second.versions[0]!);
+  const firstEndpoint = await provider.apply(first, first.versions[0]!);
+  const secondEndpoint = await createDockerDeployProvider({ dockerExec }).apply(second, second.versions[0]!);
+  assert.equal(firstEndpoint.host, "127.0.0.1");
+  assert.equal(secondEndpoint.host, "127.0.0.1");
+  assert.notEqual(firstEndpoint.port, secondEndpoint.port);
   await provider.destroy(first);
 
   const firstName = `agent-deploy-${first.id.slice(0, 12)}`;
@@ -89,7 +100,7 @@ test("an app network created concurrently is reused, and a create that leaves no
       networkExists = createLeavesNetwork;
       return { code: 1, stdout: "", stderr: "network with name x already exists" };
     }
-    return { code: 0, stdout: "", stderr: "" };
+    return { code: 0, stdout: args[0] === "port" ? "127.0.0.1:45000\n" : "", stderr: "" };
   };
   const store = createDeployStore(testDeployBackings());
   const publishedApp = await store.create({

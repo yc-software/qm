@@ -1,3 +1,7 @@
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
+import { artifactProvenance, mergeSourceProvenance, type SourceProvenance } from "../memory/facts.ts";
+import { inheritContextSources, privateSourceAllowed, type PrivateContext } from "../sessions/private-context.ts";
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
@@ -28,6 +32,8 @@ import type { SwarmService } from "../swarms/swarm-service.ts";
 import { msOf } from "../sessions/items.ts";
 
 export interface SandboxResource {
+  personalOnly?: true;
+  sourceProvenance?: SourceProvenance;
   id: string;
   backend: SandboxBackendName;
   ownerScopeId: ScopeId;
@@ -58,6 +64,7 @@ export interface SandboxAccessPlan {
 
 export interface SandboxDefault {
   sandboxId: string | null;
+  privateSandboxId?: string | null;
 }
 
 export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
@@ -115,10 +122,21 @@ interface SandboxProviderProfile {
   actions: string[];
 }
 
+export interface SandboxPrivacyContext {
+  current(): Promise<PrivateContext>;
+  sessions: Pick<SessionStore, "recordContextProvenance">;
+}
+
 export interface SandboxResources {
   profiles(): SandboxProviderProfile[];
-  forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
+  forTurn(turn: {
+    actorId: string;
+    scopeId: ScopeId;
+    isCurrent: () => Promise<boolean>;
+    privacy?: SandboxPrivacyContext;
+  }): SandboxResources;
   initialize(): Promise<void>;
+  authorizeScratch(scopeId: ScopeId, personalOnly: boolean): Promise<void>;
   list(
     actorId: string,
     scopeId: ScopeId,
@@ -206,14 +224,13 @@ export async function assertBotMayUseComputer(
   scopeId: ScopeId,
   sandboxId: string | undefined,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
-): Promise<void> {
-  if (!botMayUse) return;
-  if (!sandboxId) {
-    await defaultComputer(resources, scopeId, botMayUse);
-    return;
+): Promise<SandboxResource | undefined> {
+  if (!sandboxId && botMayUse) {
+    return defaultComputer(resources, scopeId, botMayUse);
   }
-  const resource = await resources?.get(sandboxId);
-  if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+  const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
+  if (resource && botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+  return resource ?? undefined;
 }
 
 export const MARK_ADMIN_CREATED_COMPUTERS_MIGRATION = {
@@ -256,6 +273,7 @@ export function createSandboxResources(opts: {
   beforeRetire?: (record: SandboxResource) => Promise<void>;
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
+  privacy?: SandboxPrivacyContext;
 }): SandboxResources {
   const upgraded = perTenant<{ done?: Promise<void> }>(() => ({}));
   const initialize = async (): Promise<void> => {
@@ -277,17 +295,34 @@ export function createSandboxResources(opts: {
     ];
   };
   const authorize = async (actorId: string, scopeId: ScopeId): Promise<void> => {
+    const context = await opts.privacy?.current();
+    if (context && (context.actorId !== actorId || (context.personalOnly && !privateSourceAllowed(context, scopeId))))
+      throw new SandboxAccessError("Private computer access requires its owner's personal conversation.");
     if (!parseScopeId(scopeId).kind || !(await opts.canUseScope(actorId, scopeId)))
       throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
   };
-  const get = async (id: string): Promise<SandboxResource> => {
+  const checkPrivacy = async (record: SandboxResource, actorId?: string): Promise<SandboxResource> => {
+    const context = (await opts.privacy?.current()) ?? (actorId ? { actorId } : undefined);
+    if (record.personalOnly) {
+      if (!context) return record;
+      if (!privateSourceAllowed(context, record.ownerScopeId))
+        throw new SandboxAccessError("This computer is private to its owner's personal conversation.");
+      if (opts.privacy) await inheritContextSources(opts.privacy.sessions, context, [record]);
+    } else if (context?.personalOnly)
+      throw new SandboxAccessError(
+        "Private work requires a private computer. Select or create a private personal computer.",
+      );
+    return record;
+  };
+  const load = async (id: string): Promise<SandboxResource> => {
     await initialize();
     const record = await opts.records.get(id);
     if (!record) throw new SandboxAccessError(`sandbox not found: ${id}`);
     return record;
   };
+  const get = async (id: string) => checkPrivacy(await load(id));
   const agentRecord = async (actorId: string, id: string): Promise<SandboxResource> => {
-    const record = await get(id);
+    const record = await checkPrivacy(await load(id), actorId);
     if (record.jobOnly) throw new SandboxAccessError(JOB_ONLY_REFUSAL);
     await authorize(actorId, record.ownerScopeId);
     return record;
@@ -309,6 +344,24 @@ export function createSandboxResources(opts: {
     const guarded = async (): Promise<T> => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");
+      const context = await opts.privacy?.current();
+      if (current.personalOnly && context?.sourceProvenance && opts.privacy) {
+        const merged = mergeSourceProvenance([
+          ...(current.sourceProvenance ? [current.sourceProvenance] : []),
+          context.sourceProvenance,
+        ]);
+        if (canonicalJson(merged) !== canonicalJson(current.sourceProvenance)) {
+          const updated = await opts.records.update(id, (record) => ({
+            ...record,
+            sourceProvenance: mergeSourceProvenance([
+              ...(record.sourceProvenance ? [record.sourceProvenance] : []),
+              merged,
+            ]),
+          }));
+          if (!updated) throw new SandboxAccessError("The private computer no longer exists.");
+          await inheritContextSources(opts.privacy.sessions, context, [updated]);
+        }
+      }
       return action();
     };
     return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
@@ -332,6 +385,8 @@ export function createSandboxResources(opts: {
     forTurn: (turn) =>
       createSandboxResources({
         ...opts,
+        upgrade: initialize,
+        privacy: turn.privacy,
         canUseScope: async (actorId, scopeId) =>
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
@@ -342,10 +397,17 @@ export function createSandboxResources(opts: {
       return backend;
     },
     initialize,
+    async authorizeScratch(scopeId, personalOnly) {
+      const context = await opts.privacy?.current();
+      if (!context) return;
+      if (scopeId !== context.scopeId) await authorize(context.actorId, scopeId);
+      if (!!context.personalOnly !== personalOnly || (personalOnly && !privateSourceAllowed(context, scopeId)))
+        throw new SandboxAccessError("Disposable computer privacy no longer matches this conversation.");
+    },
     get,
     async getMany(ids) {
       await initialize();
-      return opts.records.getMany(ids);
+      return Promise.all((await opts.records.getMany(ids)).map((record) => checkPrivacy(record)));
     },
     use,
     recordLoad: (id, sample) => opts.loads.put(id, sample),
@@ -380,7 +442,7 @@ export function createSandboxResources(opts: {
           const current = await get(id);
           if (current.state === "retired" && !current.cleanupPending && !current.error) return;
           const selected = await opts.defaults.get(current.ownerScopeId);
-          if (selected?.sandboxId === id)
+          if (selected?.sandboxId === id || selected?.privateSandboxId === id)
             throw new Error("unset or change this scope's default before retiring its computer");
           await opts.beforeRetire?.(current);
           await destroy(current);
@@ -431,26 +493,42 @@ export function createSandboxResources(opts: {
     },
     async resolve(scopeId) {
       await initialize();
+      const context = await opts.privacy?.current();
       const route = await opts.defaults.get(scopeId);
-      return route?.sandboxId ? get(route.sandboxId) : null;
+      const selected = context?.personalOnly ? route?.privateSandboxId : route?.sandboxId;
+      return selected ? get(selected) : null;
     },
     async list(actorId, scopeId) {
       await authorize(actorId, scopeId);
       await initialize();
       const route = await opts.defaults.get(scopeId);
+      const context = await opts.privacy?.current();
+      const selected = context?.personalOnly ? route?.privateSandboxId : route?.sandboxId;
       const sandboxes: SandboxResource[] = [];
       for (const record of await opts.records.all()) {
-        if (record.jobOnly || !(await opts.canUseScope(actorId, record.ownerScopeId))) continue;
+        if (
+          record.jobOnly ||
+          (record.personalOnly && !privateSourceAllowed(context ?? { actorId }, record.ownerScopeId)) ||
+          (context && !!record.personalOnly !== !!context.personalOnly) ||
+          !(await opts.canUseScope(actorId, record.ownerScopeId))
+        )
+          continue;
         const backend = opts.backends[record.backend];
         let availableActions = actionsFor(backend).filter((action) => action !== "create");
         if (record.state === "retired")
           availableActions = (record.cleanupPending || record.error) && backend?.destroyScope ? ["retire"] : [];
         sandboxes.push({ ...record, holders: undefined, availableActions });
       }
+      if (context && opts.privacy)
+        await inheritContextSources(
+          opts.privacy.sessions,
+          context,
+          sandboxes.filter((record) => record.personalOnly),
+        );
       return {
         sandboxes,
-        defaultSandboxId: route?.sandboxId ?? null,
-        defaultMode: route?.sandboxId ? "selected" : "none",
+        defaultSandboxId: selected ?? null,
+        defaultMode: selected ? "selected" : "none",
         providers: profiles(),
       };
     },
@@ -466,7 +544,14 @@ export function createSandboxResources(opts: {
         );
       const id = reservationId ?? randomUUID();
       if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) throw new Error("invalid sandbox reservation");
+      const context = await opts.privacy?.current();
       const record: SandboxResource = {
+        ...(context?.personalOnly
+          ? {
+              personalOnly: true as const,
+              sourceProvenance: mergeSourceProvenance([artifactProvenance(scopeId, context.sourceProvenance, true)]),
+            }
+          : {}),
         id,
         backend: backend as SandboxBackendName,
         ownerScopeId: scopeId,
@@ -484,7 +569,11 @@ export function createSandboxResources(opts: {
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const existing = await opts.records.get(id);
         if (existing) {
-          if (existing.ownerScopeId !== scopeId || existing.backend !== backend)
+          if (
+            existing.ownerScopeId !== scopeId ||
+            existing.backend !== backend ||
+            !!existing.personalOnly !== !!record.personalOnly
+          )
             throw new Error("sandbox reservation ownership mismatch");
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
@@ -522,8 +611,10 @@ export function createSandboxResources(opts: {
       await initialize();
       await authorize(actorId, scopeId);
       await opts.lock.withLock(`sandbox-default:${scopeId}`, async () => {
+        let selectedPrivate = (await opts.privacy?.current())?.personalOnly === true;
         if (id !== null) {
           const record = await agentRecord(actorId, id);
+          selectedPrivate ||= record.personalOnly === true;
           if (record.state === "retired") throw new Error("sandbox has been retired");
           if (record.ownerScopeId !== scopeId)
             throw new Error(
@@ -531,7 +622,11 @@ export function createSandboxResources(opts: {
             );
         }
         await opts.beforeDefaultChange?.(scopeId);
-        await opts.defaults.put(scopeId, { sandboxId: id });
+        const current = (await opts.defaults.get(scopeId)) ?? { sandboxId: null };
+        await opts.defaults.put(scopeId, {
+          ...current,
+          ...(selectedPrivate ? { privateSandboxId: id } : { sandboxId: id }),
+        });
       });
     },
   };
@@ -547,11 +642,14 @@ export function createTurnSandboxAccess(ctx: {
   resolution: Resolution;
   scopeId: ScopeId;
   openResourceAccess?: boolean;
+  privateContext?: () => Promise<PrivateContext>;
   botMayUse?: (resource: SandboxResource) => Promise<boolean>;
 }) {
   const { deps, actor, resolution, scopeId, openResourceAccess, botMayUse } = ctx;
   const writableScopeId = resolution.writableScopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
+    const context = await ctx.privateContext?.();
+    if (context?.personalOnly && !privateSourceAllowed(context, target)) return false;
     if (target === writableScopeId || target === scopeId) return true;
     if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
       return false;

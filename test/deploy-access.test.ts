@@ -154,7 +154,7 @@ companyTest("approve is audited and idempotent, preserves manage access, and res
   await f.decide();
   assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "write" }]);
   assert.equal((await f.notices()).length, 2);
-  await f.app.moveArtifactHome("deploy", f.d.id, person(requester), owner);
+  await f.app.moveArtifactHome(tenant, "deploy", f.d.id, person(requester), owner);
   await assert.rejects(f.decide(), /owner/);
   await assert.rejects(f.decide(owner, false), /owner/);
 });
@@ -299,7 +299,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
 test("shared-home members can approve and decline, outsiders cannot", async (t) => {
   const f = await fixture(t);
   await f.directory.upsertGroup("G1", [owner, "carol@example.com"], "slack");
-  await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
+  await f.app.moveArtifactHome(tenant, "deploy", f.d.id, scopeId("group", "G1"), owner);
   assert.match(await f.decide("carol@example.com", false), /^Declined\./);
   assert.match(await f.decide("carol@example.com"), /^Approved\./);
   await assert.rejects(f.decide(requester, false), /owner/);

@@ -1,3 +1,15 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { Grant } from "./types.ts";
+import { createArtifactDisclosure } from "./memory/artifact-disclosure.ts";
+import { ATTACHMENT_STAGING_MIGRATION, ATTACHMENT_RECEIPTS_MIGRATION } from "./sessions/attachment-migrations.ts";
+import { DOCUMENT_BINDING_KEYS_MIGRATION } from "./documents/migrations.ts";
+import { createDocumentMemory, nativeDocumentSources } from "./documents/memory.ts";
+import { createDocumentGroups } from "./documents/groups.ts";
+import {
+  createDocumentConversations,
+  type DocumentConversations,
+  type DocumentRecord,
+} from "./documents/conversations.ts";
 import type { LoadSample } from "./sandbox/load-probe.ts";
 import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
@@ -102,6 +114,7 @@ import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
+import { parseRef } from "./acl/resource-ref.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
@@ -139,7 +152,7 @@ import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { createCronStore, withCronAccess, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import {
@@ -265,6 +278,7 @@ import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
+  upgradePrivateSandboxDefaults,
   legacySandboxBackendForScope,
   type LegacyRoute,
 } from "./sandbox/sandbox-resource-upgrade.ts";
@@ -555,6 +569,7 @@ export interface BuiltApp {
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   memory: MemoryService;
   sandbox: Sandbox;
+  sandboxForTurn: (resources: SandboxResources) => Sandbox;
   advisoryLock: AdvisoryLock;
   sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
@@ -568,6 +583,8 @@ export interface BuiltApp {
   brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
   projects: ProjectStore;
+  documentConversations: DocumentConversations;
+  managedGroups: ReturnType<typeof createDocumentGroups>;
   environments: EnvironmentStore;
   processes?: ProcessRegistry;
   appPageViews?: AppPageViewLog;
@@ -642,11 +659,16 @@ export function buildApp(
     canManageScope?: CanManageScope;
     canUseSandboxScope?: CanManageScope;
     managesArtifactHome?: ManagesArtifactHome;
+    authorizeArtifactShare?: (grant: Grant, actorId: string, releasePrivate?: true) => Promise<void>;
+    withArtifactLock?: <R>(owner: ScopeId, ref: string, write: () => Promise<R>) => Promise<R>;
   } = {};
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) =>
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
     resolveFiles: (refs) => files.resolveByIds(refs),
+    withArtifactLock: (owner, ref, write) => membership.withArtifactLock!(owner, ref, write),
+    authorizeArtifactShare: (grant, actorId, releasePrivate) =>
+      membership.authorizeArtifactShare!(grant, actorId, releasePrivate),
   });
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
@@ -844,7 +866,9 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalDurableByteStore(join(config.dataDir, "docstore"));
-  const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
+  const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes, {
+    getMany: (query, transaction) => sessions.getMany(query, transaction),
+  });
   const fileUploads =
     config.snapshotStore === "s3" && config.s3Bucket
       ? createDirectFileUploads({
@@ -1257,6 +1281,12 @@ export function buildApp(
           ];
         },
       });
+      await upgradePrivateSandboxDefaults({
+        records: sandboxRecords,
+        defaults: sandboxDefaults,
+        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
+        lock: advisoryLock,
+      });
     },
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
@@ -1283,12 +1313,31 @@ export function buildApp(
     },
     canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
   });
-  const sandbox: Sandbox = createSandboxRouter({
-    resources: sandboxResources,
+  const sandboxResourceContext = new AsyncLocalStorage<SandboxResources | undefined>();
+  const routedResources = new Proxy(sandboxResources, {
+    get(target, key) {
+      const resources = sandboxResourceContext.getStore() ?? target;
+      const value = Reflect.get(resources, key);
+      return typeof value === "function" ? value.bind(resources) : value;
+    },
+  });
+  const sandbox = createSandboxRouter({
+    resources: routedResources,
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     onError: sandboxOnError,
   });
+  const inSandboxContext = (resources: SandboxResources | undefined): Sandbox =>
+    new Proxy(sandbox, {
+      get(target, key) {
+        const value = Reflect.get(target, key);
+        return typeof value === "function"
+          ? (...args: unknown[]) => sandboxResourceContext.run(resources, () => Reflect.apply(value, target, args))
+          : value;
+      },
+    });
+  const sandboxForTurn = (resources: SandboxResources): Sandbox => inSandboxContext(resources);
+  const cleanupSandbox = inSandboxContext(undefined);
   const secretSource =
     config.secretsBackend === "aws"
       ? createLayeredSecretSource(
@@ -1873,14 +1922,6 @@ export function buildApp(
         provisionWorkspace.bind(null, config.workspaceProvisionerUrl, provisionerSigningKey(config.signingSecret!)),
       )
     : undefined;
-  const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
-    agent,
-    memory: baseMemory,
-    captureQuietMs: config.memoryCaptureQuietMs,
-    ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
-    onCaptureError: (e, scope) =>
-      recordAmbientError({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
-  });
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
     return (
@@ -1894,6 +1935,25 @@ export function buildApp(
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember,
     advisoryLock,
+  });
+  const documentConversations = createDocumentConversations({
+    backing: artifactMap<DocumentRecord>("document_conversations"),
+    projects,
+    sessions,
+  });
+  pgArtifactMap.pool.registerMigration(DOCUMENT_BINDING_KEYS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(ATTACHMENT_STAGING_MIGRATION);
+  pgArtifactMap.pool.registerMigration(ATTACHMENT_RECEIPTS_MIGRATION);
+  const managedGroups = createDocumentGroups(documentConversations, projects);
+  const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
+    databaseUrl,
+    sessions,
+    agent,
+    memory: createDocumentMemory(baseMemory, documentConversations, auditLog, sessions),
+    captureQuietMs: config.memoryCaptureQuietMs,
+    ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
+    onCaptureError: (e, scope) =>
+      recordAmbientError({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
   const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
@@ -1912,15 +1972,15 @@ export function buildApp(
     orgAdmins: async () => (await admin.listGrants(ambientTenant())).filter((grant) => grant.role === "org_admin"),
     auditLog,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
+  const canReadScope = createCanReadScope({ managedGroups, directory, identity, teams, sessions, personas });
+  const canWriteScope = createCanWriteScope({ managedGroups, directory, identity, teams, personas });
+  const canManageScope = createCanManageScope({ managedGroups, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams, personas },
+    { managedGroups, directory, identity, teams, personas },
     canManageScope,
   );
-  const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
-  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
+  const currentScopeMembers = createCurrentScopeMembers({ managedGroups, directory, identity });
+  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups, directory, identity });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -1939,7 +1999,53 @@ export function buildApp(
     },
   );
 
+  const discloseArtifact = createArtifactDisclosure({
+    nativeSources: (target, sources) => nativeDocumentSources(documentConversations, [target], sources),
+    classify: identity.classify,
+    orgScopeId: scopeId("org", config.orgId),
+    config: configStore,
+    currentScopeMembers: createCurrentScopeMembers({ managedGroups, directory, identity }, true),
+    isCurrentSharedScopeMember,
+  });
+  membership.withArtifactLock = async (owner, ref, write) => {
+    const parsed = parseRef(ref);
+    if (parsed.kind === "cron") return withCronAccess(crons, advisoryLock, parsed.id, write);
+    if (parsed.kind !== "skill") return write();
+    const selected = await skills.get(parsed.id);
+    return selected ? skills.withNameLock(owner, selected.manifest.name, write) : write();
+  };
+  membership.authorizeArtifactShare = async (grant, actorId, releasePrivate) => {
+    const parsed = parseRef(grant.ref);
+    if (parsed.kind !== "file" && parsed.kind !== "skill" && parsed.kind !== "cron") return;
+    const loaders = {
+      file: () => files.get(parsed.id),
+      skill: () => skills.get(parsed.id),
+      cron: () => crons.get(parsed.id),
+    };
+    const stored = await loaders[parsed.kind]();
+    const ownerScopeId = stored && ("ownerScopeId" in stored ? stored.ownerScopeId : stored.scopeId);
+    if (!stored || ownerScopeId !== grant.ownerScopeId)
+      throw new Error("The artifact's current owner does not match this grant.");
+    if (stored.personalOnly && !releasePrivate)
+      throw new Error(
+        parsed.kind === "cron"
+          ? "Share this private schedule explicitly before granting access."
+          : "Private artifacts cannot change audience",
+      );
+    const provenance = stored.sourceProvenance;
+    if (
+      releasePrivate ||
+      (provenance &&
+        (!provenance.sources.length ||
+          provenance.sources.some(
+            (source) => source !== ownerScopeId && source !== personalScope(actorId) && source !== grant.granteeScopeId,
+          )))
+    )
+      await discloseArtifact(stored, grant.granteeScopeId, actorId);
+  };
   const deployService = createDeployService({
+    discloseApp: discloseArtifact,
+    sessions,
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
     publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),
@@ -2024,6 +2130,12 @@ export function buildApp(
   });
   const crons: CronStore = {
     ...cronsBase,
+    async publishPrivate(id, revision, target, provenance) {
+      const published = await cronsBase.publishPrivate(id, revision, target, provenance);
+      cronChanged.notify?.(id);
+      cronChanged.notify?.(published.id);
+      return published;
+    },
     async create(input) {
       const cron = await cronsBase.create(input);
       cronChanged.notify?.(cron.id);
@@ -2183,7 +2295,10 @@ export function buildApp(
     modelCredentialFetch: overrides.modelCredentialFetch,
     refreshModels,
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId", "wake"]));
+  const sessionMailbox = createSessionMailbox(
+    artifactMap<SessionMessage>("session_mailbox", ["recipientId", "wake"]),
+    sessions,
+  );
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     sessions,
@@ -2198,7 +2313,7 @@ export function buildApp(
     conversations: {
       search: (input) => app.searchConversations(input),
       list: (viewer) => app.listSessions(viewer),
-      start: (actorId, input) => startSession(app, sessions, actorId, input),
+      start: (tenant, actorId, input) => startSession(tenant, app, sessions, actorId, input),
     },
     async validateRuntime(input, scope) {
       const requested = {
@@ -2262,6 +2377,8 @@ export function buildApp(
     toolOutput,
     sandbox,
     sandboxResources,
+    sandboxForTurn,
+    cleanupSandbox,
     swarms,
     connectorTokens,
     auditLog,
@@ -2319,9 +2436,10 @@ export function buildApp(
     resolveSessionRuntime,
     directory,
     isCurrentSharedScopeMember,
-    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
-    managedGroups: projects,
+    currentScopeMembers: createCurrentScopeMembers({ managedGroups, directory, identity }, true),
+    managedGroups,
     projects,
+    documentConversations,
     personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions ? { replyCheck: createReplyCheck(decisions, decide), decide } : {}),
@@ -2430,6 +2548,7 @@ export function buildApp(
     advisoryLock,
   };
   const app = createApp({
+    discloseArtifact,
     errors,
     settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,
@@ -2474,6 +2593,7 @@ export function buildApp(
     directory,
     ...(emailAuthMembers?.length ? { emailAuthMembers } : {}),
     projects,
+    managedGroups,
     personas,
     personaHandover,
     environments,
@@ -3069,6 +3189,16 @@ export function buildApp(
         { immediate: true },
       )
     : null;
+  const memoryCaptureStarter = memoryStrategy.start
+    ? createSweeper(
+        async () => {
+          await memoryStrategy.start!();
+          void memoryCaptureStarter?.stop();
+        },
+        1_000,
+        { label: "memory capture worker startup", immediate: true },
+      )
+    : null;
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
@@ -3096,6 +3226,7 @@ export function buildApp(
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
+      memoryCaptureStarter?.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
       composioReturnSweeper.start();
@@ -3135,6 +3266,8 @@ export function buildApp(
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),
+      memoryCaptureStarter?.stop(),
+      memoryStrategy.stopClaims?.(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
       deployMaintenanceSweeper.stop(),
@@ -3216,6 +3349,7 @@ export function buildApp(
           runStreamEvents.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
+      await memoryStrategy.stop?.();
       await agent.close?.();
       await semanticMemory.close();
       await flyTunnel?.stop();
@@ -3299,6 +3433,7 @@ export function buildApp(
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
+    sandboxForTurn,
     sandboxResources,
     advisoryLock,
     blobTransfer,
@@ -3312,6 +3447,8 @@ export function buildApp(
     ...(brokerSessions ? { brokerSessions } : {}),
     directory,
     projects,
+    managedGroups,
+    documentConversations,
     environments,
     ...(processes ? { processes } : {}),
     ...(appPageViews ? { appPageViews } : {}),
@@ -3414,6 +3551,7 @@ export function serverDeps(
     ...(built.teams ? { teams: built.teams } : {}),
     egressAudit: built.egressAudit,
     sessions: built.sessions,
+    documentConversations: built.documentConversations,
     auditLog: built.auditLog,
     errors: built.errors,
     crons: built.crons,
@@ -3454,6 +3592,7 @@ export function serverDeps(
     }),
     egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
     sandbox: built.sandbox,
+    sandboxForTurn: built.sandboxForTurn,
     advisoryLock: built.advisoryLock,
     ...(built.processes ? { processes: built.processes } : {}),
     ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),

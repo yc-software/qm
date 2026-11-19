@@ -1,3 +1,6 @@
+import type { SessionStore } from "../sessions/session-store.ts";
+import { privateTriggerAllowed } from "./trigger-store.ts";
+import { artifactProvenance, mergeProvenance, UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import type { CronScript } from "./types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
@@ -32,7 +35,10 @@ export interface TriggerDeps {
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     conversationMembers?: DirectoryStore["conversationMembers"];
   };
-  sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> } & Pick<
+    SessionStore,
+    "get" | "getByThread" | "recordContextProvenance"
+  >;
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
@@ -40,6 +46,8 @@ export interface TriggerSpec extends Pick<
   TurnRequest,
   "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
 > {
+  personalOnly?: true;
+  sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -180,6 +188,8 @@ function homeRoster(
 }
 
 export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
+  if (!privateTriggerAllowed(spec))
+    return { authzFailed: true, ran: false, note: "Private scheduled output cannot use this scope or destination." };
   await deps.identity.refresh();
   const runsAsScope = actsAsScope(spec.owner, spec.ownerScopeId);
   const scheduled = SCHEDULED_SURFACES.has(spec.surface);
@@ -194,6 +204,33 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       : undefined;
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
   const threadRef = spec.threadRef ?? spec.fireKey;
+  const enqueue = async (input: Parameters<typeof reachEnqueue>[0], result?: TurnResult) => {
+    let source;
+    if (result && deps.sessions)
+      source = result.sessionId
+        ? await deps.sessions.get(result.sessionId)
+        : await deps.sessions.getByThread(threadRef);
+    const inherited = mergeProvenance(
+      [
+        artifactProvenance(spec.ownerScopeId, spec.sourceProvenance, spec.personalOnly),
+        ...(source ? [artifactProvenance(source.scopeId, source.sourceProvenance, source.personalOnly)] : []),
+      ],
+      "ordinary",
+    );
+    if (!privateTriggerAllowed({ ...spec, personalOnly: inherited.personalOnly }))
+      throw new Error("Private scheduled output cannot use this scope or destination.");
+    if (input.destination.type === "web" && deps.sessions) {
+      const target = await deps.sessions.getByThread(input.destination.target);
+      if (target) await deps.sessions.recordContextProvenance(target.id, target.scopeId, inherited);
+    }
+    return reachEnqueue({
+      ...input,
+      provenance: {
+        ...(input.provenance ?? deliveryProvenance(spec, threadRef, result)),
+        contextProvenance: inherited,
+      },
+    });
+  };
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
   let roster: DirectoryMember[] | undefined;
   let isPrivate: boolean | undefined;
@@ -257,15 +294,20 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let heldForApproval = false;
   let runDelivers = false;
   let scriptVerdict: string | undefined;
+  let executionResult: TurnResult | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
     if (!spec.errorNotice || !spec.destination || !deliverable) return;
-    await deps.deliveries.enqueue({
-      destination: spec.destination,
-      text: spec.errorNotice(reason),
-      idempotencyKey: `${spec.fireKey}:err`,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
+    await enqueue(
+      {
+        deliveries: deps.deliveries,
+        destination: spec.destination,
+        text: spec.errorNotice(reason),
+        idempotencyKey: `${spec.fireKey}:err`,
+        provenance: deliveryProvenance(spec, threadRef, executionResult),
+        ...(spec.shadow ? { shadow: true } : {}),
+      },
+      executionResult,
+    );
   };
   const ran = await deps.idempotency.once(spec.fireKey, async () => {
     await spec.onClaimed?.();
@@ -278,7 +320,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         return;
       }
       const attributeAs = await relayAttribution(deps, spec);
-      await reachEnqueue({
+      await enqueue({
         deliveries: deps.deliveries,
         destination: spec.destination,
         text: spec.message,
@@ -294,6 +336,17 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       return;
     }
     const res = await deps.run({
+      ...(spec.personalOnly || spec.sourceProvenance || spec.securityScreenData !== undefined
+        ? {
+            contextProvenance: mergeProvenance(
+              [
+                artifactProvenance(spec.ownerScopeId, spec.sourceProvenance, spec.personalOnly),
+                ...(spec.securityScreenData !== undefined ? [UNTRACKED_PROVENANCE] : []),
+              ],
+              "ordinary",
+            ),
+          }
+        : {}),
       surface: spec.surface,
       actor: { externalId: actorId },
       conversation,
@@ -328,6 +381,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
+    executionResult = res;
     if (res.status === "queued") {
       if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
       throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
@@ -356,15 +410,18 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         note = notVisibleNote;
         return;
       }
-      await reachEnqueue({
-        deliveries: deps.deliveries,
-        destination: res.persona ? { ...spec.destination, persona: res.persona } : spec.destination,
-        text: res.reply ?? "",
-        ...(res.attachments?.length ? { attachments: res.attachments } : {}),
-        idempotencyKey: spec.fireKey,
-        provenance: deliveryProvenance(spec, threadRef, res),
-        ...(spec.shadow ? { shadow: true } : {}),
-      });
+      await enqueue(
+        {
+          deliveries: deps.deliveries,
+          destination: res.persona ? { ...spec.destination, persona: res.persona } : spec.destination,
+          text: res.reply ?? "",
+          ...(res.attachments?.length ? { attachments: res.attachments } : {}),
+          idempotencyKey: spec.fireKey,
+          provenance: deliveryProvenance(spec, threadRef, res),
+          ...(spec.shadow ? { shadow: true } : {}),
+        },
+        res,
+      );
       return;
     }
     if (res.status === "ok") note = "produced no reply";

@@ -1,4 +1,4 @@
-import { currentTenant, withTenant } from "../tenants/context.ts";
+import { currentTenant, withTenant, type Tenant } from "../tenants/context.ts";
 import { createSweeper } from "../util/sweeper.ts";
 
 interface TenantRuntime {
@@ -8,7 +8,7 @@ interface TenantRuntime {
 }
 
 export function createTenantSlackRuntimes(opts: {
-  runtimeFor: (tenant: string) => TenantRuntime;
+  runtimeFor: (tenant: string, token: Tenant) => TenantRuntime;
   tenants: () => Promise<(string | undefined)[]>;
   onError: (error: unknown) => void;
   discoveryIntervalMs?: number;
@@ -18,7 +18,7 @@ export function createTenantSlackRuntimes(opts: {
   const ensure = (tenant: string): TenantRuntime => {
     let runtime = runtimes.get(tenant);
     if (!runtime) {
-      runtime = withTenant(tenant, () => opts.runtimeFor(tenant));
+      runtime = withTenant(tenant, (token) => opts.runtimeFor(tenant, token));
       runtimes.set(tenant, runtime);
     }
     if (running) withTenant(tenant, () => runtime.start());

@@ -22,7 +22,7 @@ const BRAIN = memberBrainId("U1");
 
 const notebook: MemoryService = {
   recall: async () => [{ text: "notebook fact" }],
-  capture: async (_scope, facts) => facts.length,
+  capture: async (_tenant, _scope, facts) => facts.length,
   query: async () => [{ text: "notebook hit" }],
   read: async () => "",
 };

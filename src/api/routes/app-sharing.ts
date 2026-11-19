@@ -1,3 +1,5 @@
+import { tenantOf } from "./route.ts";
+import { requestPrivateContext } from "../private-context.ts";
 import { appView } from "../app.ts";
 import { sendJson } from "../http.ts";
 import { livePersonTurn } from "./shared.ts";
@@ -17,7 +19,10 @@ async function setAppConnectors(ctx: ApiCtx): Promise<void> {
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
   try {
-    const publishedApp = await app.setAppConnectors(params.id!, connectors, { createdBy: principalId });
+    const publishedApp = await app.setAppConnectors(tenantOf(ctx), params.id!, connectors, {
+      createdBy: principalId,
+      context: requestPrivateContext(ctx, principalId),
+    });
     return sendJson(res, 200, { app: appView(publishedApp) });
   } catch (e) {
     return sendShareFailure(res, e);

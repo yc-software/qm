@@ -1,3 +1,4 @@
+import type { DocumentKnowledge } from "../documents/conversations.ts";
 import { memoryRecallLabels } from "../memory/recall-labels.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
@@ -14,10 +15,10 @@ import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryRecallContext, MemoryService } from "../memory/memory-service.ts";
-import type { MemoryFact } from "../memory/facts.ts";
+import { artifactProvenance, type MemoryProvenance, type MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
-import { type Resolution, type ScopeId, type Principal } from "../types.ts";
+import { personalScope, type Resolution, type ScopeId, type Principal } from "../types.ts";
 import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
 import type { CurrentScopeMembers } from "./scope-membership.ts";
@@ -25,6 +26,8 @@ import type { Tenant } from "../tenants/context.ts";
 
 type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
   tenant: Tenant;
+  document?: DocumentKnowledge;
+  onDisclosure?: (facts: readonly MemoryProvenance[]) => Promise<boolean>;
   resolution: Resolution;
   audienceScopeId?: ScopeId;
   external?: boolean;
@@ -46,12 +49,21 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
 
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
-  const sharingSources = input.external
-    ? []
-    : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+  const sharingSources =
+    input.external || input.document
+      ? []
+      : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
   const memoryScopeId = resolution.writableScopeId;
+  const documentScopes = input.document?.sharedAccess
+    ? [input.document.teamScopeId, input.document.documentScopeId]
+    : [];
   const baseRecallScopes = useMemory
-    ? recallMemoryScopes(memoryPolicy, memoryScopeId, resolution.readOnlyScopeIds)
+    ? [
+        ...new Set([
+          ...recallMemoryScopes(memoryPolicy, memoryScopeId, resolution.readOnlyScopeIds),
+          ...(memoryPolicy.recall === "visible" ? documentScopes : []),
+        ]),
+      ]
     : [];
   const read = [
     ...new Set([...baseRecallScopes, ...(useMemory && memoryPolicy.recall === "visible" ? sharingSources : [])]),
@@ -59,8 +71,14 @@ export async function resolveTurnContext(input: ContextInput) {
   const memoryAccess =
     (useMemory && memoryPolicy.capture !== "off") || read.length
       ? {
-          ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
+          ...(useMemory && memoryPolicy.capture !== "off"
+            ? { write: input.document?.mode === "shared" ? input.document.documentScopeId : memoryScopeId }
+            : {}),
           read,
+          ...(input.document?.mode === "shared" && input.document.sharedAccess && memoryPolicy.capture !== "off"
+            ? { teamWrite: input.document.teamScopeId }
+            : {}),
+          ...(input.document?.mode === "private" ? { personalOnly: true as const } : {}),
           ...(input.notebookOnly ? { notebookOnly: true as const } : {}),
         }
       : undefined;
@@ -78,6 +96,7 @@ export async function resolveTurnContext(input: ContextInput) {
   const disclosure: MemoryDisclosure = {
     actor: input.actor,
     targetScope: input.targetScope,
+    ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}),
     nativeScopes: baseRecallScopes,
     audience: input.audience,
     open: resolution.sharingPosture === "open" && !input.botActor,
@@ -85,6 +104,7 @@ export async function resolveTurnContext(input: ContextInput) {
     config: input.config,
     isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,
     currentScopeMembers: input.currentScopeMembers,
+    ...(input.onDisclosure ? { onDisclosure: input.onDisclosure } : {}),
   };
   const memory = disclosedMemory(input.memory, disclosure);
   const reader = {
@@ -103,7 +123,13 @@ export async function resolveTurnContext(input: ContextInput) {
     memorySnapshot: async () => {
       const notebooks = await tracePhase(
         "turn.memory_snapshot",
-        () => Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) }))),
+        () =>
+          Promise.all(
+            read.map(async (scope) => ({
+              scope,
+              facts: await (memory.snapshotFacts ? memory.snapshotFacts(scope) : memory.facts?.(scope)),
+            })),
+          ),
         { counts: (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }) },
       );
       for (const { scope } of notebooks) recordRead(scope, "memory");
@@ -163,9 +189,10 @@ export async function resolveTurnContext(input: ContextInput) {
     },
     listFiles: () => handles,
     listSkills: async (sources?: readonly string[]) => {
-      const sharingSources = input.external
-        ? []
-        : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+      const sharingSources =
+        input.external || input.document
+          ? []
+          : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
       const skillScopes = [
         ...new Set([
           memoryScopeId,
@@ -188,12 +215,26 @@ export async function resolveTurnContext(input: ContextInput) {
               )
               .catch(swallowAs("context: skill grants for audience", []))
           ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));
+      let visible =
+        (await input.skills?.visibleFor(
+          sources ? skillScopes.filter((scope) => sources.includes(scope)) : skillScopes,
+          sources ? grantedSkills.filter((grant) => sources.includes(grant.ownerScopeId)) : grantedSkills,
+          input.targetScope === personalScope(input.actor.id) &&
+            (input.audienceScopeId ?? input.targetScope) === input.targetScope
+            ? input.targetScope
+            : undefined,
+        )) ?? [];
+      const provenance = visible.flatMap((row) =>
+        [row.skill, ...row.shadowed].flatMap((skill) =>
+          skill ? [artifactProvenance(skill.scopeId, skill.sourceProvenance, skill.personalOnly)] : [],
+        ),
+      );
+      if (provenance.length && (await input.onDisclosure?.(provenance)) === false)
+        visible = visible
+          .filter((row) => !row.skill?.personalOnly)
+          .map((row) => ({ ...row, shadowed: row.shadowed.filter((skill) => !skill.personalOnly) }));
       return {
-        skills:
-          (await input.skills?.visibleFor(
-            sources ? skillScopes.filter((scope) => sources.includes(scope)) : skillScopes,
-            sources ? grantedSkills.filter((grant) => sources.includes(grant.ownerScopeId)) : grantedSkills,
-          )) ?? [],
+        skills: visible,
         sharingSources,
         skillSources: [...new Set([...skillScopes, ...grantedSkills.map((grant) => grant.ownerScopeId)])],
       };

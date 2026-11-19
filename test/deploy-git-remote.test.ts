@@ -50,6 +50,8 @@ async function fixture(): Promise<{
   const app = {
     tenantFor: async () => TEST_TENANT,
     listApps: async () => [publishedApp],
+    getApp: async () => publishedApp,
+    runAppGitRead: async (_id: string, read: () => Promise<unknown>) => read(),
     appGitRepoPath: async (id: string) => (id === publishedApp.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;
   const server: Server = createServer(app, {

@@ -1,3 +1,4 @@
+import { testTenant as cronTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -58,7 +59,7 @@ test(
       assert.equal(await built.directory.get(canonical), null, "the directory row stays keyed by the linked email");
 
       const cron = await makeCron();
-      const disabled = await control.setCronEnabled(cron.id, false, claims(canonical));
+      const disabled = await control.setCronEnabled(cronTenant, cron.id, false, claims(canonical));
       assert.ok(disabled.ok, JSON.stringify(disabled));
       assert.equal((await built.app.getCron(cron.id))?.enabled, false);
       assert.equal(await built.app.authorizesCapabilityScope({ actorId: canonical, scopeId: room }), true);
