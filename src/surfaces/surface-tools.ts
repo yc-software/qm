@@ -52,7 +52,7 @@ import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
 import { sleep } from "../util/async.ts";
 import { foldPrincipalId } from "../directory/person.ts";
-import { stripUnresolvedMentions } from "../slack/mrkdwn.ts";
+import { mentionedUserIds } from "../slack/mrkdwn.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { Item } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
@@ -391,19 +391,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         return { ok: false, message: "This conversation takes text messages only; nothing was sent." };
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
-      let outgoing = postText;
-      let notes: string[] | undefined;
+      let unknownMentions: string[] | undefined;
       if (postText.includes("<@") && deliversOwnMessageTs(destination)) {
         const roster = await rosterForMentions();
-        if (roster.known) {
-          const cleaned = stripUnresolvedMentions(postText, (id) => roster.ids.has(id));
-          if (cleaned.stripped.length) {
-            outgoing = cleaned.text;
-            notes = [
-              `mention(s) ${cleaned.stripped.map((id) => `@${id}`).join(", ")} aren't in this conversation — sent as plain text, nobody was pinged`,
-            ];
-          }
-        }
+        if (roster.known)
+          unknownMentions = [...new Set(mentionedUserIds(postText).filter((id) => !roster.ids.has(id)))];
       }
       const footer = buildDebugFooter();
       const run = input.runId ? await deps.runs?.get(input.runId) : null;
@@ -415,10 +407,17 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(editRef ? { editRef } : {}),
         ...(footer ? { debugFooter: footer } : {}),
       };
-      const sent = await enqueue(projectedDestination, outgoing, seq, f.attachments);
+      const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
       const withAttachments =
         sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
-      return notes?.length ? { ...withAttachments, notes } : withAttachments;
+      if (!unknownMentions?.length) return withAttachments;
+      const raw = unknownMentions.map((id) => `<@${id}>`).join(", ");
+      return {
+        ...withAttachments,
+        notes: [
+          `mention id(s) ${raw} aren't recognized members of this conversation — the message went out as written, so an unverified id may ping an unintended person; edit the message${sent.ok && sent.ts ? ` (ts ${sent.ts})` : ""} to fix it`,
+        ],
+      };
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();

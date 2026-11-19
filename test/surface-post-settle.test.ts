@@ -88,16 +88,26 @@ test("an edit the surface refuses reports the ref wasn't one of the bot's own me
   assert.match(r.message ?? "", /cant_update_message/);
 });
 
-test("mentions of people outside the conversation are sent as plain text and flagged", async () => {
+test("mentions of strangers go out as written and come back flagged with the ts", async () => {
   const { tools, enqueued } = toolsWithDeliveries({
     audience: [{ id: "U2" }],
     directory: async () => new Map([["U2", { principalId: "U2", slackId: "U2" }]]),
   });
   const r = await tools.post("ping <@U2> and <@U999>", undefined);
   assert.equal(r.ok, true);
-  assert.equal(enqueued[0]!.text, "ping <@U2> and @U999", "the roster member stays a mention, the stranger doesn't");
-  assert.match(r.notes?.[0] ?? "", /@U999/);
-  assert.match(r.notes?.[0] ?? "", /nobody was pinged/);
+  assert.equal(enqueued[0]!.text, "ping <@U2> and <@U999>", "the text is never rewritten, member or stranger");
+  assert.match(r.notes?.[0] ?? "", /<@U999>/);
+  assert.match(r.notes?.[0] ?? "", /may ping an unintended person/);
+  assert.match(r.notes?.[0] ?? "", /ts 1\.1/, "the flag points at the message just posted, so it can be edited");
+});
+test("every unverified mention id is flagged once, resolved ids are not", async () => {
+  const { tools } = toolsWithDeliveries({
+    audience: [{ id: "U2" }],
+    directory: async () => new Map([["U2", { principalId: "U2", slackId: "U2" }]]),
+  });
+  const r = await tools.post("ping <@U999> twice <@U999> and <@U2>", undefined);
+  assert.equal((r.notes?.[0] ?? "").match(/<@U999>/g)?.length, 1, "duplicate strangers are listed once");
+  assert.doesNotMatch(r.notes?.[0] ?? "", /U2\b/, "roster members raise no flag");
 });
 
 test("mentions are left untouched when the roster can't be read", async () => {
@@ -108,6 +118,6 @@ test("mentions are left untouched when the roster can't be read", async () => {
   });
   const r = await tools.post("ping <@U999>", undefined);
   assert.equal(r.ok, true);
-  assert.equal(enqueued[0]!.text, "ping <@U999>", "an unreadable roster never rewrites the message");
+  assert.equal(enqueued[0]!.text, "ping <@U999>", "an unreadable roster neither rewrites nor flags the message");
   assert.equal(r.notes, undefined);
 });
