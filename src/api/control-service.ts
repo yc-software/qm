@@ -257,6 +257,9 @@ export async function cronTaskRewrite(
   return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
+const CRON_FIRE_SELF_REWRITE =
+  "a cron's own fire can't rewrite its task or script: the rewrite would be automation-written, which removes the owner's authority and stops the job. Put what later fires should know in the cron note, or publish longer state to Files and put the file ID in the note.";
+
 const WEBHOOK_TASK_OWNER_ONLY =
   "only the webhook's owner can change its task — its fires run as them. Create your own webhook to run a different task as yourself.";
 
@@ -600,6 +603,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return { ok: false, code: "forbidden", message: "not your cron" };
       const patch = patchFromCronPatchRequest(before, req, capability);
       if ("ok" in patch) return patch;
+      if (
+        (req.action !== undefined || req.text !== undefined || req.script !== undefined) &&
+        capability.threadRef?.startsWith(`cron:${id}:fire:`) === true
+      )
+        return { ok: false, code: "bad_request", message: CRON_FIRE_SELF_REWRITE };
       if (req.script !== undefined && !(await ownsCron(app, before, capability.actorId)))
         return { ok: false, code: "forbidden", message: "only the cron's owner can change its script" };
       if (req.script) {

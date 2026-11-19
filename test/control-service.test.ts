@@ -123,6 +123,24 @@ test("a task an automated turn wrote fires without its owner's authority until t
   assert.equal((await built.app.getCron(byPerson.cron.id))?.taskAuthor, "automation");
 });
 
+test("a cron's own fire cannot rewrite its task or script, so its owner's authority survives", async () => {
+  const { built, control } = setup();
+  const typed = claims("U1", undefined, { liveActor: true });
+  const made = await control.createCron({ schedule: { everyMs: 60_000 }, action: "sync the CRM" }, typed);
+  assert.ok(made.ok, JSON.stringify(made));
+  const id = made.cron.id;
+  const ownFire = claims("U1", undefined, { liveActor: true, triggered: true, threadRef: `cron:${id}:fire:1` });
+  for (const req of [{ action: "sync the CRM via the fallback" }, { text: "done" }, { script: null }]) {
+    const res = await control.patchCron(id, req, ownFire);
+    assert.equal(!res.ok && res.code, "bad_request", JSON.stringify(req));
+  }
+  const after = await built.app.getCron(id);
+  assert.equal(after?.action, "sync the CRM");
+  assert.equal(after?.taskAuthor, undefined, "the owner's authority is untouched");
+  const retitled = await control.patchCron(id, { title: "CRM sync" }, ownFire);
+  assert.ok(retitled.ok, "non-task fields stay editable from a fire");
+});
+
 test("the owner rewriting their own shared cron's task keeps ownership and gets no notice", async () => {
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string) =>
