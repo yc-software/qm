@@ -61,7 +61,8 @@ export function connectionCard(
     </button>`;
   const settled = at?.checked && at.outcome !== "checking";
   let next: TemplateResult | typeof nothing = nothing;
-  if (settled && at.stale) next = button("Reconnect", `Reconnect ${service.name}`, at.connect, "btn primary");
+  if (settled && at.stale && at.reconnect)
+    next = button("Reconnect", `Reconnect ${service.name}`, at.reconnect, "btn primary");
   else if (settled && !at.connected && at.outcome === "failed")
     next = button("Try again", `Try connecting ${service.name} again`, at.connect, "btn primary");
   else if (settled && !at.connected) next = button("Connect", `Connect ${service.name}`, at.connect, "btn primary");
@@ -77,7 +78,7 @@ export function connectionCard(
       >
     </span>
     <span class="connection-card-actions"
-      >${settled ? connectionActions(service.name, Boolean(at.working), at.reconnect, at.disconnect) : nothing}${at?.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
+      >${settled ? connectionActions(service.name, Boolean(at.working), at.stale ? undefined : at.reconnect, at.disconnect) : nothing}${at?.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
     >
   </div>`;
 }

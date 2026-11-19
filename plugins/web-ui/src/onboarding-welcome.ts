@@ -341,12 +341,12 @@ export class OnboardingWelcome extends LitElement {
     const service = this.services.find((item) => item.id === this.toolkit);
     if (!service) return this.loading ? connectionCard({ id: this.toolkit }) : undefined;
     const accounts = listed.filter((account) => account.toolkit === service.id);
-    const removable = accounts.filter((account) => account.id);
+    const removable = accounts.filter((account) => account.id && account.id !== this.disconnecting);
     const sole = removable.length === 1 ? removable[0] : undefined;
     const stale = this.staleToolkits().has(service.id);
     const checked = this.preview || this.connectionsChecked;
     const problem = this.connectionError || this.authorizationError;
-    const connect = () => void this.authorize(service, sole?.id ?? this.staleAccount(service.id));
+    const connect = () => void this.authorize(service, sole?.id);
     let working = "";
     if (this.authorizing) working = `Opening ${service.name}…`;
     else if (this.disconnecting) working = "Disconnecting…";
@@ -359,7 +359,7 @@ export class OnboardingWelcome extends LitElement {
       working,
       problem,
       connect,
-      reconnect: sole && !stale ? connect : undefined,
+      reconnect: sole && connect,
       disconnect: sole && (() => this.confirmDisconnect(sole, service.name)),
       recheck:
         (!checked && problem) || (!this.preview && this.connectionOutcome === "failed")

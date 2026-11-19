@@ -35,6 +35,7 @@ test("a verified reconnect removes the replaced connection, and lists both when 
     window.confirm = () => true;
     rows()[0]!.querySelector<HTMLButtonElement>(".kc-text-action.danger")!.click();
     await settle(() => status() === "Connected");
+    assert.equal(status(), "Connected");
     assert.deepEqual(disconnects, [{ accountId: "ca_old" }, { accountId: "ca_old" }]);
     assert.equal(rows().length, 0);
     assert.ok(widget.querySelector(".connection-card.compact"));
