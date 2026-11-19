@@ -221,7 +221,7 @@ test("a founder removed from the workspace cannot self-serve back in", async (t)
   const tenant = await withoutTenant(() => selfServeWorkspace(s.config, { subject: "stayer", email: null }, org));
   const leaver = trustedPrincipal(issuer, "leaver");
   await withTenant(tenant, async () => {
-    await s.built.admin.users.record({ id: leaver, source: "invite", at: Date.now() });
+    await s.built.admin.users.record([{ id: leaver, source: "invite", at: Date.now() }]);
     await s.built.admin.users.markOffboarded(leaver, trustedPrincipal(issuer, "stayer"));
   });
   await assert.rejects(

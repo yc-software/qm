@@ -325,7 +325,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
     assert.equal(adminStatusFromGrants(await built.admin.listGrants(tenant), "casey@acme.test").isAdmin, false);
-    await built.users.record({ id: "B0BOT", source: "turn", at: 1 }).then(() => built.users.markApps(["B0BOT"]));
+    await built.users.record([{ id: "B0BOT", source: "turn", at: 1 }]).then(() => built.users.markApps(["B0BOT"]));
     for (const [principalId, canonicalId] of Object.entries({
       B0BOT: "casey@acme.test",
       [OIDC]: "B0BOT",
@@ -606,7 +606,7 @@ describe("directory sync and bot sign-ins", () => {
       app.principalLinks.link({ principalId, canonicalId, evidence: EVIDENCE, linkedBy: "admin-alice" });
     await link("U0BOT");
     await link("U0STALE", "sso:stale");
-    for (const id of ["U0OLDAPP", "U0RESET"]) await app.users.record({ id, source: "turn", at: 1 });
+    for (const id of ["U0OLDAPP", "U0RESET"]) await app.users.record([{ id, source: "turn", at: 1 }]);
     await app.users.markApps(["U0OLDAPP", "U0RESET", "sso:stale"]);
     const person = (await app.users.get(pat))!;
     const flags = { [pat]: false, U0BOT: true, U0OLDAPP: undefined, U0RESET: false, U0STALE: false };

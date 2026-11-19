@@ -56,6 +56,7 @@ interface SeenPerson {
   id: string;
   source: UserSource;
   at: number;
+  name?: string;
 }
 
 export interface UserStore extends UserLinkStore {
@@ -63,8 +64,7 @@ export interface UserStore extends UserLinkStore {
   get(idOrAlias: string): Promise<UserRecord | null>;
   resolve(aliases: readonly string[]): Promise<Map<string, UserRecord>>;
   activity(): Promise<UserActivity[]>;
-  record(person: SeenPerson): Promise<boolean>;
-  recordAll(people: readonly (SeenPerson & { name?: string })[]): Promise<void>;
+  record(people: readonly SeenPerson[]): Promise<void>;
   linkAll(links: readonly UserLink[]): Promise<{ link: UserLink; error: PrincipalLinkError }[]>;
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
@@ -346,27 +346,42 @@ async function findUser(q: Query, alias: string): Promise<string | undefined> {
 }
 
 export async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
+  return (await ensureUsersIn(client, [alias])).get(alias)!;
+}
+
+async function ensureUsersIn(client: PoolClient, aliases: readonly string[]): Promise<Map<string, string>> {
   const q = onClient(client);
-  const found = await findUser(q, alias);
-  if (found) return found;
+  const find = async (wanted: readonly string[]) =>
+    (await q(`SELECT alias_id, user_id FROM user_links WHERE alias_id = ANY($1::text[])`, [wanted])).map(
+      (r) => [r.alias_id as string, r.user_id as string] as const,
+    );
+  const users = new Map(await find(aliases));
+  const missing = [...new Set(aliases.filter((a) => !users.has(a)))];
+  if (!missing.length) return users;
   const created = (
     await q(
-      `INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
-      [alias],
+      `INSERT INTO users(primary_alias) SELECT unnest($1::text[])
+       ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id, primary_alias`,
+      [missing],
     )
-  )[0]?.id as string | undefined;
-  if (created) {
-    const linked = await q(
-      `INSERT INTO user_links(alias_id, user_id, evidence, created_at) VALUES ($1, $2, 'primary', now())
-       ON CONFLICT (tenant_id, alias_id) DO NOTHING RETURNING alias_id`,
-      [alias, created],
+  ).map((r) => r.id as string);
+  const linked = await q(
+    `INSERT INTO user_links(alias_id, user_id, evidence, created_at)
+       SELECT u.primary_alias, u.id, 'primary', now() FROM users u WHERE u.id = ANY($1::uuid[])
+     ON CONFLICT (tenant_id, alias_id) DO NOTHING RETURNING alias_id, user_id`,
+    [created],
+  );
+  for (const r of linked) users.set(r.alias_id as string, r.user_id as string);
+  if (linked.length < missing.length) {
+    await q(
+      `DELETE FROM users u WHERE u.id = ANY($1::uuid[]) AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.user_id = u.id)`,
+      [created],
     );
-    if (linked.length) return created;
-    await q(`DELETE FROM users WHERE id = $1`, [created]);
+    for (const [alias, user] of await find(missing.filter((a) => !users.has(a)))) users.set(alias, user);
   }
-  const winner = await findUser(q, alias);
-  if (!winner) throw new Error(`users: could not resolve or create a user for ${alias}`);
-  return winner;
+  const lost = missing.find((a) => !users.has(a));
+  if (lost) throw new Error(`users: could not resolve or create a user for ${lost}`);
+  return users;
 }
 
 const MARK_APPS = `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`;
@@ -470,95 +485,36 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async activity() {
       return (await q(ACTIVITY)).map(toActivity);
     },
-    async record({ id, source, at }) {
-      const alias = foldPrincipalId(id);
-      const seen = `UPDATE users u SET first_seen_at = ${ts("$2")}, source = $3
-                     WHERE u.id = $1 AND u.first_seen_at IS NULL RETURNING u.id`;
-      const known = await findUser(q, alias);
-      if (known) return (await q(seen, [known, at, source])).length > 0;
-      return transaction(async (client) => {
-        const user = await ensureUserIn(client, alias);
-        return (await client.query(seen, [user, at, source])).rows.length > 0;
-      });
-    },
-    async recordAll(people) {
+    async record(people) {
       if (!people.length) return;
       const aliases = people.map((p) => foldPrincipalId(p.id));
-      await transaction(async (client) => {
-        const created = (
-          await client.query(
-            `INSERT INTO users(primary_alias)
-               SELECT DISTINCT s.a FROM unnest($1::text[]) AS s(a)
-                WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = s.a)
-             ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
-            [aliases],
-          )
-        ).rows.map((r) => r.id as string);
-        if (created.length) {
-          await client.query(
-            `INSERT INTO user_links(alias_id, user_id, evidence, created_at)
-               SELECT u.primary_alias, u.id, 'primary', now() FROM users u WHERE u.id = ANY($1::uuid[])
-             ON CONFLICT (tenant_id, alias_id) DO NOTHING`,
-            [created],
-          );
-          await client.query(
-            `DELETE FROM users u WHERE u.id = ANY($1::uuid[])
-                AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.user_id = u.id)`,
-            [created],
-          );
-        }
-        await client.query(
-          `UPDATE users u SET
-             first_seen_at = coalesce(u.first_seen_at, ${ts("s.at")}),
-             source = CASE WHEN u.first_seen_at IS NULL THEN s.source ELSE u.source END,
-             display_name = coalesce(s.name, u.display_name)
-             FROM unnest($1::text[], $2::bigint[], $3::text[], $4::text[]) AS s(alias, at, source, name)
-             JOIN user_links l ON l.alias_id = s.alias
-            WHERE u.id = l.user_id`,
-          [
-            aliases,
-            people.map((p) => p.at),
-            people.map((p) => p.source),
-            people.map((p) => cleanDisplayName(p.name) ?? null),
-          ],
-        );
-      });
+      const unknown = (
+        await q(
+          `SELECT s.a FROM unnest($1::text[]) AS s(a) WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = s.a)`,
+          [aliases],
+        )
+      ).map((r) => r.a as string);
+      if (unknown.length) await transaction((client) => ensureUsersIn(client, unknown));
+      await q(
+        `UPDATE users u SET
+           first_seen_at = coalesce(u.first_seen_at, ${ts("s.at")}),
+           source = CASE WHEN u.first_seen_at IS NULL THEN s.source ELSE u.source END,
+           display_name = coalesce(s.name, u.display_name)
+           FROM unnest($1::text[], $2::bigint[], $3::text[], $4::text[]) AS s(alias, at, source, name)
+           JOIN user_links l ON l.alias_id = s.alias
+          WHERE u.id = l.user_id`,
+        [
+          aliases,
+          people.map((p) => p.at),
+          people.map((p) => p.source),
+          people.map((p) => cleanDisplayName(p.name) ?? null),
+        ],
+      );
     },
     async linkAll(links) {
-      if (!links.length) return [];
       return transaction(async (client) => {
-        const q = onClient(client);
-        await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
-        const bots = new Set(
-          await findBotSignIns(
-            q,
-            links.flatMap((l) => [l.principalId, l.canonicalId]),
-          ),
-        );
-        const refused = links
-          .filter((l) => bots.has(foldPrincipalId(l.principalId)) || bots.has(foldPrincipalId(l.canonicalId)))
-          .map((link) => ({ link, error: new PrincipalLinkError(400, APP_IS_NOT_A_PERSON) }));
-        const wanted = links.filter((l) => !refused.some((r) => r.link === l));
-        const fresh = wanted.filter((l) => !l.linkedBy);
-        const inserted = new Set(
-          (
-            await q(
-              `INSERT INTO user_links(alias_id, user_id, evidence, created_at)
-                 SELECT DISTINCT ON (s.alias) s.alias, t.user_id, s.evidence, ${ts("s.at")}
-                   FROM unnest($1::text[], $2::text[], $3::text[], $4::bigint[]) AS s(alias, canonical, evidence, at)
-                   JOIN user_links t ON t.alias_id = s.canonical
-                  WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = s.alias)
-               ON CONFLICT (tenant_id, alias_id) DO NOTHING RETURNING alias_id`,
-              [
-                fresh.map((l) => l.principalId),
-                fresh.map((l) => l.canonicalId),
-                fresh.map((l) => l.evidence),
-                fresh.map((l) => l.createdAt),
-              ],
-            )
-          ).map((r) => r.alias_id as string),
-        );
-        for (const link of wanted.filter((l) => !inserted.has(l.principalId)))
+        const refused: { link: UserLink; error: PrincipalLinkError }[] = [];
+        for (const link of links)
           await linkInTransaction(client, link).catch((error: unknown) => {
             if (!(error instanceof PrincipalLinkError)) throw error;
             refused.push({ link, error });

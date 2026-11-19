@@ -14,7 +14,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 test("the bot marker backfill marks what a Slack app user made and nothing a person made", async () => {
   const url = testDatabaseUrl();
   const users = createPostgresUserStore(url);
-  for (const id of ["release-bot", "U1"]) await users.record({ id, source: "turn", at: Date.now() });
+  for (const id of ["release-bot", "U1"]) await users.record([{ id, source: "turn", at: Date.now() }]);
   await users.markApps(["release-bot"]);
   const maps = createPostgresMapFactory(url);
   const creators = { crons: "createdBy", loops: "createdBy", monitors: "createdBy", keychain_asks: "requesterId" };

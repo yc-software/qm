@@ -1038,7 +1038,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "deploy-key", secret: "s" }, await capFor("U_ALICE"))
     ).json()) as any;
-    await built.users.record({ id: "U_BOB", source: "turn", at: Date.now() });
+    await built.users.record([{ id: "U_BOB", source: "turn", at: Date.now() }]);
     const floored = await capFor("U_BOB", "channel:C_INFRA", { botActor: true });
     const res = await post("/v1/keychain/asks", { credential: credential.id, purpose: "deploy" }, floored);
     assert.equal(res.status, 403);

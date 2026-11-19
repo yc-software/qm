@@ -179,7 +179,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
-  if (member.kind === "teammate") await deps.admin!.users.record({ id: email, source: "invite", at: member.createdAt });
+  if (member.kind === "teammate")
+    await deps.admin!.users.record([{ id: email, source: "invite", at: member.createdAt }]);
   await deps.identity.putExternalMember(member);
   const action = created || readmitted ? "external_user.invite" : "external_user.update";
   audit(ctx, {

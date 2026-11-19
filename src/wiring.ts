@@ -1853,8 +1853,7 @@ export function buildApp(
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
     seedsTenant: (tenant) => tenant.id === bootTenant(),
-    beforeSeed: (grants) =>
-      Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
+    beforeSeed: (grants) => users.record(grants.map((g) => ({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
   const emailAuthMembers = config.emailAuthPrincipals?.map((principalId) => ({
     principalId,

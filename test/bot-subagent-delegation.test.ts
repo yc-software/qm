@@ -95,7 +95,7 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
     acl,
     deploy: {} as never,
     deliveries: createDeliveryStore(),
-    users: { record: async () => true, markApps: async (ids: readonly string[]) => apps.push(...ids) },
+    users: { record: async () => {}, markApps: async (ids: readonly string[]) => apps.push(...ids) },
     sessionSyscalls: createSessionSyscalls({
       advisoryLock: testAdvisoryLock(),
       sessions,

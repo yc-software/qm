@@ -111,7 +111,7 @@ export async function recordUser(
   botActor: boolean | undefined,
 ): Promise<void> {
   try {
-    await users.record({ id, source: "turn", at: Date.now() });
+    await users.record([{ id, source: "turn", at: Date.now() }]);
     if (botActor) await users.markApps([id]);
   } catch (err) {
     reportFailure("users: record user", err);

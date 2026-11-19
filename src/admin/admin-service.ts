@@ -132,7 +132,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         grantedBy: `trusted-oidc:${issuer}`,
         createdAt: now(),
       };
-      await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
+      await opts.users.record([{ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() }]);
       const created = (await grants.addIfAbsent(tenant, [grant])).length > 0;
       return { grant, created };
     },
@@ -161,7 +161,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
             createdAt: at,
           })),
       );
-      await opts.users.recordAll(
+      await opts.users.record(
         admitted.map(({ person, principalId }) => ({ id: principalId, source: "admin", at, name: person.name })),
       );
       const unlinked = await opts.users.linkAll(
@@ -199,7 +199,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         throw new AdminError(400, `org_admin scope must be org:${orgId}`);
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
-      await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
+      await opts.users.record([{ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() }]);
       await grants.add(tenant, grant);
       return grant;
     },

@@ -20,12 +20,12 @@ const unique = (name: string) => `${name}-${randomUUID().slice(0, 8)}@example.co
 test("a person joins the roster once, folded to one row, and keeps their first arrival", async () => {
   const pat = unique("pat");
   const roster = store();
-  await roster.record({ id: pat.toUpperCase(), source: "turn", at: Date.now() });
+  await roster.record([{ id: pat.toUpperCase(), source: "turn", at: Date.now() }]);
   const row = (await roster.get(pat))!;
   assert.deepEqual([row.principalId, row.source], [pat, "turn"]);
   assert.match(row.id, /^[0-9a-f-]{36}$/, "the user's key is a generated id, not the sign-in");
   assert.equal(typeof row.firstSeenAt, "number");
-  await roster.record({ id: pat, source: "admin", at: Date.now() });
+  await roster.record([{ id: pat, source: "admin", at: Date.now() }]);
   assert.deepEqual([(await roster.get(pat))!.source, (await roster.get(pat))!.firstSeenAt], ["turn", row.firstSeenAt]);
   assert.equal((await roster.list()).filter((u) => u.principalId === pat).length, 1);
 });
@@ -34,7 +34,7 @@ test("a user is a person until marked as an app; marking never creates a row or 
   const bot = `U-${randomUUID().slice(0, 8)}`;
   const absent = `U-${randomUUID().slice(0, 8)}`;
   const roster = store();
-  await roster.record({ id: bot, source: "turn", at: Date.now() });
+  await roster.record([{ id: bot, source: "turn", at: Date.now() }]);
   assert.equal((await roster.get(bot))?.kind, "person");
   assert.equal(await roster.markApps([bot, absent]), 1);
   assert.equal((await roster.get(bot))?.kind, "app");
@@ -49,7 +49,7 @@ test("a link refuses an app user unless its directory row says it is a person, a
   const app = `U-${randomUUID().slice(0, 8)}`;
   const pat = unique("pat");
   const roster = store();
-  await roster.record({ id: app, source: "turn", at: Date.now() });
+  await roster.record([{ id: app, source: "turn", at: Date.now() }]);
   await roster.markApps([app]);
   const link = { principalId: app, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() };
   await assert.rejects(roster.link(link), PrincipalLinkError);
@@ -69,7 +69,7 @@ test("offboarding sets offboarded_at once; reactivation clears it", async () => 
   const retry = await roster.markOffboarded(leaver.toUpperCase(), "admin-bob");
   assert.deepEqual([retry.offboardedAt, retry.offboardedBy], [first.offboardedAt, "admin-alice"]);
 
-  await roster.record({ id: leaver, source: "turn", at: Date.now() });
+  await roster.record([{ id: leaver, source: "turn", at: Date.now() }]);
   const seen = (await roster.get(leaver))!;
   assert.deepEqual([seen.offboardedBy, seen.source], ["admin-alice", "turn"], "a first arrival keeps the offboarding");
 
@@ -91,8 +91,8 @@ test("linking merges the sign-in's row into its user, and later writes for it la
     (await db.q("SELECT primary_alias FROM users WHERE primary_alias = ANY($1)", [[sam, slack]]))
       .map((r) => r.primary_alias as string)
       .sort();
-  await roster.record({ id: sam, source: "admin", at: 200 });
-  await roster.record({ id: slack, source: "turn", at: 150 });
+  await roster.record([{ id: sam, source: "admin", at: 200 }]);
+  await roster.record([{ id: slack, source: "turn", at: 150 }]);
   const { offboardedAt: slackOffboarded } = await backing.markOffboarded(slack, "admin-bob");
   await new Promise((r) => setTimeout(r, 5));
   await backing.markOffboarded(sam, "admin-alice");
@@ -111,7 +111,7 @@ test("linking merges the sign-in's row into its user, and later writes for it la
     assert.equal((await roster.get(slack))?.principalId, sam, "the sign-in reads as its user");
     assert.equal((await roster.get(slack))?.id, (await roster.get(sam))?.id);
 
-    await backing.record({ id: slack, source: "turn", at: 1 });
+    await backing.record([{ id: slack, source: "turn", at: 1 }]);
     await backing.markOffboarded(slack, "admin-carol");
     assert.deepEqual(await rowIds(), [sam], "writes under the sign-in resolve to the user");
     assert.equal((await roster.markReactivated(slack))?.offboardedAt, undefined);
@@ -158,8 +158,8 @@ test("the same sign-in is a separate user in each tenant, and a link stays in it
   const pat = unique("pat");
   const alias = `U-${randomUUID().slice(0, 8)}`;
   try {
-    await withTenant(a, () => roster.record({ id: pat, source: "turn", at: Date.now() }));
-    await withTenant(b, () => roster.record({ id: pat, source: "invite", at: Date.now() }));
+    await withTenant(a, () => roster.record([{ id: pat, source: "turn", at: Date.now() }]));
+    await withTenant(b, () => roster.record([{ id: pat, source: "invite", at: Date.now() }]));
     const inA = (await withTenant(a, () => roster.get(pat)))!;
     const inB = (await withTenant(b, () => roster.get(pat)))!;
     assert.notEqual(inA.id, inB.id);
@@ -185,10 +185,10 @@ test("activity is one row per user across every linked sign-in, counting only th
   const slack = `U-${randomUUID().slice(0, 8)}`;
   const quiet = `U-${randomUUID().slice(0, 8)}`;
   const stranger = `U-${randomUUID().slice(0, 8)}`;
-  await roster.record({ id: pat, source: "turn", at: 1 });
-  await roster.record({ id: slack, source: "turn", at: 2 });
+  await roster.record([{ id: pat, source: "turn", at: 1 }]);
+  await roster.record([{ id: slack, source: "turn", at: 2 }]);
   await roster.link({ principalId: slack, canonicalId: pat, evidence: "qa", linkedBy: "", createdAt: Date.now() });
-  await roster.record({ id: quiet, source: "turn", at: 3 });
+  await roster.record([{ id: quiet, source: "turn", at: 3 }]);
   await roster.markApps([quiet]);
 
   const dm = await sessions.getOrCreateByThread(`dm:${randomUUID()}`, "dm", scopeId("personal", pat));
@@ -249,7 +249,7 @@ test("resolve and get find a user by any sign-in or by its id, with every sign-i
   const roster = store();
   const pat = unique("pat");
   const slack = `U-${randomUUID().slice(0, 8)}`;
-  await roster.record({ id: pat, source: "turn", at: 1 });
+  await roster.record([{ id: pat, source: "turn", at: 1 }]);
   await roster.link({ principalId: slack, canonicalId: pat, evidence: "qa", linkedBy: "", createdAt: Date.now() });
   const user = (await roster.get(pat))!;
   assert.deepEqual(user.aliases, [pat, slack]);
@@ -291,11 +291,11 @@ test("linking keeps the name a sign-in already had, and labels fall back to an e
   const oidc = `oidc:issuer:${randomUUID().slice(0, 8)}`;
   const roster = store();
   await roster.setDisplayName(oidc, "Grace Hopper");
-  await roster.record({ id: email, source: "turn", at: Date.now() });
+  await roster.record([{ id: email, source: "turn", at: Date.now() }]);
   await roster.link({ principalId: oidc, canonicalId: email, evidence: "sso", linkedBy: "", createdAt: 0 });
   assert.equal(personLabel(email, { user: await roster.get(email) }), "Grace Hopper");
   const bare = `oidc:issuer:${randomUUID().slice(0, 8)}`;
-  await roster.record({ id: bare, source: "turn", at: Date.now() });
+  await roster.record([{ id: bare, source: "turn", at: Date.now() }]);
   assert.equal(personLabel(bare, { user: await roster.get(bare) }), UNKNOWN_PERSON);
   const mailOnly = unique("mail");
   await roster.link({ principalId: bare, canonicalId: mailOnly, evidence: "sso", linkedBy: "", createdAt: 0 });

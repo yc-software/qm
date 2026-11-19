@@ -214,7 +214,7 @@ test("two tenants keep separate rosters and links under the login that does not 
     const link = { principalId: "U1", evidence: "sso", linkedBy: "", createdAt: 0 };
     await withTenant(a, () => users.link({ ...link, canonicalId: "pat@a.test" }));
     await withTenant(b, () => users.link({ ...link, canonicalId: "quinn@b.test" }));
-    await withTenant(b, () => users.record({ id: "quinn@b.test", source: "turn", at: 1 }));
+    await withTenant(b, () => users.record([{ id: "quinn@b.test", source: "turn", at: 1 }]));
     await withTenant(a, () => users.markOffboarded("pat@a.test", "admin@a.test"));
     const linked = async (tenant: string) =>
       (await withTenant(tenant, () => users.links())).map((l) => [l.principalId, l.canonicalId]);
