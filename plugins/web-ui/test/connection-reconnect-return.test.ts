@@ -32,11 +32,13 @@ test("a verified reconnect removes the replaced connection only after the new on
       returnKey: "reply:1:0:0",
     });
     document.querySelector(".message-stack")!.append(widget);
-    for (let i = 0; i < 200 && !(disconnects.length && /Gmail connected/.test(widget.textContent ?? "")); i++)
+    const status = () => widget.querySelector(".connection-card-status")?.textContent?.trim();
+    for (let i = 0; i < 200 && !(disconnects.length && status() === "Connected"); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
     assert.deepEqual(disconnects, [{ accountId: "ca_old" }]);
-    assert.equal(widget.querySelectorAll(".connection-connected > span").length, 1);
-    assert.doesNotMatch(widget.textContent ?? "", /needs new permissions/);
+    assert.equal(status(), "Connected");
+    assert.equal(widget.querySelector(".connection-card .btn.primary"), null);
+    assert.ok(widget.querySelector(".connection-card.fresh"));
   } finally {
     await h.close();
   }

@@ -1,0 +1,59 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { harness } from "./deep-link-boot-fixture.ts";
+
+const settle = async (done: () => boolean) => {
+  for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+};
+
+test("a card for one app asks for that app alone and never shows the person's other apps", async () => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const asked: string[] = [];
+  const h = await harness({
+    path: "/s/sess-deep",
+    api: (path) => {
+      if (path.startsWith("/api/composio/connections"))
+        return held.then(() =>
+          Response.json({
+            items: [
+              { id: "ca_teams", toolkit: "microsoft_teams", missingScopes: ["offline_access"] },
+              { id: "ca_point", toolkit: "share_point", missingScopes: [] },
+            ],
+            nextCursor: null,
+          }),
+        );
+      if (!path.startsWith("/api/composio/toolkits")) return undefined;
+      asked.push(new URL(path, "http://localhost").searchParams.get("toolkit") ?? "");
+      return held.then(() =>
+        Response.json({ items: [{ id: "gmail", name: "Gmail", description: "Email" }], nextCursor: null }),
+      );
+    },
+  });
+  try {
+    await h.boot();
+    const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
+      me: { org: "test", user: "tester" },
+      widget: "apps",
+      setupOnly: true,
+      toolkit: "gmail",
+      returnKey: "reply:1:0:0",
+    });
+    document.querySelector(".message-stack")!.append(widget);
+    await settle(() => Boolean(widget.querySelector(".connection-card")));
+    const waiting = widget.querySelector(".connection-card")!;
+    assert.equal(waiting.getAttribute("aria-busy"), "true");
+    assert.ok(waiting.querySelector('.connector-logo[data-service="gmail"]'), "the logo is there from the first frame");
+    assert.equal(widget.textContent?.trim(), "");
+    release();
+    const status = () => widget.querySelector(".connection-card-status")?.textContent?.trim();
+    await settle(() => status() === "Not connected");
+    assert.equal(widget.querySelector(".connection-card strong")?.textContent, "Gmail");
+    assert.equal(widget.querySelector(".connection-card .btn.primary")?.getAttribute("aria-label"), "Connect Gmail");
+    assert.equal(widget.querySelector(".connection-card .btn:not(.primary)"), null);
+    assert.doesNotMatch(widget.textContent ?? "", /teams|share_point|permissions|Loading/i);
+    assert.deepEqual(asked, ["gmail"]);
+  } finally {
+    await h.close();
+  }
+});
