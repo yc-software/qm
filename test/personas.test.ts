@@ -670,4 +670,14 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
   assert.equal(bob.reply.includes("## Persona:"), false);
   assert.equal((await built.sessions.get(bob.sessionId))?.personaId, undefined);
   assert.match(bob.reply, /route-ada picked the persona .* can.t use it here/);
+
+  const bea = ok(await personas.create(ALICE, { name: "Bea" }));
+  ok(
+    await personas.setAccess(ALICE, bea.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: "channel:C_BEA", role: "read", pinned: true },
+    ]),
+  );
+  const pinned = await sysprompt(ALICE, { kind: "channel", channelRef: "C_BEA", threadRef: "channel:C_BEA:t1" });
+  assert.match(pinned.reply, /## Persona: Bea[\s\S]*route-ada picked the persona .* already wears Bea, pinned here/);
 });

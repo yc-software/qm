@@ -348,8 +348,13 @@ export async function routedPersonaTurn(
   actorId: string,
   contextScope: ScopeId,
 ): Promise<{ turn: PersonaForTurn | string | null; note?: string }> {
-  if (!routed?.persona || routed.persona === personaId)
-    return { turn: await personas.forTurn(personaId, actorId, contextScope) };
+  const current = await personas.forTurn(personaId, actorId, contextScope);
+  if (!routed?.persona || routed.persona === personaId) return { turn: current };
+  if (current && typeof current === "object")
+    return {
+      turn: current,
+      note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but this conversation already wears ${current.persona.name}${current.pinned ? ", pinned here," : ""} which takes precedence.`,
+    };
   const picked = await personas.forTurn(routed.persona, actorId, contextScope);
   if (picked && typeof picked === "object")
     return {
@@ -357,7 +362,7 @@ export async function routedPersonaTurn(
       note: `The decision rule ${routed.ruleId} routed this conversation to the persona ${picked.persona.name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`,
     };
   return {
-    turn: await personas.forTurn(personaId, actorId, contextScope),
+    turn: current,
     note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but the sender can't use it here, so the conversation's persona is unchanged. A persona owner can share it with them, or an org admin can change ${routed.ruleId} in Settings → Decision rules.`,
   };
 }
