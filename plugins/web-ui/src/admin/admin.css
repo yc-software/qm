@@ -2748,9 +2748,12 @@
 }
 #app-view .cred-group {
   border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
-  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+  background: var(--background);
   border-radius: 14px;
   overflow: hidden;
+}
+html.dark #app-view .cred-group {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
 }
 #app-view .cred-row {
   all: unset;
