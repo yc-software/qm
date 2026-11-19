@@ -381,7 +381,7 @@ test("an attested connector refuses a call outside its person's own conversation
 test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
   installPrincipalLinks({
     canonical: (key) => (["alice@example.com", "U_ALICE", "system:digest"].includes(key) ? "U_ALICE" : undefined),
-    aliases: () => [],
+    aliases: (key) => (key === "U_ALICE" ? ["alice@example.com", "provider:stable-7", "bad\nvalue"] : []),
   });
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, {
@@ -402,6 +402,10 @@ test("attested connectors send one canonical person and never call for an actor 
     );
   assert.ok(mcp.requests.length > 0);
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U_ALICE"]));
+  assert.deepEqual(
+    new Set(mcp.requests.map((r) => r.aliases)),
+    new Set([JSON.stringify(["alice@example.com", "provider:stable-7"])]),
+  );
   const sent = mcp.requests.length;
   await assert.rejects(
     service.call("records", { operation: "search" }, "system:digest", undefined, "personal:U_ALICE"),
@@ -488,10 +492,13 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     ["alice", "bob"],
   );
   assert.deepEqual(authFor("tools/call").sort(), ["Bearer alice-token", "Bearer bob-token"]);
-  await users.setConnectorToken(host, "internal:alice", { accessToken: "rotated-alice" });
+  installPrincipalLinks({ canonical: (k) => (k === "alice@x.test" ? "internal:alice" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  await users.setConnectorToken(host, "alice@x.test", { accessToken: "rotated-alice" });
   await service.call("crm_query", { q: "rotated" }, "internal:alice");
   assert.equal(authFor("tools/call").at(-1), "Bearer rotated-alice");
-  await users.deleteConnectorToken(host, "internal:alice");
+  assert.equal(await service.call("crm_query", { q: "linked" }, "alice@x.test"), "linked");
+  await users.deleteConnectorToken(host, "alice@x.test");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
   await assert.rejects(service.call("crm_query", {}), /requires a connected user/);
   await assert.rejects(
@@ -500,7 +507,10 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
   );
   await users.setConnectorToken(host, "internal:bob", { accessToken: "expired", expiresAt: 1 });
   await assert.rejects(service.call("crm_query", {}, "internal:bob"), /Connect your account/);
-  assert.equal(authFor("tools/call").length, 3);
+  assert.equal(authFor("tools/call").length, 4);
+  await users.setConnectorToken(host, "alice@x.test", { accessToken: "relinked" });
+  installPrincipalLinks(null);
+  assert.equal(await users.connectorAccessToken(host, "internal:alice"), "relinked");
 });
 
 test("per-user mode fails closed without a keychain and shared mode preserves existing behavior", async (t) => {
@@ -702,6 +712,36 @@ test("a connector set to attest in any audience acts as the signed-in person who
   assert.deepEqual(
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
     ["U1", "U2"],
+  );
+  service.close();
+});
+
+test("an app a connector serves is connected for a person only when that person's tool list carries a tool named for it", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "inbox", description: "Read mail", inputSchema: { type: "object" } }],
+  });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  const app = (toolkit: string) => ({ toolkit, name: toolkit, connectUrl: `https://host.example/${toolkit}` });
+  const apps = [app("inbox"), app("calendar")];
+  await store.put(server({ id: "host", url: mcp.url, catalog: true, attestActor: true, apps }));
+  const status = async (person: string) =>
+    (await service.appConnections(person, await store.list())).map((entry) => [
+      entry.toolkit,
+      entry.connector,
+      entry.connected,
+    ]);
+  assert.deepEqual(await status("alice@example.com"), [
+    ["inbox", "host", true],
+    ["calendar", "host", false],
+  ]);
+  assert.deepEqual(
+    new Set(mcp.requests.filter((r) => r.rpc === "tools/list").map((r) => r.actor)),
+    new Set(["alice@example.com"]),
+  );
+  assert.deepEqual(
+    (await status("jörg@example.com")).map(([, , connected]) => connected),
+    [false, false],
   );
   service.close();
 });

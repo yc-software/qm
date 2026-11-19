@@ -6,7 +6,7 @@ export function commandApprovalId(sessionId: string, command: string, approvalKe
 }
 
 export function inputApprovalId(sessionId: string, request: unknown): string {
-  return hashId([sessionId, "security-screen", JSON.stringify(request ?? null)]);
+  return hashId([sessionId, "security-screen", canonicalJson(request ?? null)]);
 }
 
 const TOOL_CALL_APPROVAL_PREFIX = "tool-call:";

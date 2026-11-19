@@ -1342,6 +1342,12 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(await secret(), "relogin");
     assert.equal((await save("typed", live)).status, 200);
     assert.equal(await secret(), "typed");
+
+    const ended = await capFor(owner, undefined, { ...liveRunClaims(owner), runId: "ended-run" });
+    assert.equal((await save("swapped", ended)).status, 403);
+    const next = (await (await post("/v1/keychain/login-tickets", { service: "gh" }, live)).json()) as any;
+    assert.equal((await save("after the turn", ended, next.loginTicket)).status, 200);
+    assert.equal(await secret(), "after the turn");
   });
 
   it("a credential's writer lease admits one holder until it is released or ends", async () => {

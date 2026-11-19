@@ -26,6 +26,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -60,7 +61,7 @@ async function start(withConfig = true) {
     ...(withConfig ? { config: built.config } : {}),
     auditLog: built.auditLog,
     sessions: built.sessions,
-    runs: built.runs,
+    runs: liveRunStore(built.runs),
     errors: built.errors,
     keychain,
     capabilitySecret: SECRET,
@@ -80,6 +81,7 @@ const capFor = async (
     scope?: string;
     triggered?: boolean;
     botActor?: boolean;
+    runId?: string;
   } = {},
 ) => {
   const aud = opts.aud === undefined ? CONTROL_PLANE_AUD : opts.aud;
@@ -88,7 +90,9 @@ const capFor = async (
       actorId,
       scopeId: opts.scope ?? scopeId("personal", actorId),
       ...(aud === null ? {} : { aud }),
-      ...(opts.live === false ? {} : { liveActor: true }),
+      ...liveRunClaims(actorId),
+      liveActor: opts.live !== false,
+      ...(opts.runId ? { runId: opts.runId } : {}),
       ...(opts.liveAuthor ? { liveAuthor: true } : {}),
       ...(opts.triggered ? { triggered: true } : {}),
       ...(opts.botActor ? { botActor: true } : {}),
@@ -102,16 +106,19 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
   const s = await start();
   try {
     const cap = await capFor("admin-alice");
+    const ended = await capFor("admin-alice", { runId: "ended-run" });
     await s.built.memory.capture(ORG, ["seed"], 0);
-    const putRes = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
-      method: "PATCH",
-      headers: { "x-agent-capability": cap, "content-type": "application/json" },
-      body: JSON.stringify({ facts: [{ id: "1", text: "standup is 9:30 every day." }] }),
-    });
-    assert.equal(putRes.status, 200);
+    const patch = (token: string, text: string) =>
+      fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
+        method: "PATCH",
+        headers: { "x-agent-capability": token, "content-type": "application/json" },
+        body: JSON.stringify({ facts: [{ id: "1", text }] }),
+      });
+    assert.equal((await patch(cap, "standup is 9:30 every day.")).status, 200);
+    assert.equal((await patch(ended, "written after the turn ended")).status, 403);
 
     const getRes = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
-      headers: { "x-agent-capability": cap },
+      headers: { "x-agent-capability": ended },
     });
     assert.equal(getRes.status, 200);
     assert.match(((await getRes.json()) as any).content, /standup is 9:30/);
@@ -137,7 +144,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
       actorId: "admin-alice",
       scopeId: "channel:C1",
       aud: CONTROL_PLANE_AUD,
-      liveActor: true,
+      ...liveRunClaims("admin-alice"),
       liveAuthor: true,
       members,
       keychainMembers: members,
@@ -612,10 +619,19 @@ for (const [name, input, read, expected] of [
     const s = await start();
     try {
       await selectDefaultSandbox(s.built, "admin-alice", "channel:C1");
-      let cap: string | undefined;
+      const statuses: number[] = [];
       const provision = s.built.sandbox.provision.bind(s.built.sandbox);
-      s.built.sandbox.provision = (owner, opts) => {
-        cap = opts?.env?.AGENT_API_TOKEN;
+      s.built.sandbox.provision = async (owner, opts) => {
+        const cap = opts?.env?.AGENT_API_TOKEN;
+        if (cap && !statuses.length) {
+          statuses.push((await fetch(`${s.base}/v1/admin/users`, { headers: { "x-agent-capability": cap } })).status);
+          const res = await fetch(`${s.base}/v1/admin/scopes/${ORG}/security-posture`, {
+            method: "PUT",
+            headers: { "x-agent-capability": cap, "content-type": "application/json" },
+            body: JSON.stringify({ posture: "auto" }),
+          });
+          statuses.push(res.status);
+        }
         return provision(owner, opts);
       };
       const admin = { externalId: "admin-alice" };
@@ -633,15 +649,7 @@ for (const [name, input, read, expected] of [
         ...input,
       });
       assert.equal(result.status, "ok");
-      assert.ok(cap);
-      const users = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-agent-capability": cap } });
-      assert.equal(users.status, read);
-      const res = await fetch(`${s.base}/v1/admin/scopes/${ORG}/security-posture`, {
-        method: "PUT",
-        headers: { "x-agent-capability": cap, "content-type": "application/json" },
-        body: JSON.stringify({ posture: "auto" }),
-      });
-      assert.equal(res.status, expected);
+      assert.deepEqual(statuses, [read, expected]);
     } finally {
       await s.close();
     }

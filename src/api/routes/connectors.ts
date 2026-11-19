@@ -304,7 +304,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
-  if (!(await livePersonTurn(ctx))) return;
+  if (!livePersonTurn(ctx)) return;
   const b = body as {
     provider?: unknown;
     accountType?: unknown;
@@ -484,7 +484,7 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
 
 async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
-  if (!(await livePersonTurn(ctx))) return;
+  if (!livePersonTurn(ctx)) return;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;

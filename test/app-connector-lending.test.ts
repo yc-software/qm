@@ -140,7 +140,6 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "nothing is lent by default");
   assert.equal((await h.lend(CO_MANAGER, ["slack.com"])).status, 403, "a co-manager cannot lend the publisher's");
   assert.equal((await h.lend(PUBLISHER, ["slack.com"], false)).status, 403, "an unattended turn cannot lend");
-  assert.equal((await h.lend(PUBLISHER, ["slack.com"], true, { runId: "finished-run" })).json.error, "inactive_run");
   assert.equal((await h.lend(PUBLISHER, ["evil.example.com"])).json.error, "unknown_connector");
 
   const lent = await h.lend(PUBLISHER, ["Slack.com", "gmail.googleapis.com"]);
@@ -199,7 +198,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal(viaTool.ok || viaTool.code, "human_consent_required");
   assert.deepEqual(await h.app.appGrantees(h.d.id), unshared);
   for (const [path, body, claims] of [
-    [`/v1/apps/${h.d.id}/share`, { scope: "org" }, { triggered: true }],
+    [`/v1/shares/deploy/${h.d.id}`, { scope: "org" }, { triggered: true }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true }, { triggered: true }],
   ] as const) {

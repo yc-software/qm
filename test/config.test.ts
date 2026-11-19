@@ -174,14 +174,16 @@ test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unl
     proxied.porterSandbox,
     proxied.agent37Sandbox,
     proxied.renderSandbox,
+    proxied.managedAgentsSandbox,
   ])
     assert.equal(provider.egressProxyUrl, "https://egress.test");
   const exempted = loadConfig({
     EGRESS_PROXY_URL: "https://egress.test",
-    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines",
+    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines, do-managed-agents",
   });
   assert.equal(exempted.e2bSandbox.egressProxyUrl, undefined);
   assert.equal(exempted.smolmachinesSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.managedAgentsSandbox.egressProxyUrl, undefined);
   assert.equal(exempted.modalSandbox.egressProxyUrl, "https://egress.test");
   assert.equal(loadConfig({}).e2bSandbox.egressProxyUrl, undefined);
 });
@@ -201,8 +203,8 @@ test("a retired per-provider egress proxy setting stops boot only when EGRESS_PR
     /No longer read: SMOLMACHINES_EGRESS_PROXY_URL\./,
   );
   assert.throws(
-    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test", EGRESS_PROXY_URL: "https://egress.test" }),
-    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\. DigitalOcean Managed Agents can't be forced/,
+    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test" }),
+    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\..*Set EGRESS_PROXY_URL/,
   );
   const warnings: string[] = [];
   const original = console.warn;
@@ -1034,5 +1036,18 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops
       assert.doesNotMatch(String(e), /PASSWORD|admin/);
       return true;
     },
+  );
+});
+
+test("a workspace provisioner needs a strong signing secret and no deployment model credentials", () => {
+  const signed = {
+    WORKSPACE_PROVISIONER_URL: "http://provisioner.test/provision",
+    CORE_SIGNING_SECRET: "s".repeat(48),
+  };
+  assert.equal(loadConfig(signed).workspaceProvisionerUrl, "http://provisioner.test/provision");
+  assert.throws(() => loadConfig({ ...signed, CORE_SIGNING_SECRET: "" }), /requires CORE_SIGNING_SECRET/);
+  assert.throws(
+    () => loadConfig({ ...signed, OPENAI_API_KEY: "sk-x", CODEX_AUTH_CREDENTIAL: "c" }),
+    /cannot be combined with deployment model credentials: OPENAI_API_KEY, CODEX_AUTH_CREDENTIAL/,
   );
 });

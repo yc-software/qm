@@ -9,6 +9,7 @@ export interface ConnectionService {
   description: string;
   popularity: number;
   logoUrl?: string;
+  connectUrl?: string;
   connected?: boolean;
   stale?: boolean;
 }
@@ -18,7 +19,6 @@ export function mountConnectionPicker(
   services: ConnectionService[],
   onSelect: (service: ConnectionService) => void,
   state: { query: string; expanded: boolean } = { query: "", expanded: false },
-  only?: ConnectionService,
   titled = true,
 ): void {
   let query = state.query;
@@ -32,37 +32,33 @@ export function mountConnectionPicker(
     });
     const shown = expanded || words.length ? matches : matches.slice(0, 6);
     render(
-      html`<section class="connection-picker" aria-label=${only ? `Connect ${only.name}` : "Connect your apps"}>
+      html`<section class="connection-picker" aria-label="Connect your apps">
         ${
           titled
             ? html`<header class="connection-picker-header">
                 <div>
-                  <h3>${only ? `Connect ${only.name}` : "Connect your apps"}</h3>
+                  <h3>Connect your apps</h3>
                 </div>
               </header>`
             : nothing
         }
-        ${
-          only
-            ? nothing
-            : html`<label class="connection-picker-search">
-                  ${icon(Search, 16)}
-                  <input
-                    type="search"
-                    aria-label="Search apps"
-                    placeholder="Search apps…"
-                    .value=${query}
-                    @input=${(event: Event) => {
-                      query = (event.target as HTMLInputElement).value;
-                      state.query = query;
-                      draw();
-                    }}
-                  />
-                </label>
-                <div class="connection-picker-caption" role="status" aria-live="polite">
-                  ${words.length ? `${matches.length} ${matches.length === 1 ? "app" : "apps"} found` : "Popular apps"}
-                </div>`
-        }
+        <label class="connection-picker-search">
+          ${icon(Search, 16)}
+          <input
+            type="search"
+            aria-label="Search apps"
+            placeholder="Search apps…"
+            .value=${query}
+            @input=${(event: Event) => {
+              query = (event.target as HTMLInputElement).value;
+              state.query = query;
+              draw();
+            }}
+          />
+        </label>
+        <div class="connection-picker-caption" role="status" aria-live="polite">
+          ${words.length ? `${matches.length} ${matches.length === 1 ? "app" : "apps"} found` : "Popular apps"}
+        </div>
         <div class="connection-picker-grid">
           ${shown.map((service) => {
             let action = { label: `Connect ${service.name}`, mark: ArrowUpRight };

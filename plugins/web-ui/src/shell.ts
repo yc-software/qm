@@ -344,7 +344,7 @@ function gateShell(body: unknown) {
     <div class="signin">
       <div class="signin-panel">
         <div class="signin-brand">
-          ${brandMark()}<span>${brandName()}</span>
+          ${brandMark()}<span class="brand-name">${brandName()}</span>
           ${authMode === "dev" ? html`<span class="dev-chip">DEV</span>` : nothing}
         </div>
         ${body}

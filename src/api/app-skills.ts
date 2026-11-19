@@ -7,7 +7,7 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
-import { triggerBlocksSharedSkill } from "./artifact-share.ts";
+import { authorPublishesSkill, triggerBlocksSharedSkill } from "./artifact-share.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -241,6 +241,7 @@ export function createSkillMethods(
   | "archiveSkill"
   | "listVisibleSkills"
   | "canManageSkill"
+  | "manageableSkills"
   | "updateOwnedSkill"
   | "restoreOwnedSkill"
   | "listSkillPacks"
@@ -254,7 +255,7 @@ export function createSkillMethods(
   | "createOwnedSkill"
   | "deleteOwnedSkill"
 > {
-  const { canManageSkill, republishIfShared } = h;
+  const { canManageSkill, manageableSkills, republishIfShared } = h;
   return {
     listSkills() {
       return deps.skills.list();
@@ -278,6 +279,7 @@ export function createSkillMethods(
     canManageSkill(skill, principalId, botWork) {
       return canManageSkill(skill, principalId, botWork);
     },
+    manageableSkills,
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
       if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
@@ -418,8 +420,7 @@ export function createSkillMethods(
       const body = input.body.trim();
       if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
       const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
-      const homeKind = parseScopeId(homeScope).kind;
-      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group" && homeKind !== "persona") {
+      if (!authorPublishesSkill(homeScope)) {
         throw new Error(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );

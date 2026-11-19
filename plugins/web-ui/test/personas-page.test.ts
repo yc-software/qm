@@ -116,6 +116,8 @@ const { vite, dom, close } = await browserEnv({
         { session: { id: "s-new", type: "dm", scopeId: "personal:tester", threadRef: "web:tester:new", createdAt: 1 } },
         201,
       );
+    if (path === "/api/sessions/s-new/persona" && method === "PUT")
+      return json({ persona: { id: "p-cy", name: "Cy", sessionModelId: "alpha" } });
     if (path.includes("/persona")) return json({ persona: null });
     if (path.startsWith("/api/sessions/s-new"))
       return json({
@@ -215,7 +217,7 @@ test("when personas are off for the person, Browse has no Personas entry and the
   );
 });
 
-test("Chat starts a conversation and sets its persona before anything is sent", async () => {
+test("Chat starts a conversation, sets its persona before anything is sent, and opens on the model core started it on", async () => {
   const { main } = await mountPage();
   calls = [];
   button(main, "Chat", "Cy").click();
@@ -231,6 +233,9 @@ test("Chat starts a conversation and sets its persona before anything is sent", 
   );
   const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
   assert.equal(sessionsState.list.find((s: { id: string }) => s.id === "s-new")?.personaId, "p-cy");
+  assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("web-ui:model-picks") ?? "[]"), [
+    ["web:tester:new", "alpha"],
+  ]);
 });
 
 test("Fork hands off to QM in a new chat instead of copying on the page", async () => {

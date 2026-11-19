@@ -7,6 +7,8 @@ import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
+import { installPrincipalLinks } from "../src/directory/person.ts";
+
 const SECRET = "super-secret-bearer";
 
 function reader(rec: Partial<DecryptedServiceCredential> & { slug: string }): ServiceCredentialReader {
@@ -324,7 +326,12 @@ test("a missing slug or url is a 400 bad_request", async () => {
   assert.equal((await brokerCredentialCall(base({ body: { credential: "x-firehose" } }))).status, 400);
 });
 
-test("actor attestation is opt-in and taken from capability claims", async () => {
+test("actor attestation is opt-in and taken from capability claims", async (t) => {
+  installPrincipalLinks({
+    canonical: () => undefined,
+    aliases: (id) => (id === "actor-42" ? ["provider:stable-7"] : []),
+  });
+  t.after(() => installPrincipalLinks(null));
   for (const actor of [undefined, false, true]) {
     const cap = captureFetch();
     const result = await brokerCredentialCall(
@@ -341,13 +348,17 @@ test("actor attestation is opt-in and taken from capability claims", async () =>
     );
     assert.equal(result.status, 200);
     assert.equal(cap.calls[0]!.headers["x-qm-actor"], actor ? "actor-42" : undefined);
+    assert.equal(
+      cap.calls[0]!.headers["x-qm-actor-aliases"],
+      actor ? JSON.stringify(["provider:stable-7"]) : undefined,
+    );
     assert.equal(cap.calls[0]!.headers.Authorization, `Bearer ${SECRET}`);
   }
 });
 
 test("callers cannot supply an actor header even when attestation is disabled", async () => {
   for (const actor of [false, true]) {
-    for (const key of ["x-qm-actor", "X-QM-Actor"]) {
+    for (const key of ["x-qm-actor", "X-QM-Actor", "x-qm-actor-aliases", "X-QM-Actor-Aliases"]) {
       const cap = captureFetch();
       const result = await brokerCredentialCall(
         base({
@@ -357,7 +368,7 @@ test("callers cannot supply an actor header even when attestation is disabled", 
         }),
       );
       assert.equal(result.status, 400);
-      assert.deepEqual(result.json, { error: "reserved_header", message: "x-qm-actor is set only by the broker" });
+      assert.deepEqual(result.json, { error: "reserved_header", message: "actor headers are set only by the broker" });
       assert.equal(cap.calls.length, 0);
     }
   }
@@ -379,7 +390,13 @@ test("actor attestation fails closed for malformed identities and injection conf
     assert.equal(denial.error, "invalid_actor");
     assert.match(denial.message, /1 to 256 visible ASCII characters with POST \/v1\/admin\/principal-links/);
   }
-  for (const injection of [{ actor: "yes" }, { header: "X-QM-Actor" }, { scheme: "Bearer\n" }]) {
+  for (const injection of [
+    { actor: "yes" },
+    { header: "X-QM-Actor" },
+    { header: "X-QM-Actor-Aliases" },
+    { headers: { "x-qm-actor-aliases": "[]" } },
+    { scheme: "Bearer\n" },
+  ]) {
     const cap = captureFetch();
     const result = await brokerCredentialCall(
       base({

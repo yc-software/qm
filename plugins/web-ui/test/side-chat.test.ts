@@ -27,6 +27,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
   ];
   let fork: CoreSession | undefined;
   let forkBody: unknown;
+  let turnBody: { threadRef?: string; text?: string } | undefined;
   let failFork = true;
   let failOpen = true;
   let openingSide = false;
@@ -94,6 +95,10 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
           return openReady.then(() => Response.json({ error: "Load temporarily unavailable" }, { status: 503 }));
         }
         return Response.json({ session: fork, items });
+      }
+      if (path === "/api/turn") {
+        turnBody = JSON.parse(String(init?.body));
+        return Response.json({ status: "queued", runId: "run-1" });
       }
       if (path === "/api/sessions/side/expand") {
         assert.equal(init?.method, "POST");
@@ -203,6 +208,12 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     const forkRequests = h.requests.filter((path) => path === "/api/sessions/source/fork").length;
     retry()!.dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
     retry()!.click();
+    const queuedInput = document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!;
+    for (const options of [{ shiftKey: true }, { isComposing: true }, { keyCode: 229 }, {}]) {
+      const key = new window.KeyboardEvent("keydown", { key: "Enter", ...options, bubbles: true, cancelable: true });
+      queuedInput.dispatchEvent(key);
+      assert.equal(key.defaultPrevented, !Object.keys(options).length);
+    }
     await until(() => Boolean(document.querySelector(".side-chat-conversation textarea")));
     assert.equal(h.requests.filter((path) => path === "/api/sessions/source/fork").length, forkRequests);
     assert.equal(document.querySelector(".side-chat-panel .fork-origin-badge"), null);
@@ -212,10 +223,10 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
       document.querySelector(".side-chat-layout > .custom-chat-shell")!.textContent!,
       /Use durable, then durable shared queue/,
     );
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>(".side-chat-conversation textarea")!.value,
-      "Explain this while loading",
-    );
+    await until(() => Boolean(turnBody));
+    assert.equal(turnBody!.threadRef, "web:tester:side");
+    assert.match(turnBody!.text!, /durable[\s\S]*Explain this while loading$/);
+    assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-conversation textarea")!.value, "");
     document.querySelector<HTMLButtonElement>('.side-chat-panel [aria-label="Expand side chat"]')!.click();
     document.querySelector<HTMLButtonElement>('.side-chat-panel [aria-label="Remove excerpt"]')!.click();
     assert.equal(document.querySelector(".side-chat-excerpt"), null);

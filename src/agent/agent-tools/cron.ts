@@ -32,6 +32,20 @@ interface CronLike {
   botActor?: boolean;
   loopId?: string;
   taskAuthor?: "automation";
+  sharedFrom?: string;
+  sharedBy?: string;
+  forkedAt?: number;
+  copies?: Array<{ id: string; owner: string; status: string }>;
+}
+
+function fmtSharing(c: CronLike): string {
+  let out = "";
+  if (c.sharedFrom)
+    out += c.forkedAt
+      ? `\n    shared copy of ${c.sharedFrom}${c.sharedBy ? ` (${c.sharedBy})` : ""}, since edited here: the original's edits no longer reach it`
+      : `\n    linked copy of ${c.sharedFrom}${c.sharedBy ? ` (${c.sharedBy})` : ""}: the original's edits reach it until it is edited here${c.enabled ? "" : "; paused until its owner turns it on"}`;
+  if (c.copies?.length) out += `\n    shared with: ${c.copies.map((k) => `${k.owner} (${k.status})`).join(", ")}`;
+  return out;
 }
 
 function fmtCronLine(c: CronLike, preview = false): string {
@@ -58,7 +72,7 @@ function fmtCronLine(c: CronLike, preview = false): string {
   else if (!preview && c.taskAuthor === "automation")
     authority =
       "\n    authority: none — an automated turn wrote this task; its owner restores theirs by rewriting it on a turn they send";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${note}`;
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${preview ? "" : fmtSharing(c)}${note}`;
 }
 
 function fmtCronCreated(r: {
@@ -218,6 +232,12 @@ export function cronTools(kit: ToolKit) {
           { description: "create/patch: the task cron's script (patch replaces; null removes)." },
         ),
       ),
+      persona: Type.Optional(
+        Type.String({
+          description:
+            "create: a persona (name or id) that owns the cron and runs it as itself; works from any conversation for the persona's owners and write holders.",
+        }),
+      ),
       enabled: Type.Optional(Type.Boolean({ description: "patch: false pauses, true resumes." })),
       archived: Type.Optional(Type.Boolean({ description: "patch: true archives the cron." })),
       limit: Type.Optional(
@@ -271,6 +291,7 @@ export function cronTools(kit: ToolKit) {
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.script ? { script: params.script } : {}),
+            ...(params.persona ? { persona: params.persona } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {

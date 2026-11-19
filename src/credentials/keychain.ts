@@ -793,8 +793,10 @@ export function createKeychain(deps: {
     token: OAuthToken,
     accountType?: string,
   ): Promise<KeychainCredential> {
-    const id = oauthId(host, principalId, accountType);
-    const rec = connectorRec(id, host, principalId, token, accountType, await deps.creds.get(id));
+    const prior = await connectorRecord(host, principalId, accountType);
+    const ownerId = prior?.ownerId ?? canonicalPerson(principalId);
+    const id = prior?.id ?? oauthId(host, ownerId, accountType);
+    const rec = connectorRec(id, host, ownerId, token, accountType, prior);
     await deps.creds.put(id, rec);
     return rec;
   }
@@ -804,7 +806,9 @@ export function createKeychain(deps: {
     principalId: string,
     accountType?: string,
   ): Promise<KeychainCredential | null> {
-    return deps.creds.get(oauthId(host, principalId, accountType));
+    const ids = [...new Set([principalId, ...personIds(principalId)])].map((id) => oauthId(host, id, accountType));
+    const recs = await deps.creds.getMany(ids);
+    return ids.map((id) => recs.find((rec) => rec.id === id)).find((rec) => rec !== undefined) ?? null;
   }
 
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
@@ -1268,9 +1272,9 @@ export function createKeychain(deps: {
     createGrant: mintGrant,
 
     async grantConnectorToScope({ host, principalId, accountType, audienceScopeId, purpose }) {
-      const id = oauthId(host, principalId, accountType);
-      const cred = await deps.creds.get(id);
+      const cred = await connectorRecord(host, principalId, accountType);
       if (!cred) return null;
+      const id = cred.id;
       for (const g of await deps.grants.all()) {
         if (
           g.credentialId === id &&
@@ -1281,7 +1285,7 @@ export function createKeychain(deps: {
           return g;
         }
       }
-      return mintGrant({ credentialId: id, ownerId: principalId, audienceScopeId, mode: "standing", purpose });
+      return mintGrant({ credentialId: id, ownerId: cred.ownerId, audienceScopeId, mode: "standing", purpose });
     },
 
     async getGrant(id) {
@@ -1516,7 +1520,8 @@ export function createKeychain(deps: {
     },
 
     async deleteConnectorToken(host, principalId, accountType) {
-      await deleteCredential(oauthId(host, principalId, accountType));
+      const rec = await connectorRecord(host, principalId, accountType);
+      if (rec) await deleteCredential(rec.id);
     },
 
     async connectorTokenStatus(host, principalId, accountType) {

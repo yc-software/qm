@@ -82,35 +82,16 @@ if the sender holds a role on the persona (counting the conversation's channel),
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
 
-An org admin can also route conversations to personas with a decision rule on the `persona`
-hook (Settings → Decision rules). Its options are `keep` or `use_persona` with a `persona` id,
-and its `onError` must be a `keep` option. The hook runs on a person's own message (a Slack or
-web message, or a turn a person submits through the API; not cron, webhook, ambient, bot,
-subagent or session-to-session turns) in a conversation that has no persona of its own and no
-pinned one; its state is the surface, the conversation kind
-(`dm`, `group` or `channel`) and the message, so "only in DMs" and which personas exist are part
-of the rule's question and options. When the enforcing rule picks a persona the sender holds a
-role on, the conversation keeps it, the turn wears it, and that turn's context names the rule and
-how to switch. If the sender has no role on it or it no longer exists, the turn goes on without
-one and its `## Personas` block says which rule picked what. Dropping a routed persona
-(`personaId: null`) returns the conversation to routing, so a later message the rule judges
-addressed to a persona routes it again; a message it isn't keeps the conversation as it is.
-Example:
-
-```json
-{
-  "id": "route-research",
-  "hook": "persona",
-  "question": "Is this direct message addressed to the Research persona, by name or as a research request?",
-  "options": {
-    "keep": { "description": "Not a DM, or not for Research", "action": "keep" },
-    "research": { "description": "A DM for Research", "action": "use_persona", "persona": "<persona id>" }
-  },
-  "model": { "provider": "gateway", "model": "<decision model>" },
-  "mode": "enforce",
-  "onError": "keep"
-}
-```
+An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
+Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
+its `turn_start` rules once, before it settles its persona, and model selection reuses the same
+verdicts, so one enforcing rule may pick a persona while another picks a runtime: the hook
+allows one enforcing rule per action. The state the rules see includes the conversation kind
+(`dm`, `group` or `channel`), so "only in DMs" and "addressed to this persona" belong in the
+rule's question and options. Ambient turns are not routed. When the enforcing rule picks a
+persona the conversation isn't already wearing and the sender holds a role on it, the
+conversation adopts it and that turn's context names the rule and how to switch; otherwise the
+persona is unchanged and the context names the rule, the persona and who can fix it.
 
 A cron set up in a conversation with a persona fires as that persona: when it fires, the
 scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
@@ -121,7 +102,7 @@ destination: replies, posts to other conversations, and cron output. Slack posts
 edits those messages under the persona's name and icon, ahead of any deployment-wide
 `SLACK_BOT_DISPLAY_NAME`/`SLACK_BOT_ICON_EMOJI` override (needs `chat:write.customize`, which
 the app manifest requests) (a Unicode emoji maps to its Slack
-shortcode; a custom emoji is used by name; no icon keeps the default), and ends them with a
+shortcode; a custom emoji is used by name; an image icon is sent as its URL; no icon keeps the default), and ends them with a
 `Persona: <name>` context line linking to the persona's page, next to the cron settings
 link when there is one. File uploads and the in-progress task card still show the app's own
 identity, since Slack doesn't let an app rename those.
@@ -170,3 +151,13 @@ access are never copied.
 `?before=&limit=`; who and when, with content only on `&full=1`),
 `POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.
+
+## Default model
+
+A persona can carry a default model, stored as the runtime selection of its `persona:<id>`
+scope and set from the Model panel on the persona's page (or `PUT /v1/runtime-config` with
+that scope; writers only). When a conversation that has no model yet takes the persona,
+core sets the conversation's model to it: on `PUT /v1/sessions/:id/persona`, which returns
+it as `sessionModelId` so the web composer opens on it, and on the first turn in a channel
+or group that pins the persona. From there it is the conversation's own model: a model the
+person picks for the turn still wins, and later turns keep whatever model it last used.

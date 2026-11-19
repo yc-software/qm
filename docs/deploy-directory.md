@@ -188,7 +188,7 @@ files, and so on) as them, the same way apps use org credentials through the bro
 Nothing is lent by default. The publisher opts in per app and per connected-app host with
 `POST /v1/apps/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
 withdraws. Only the publisher may call it, from a live turn or a signed-in session, and
-sharing the app (`POST /v1/apps/:id/share`, or `POST /v1/share` for a deploy) takes the
+sharing the app (`POST /v1/shares/deploy/:id`, or `POST /v1/share` for a deploy) takes the
 same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
@@ -243,7 +243,7 @@ services' private network, so it relays audit records through `apiUrl` (or
 `egress_proxy_hostname` output. On Fly it serves TLS on 443 at
 `<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
 port and leaves TLS to the operator. Then set `env.core.EGRESS_PROXY_URL` to
-`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS` (DigitalOcean Managed Agents is never proxied, see [do-managed-agents.md](do-managed-agents.md)). Update vendored Terraform from the current scaffold
+`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS`. Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
 ### Shared AWS foundations
@@ -259,7 +259,7 @@ An exact `--candidate` deployment consumes its digest-pinned images without chan
 When `securityScreen.mode` is not `off`, the classifier screens external content — inbound data, attachments and documents, shared skills, steering context, and external tool output — under every security posture. Posture only caps enforcement: Dangerous scopes observe, and Auto and Strict follow the deployment mode. Scope posture changes cannot turn screening off; they keep their own tool approvals and private-network policy.
 
 - `observe` classifies in the background and never delays a turn, quarantines, prompts, or adds untrusted-content markers. Each observation is bounded by `SECURITY_SCREEN_TIMEOUT_MS`, the same deadline enforce uses; there is no separate concurrency cap. Observed model screens are not charged to the user's budget.
-- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Content too long for the screen to read does not pass through: a message waits for a once-only approval and then runs with the untrusted-content marker, and a file or document is withheld with a notice that says why. A triggered run that delivers to a webhook receiver hands the approval to that receiver. Any other triggered run, such as a cron, monitor or loop stage, waits for the approval on its thread when that thread is a web, swarm or subagent thread; on any other thread it fails closed instead, and the run's refusal gives the approval's reason, for flagged input as well as input too long to read. A trigger that bot work made or last edited fails closed in every case. Loop triage is the exception for a long backlog: each fire screens and sorts as many items as fit, and later fires take the rest. Outages, timeouts, and other unscreenable content fail open with an untrusted-content marker and an audit record.
+- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Content too long for the screen to read does not pass through: a message waits for a once-only approval and then runs with the untrusted-content marker, and a file or document is withheld with a notice that says why. A triggered run, such as a cron, monitor or loop stage, waits for the approval on its thread when that thread is a web, swarm or subagent thread; on any other thread it fails closed instead, and the run's refusal gives the approval's reason, for flagged input as well as input too long to read. A trigger that bot work made or last edited fails closed in every case. Loop triage is the exception for a long backlog: each fire screens and sorts as many items as fit, and later fires take the rest. Outages, timeouts, and other unscreenable content fail open with an untrusted-content marker and an audit record.
 
 Every classification writes one `security_screen.classify` audit record with status `allow`, `block`, `would_block`, or `error`. Its detail carries the hook, source labels, surface, origin, session, run and thread identifiers, request ID, attempt count, and any score, threshold, or outcome — enough to find the transcript behind a would-block. It never includes the screened text.
 

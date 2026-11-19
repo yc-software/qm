@@ -78,6 +78,12 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await put({})).status, 200);
   assert.equal((await store.get("crm"))?.enabled, false, "an update that omits enabled keeps it");
   assert.equal((await put({ enabled: true })).status, 200);
+  const gmail = { toolkit: "gmail", name: "Gmail", connectUrl: "https://host.example/google" };
+  for (const apps of [gmail, [{ ...gmail, connectUrl: "http://host.example/google" }], [{ ...gmail, toolkit: "G M" }]])
+    assert.equal((await put({ apps })).status, 400);
+  assert.equal((await put({ apps: [gmail] })).status, 200);
+  assert.equal((await put({})).status, 200);
+  assert.deepEqual((await store.get("crm"))?.apps, [gmail], "an update that omits apps keeps them");
   const saved = await put({
     credentialScope: "per-user",
     credentialHost: "accounts.example.com",

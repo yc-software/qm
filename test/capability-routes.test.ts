@@ -15,6 +15,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from ".
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunBinding, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -30,6 +31,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         scopeId: scope,
         destination: { type: "slack", target: `D-${actorId}`, audienceScopeId: scope },
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...liveRunBinding(actorId),
         ...extra,
       },
       SECRET,
@@ -58,6 +60,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         destinations: [THREAD, ROOT],
         defaultDestinationKey: THREAD.key,
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...liveRunBinding(actorId),
         ...extra,
       },
       SECRET,
@@ -80,6 +83,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       scheduler: built.scheduler,
       config: built.config,
       admin: built.admin,
+      runs: liveRunStore(),
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -879,10 +883,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("registers a destination-less webhook when the token carries no destination (side-effect-only)", async () => {
-    const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", liveAuthor: true, exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const noDest = await capFor("U9", undefined, { liveAuthor: true, destination: undefined });
     const res = await post(
       "/v1/webhooks",
       { action: "mirror the event to a file", verification: { scheme: "hmac-sha256", secret: "side-effect-secret" } },
