@@ -42,7 +42,7 @@ The flow, cheapest first:
 
    ```bash
    B64=$(base64 -w0 /tmp/<name>.emoji.png)
-   curl -fsS -X POST "$AGENT_API_URL/v1/emoji" \
+   curl -sS -X POST "$AGENT_API_URL/v1/emoji" \
      -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
      -d "{\"name\":\"<name>\",\"image\":\"$B64\"}"
    ```
