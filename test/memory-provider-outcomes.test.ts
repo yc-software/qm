@@ -126,7 +126,7 @@ test("an attested provider sends the canonical person on every request and the s
 
   assert.ok(attested.requests.length > 0);
   assert.deepEqual(new Set(attested.requests.map((request) => request.actor)), new Set(["U1"]));
-  assert.deepEqual(new Set(attested.requests.map((request) => request.actorAliases)), new Set(['["u1@acme.test"]']));
+  assert.deepEqual(new Set(attested.requests.map((request) => request.aliases)), new Set(['["u1@acme.test"]']));
   assert.deepEqual(
     seen.map((args) => args.acting_user),
     ["U1", "U1", "U1"],
@@ -135,7 +135,7 @@ test("an attested provider sends the canonical person on every request and the s
   const plain = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   await configured(plain.url).recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
   assert.deepEqual(
-    plain.requests.filter((request) => request.actor !== undefined || request.actorAliases !== undefined),
+    plain.requests.filter((request) => request.actor !== undefined || request.aliases !== undefined),
     [],
   );
 });
