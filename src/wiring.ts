@@ -49,6 +49,11 @@ import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
+import {
+  createLoginKeepAliveService,
+  withLoginKeepAlive,
+  type LoginKeepAliveProfile,
+} from "./credentials/keep-alive.ts";
 import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
   createSessionSyscalls,
@@ -1367,7 +1372,9 @@ export function buildApp(
     ...(fresh.expiresAt !== undefined ? { expiresAt: fresh.expiresAt } : {}),
   });
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
-  const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
+  const keychain: Keychain | undefined = keychainKeyMaterial
+    ? withLoginKeepAlive(credentialStore, (ownerId) => loginKeepAlive.ensure(ownerId))
+    : undefined;
   const serviceCreds = withDeploymentCredentials(
     credentialStore,
     scopeId("org", config.orgId),
@@ -1387,7 +1394,11 @@ export function buildApp(
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
-  const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
+  const connectorTokens = withOperatorTokenFallback(
+    keychain ?? credentialStore,
+    config.egressServiceHosts ?? [],
+    secretSource,
+  );
   const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
   const secretDrops: SecretDropStore = createSecretDropStore(inboundMap<SecretDropRecord>("secret_drops"));
@@ -2864,9 +2875,17 @@ export function buildApp(
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
+  const loginKeepAlive = createLoginKeepAliveService({
+    store: artifactMap<LoginKeepAliveProfile>("login_keep_alive_profiles"),
+    keychain: credentialStore,
+    timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
+    crons,
+    scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
+  });
   const scheduler = createScheduler({
     admittedWork,
-    skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    skipFire: async (cron) =>
+      (await memoryTidy.skipFire(cron)) ?? (await loginKeepAlive.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id, { actorId: "system" }),

@@ -134,3 +134,21 @@ test("a refresh that cannot take its lock still serves the unexpired token", asy
   await k.setConnectorToken(HOST, "U2", { accessToken: "expired", refreshToken: "rt", expiresAt: Date.now() - 1 });
   assert.equal(await k.connectorAccessToken(HOST, "U2"), null);
 });
+
+test("an account a run found revoked reads as needing reconnect until a refresh or reconnect works", async () => {
+  const creds = testMap<KeychainCredential>();
+  const provider = rotatingProvider();
+  const k = keychain(creds, testAdvisoryLock(), provider.refresh);
+  await k.setConnectorToken(HOST, "U1", {
+    accessToken: "at-0",
+    refreshToken: "rt-0",
+    expiresAt: Date.now() + 3_600_000,
+  });
+  const id = (await creds.all())[0]!.id;
+  const state = async () => (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!;
+  assert.equal((await state()).needsReconnect, undefined);
+  await k.recordCheck("U1", id, { ok: false, detail: "401 revoked" });
+  assert.deepEqual([(await state()).needsReconnect, (await state()).refreshError], [true, "401 revoked"]);
+  assert.equal(await k.connectorAccessToken(HOST, "U1"), "at-1");
+  assert.equal((await state()).needsReconnect, undefined);
+});

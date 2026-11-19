@@ -1,6 +1,6 @@
 import { html, render, type TemplateResult } from "lit";
 import { KeyRound, Link } from "lucide";
-import { api } from "./core-bridge";
+import { api, ApiError, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
@@ -10,6 +10,19 @@ import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keychain-state";
 import { listPageTpl } from "./list-page";
+import "./onboarding-welcome";
+import type { OnboardingWelcome } from "./onboarding-welcome";
+import { isConnectionReturn } from "./connection-return";
+
+interface AppConnection {
+  id: string;
+  toolkit: string;
+  name: string;
+  label?: string;
+  connector?: string;
+  missingScopes?: string[];
+  status?: string;
+}
 
 interface ConnectorProvider {
   mcpLabel?: string;
@@ -30,6 +43,7 @@ interface KeychainCredential {
   fingerprint?: string;
   expiresAt?: number;
   createdAt?: number;
+  check?: { ok: boolean; at: number; detail?: string };
 }
 
 interface KeychainConnectorCredential {
@@ -67,6 +81,9 @@ let keychainConnectorCredentials: KeychainConnectorCredential[] = [];
 let keychainGrants: KeychainGrant[] = [];
 let keychainAsks: KeychainAsk[] = [];
 let keychainScopeNames: Record<string, string> = {};
+let composioAvailable = false;
+let apps: AppConnection[] = [];
+let pickingApp = isConnectionReturn();
 let connectorNotice = "";
 let loadNotice = "";
 let addingCredential: { service: string; envKey: string; purpose: string } | null = null;
@@ -109,6 +126,14 @@ function fmtDate(ms?: number): string {
   }
 }
 
+function fmtDateTime(ms: number): string {
+  try {
+    return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return "";
+  }
+}
+
 function accessModeLabel(mode?: "once" | "standing"): string {
   return mode === "once" ? "one-time" : "standing";
 }
@@ -116,6 +141,7 @@ function accessModeLabel(mode?: "once" | "standing"): string {
 function credentialCard(c: KeychainCredential): TemplateResult {
   const subtitle = [c.accountLabel, c.host, c.envKey].filter(Boolean).join(" · ");
   const expired = isExpiredCredential(c);
+  const failing = c.check && !c.check.ok;
   const grants = keychainGrants.filter((grant) => grant.credentialId === c.id && isActiveGrant(grant, c));
   const asks = keychainAsks.filter((ask) => ask.credentialId === c.id);
   return html`
@@ -126,8 +152,10 @@ function credentialCard(c: KeychainCredential): TemplateResult {
           <div class="kc-resource-title-row">
             <h3>${c.service}</h3>
             ${expired ? html`<span class="kc-state warning">Expired</span>` : ""}
+            ${!expired && c.check ? html`<span class="kc-state ${failing ? "warning" : "ok"}">${failing ? "Check failed" : "Working"}</span>` : ""}
           </div>
           ${subtitle ? html`<div class="kc-resource-meta">${subtitle}</div>` : ""}
+          ${c.check ? html`<div class="kc-resource-meta">Checked ${fmtDateTime(c.check.at)}</div>` : ""}
         </div>
         <button
           class="kc-text-action danger"
@@ -139,6 +167,7 @@ function credentialCard(c: KeychainCredential): TemplateResult {
           Delete
         </button>
       </div>
+      ${failing ? html`<div class="kc-inline-warning" role="status">${c.check?.detail ?? "Its last check failed"}. Sign in again in a conversation with QM.</div>` : ""}
       ${
         asks.length
           ? html`<div class="kc-access-block pending">
@@ -383,7 +412,7 @@ function drawConnectors(): void {
     const grants = keychainGrants.filter((grant) => isActiveGrant(grant, credentialsById.get(grant.credentialId)));
     let connectionState: TemplateResult | string = html`<span class="kc-state neutral">Not connected</span>`;
     if (needsReconnect) connectionState = html`<span class="kc-state warning">Reconnect needed</span>`;
-    else if (connected) connectionState = "";
+    else if (connected) connectionState = html`<span class="kc-state ok">Working</span>`;
     return html`
       <article class="kc-resource kc-account">
         <div class="kc-resource-main">
@@ -432,14 +461,20 @@ function drawConnectors(): void {
       </article>
     `;
   });
-  let accountsContent: TemplateResult | TemplateResult[] = connectorCards;
+  const accountCards = [...connectorCards, ...apps.map(appCard)];
+  let accountsContent: TemplateResult | TemplateResult[] = accountCards;
   if (accountsLoading) accountsContent = loadingPlaceholder("Loading accounts\u2026");
-  else if (!connectorCards.length)
+  else if (!accountCards.length)
     accountsContent = html`<div class="kc-empty">
       ${icon(Link, 20)}
-      <div>
-        <strong>No accounts available</strong><span>Your workspace has not configured any account providers yet.</span>
-      </div>
+      ${
+        composioAvailable
+          ? html`<div><strong>No linked accounts</strong><span>Connect an app so QM can use it for you.</span></div>`
+          : html`<div>
+              <strong>No accounts available</strong
+              ><span>Your workspace has not configured any account providers yet.</span>
+            </div>`
+      }
     </div>`;
   let credentialsContent: TemplateResult | TemplateResult[] = keychainCredentials.map(credentialCard);
   if (keysLoadingFresh) credentialsContent = loadingPlaceholder("Loading credentials\u2026");
@@ -466,6 +501,7 @@ function drawConnectors(): void {
     count: number,
     content: TemplateResult | TemplateResult[],
     sectionLoading: boolean,
+    action?: TemplateResult,
   ) =>
     html`<section class="kc-section" aria-labelledby=${id}>
       <div class="kc-section-head">
@@ -473,6 +509,7 @@ function drawConnectors(): void {
           <h2 id=${id}>${heading}</h2>
           <span>${sectionLoading ? "…" : count}</span>
         </div>
+        ${action ?? ""}
       </div>
       <div class="kc-resource-list">${content}</div>
     </section>`;
@@ -482,7 +519,39 @@ function drawConnectors(): void {
     rows.push(html`<div class="status" role="status">${loading ? "Loading your keychain…" : notice}</div>`);
   if (addingCredential) rows.push(addCredentialCard());
   rows.push(
-    section("kc-accounts-title", "Linked accounts", entries.length, accountsContent, accountsLoading),
+    section(
+      "kc-accounts-title",
+      "Linked accounts",
+      accountCards.length,
+      html`${
+        composioAvailable && pickingApp
+          ? html`<qm-onboarding-welcome
+              class="kc-app-picker"
+              .me=${appState.me}
+              .setupOnly=${true}
+              .embedded=${true}
+              .widget=${"apps"}
+              .returnKey=${"keychain"}
+              .base=${withBase("")}
+              @app-connected=${() => void refreshApps()}
+            ></qm-onboarding-welcome>`
+          : ""
+      }${accountsContent}`,
+      accountsLoading,
+      composioAvailable
+        ? html`<button
+            class="btn"
+            type="button"
+            aria-expanded=${pickingApp}
+            @click=${() => {
+              pickingApp = !pickingApp;
+              drawConnectors();
+            }}
+          >
+            ${pickingApp ? "Done" : "Connect an app"}
+          </button>`
+        : undefined,
+    ),
     section(
       "kc-credentials-title",
       "Stored credentials",
@@ -580,7 +649,24 @@ export async function renderConnectors(): Promise<void> {
       drawConnectors();
     },
   );
-  await Promise.all([connDone, keysDone]);
+  const appsDone = loadApps().then(
+    (loaded) => {
+      if (!fresh()) return;
+      composioAvailable = true;
+      apps = loaded;
+      drawConnectors();
+    },
+    (reason) => {
+      if (!fresh()) return;
+      composioAvailable = false;
+      apps = [];
+      if (!(reason instanceof ApiError && reason.status === 403))
+        notices.push(errMessage(reason, "Failed to load connected apps."));
+      applyNotices();
+      drawConnectors();
+    },
+  );
+  await Promise.all([connDone, keysDone, appsDone]);
 }
 
 async function deleteCredential(credential: KeychainCredential): Promise<void> {
@@ -710,6 +796,109 @@ async function startConnector(provider: string): Promise<void> {
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
     connectorNotice = errMessage(e, "Could not start the connector.");
   }
+  drawConnectors();
+}
+
+async function loadApps(): Promise<AppConnection[]> {
+  const loaded: AppConnection[] = [];
+  let cursor = "";
+  do {
+    const page = await api<{ items?: AppConnection[]; nextCursor?: string | null }>(
+      `/api/composio/connections${cursor ? `?${new URLSearchParams({ cursor })}` : ""}`,
+    );
+    loaded.push(...(page.items ?? []));
+    cursor = page.nextCursor ?? "";
+  } while (cursor);
+  return loaded;
+}
+
+async function refreshApps(): Promise<void> {
+  try {
+    apps = await loadApps();
+  } catch (e) {
+    connectorNotice = errMessage(e, "Failed to load connected apps.");
+  }
+  if (appState.currentView === "keychain") drawConnectors();
+}
+
+function reconnectApp(app: AppConnection): void {
+  pickingApp = true;
+  drawConnectors();
+  appState.mainEl
+    ?.querySelector<OnboardingWelcome>("qm-onboarding-welcome.kc-app-picker")
+    ?.reconnectApp(app.toolkit, app.name, app.id);
+}
+
+function appCard(app: AppConnection): TemplateResult {
+  let state = html`<span class="kc-state ok">Working</span>`;
+  if (app.status) state = html`<span class="kc-state warning">Reconnect needed</span>`;
+  else if (app.missingScopes?.length) state = html`<span class="kc-state warning">Needs new permissions</span>`;
+  return html`<article class="kc-resource kc-account">
+    <div class="kc-resource-main">
+      ${connectorLogo(app.toolkit, `https://logos.composio.dev/api/${app.toolkit}`)}
+      <div class="kc-resource-copy">
+        <div class="kc-resource-title-row">
+          <h3>${app.name}</h3>
+          ${state}
+        </div>
+        ${
+          app.label || app.connector
+            ? html`<div class="kc-resource-meta">${app.label ?? `Connected through ${app.connector}`}</div>`
+            : ""
+        }
+      </div>
+      <div class="kc-resource-actions" ?hidden=${Boolean(app.connector)}>
+        <button class="btn" type="button" @click=${() => reconnectApp(app)}>Reconnect</button>
+        <button
+          class="kc-text-action danger"
+          type="button"
+          ?disabled=${keychainOperations.mutationInFlight}
+          @click=${() => disconnectApp(app)}
+        >
+          Disconnect
+        </button>
+      </div>
+    </div>
+    ${
+      app.status
+        ? html`<div class="kc-inline-warning" role="status">
+            ${app.name} stopped working. Reconnect it to keep using it.
+          </div>`
+        : ""
+    }
+    ${
+      !app.status && app.missingScopes?.length
+        ? html`<div class="kc-inline-warning" role="status">
+            QM needs more access to ${app.name} than it was given. Reconnect to grant it.
+          </div>`
+        : ""
+    }
+  </article>`;
+}
+
+function disconnectApp(app: AppConnection): void {
+  confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  confirmation = {
+    title: `Disconnect ${app.name}?`,
+    body: "QM loses access to it until you connect it again. Automations using it may stop working.",
+    action: "Disconnect account",
+    run: async () => {
+      const operation = beginKeychainMutation();
+      if (!operation) return;
+      confirmation = null;
+      confirmationOpener = null;
+      drawConnectors();
+      try {
+        await api("/api/composio/disconnect", { method: "POST", body: JSON.stringify({ accountId: app.id }) });
+        apps = apps.filter((candidate) => candidate.id !== app.id);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404))
+          connectorNotice = errMessage(e, `Could not disconnect ${app.name}.`);
+      } finally {
+        if (keychainOperations.finishMutation(operation)) drawConnectors();
+      }
+    },
+  };
   drawConnectors();
 }
 

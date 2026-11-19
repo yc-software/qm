@@ -33,13 +33,18 @@ conversation shares that computer through an environment.
 
 `src/credentials/execute-files.ts` stages requested bundles in a private
 `/tmp/qm-credentials.<random>/home`, points the CLI at it, captures changed files after the
-command and writes them back with `keychain.updateFiles`, which rejects stale writes. Only the
-owner's executions write back; a grant uses the saved files as they are. The owner's live turn
-writes back everything: a turn the owner's own message started in an all-internal conversation,
+command and writes them back with `keychain.updateFiles`, which rejects stale writes. Every
+execution writes back, including one that uses the login through a grant, so the owner's live
+turns, their scheduled tasks and other people's grants all share one saved login. The owner's
+live turn writes back everything: a turn the owner's own message started in an all-internal conversation,
 meaning a DM or a room whose turn carries a member list in which everyone is internal (a live
 ambient wake included), a subagent delegated from one, the turn that resumes when that subagent
 reports back, a conversation such a turn starts or forks, and a background job any of these
-started. Every other run writes back only a token refresh: a file the saved login already holds
+started. Every other run writes back only a token refresh, and so does every run that uses
+the login through a grant, whoever's turn it is: a grantee's live turn in their own or a shared
+conversation, their cron and loop fires, and bot-marked turns using a bot grant. A grantee's
+refresh therefore replaces the owner's stored token cache, which is the same AWS SSO session
+renewed, never a different account or start URL. A token refresh is: a file the saved login already holds
 in `.aws/sso/cache/` in which only `accessToken`, `expiresAt` and `refreshToken` changed. That
 covers cron, loop, watch and webhook fires, swarm workers (a swarm a live turn started
 included), resumes after a credential request or secret drop, reaction turns, messages between
@@ -74,7 +79,25 @@ remove each other's files.
 
 - The staging directory is protected by mode 0700 and a random name, not by a separate user.
   Another process running as the same user during the command can read it.
-- No proactive refresh for idle AWS sessions; the CLI refreshes only when a command runs.
-- Refreshes made through a grant are not saved.
+- A saved login refreshes only when a command uses it. The nightly "Keep logins alive" task
+  checks saved CLI logins whose refreshes land in the declared token caches (today AWS SSO), so
+  those are refreshed at least daily; it skips logins that would rotate tokens anywhere else.
+  Nothing can extend an AWS SSO session past its configured length.
 - An unattended refresh of a CLI that rotates its refresh token outside the declared token
   caches is not saved, so the next use asks the owner to sign in again.
+
+## Status and keep-alive
+
+Saving a file login that holds a token cache a run saves back (the AWS SSO and CLI caches in
+`file-merge.ts`) or storing an OAuth connector token arms one managed task per person, "Keep
+logins alive", in their personal conversation, nightly at about 4 AM local. AI-account
+subscription logins and third-party app connections do not arm it. Before each fire the scheduler
+refreshes every connector token that is due through the keychain's locked refresh, with no model
+turn. The fire then runs only if the person has such a file login or a connector that needs
+reconnecting. The model runs `aws sts get-caller-identity` for those logins, which refreshes and
+saves their token cache, and records the result with `POST /v1/keychain/credentials/:id/check`. The check is shown on the Keychain page and in every
+conversation's credential list until the next check or a fresh sign-in, and the task tells the
+person once when something stops working or recovers. A connector's state comes from its
+refresh: a failed refresh shows as "Reconnect needed". Apps connected through Composio that
+Composio reports as expired or failed are listed with that status instead of disappearing; a sign-in
+the person never finished is not listed.

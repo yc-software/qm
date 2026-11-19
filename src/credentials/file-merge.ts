@@ -7,6 +7,9 @@ const TOKEN_CACHES: ReadonlyArray<{ directory: string; expiry: readonly string[]
 ];
 
 const tokenCache = (file: CredentialFile) => TOKEN_CACHES.find(({ directory }) => file.path.startsWith(directory));
+
+export const isTokenCachePath = (path: string): boolean =>
+  TOKEN_CACHES.some(({ directory }) => path.startsWith(directory));
 const parsed = (file: CredentialFile): unknown =>
   JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8"));
 

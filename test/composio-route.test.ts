@@ -52,6 +52,8 @@ function fixture() {
       }),
     } as unknown as ServerDeps["runs"],
     composioFetch: (async (input, init) => {
+      const toolkit = /\/toolkits\/([a-z0-9_-]+)$/.exec(String(input))?.[1];
+      if (toolkit) return Response.json({ name: `${toolkit} app` });
       calls.push({ url: String(input), init });
       const result = replies.shift();
       if (result instanceof Error) throw result;
@@ -255,7 +257,7 @@ test("authorization supplies the callback and account binding without accepting 
   assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
 });
 
-test("connections return only this actor's active accounts and strip credentials", async () => {
+test("connections return only this actor's accounts, flag expired ones, skip abandoned sign-ins, and strip credentials", async () => {
   const f = fixture();
   await f.own();
   const owned = {
@@ -264,12 +266,15 @@ test("connections return only this actor's active accounts and strip credentials
     status: "ACTIVE",
     toolkit: { slug: "gmail" },
     data: { token: "secret-token" },
+    state: { val: { status: "ACTIVE", access_token: "secret-token", displayName: "alice@example.com" } },
   };
   f.replies.push({
     items: [
       owned,
       { ...owned, id: "ca_other", user_id: composioUserId(orgId(), "bob") },
       { ...owned, status: "INITIATED" },
+      { ...owned, id: "ca_expired", status: "EXPIRED" },
+      { ...owned, id: "ca_abandoned", status: "EXPIRED", state: { val: { status: "EXPIRED" } } },
       { ...owned, is_disabled: true },
     ],
     next_cursor: "next-page",
@@ -277,12 +282,30 @@ test("connections return only this actor's active accounts and strip credentials
   const r = await f.invoke("/v1/composio/connections?user_ids=bob&cursor=page-1");
   assert.equal(r.status, 200);
   assert.deepEqual(r.data, {
-    items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(orgId(), "alice"), missingScopes: [] }],
+    items: [
+      {
+        id: "ca_gmail",
+        toolkit: "gmail",
+        name: "gmail app",
+        userId: composioUserId(orgId(), "alice"),
+        label: "alice@example.com",
+        missingScopes: [],
+      },
+      {
+        id: "ca_expired",
+        toolkit: "gmail",
+        name: "gmail app",
+        userId: composioUserId(orgId(), "alice"),
+        label: "alice@example.com",
+        missingScopes: [],
+        status: "EXPIRED",
+      },
+    ],
     nextCursor: "next-page",
   });
   const q = new URL(f.calls[0]!.url).searchParams;
   assert.equal(q.get("user_ids"), composioUserId(orgId(), "alice"));
-  assert.equal(q.get("statuses"), "ACTIVE");
+  assert.equal(q.get("statuses"), "ACTIVE,EXPIRED,FAILED");
   assert.equal(q.get("cursor"), "page-1");
   assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
 });
@@ -913,8 +936,20 @@ test("linked account discovery and Slack status preserve historical aliases with
     const listed = await f.invoke("/v1/composio/connections?cursor=page");
     assert.equal(listed.status, 200);
     assert.deepEqual(listed.data.items, [
-      { id: "ca_legacy", toolkit: "slack", userId: composioUserId(orgId(), aliasId), missingScopes: [] },
-      { id: "ca_current", toolkit: "slack", userId: composioUserId(orgId(), "alice"), missingScopes: [] },
+      {
+        id: "ca_legacy",
+        toolkit: "slack",
+        name: "slack app",
+        userId: composioUserId(orgId(), aliasId),
+        missingScopes: [],
+      },
+      {
+        id: "ca_current",
+        toolkit: "slack",
+        name: "slack app",
+        userId: composioUserId(orgId(), "alice"),
+        missingScopes: [],
+      },
     ]);
     assert.equal(listed.data.nextCursor, "next");
     const query = new URL(f.calls.at(-1)!.url).searchParams;
@@ -1036,8 +1071,8 @@ test("linked identities retain provider accounts and Slack status until unlinked
     const listed = await f.invoke("/v1/composio/connections?cursor=page");
     assert.deepEqual(listed.data, {
       items: [
-        { id: "ca_old", toolkit: "slack", userId: alias, missingScopes: [] },
-        { id: "ca_new", toolkit: "slack", userId: canonical, missingScopes: [] },
+        { id: "ca_old", toolkit: "slack", name: "slack app", userId: alias, missingScopes: [] },
+        { id: "ca_new", toolkit: "slack", name: "slack app", userId: canonical, missingScopes: [] },
       ],
       nextCursor: "next",
     });
@@ -1394,7 +1429,7 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   );
   f.replies.push({ items: [], next_cursor: null });
   assert.deepEqual((await f.invoke("/v1/composio/connections")).data.items, [
-    { id: "", toolkit: "gmail", connector: "host", missingScopes: [] },
+    { id: "", toolkit: "gmail", name: "Gmail", connector: "host", missingScopes: [] },
   ]);
   const refused = await f.invoke("/v1/composio/authorize", { toolkit: "gmail" });
   assert.equal(refused.status, 409);
@@ -1405,7 +1440,7 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   bare.deps.mcpServers = f.deps.mcpServers;
   bare.deps.mcpToolService = f.deps.mcpToolService;
   assert.deepEqual((await bare.invoke("/v1/composio/connections")).data.items, [
-    { id: "", toolkit: "gmail", connector: "host", missingScopes: [] },
+    { id: "", toolkit: "gmail", name: "Gmail", connector: "host", missingScopes: [] },
   ]);
   assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
   assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);

@@ -27,6 +27,7 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
     !(
       target.pathname === `${prefix}/` ||
       target.pathname === `${prefix}/settings` ||
+      target.pathname === `${prefix}/keychain` ||
       new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/s/[a-zA-Z0-9_-]+$`).test(target.pathname)
     )
   )

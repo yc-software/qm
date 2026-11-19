@@ -853,7 +853,7 @@ for (const [where, room, actor] of [
   ["a room", true, "U1"],
   ["a room, used by someone else", true, "U2"],
 ] as const) {
-  test(`a login refreshed through its grant in ${where} saves only for its owner`, async (t) => {
+  test(`a login refreshed through its grant in ${where} saves everything only for its owner`, async (t) => {
     const b = await fixture(t);
     assert.ok(b.keychain);
     await b.config.setSharingPosture("org:default-org", "isolated");
@@ -877,7 +877,8 @@ for (const [where, room, actor] of [
       room,
       actor,
     );
-    assert.equal(out, "(exit 0)");
+    if (actor === "U1") assert.equal(out, "(exit 0)");
+    else assert.match(out, /could not save its changes to \.custom-cli\/auth \(not a refreshable token cache\)/);
     const saved = await b.keychain.materializeOwnById("U1", login.id, "personal:U1");
     assert.equal(saved.kind, "file");
     if (saved.kind === "file")

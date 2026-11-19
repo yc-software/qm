@@ -19,6 +19,7 @@ interface ConnectedAccount {
   id: string;
   toolkit: string;
   missingScopes?: string[];
+  status?: string;
 }
 import type { Me } from "./shell-state";
 import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
@@ -57,6 +58,7 @@ export class OnboardingWelcome extends LitElement {
     widget: {},
     toolkit: {},
     returnKey: {},
+    embedded: { type: Boolean },
     base: {},
     loading: { state: true },
     error: { state: true },
@@ -80,6 +82,7 @@ export class OnboardingWelcome extends LitElement {
   declare widget: "all" | "apps" | "slack" | "slack-account";
   declare toolkit: string;
   declare returnKey: string;
+  declare embedded: boolean;
   declare base: string;
   declare loading: boolean;
   declare error: string;
@@ -120,6 +123,7 @@ export class OnboardingWelcome extends LitElement {
     this.widget = "all";
     this.toolkit = "";
     this.returnKey = "welcome";
+    this.embedded = false;
     this.base = "/";
     this.loading = true;
     this.error = "";
@@ -273,7 +277,9 @@ export class OnboardingWelcome extends LitElement {
     const toolkits = new Set(this.connections.map((account) => account.toolkit));
     return new Set(
       [...toolkits].filter((toolkit) =>
-        this.connections.every((account) => account.toolkit !== toolkit || account.missingScopes?.length),
+        this.connections.every(
+          (account) => account.toolkit !== toolkit || account.missingScopes?.length || account.status,
+        ),
       ),
     );
   }
@@ -304,6 +310,9 @@ export class OnboardingWelcome extends LitElement {
       await this.updateComplete;
       this.drawPicker();
     }
+  }
+  reconnectApp(toolkit: string, name: string, accountId: string): void {
+    void this.authorize({ id: toolkit, name, description: "", popularity: 0 }, accountId);
   }
   private confirmDisconnect(account: ConnectedAccount, name: string): void {
     if (window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`))
@@ -337,7 +346,7 @@ export class OnboardingWelcome extends LitElement {
       if (this.realReturn) {
         const attempt = this.realReturn;
         const verified = accounts.some(
-          (account) => account.id === attempt.accountId && account.toolkit === attempt.service.id,
+          (account) => account.id === attempt.accountId && account.toolkit === attempt.service.id && !account.status,
         );
         if (verified && (!this.returnAccount || this.returnAccount === attempt.accountId))
           this.connectionOutcome = "success";
@@ -351,6 +360,7 @@ export class OnboardingWelcome extends LitElement {
           );
           if (replaced && !(await this.disconnect(replaced, attempt.service.name)))
             this.connectionError = `${attempt.service.name} is reconnected, but the old connection is still there. Disconnect it below.`;
+          this.dispatchEvent(new Event("app-connected"));
           if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
             continuedAttempts.add(attempt.state);
             this.onConnected?.(attempt.service.name);
@@ -631,7 +641,7 @@ export class OnboardingWelcome extends LitElement {
               ${
                 this.error
                   ? html`<div class="welcome-load">
-                      ${this.seeded ? nothing : html`<strong>Connect your apps</strong>`}
+                      ${this.seeded || this.embedded ? nothing : html`<strong>Connect your apps</strong>`}
                       <p role="status">${this.error}</p>
                       <button
                         type="button"
@@ -665,13 +675,16 @@ export class OnboardingWelcome extends LitElement {
               ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
               <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
               ${
-                connectedAccounts.length
+                connectedAccounts.length && !this.embedded
                   ? html`<div class="connection-connected" role="status" aria-live="polite">
                       ${connectedAccounts.map((account) => {
                         const service = serviceFor(account.toolkit);
-                        const stale = Boolean(account.missingScopes?.length);
+                        const stale = Boolean(account.missingScopes?.length || account.status);
+                        let state = "connected";
+                        if (account.status) state = "reconnect needed";
+                        else if (stale) state = "needs new permissions";
                         return html`<span class=${stale ? "stale" : ""}
-                          >${icon(stale ? TriangleAlert : Check, 10)}${`${service.name} ${stale ? "needs new permissions" : "connected"}`}
+                          >${icon(stale ? TriangleAlert : Check, 10)}${`${service.name} ${state}`}
                           ${
                             account.id
                               ? html`<button
