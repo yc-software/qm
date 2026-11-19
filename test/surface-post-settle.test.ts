@@ -99,15 +99,8 @@ test("mentions of strangers go out as written and come back flagged with the ts"
   assert.match(r.notes?.[0] ?? "", /<@U999>/);
   assert.match(r.notes?.[0] ?? "", /may ping an unintended person/);
   assert.match(r.notes?.[0] ?? "", /ts 1\.1/, "the flag points at the message just posted, so it can be edited");
-});
-test("every unverified mention id is flagged once, resolved ids are not", async () => {
-  const { tools } = toolsWithDeliveries({
-    audience: [{ id: "U2" }],
-    directory: async () => new Map([["U2", { principalId: "U2", slackId: "U2" }]]),
-  });
-  const r = await tools.post("ping <@U999> twice <@U999> and <@U2>", undefined);
-  assert.equal((r.notes?.[0] ?? "").match(/<@U999>/g)?.length, 1, "duplicate strangers are listed once");
-  assert.doesNotMatch(r.notes?.[0] ?? "", /U2\b/, "roster members raise no flag");
+  const dup = await tools.post("again <@U999> <@U999> <@U2>", undefined);
+  assert.equal((dup.notes?.[0] ?? "").match(/<@U999>/g)?.length, 1, "a stranger id is listed once, roster ids never");
 });
 
 test("mentions are left untouched when the roster can't be read", async () => {

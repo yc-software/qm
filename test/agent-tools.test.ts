@@ -1198,7 +1198,7 @@ test("surface post/edit results carry the delivered ts and the ref they acted on
     ok: true,
     deliveryId: "d1",
     ts: "1795030226.902129",
-    notes: ["<@U999> may ping an unintended person; edit the message (ts 1795030226.902129) to fix it"],
+    notes: ["<@U999> may ping an unintended person"],
   });
   ctx.edit = async () => ({ ok: true, deliveryId: "e1", ts: "777.888" });
   const slack = surfaceTool({ current: ctx, emit: sink(emitted), scopeLabel: "channel:C1" });
@@ -1206,7 +1206,7 @@ test("surface post/edit results carry the delivered ts and the ref they acted on
     ((await call(slack, { action, ...params })) as { content: Array<{ text: string }> }).content[0]!.text;
   assert.equal(
     await textOf("post", { text: "hello there" }),
-    "[sent ts=1795030226.902129] <@U999> may ping an unintended person; edit the message (ts 1795030226.902129) to fix it",
+    "[sent ts=1795030226.902129] <@U999> may ping an unintended person",
   );
   assert.equal(await textOf("edit", { ref: "777.888", text: "hello again" }), "[edited ref=777.888]");
   assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.body.action === "post")!.body.ts, "1795030226.902129");
