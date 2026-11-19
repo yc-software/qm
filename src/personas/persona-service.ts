@@ -327,14 +327,18 @@ export function createPersonaService(deps: {
   };
 }
 
-export function personaPrompt({ persona, scope, pinned }: PersonaForTurn, sharesNotebook = false): string {
+export function personaPrompt({ persona, scope, pinned }: PersonaForTurn, sharesNotebook: boolean): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
   ];
   if (pinned)
     lines.push(
-      `This channel or group pinned ${persona.name}${sharesNotebook ? ", so memory you save here goes to its notebook, which every conversation using it reads. Use what that notebook holds here as well, even a fact that names another room" : ""}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+      `This channel or group pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+    );
+  if (sharesNotebook)
+    lines.push(
+      `Memory is the exception to where writes land: what you save here goes to ${persona.name}'s notebook, which every conversation using ${persona.name} reads.`,
     );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());

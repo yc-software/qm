@@ -520,7 +520,7 @@ export interface ToolContextDeps {
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
-  memoryAccess?: { write?: ScopeId; read: ScopeId[]; conversationScopeId?: ScopeId; notebookOnly?: true };
+  memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
@@ -1190,7 +1190,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
           ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
-          conversationScopeId: deps.memoryAccess?.conversationScopeId ?? writableScopeId,
+          conversationScopeId: writableScopeId,
         },
         deps.runId,
       );
@@ -1201,7 +1201,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
         ...deps.memoryCaptureMetadata?.(),
-        conversationScopeId: deps.memoryAccess?.conversationScopeId ?? writableScopeId,
+        conversationScopeId: writableScopeId,
       });
       return true;
     },

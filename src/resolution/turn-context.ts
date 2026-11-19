@@ -63,7 +63,7 @@ export async function resolveTurnContext(input: ContextInput) {
       ? {
           ...(useMemory && memoryPolicy.capture !== "off" ? { write: notebookScopeId } : {}),
           read,
-          ...(input.sharedNotebook ? { conversationScopeId: input.sharedNotebook } : {}),
+          ...(input.sharedNotebook ? { sourceScopeId: input.sharedNotebook } : {}),
           ...(input.notebookOnly ? { notebookOnly: true as const } : {}),
         }
       : undefined;

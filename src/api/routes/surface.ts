@@ -829,7 +829,8 @@ const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, cap
     {
       mode: "explicit",
       ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
-      conversationScopeId: capability.memory?.conversationScopeId ?? capability.scopeId,
+      conversationScopeId: capability.scopeId,
+      sourceScopeId: capability.memory?.sourceScopeId,
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     },
     capability.runId,
@@ -851,7 +852,8 @@ const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capabi
   const edits = parseEdits(body);
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
   await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
-    conversationScopeId: capability.memory?.conversationScopeId ?? capability.scopeId,
+    conversationScopeId: capability.scopeId,
+    sourceScopeId: capability.memory?.sourceScopeId,
   });
   audit(
     { deps, tenant },

@@ -16,6 +16,7 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
+  const shares = new Map<ScopeId, ScopeId>();
   const store = testMap<MemoryTidyProfile>();
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
@@ -34,6 +35,7 @@ function fixture() {
     timezone: async (id: string) => timezones.get(id),
     crons,
     scheduler: { notifyChanged: () => {} },
+    sharedNotebook: async (room: ScopeId) => shares.get(room),
   };
   const service = createMemoryTidyService(deps);
   const scheduler = createScheduler({
@@ -56,7 +58,7 @@ function fixture() {
     await scheduler.tick(at);
     await crons.update(cron.id, { schedule: cron.schedule });
   };
-  return { deps, notebooks, timezones, store, crons, calls, service, scheduler, cronOf, fact, fireAt };
+  return { deps, notebooks, timezones, shares, store, crons, calls, service, scheduler, cronOf, fact, fireAt };
 }
 
 const alice = scopeId("personal", "alice");
@@ -116,6 +118,22 @@ test("captures that add facts ensure the notebook's tidy cron, including through
   added = 2;
   await memory.withDisclosure!({} as never).capture(scopeId("channel", "C1"), ["fact"], 0);
   assert.deepEqual(ensured, [alice, scopeId("channel", "C1")]);
+});
+
+test("the room that last saved to a shared notebook tidies it along with its own", async () => {
+  const f = fixture();
+  const [one, two, shared] = [scopeId("channel", "C1"), scopeId("channel", "C2"), scopeId("persona", "p1")];
+  for (const room of [one, two]) f.shares.set(room, shared);
+  f.notebooks.set(shared, [f.fact(Date.now())]);
+  const memory = withMemoryTidy({ capture: async () => 1 } as unknown as MemoryService, f.service.ensure);
+  for (const room of [one, two])
+    await memory.capture(shared, ["fact"], 0, undefined, {
+      mode: "explicit",
+      conversationScopeId: room,
+      sourceScopeId: shared,
+    });
+  assert.equal(await f.service.skipFire(await f.cronOf(one)), "notebook unchanged since the last tidy");
+  assert.equal(await f.service.skipFire(await f.cronOf(two)), undefined);
 });
 
 test("a scheduled fire runs the tidy only when the notebook changed since the last tidy", async () => {

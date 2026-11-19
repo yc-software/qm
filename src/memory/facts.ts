@@ -21,6 +21,7 @@ export interface MemoryFact extends MemoryProvenance {
 
 export interface MemoryCaptureMetadata {
   conversationScopeId?: ScopeId;
+  sourceScopeId?: ScopeId;
   sessionId?: string;
   sensitivity?: MemorySensitivity;
   inheritedFacts?: readonly MemoryProvenance[];
@@ -61,7 +62,7 @@ export function mergeProvenance(
 
 export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
   const merged = mergeProvenance(context?.inheritedFacts ?? [], context?.sensitivity ?? "unknown");
-  const source = context?.conversationScopeId ?? scope;
+  const source = context?.sourceScopeId ?? context?.conversationScopeId ?? scope;
   return {
     sensitivity: merged.sensitivity,
     sources: merged.sources.includes(source) ? merged.sources : [...merged.sources, source],

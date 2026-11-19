@@ -90,7 +90,8 @@ persona's notebook, so what one pinned room remembers is shown in the others and
 everyone who can use the persona, including people who are not in that room. A room keeps
 its own notebook while anyone from outside the organization is among its members, and for a
 turn that arrives without the room's member list, as a web conversation opened in a Slack
-channel does.
+channel does. The nightly memory tidy of the room that last saved to the persona's notebook
+also tidies that notebook.
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates

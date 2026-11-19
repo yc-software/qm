@@ -90,7 +90,7 @@ export interface CapabilityClaims {
     write?: ScopeId;
     orgWrite?: ScopeId;
     read: ScopeId[];
-    conversationScopeId?: ScopeId;
+    sourceScopeId?: ScopeId;
     notebookOnly?: true;
   };
   liveActor?: boolean;

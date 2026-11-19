@@ -93,6 +93,7 @@ function createBurstBuffer(
     actorId,
     audienceScopeId,
     conversationScopeId,
+    sourceScopeId,
     sessionId,
     idempotencyKey,
     inheritedFacts,
@@ -100,6 +101,7 @@ function createBurstBuffer(
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,
+      ...(sourceScopeId !== undefined ? { sourceScopeId } : {}),
       turns: [{ input, reply }],
       ...(inheritedFacts !== undefined ? { inheritedFacts: structuredClone(inheritedFacts) } : {}),
       ...(actorId !== undefined ? { actorId } : {}),
@@ -141,6 +143,7 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
     ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),
     ...(burst.audienceScopeId ? { audienceScopeId: burst.audienceScopeId } : {}),
     conversationScopeId: burst.conversationScopeId,
+    ...(burst.sourceScopeId ? { sourceScopeId: burst.sourceScopeId } : {}),
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
     reply: burst.turns.map((turn) => turn.reply).join("\n\n"),
     ...(burst.sessionId ? { sessionId: burst.sessionId } : {}),

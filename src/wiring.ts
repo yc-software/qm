@@ -882,7 +882,7 @@ export function buildApp(
         return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
       },
     }),
-    (scope) => memoryTidy.ensure(scope),
+    (notebook, room) => memoryTidy.ensure(notebook, room),
   );
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
@@ -2848,6 +2848,10 @@ export function buildApp(
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
+    sharedNotebook: async (room) => {
+      const pinned = await personaStore.pinnedIn(room);
+      return pinned ? scopeId("persona", pinned) : undefined;
+    },
   });
   const scheduler = createScheduler({
     admittedWork,
