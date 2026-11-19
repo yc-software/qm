@@ -86,6 +86,8 @@ export function personIds(id: string): string[] {
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
+export const ACTOR_HEADERS: readonly string[] = ["x-qm-actor", "x-qm-actor-aliases"];
+
 export function attestedActorHeaders(actor: string): Record<string, string> {
   const aliases = [...new Set(personIds(actor))].filter((id) => id !== actor && attestableActor(id));
   return { "x-qm-actor": actor, "x-qm-actor-aliases": JSON.stringify(aliases) };

@@ -2,6 +2,7 @@ import type { Tenant } from "../tenants/context.ts";
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
 import {
+  ACTOR_HEADERS,
   attestableActor,
   attestedActorHeaders,
   attestsInAudience,
@@ -211,7 +212,7 @@ export async function brokerCredentialCall(opts: {
   if (
     body.headers &&
     typeof body.headers === "object" &&
-    Object.keys(body.headers).some((key) => ["x-qm-actor", "x-qm-actor-aliases"].includes(key.toLowerCase()))
+    Object.keys(body.headers).some((key) => ACTOR_HEADERS.includes(key.toLowerCase()))
   ) {
     return deny(400, "reserved_header", "actor headers are set only by the broker", rec.host);
   }
