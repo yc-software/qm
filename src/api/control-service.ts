@@ -287,14 +287,15 @@ export async function editWebhookTask(
   app: App,
   id: string,
   action: string,
-  principalId: string,
+  editor: Pick<CapabilityClaims, "actorId" | "botActor" | "liveActor" | "liveAuthor" | "scopeId"> | { actorId: string },
 ): Promise<ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request">> {
+  const principalId = editor.actorId;
   if (!action.trim()) return { ok: false, code: "bad_request", message: "task cannot be empty" };
   const webhook = await app.getWebhook(id);
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
-  if (!(await administersWebhook(app, webhook, { actorId: principalId })))
+  if (!(await administersWebhook(app, webhook, editor)))
     return { ok: false, code: "forbidden", message: "not your webhook" };
-  if (!(await app.samePerson(webhook.owner, principalId)) && !(await asOrgAdmin(app, { actorId: principalId })))
+  if (!(await app.samePerson(webhook.owner, principalId)) && !(await asOrgAdmin(app, editor)))
     return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
   const updated = await app.updateWebhook(id, { action });
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
@@ -841,7 +842,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async updateWebhook(id, patch, capability) {
       if (!personAtKeyboard(capability))
         return { ok: false, code: "forbidden", message: "editing a webhook requires a live turn started by its owner" };
-      return editWebhookTask(app, id, patch.action, capability.actorId);
+      return editWebhookTask(app, id, patch.action, capability);
     },
 
     readSoul(capability) {

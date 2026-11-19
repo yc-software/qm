@@ -203,7 +203,7 @@ async function updateWebhook(ctx: ApiCtx): Promise<void> {
   if (!capability && !principalId) return sendJson(res, 404, { error: "not_found" });
   const r = capability
     ? await deps.control.updateWebhook(params.id!, { action }, capability)
-    : await editWebhookTask(app, params.id!, action, principalId!);
+    : await editWebhookTask(app, params.id!, action, { actorId: principalId! });
   if (!r.ok) return sendJson(res, WEBHOOK_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { webhook: redactWebhook(r.webhook), url: inboundUrl(deps.publicUrl, r.webhook.id) });
 }
