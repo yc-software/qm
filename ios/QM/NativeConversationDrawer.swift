@@ -16,8 +16,13 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       let sidebarWidth = min(geometry.size.width * 0.8, 400)
       let drawer = hasSelection && !showsSidebarPage
       ZStack(alignment: .leading) {
-        sidebar()
-          .frame(width: drawer ? sidebarWidth : geometry.size.width)
+        DrawerSidebarLayer(
+          motion: motion, width: sidebarWidth, isDrawer: drawer,
+          content: DrawerContent(revision: revision) {
+            sidebar()
+              .frame(width: drawer ? sidebarWidth : geometry.size.width)
+          }
+        )
           .allowsHitTesting(!hasSelection || isOpen || showsSidebarPage)
           .accessibilityHidden(hasSelection && !isOpen && !showsSidebarPage)
         if hasSelection {
@@ -53,23 +58,24 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       .mask { Rectangle().ignoresSafeArea(.container, edges: .vertical) }
     }
     .background(QMTheme.paper.ignoresSafeArea())
-    .sensoryFeedback(trigger: isOpen) { _, _ in
-      hasSelection && !showsSidebarPage ? .impact(flexibility: .soft, intensity: 0.7) : nil
-    }
     .onAppear { motion.position = isOpen ? 1 : 0 }
     .onChange(of: isOpen) { _, open in
-      guard motion.dragStart == nil else { return }
+      // A drag commits `isOpen` only after its spring lands, so the card is already there.
+      let target: CGFloat = open ? 1 : 0
+      guard motion.dragStart == nil, motion.position != target else { return }
+      if hasSelection && !showsSidebarPage { motion.tap() }
       withAnimation(reduceMotion ? nil : .smooth(duration: 0.32)) {
-        motion.position = open ? 1 : 0
+        motion.position = target
       }
     }
   }
 
   private func drawerPan(width: CGFloat, isEnabled: Bool) -> DrawerPan {
     DrawerPan(
-      opening: !isOpen,
+      // Read the card's live position: `isOpen` lags until a released drag lands.
+      opening: { [motion] in motion.position < 0.5 },
       isEnabled: isEnabled,
-      onBegan: { motion.dragStart = motion.position },
+      onBegan: { motion.begin() },
       onChanged: { motion.track($0, width: width) },
       onEnded: { settle(translation: $0, velocity: $1, width: width) }
     )
@@ -82,6 +88,7 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
     let target: CGFloat = open ? 1 : 0
     let remaining = target - motion.position
     let relative = abs(remaining) > 0.001 ? (velocity / width) / remaining : 0
+    motion.land(open: open)
     withAnimation(
       reduceMotion
         ? nil
@@ -89,23 +96,51 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
           duration: 0.38, bounce: 0, initialVelocity: min(max(relative, 0), 12))
     ) {
       motion.position = target
+    } completion: {
+      // Flipping `isOpen` re-renders the conversation; doing it mid-spring drops frames.
+      guard motion.dragStart == nil, motion.position == target, isOpen != open else { return }
+      isOpen = open
     }
-    motion.dragStart = nil
-    if isOpen != open { isOpen = open }
   }
 }
 
-@Observable
+@MainActor @Observable
 final class DrawerMotion {
   var position: CGFloat = 0
   @ObservationIgnored var dragStart: CGFloat?
+  // The side the last haptic announced, so a drag taps once as it crosses halfway.
+  @ObservationIgnored private var announcedOpen: Bool?
+  @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .soft)
+
+  func begin() {
+    dragStart = position
+    announcedOpen = position > 0.5
+    haptic.prepare()
+  }
 
   func track(_ translation: CGFloat, width: CGFloat) {
     let raw = (dragStart ?? position) + translation / width
     var transaction = Transaction()
     transaction.disablesAnimations = true
     withTransaction(transaction) { position = min(max(raw, 0), 1) }
+    let open = position > 0.5
+    if let announced = announcedOpen, announced != open {
+      announcedOpen = open
+      haptic.impactOccurred(intensity: 0.6)
+      haptic.prepare()
+    }
   }
+
+  // A fling can settle on the other side without crossing halfway; tap for it on release.
+  func land(open: Bool) {
+    if let announced = announcedOpen, announced != open {
+      haptic.impactOccurred(intensity: 0.6)
+    }
+    announcedOpen = nil
+    dragStart = nil
+  }
+
+  func tap() { haptic.impactOccurred(intensity: 0.6) }
 }
 
 // Drag frames change only `DrawerMotion`, which re-renders `DrawerCardLayer` alone; this
@@ -128,7 +163,9 @@ private struct DrawerCardLayer<Content: View>: View {
   var body: some View {
     let reveal = motion.position
     let edge = min(reveal * 4, 1)
-    let shape = RoundedRectangle(cornerRadius: 32 * edge, style: .continuous)
+    // A fixed radius, hidden under the display's own corners while closed, keeps the clip
+    // path constant during a drag; an animated radius re-rasterizes the mask every frame.
+    let shape = RoundedRectangle(cornerRadius: reveal > 0 ? 32 : 0, style: .continuous)
     content.equatable()
       .overlay {
         QMTheme.paper.opacity(0.3 * reveal)
@@ -141,17 +178,36 @@ private struct DrawerCardLayer<Content: View>: View {
           .ignoresSafeArea(.container, edges: .vertical)
           .allowsHitTesting(false)
       }
-      .background {
-        shape.fill(QMTheme.paper)
-          .shadow(color: .black.opacity(0.08 * edge), radius: 16, x: -4)
-          .ignoresSafeArea(.container, edges: .vertical)
+      .background(alignment: .leading) {
+        // A gradient strip stands in for a blurred shadow, which is costly to redraw per frame.
+        LinearGradient(
+          colors: [.clear, .black.opacity(0.07 * edge)], startPoint: .leading,
+          endPoint: .trailing
+        )
+        .frame(width: 18)
+        .offset(x: -14)
+        .ignoresSafeArea(.container, edges: .vertical)
+        .allowsHitTesting(false)
       }
       .offset(x: motion.position * width)
   }
 }
 
+// The list trails the card a little, so the two read as one surface.
+private struct DrawerSidebarLayer<Content: View>: View {
+  let motion: DrawerMotion
+  let width: CGFloat
+  let isDrawer: Bool
+  let content: DrawerContent<Content>
+
+  var body: some View {
+    content.equatable()
+      .offset(x: isDrawer ? -(1 - motion.position) * width * 0.25 : 0)
+  }
+}
+
 struct DrawerPan: UIGestureRecognizerRepresentable {
-  let opening: Bool
+  let opening: @MainActor () -> Bool
   let isEnabled: Bool
   let onBegan: () -> Void
   let onChanged: (CGFloat) -> Void
@@ -177,8 +233,10 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
     let velocity = recognizer.velocity(in: recognizer.view).x
     switch recognizer.state {
     case .began:
+      // Start from the finger, not from the distance it travelled while the scroll view
+      // decided; otherwise the card leaps on the first frame.
+      recognizer.setTranslation(.zero, in: recognizer.view)
       onBegan()
-      onChanged(translation)
     case .changed: onChanged(translation)
     case .ended: onEnded(translation, velocity)
     case .cancelled, .failed: onEnded(translation, 0)
@@ -187,13 +245,14 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
   }
 
   final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-    var opening = true
+    var opening: @MainActor () -> Bool = { true }
 
     func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
       guard let pan = recognizer as? UIPanGestureRecognizer, let view = pan.view else {
         return false
       }
       let velocity = pan.velocity(in: view)
+      let opening = opening()
       let sideways = opening ? velocity.x : -velocity.x
       guard sideways > 0, sideways > abs(velocity.y) * 1.2 else { return false }
       return !opening || !touchesScrolledContent(pan, in: view)
