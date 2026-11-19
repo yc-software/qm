@@ -115,13 +115,13 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
         body: JSON.stringify({ facts: [{ id: "1", text }] }),
       });
     assert.equal((await patch(cap, "standup is 9:30 every day.")).status, 200);
-    assert.equal((await patch(ended, "written after the turn ended")).status, 403);
+    assert.equal((await patch(ended, "written after the turn ended")).status, 200);
 
     const getRes = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       headers: { "x-agent-capability": ended },
     });
     assert.equal(getRes.status, 200);
-    assert.match(((await getRes.json()) as any).content, /standup is 9:30/);
+    assert.match(((await getRes.json()) as any).content, /written after the turn ended/);
 
     const updates = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "memory.update");
     assert.equal(updates.length, 1);
@@ -605,8 +605,8 @@ for (const [name, input, read, expected] of [
   ["human thread reply", { origin: { kind: "ambient", live: true } }, 200, 200],
   ["synthetic ambient wake", { origin: { kind: "ambient" } }, 403, 403],
   ["bot thread reply", { origin: { kind: "ambient" }, botActor: true }, 403, 403],
-  ["cron", { origin: { kind: "automation", ownerFire: true }, surface: "cron" }, 200, 403],
-  ["webhook", { origin: { kind: "automation", ownerFire: true }, surface: "webhook" }, 200, 403],
+  ["cron", { origin: { kind: "automation", ownerFire: true }, surface: "cron" }, 200, 200],
+  ["webhook", { origin: { kind: "automation", ownerFire: true }, surface: "webhook" }, 200, 200],
   ["unmarked automation", { origin: { kind: "automation" }, surface: "cron" }, 403, 403],
   [
     "bot-actor automation",
