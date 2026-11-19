@@ -395,7 +395,6 @@ export const keychainCard = () => {
   return html`<section class="card sv-credentials" id="card-personal-keychains">
     <div class="head">
       <h2>Personal keychains</h2>
-      <a class="viewlink" href=${page.href("users")}>View users ›</a>
     </div>
     <div class="body">
       <div class="keychain-summary">
@@ -591,10 +590,7 @@ export function credentialsCard() {
     <div class="head cred-page-head">
       <div>
         <h2>Credentials</h2>
-        <p>
-          Shared keys the agent uses on your team's behalf. Secrets stay in core and never reach a sandbox.
-          <a class="viewlink" href=${page.href("audit")}>View usage</a>
-        </p>
+        <p>Shared keys the agent uses on your team's behalf. Secrets stay in core and never reach a sandbox.</p>
       </div>
       ${addCredential()}
     </div>
@@ -710,41 +706,41 @@ export function credentialsCard() {
                     </div>
                   </div>
                   ${
-                  s.draft.org
-                    ? null
-                    : html`<div class="sc-picker" id="sc-picker">
-                        <input
-                          type="text"
-                          id="sc-picker-search"
-                          .value=${s.query}
-                          @input=${(e: Event) => {
-                      s.query = (e.target as HTMLInputElement).value;
-                      s.picker = true;
-                      s.render();
-                    }}
-                          @focus=${() => {
-                      s.picker = true;
-                      s.render();
-                    }}
-                          @blur=${() =>
-                      setTimeout(() => {
-                        s.picker = false;
-                        s.render();
-                      }, 150)}
-                          placeholder="Search people or channels"
-                          autocomplete="off"
-                          spellcheck="false"
-                        />
-                        <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
-                      </div>`
-                }
+                    s.draft.org
+                      ? null
+                      : html`<div class="sc-picker" id="sc-picker">
+                          <input
+                            type="text"
+                            id="sc-picker-search"
+                            .value=${s.query}
+                            @input=${(e: Event) => {
+                            s.query = (e.target as HTMLInputElement).value;
+                            s.picker = true;
+                            s.render();
+                          }}
+                            @focus=${() => {
+                            s.picker = true;
+                            s.render();
+                          }}
+                            @blur=${() =>
+                            setTimeout(() => {
+                              s.picker = false;
+                              s.render();
+                            }, 150)}
+                            placeholder="Search people or channels"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                          <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
+                        </div>`
+                  }
                   ${
-                  !s.draft.org && s.grantees().length
-                    ? html`<div class="identity-chips" id="sc-people-chips">
-                        ${s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
-                      </div>`
-                    : null
-                }`
+                    !s.draft.org && s.grantees().length
+                      ? html`<div class="identity-chips" id="sc-people-chips">
+                          ${s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
+                        </div>`
+                      : null
+                  }`
           }
         </section>
         <section class="cd-section" aria-live="polite">

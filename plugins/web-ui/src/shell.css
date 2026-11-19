@@ -1201,11 +1201,14 @@ a.chat-row-open {
 .settings-content {
   min-width: 0;
 }
+/* A quiet footnote under the section list, not a banner above every page. */
 .settings-tip {
-  max-width: 1180px;
-  margin: 0 auto;
+  max-width: 200px;
+  margin: 24px 8px 0;
   color: var(--muted-foreground);
-  font-size: var(--font-13);
+  font-size: 12px;
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 .settings-page-title {
   position: absolute;

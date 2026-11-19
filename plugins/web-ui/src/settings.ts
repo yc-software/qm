@@ -624,6 +624,13 @@ function settingsNav(section: string): TemplateResult {
           ${group.views.map((view) => navItem(view, section))}
         `,
       )}
+      ${
+        can("admin")
+          ? html`<p class="settings-tip">
+              Ask ${brandName()} in a DM to change any setting. It makes the edit and confirms what changed.
+            </p>`
+          : nothing
+      }
     </nav>
   `;
 }
@@ -654,14 +661,6 @@ function settingsPane(): TemplateResult {
   const general = section === "general";
   return html`
     <h1 class="settings-page-title">Settings</h1>
-    ${
-      can("admin")
-        ? html`<p class="settings-tip">
-            Tip: the easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for
-            you and confirm what changed.
-          </p>`
-        : nothing
-    }
     <div class="settings-layout with-nav">
       ${settingsNav(section)}
       <div class="settings-content" @click=${followSettingsLink}>
