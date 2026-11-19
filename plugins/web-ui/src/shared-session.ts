@@ -38,7 +38,7 @@ render(
     <div class="shared-conversation">
       <header class="chat-topbar session-topbar">
         <a class="shared-brand" href=${base} aria-label=${`Open ${brandName()}`}
-          >${brandMark()}<span>${brandName()}</span></a
+          >${brandMark()}<span class="brand-name">${brandName()}</span></a
         >
         <div class="session-heading">
           <span class="session-title">Shared conversation</span
