@@ -34,7 +34,6 @@ export async function loopAdministration(
       identity: deps.identity,
       ...(deps.projects ? { managedGroups: deps.projects } : {}),
       ...(deps.personas ? { personas: deps.personas } : {}),
-      ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
     },
     actorId,
     loops.map((loop) => loop.ownerScopeId),
