@@ -228,9 +228,10 @@ const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
-const trustedSubjectPrefix = trustedOidc
-  ? `oidc:${createHash("sha256").update(trustedOidc.issuer).digest("hex")}:`
+const trustedIssuerHash = trustedOidc
+  ? createHash("sha256").update(trustedOidc.identityIssuer).digest("hex")
   : undefined;
+const trustedSubjectPrefix = trustedIssuerHash ? `oidc:${trustedIssuerHash}:` : undefined;
 const trustedSignInLabel = trustedOidc ? process.env.PORTAL_TRUSTED_OIDC_LABEL?.trim() || undefined : undefined;
 const trustedAssertions = Boolean(
   trustedOidc &&
@@ -641,11 +642,10 @@ function isSourceSignedPassthrough(method: string, pathname: string): boolean {
 }
 
 function loginProviderCookie(sub: string): string[] {
-  if (!trustedOidc || !trustedSignInLabel) return [];
-  const issuerHash = createHash("sha256").update(trustedOidc.issuer).digest("hex");
+  if (!trustedIssuerHash || !trustedSubjectPrefix || !trustedSignInLabel) return [];
   return [
-    sub.startsWith(`oidc:${issuerHash}:`)
-      ? setCookie("portal_login_provider", issuerHash, {
+    sub.startsWith(trustedSubjectPrefix)
+      ? setCookie("portal_login_provider", trustedIssuerHash, {
           path: "/",
           maxAge: 365 * 24 * 60 * 60,
           secure: SECURE_COOKIES,
@@ -1341,7 +1341,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
           org: ORG,
-          issuer: trustedOidc!.issuer,
+          issuer: trustedOidc!.identityIssuer,
         },
         identity.subject,
       );
@@ -1405,12 +1405,12 @@ const tenantChoice = createTenantChoice({
               signingSecret: CORE_SIGNING_SECRET!,
               identitySecret: PORTAL_IDENTITY_SECRET!,
               org: ORG,
-              issuer: trustedOidc!.issuer,
+              issuer: trustedOidc!.identityIssuer,
             },
             who,
             org,
           );
-          adminCache.delete(trustedPrincipal(trustedOidc!.issuer, who.subject));
+          adminCache.delete(trustedPrincipal(trustedOidc!.identityIssuer, who.subject));
           return tenant;
         },
       }
@@ -1448,11 +1448,10 @@ function setAuthenticatedSession(
 
 function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   if (
-    trustedOidc &&
+    trustedIssuerHash &&
     trustedSignInLabel &&
     url.searchParams.get("provider") !== "primary" &&
-    readCookie(req.headers.cookie, "portal_login_provider") ===
-      createHash("sha256").update(trustedOidc.issuer).digest("hex")
+    readCookie(req.headers.cookie, "portal_login_provider") === trustedIssuerHash
   ) {
     const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
     res.writeHead(302, {
