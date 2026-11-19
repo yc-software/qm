@@ -228,13 +228,13 @@ qm-onboarding-welcome {
   padding: 0 2px;
   font-size: inherit;
 }
-.connection-card {
+.connector-widget.connection-card {
   flex-wrap: wrap;
   min-width: min(100%, 300px);
   max-width: min(100%, 480px);
   margin: 0;
 }
-.connection-card.compact {
+.connector-widget.connection-card.compact {
   gap: 8px;
   min-width: 0;
   padding: 6px 10px 6px 6px;
