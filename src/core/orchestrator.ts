@@ -639,7 +639,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         commandId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
       ): Promise<PendingApproval> => {
-        const requestId = hashId([commandId, approvalTurnId]);
+        const requestId = fields.kind === "input" ? commandId : hashId([commandId, approvalTurnId]);
         const { grantModes, ...rest } = fields;
         const record: PendingApprovalRecord = {
           ...(Object.fromEntries(

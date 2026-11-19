@@ -361,3 +361,18 @@ private. The same API with only SQL tenant predicates removed fails this test.
 Document, private-context, file-release and replay suites pass. Focused
 independent review accepted this slice95/100; remaining session and other legacy
 store queries are outside that acceptance.
+
+## Input and execution approval identity
+
+The existing approval kinds remain `input` and `approval` (the default when
+omitted); their payload fields and types do not change. Only the input-screening
+path issues `input` approvals. This branch had applied an execution-turn nonce
+to both kinds. Held input now again uses the canonical request-content ID,
+including normalization of object-key order. Reholding identical input preserves
+its pending approval instead of creating another card.
+
+Execution approvals retain the fresh per-turn ID introduced for exact selected
+publication. Denied file/app/skill sharing can therefore request a fresh card;
+its approved call and private revision remain bound to that attempt. No setting,
+table, column, field, or backfill is added. Existing pending records continue
+through the unchanged canonical-request replay checks.
