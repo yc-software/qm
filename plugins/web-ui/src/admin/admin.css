@@ -2880,6 +2880,10 @@ html.dark #app-view .cred-group {
   border-radius: 14px;
   border: 1px solid var(--cd-hairline);
   flex-direction: column;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.16);
+}
+html.dark #app-view dialog.custom-provider-dialog.cd {
+  box-shadow: none;
 }
 #app-view dialog.custom-provider-dialog.cd[open] {
   display: flex;
@@ -2921,11 +2925,10 @@ html.dark #app-view .cred-group {
 }
 #app-view dialog.cd .cd-section > h3 {
   margin: 0 0 -4px;
-  color: var(--muted-foreground);
-  font-size: 12px;
+  color: var(--foreground);
+  font-size: var(--font-15);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  line-height: 1.3;
 }
 #app-view dialog.cd .cd-field {
   display: grid;
@@ -2995,6 +2998,7 @@ html.dark #app-view dialog.cd .cd-group {
   background: var(--cd-fill);
 }
 #app-view dialog.cd .cd-switch-row {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3015,37 +3019,6 @@ html.dark #app-view dialog.cd .cd-group {
 #app-view dialog.cd .cd-switch-text small {
   color: var(--muted-foreground);
   font-size: 12px;
-}
-#app-view dialog.cd input.cd-switch {
-  appearance: none;
-  flex: none;
-  position: relative;
-  width: 36px;
-  min-width: 36px;
-  height: 22px;
-  margin: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--foreground) 16%, var(--background));
-  cursor: pointer;
-  transition: background 0.18s ease;
-}
-#app-view dialog.cd input.cd-switch::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
-  transition: transform 0.18s ease;
-}
-#app-view dialog.cd input.cd-switch:checked {
-  background: #34c759;
-}
-#app-view dialog.cd input.cd-switch:checked::after {
-  transform: translateX(14px);
 }
 
 /* Segmented control for the two-way access choice. */

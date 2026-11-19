@@ -555,16 +555,16 @@ const cdField = (key: string, name: string, help: string, o: CdOptions = {}) =>
     />${help ? html`<span class="cd-help" id=${o.helpId ?? ""}>${help}</span>` : null}</label
   >`;
 const cdSwitch = (id: string, name: string, help: string, on: boolean, set: (on: boolean) => void) =>
-  html`<label class="cd-switch-row"
+  html`<label class="cd-switch-row setting-toggle"
     ><span class="cd-switch-text"><span>${name}</span>${help ? html`<small>${help}</small>` : null}</span
     ><input
       type="checkbox"
       role="switch"
-      class="cd-switch"
       id=${id}
       .checked=${on}
       @change=${(e: Event) => set((e.target as HTMLInputElement).checked)}
-  /></label>`;
+    /><span class="setting-switch" aria-hidden="true"></span
+  ></label>`;
 
 export function credentialsCard() {
   const s = credentialState;
