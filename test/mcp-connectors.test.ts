@@ -381,7 +381,7 @@ test("an attested connector refuses a call outside its person's own conversation
 test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
   installPrincipalLinks({
     canonical: (key) => (["alice@example.com", "U_ALICE", "system:digest"].includes(key) ? "U_ALICE" : undefined),
-    aliases: () => [],
+    aliases: (key) => (key === "U_ALICE" ? ["alice@example.com", "provider:stable-7", "bad\nvalue"] : []),
   });
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, {
@@ -402,6 +402,10 @@ test("attested connectors send one canonical person and never call for an actor 
     );
   assert.ok(mcp.requests.length > 0);
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U_ALICE"]));
+  assert.deepEqual(
+    new Set(mcp.requests.map((r) => r.aliases)),
+    new Set([JSON.stringify(["alice@example.com", "provider:stable-7"])]),
+  );
   const sent = mcp.requests.length;
   await assert.rejects(
     service.call("records", { operation: "search" }, "system:digest", undefined, "personal:U_ALICE"),

@@ -1,7 +1,14 @@
 import type { Tenant } from "../tenants/context.ts";
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
-import { attestableActor, attestsInAudience, OutsideAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
+import {
+  ACTOR_HEADERS,
+  attestableActor,
+  attestedActorHeaders,
+  attestsInAudience,
+  OutsideAudience,
+  UNATTESTABLE_ACTOR_FIX,
+} from "../directory/person.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -205,9 +212,9 @@ export async function brokerCredentialCall(opts: {
   if (
     body.headers &&
     typeof body.headers === "object" &&
-    Object.keys(body.headers).some((key) => key.toLowerCase() === "x-qm-actor")
+    Object.keys(body.headers).some((key) => ACTOR_HEADERS.includes(key.toLowerCase()))
   ) {
-    return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
+    return deny(400, "reserved_header", "actor headers are set only by the broker", rec.host);
   }
   const actor = attestableActor(claims.actorId);
   if (rec.injection?.actor && !actor) {
@@ -272,7 +279,7 @@ export async function brokerCredentialCall(opts: {
   }
 
   const headers = brokerRequestHeaders(rec, callerHeaders(body.headers));
-  if (rec.injection?.actor && actor) headers["x-qm-actor"] = actor;
+  if (rec.injection?.actor && actor) Object.assign(headers, attestedActorHeaders(actor));
 
   let resp: BrokerFetchResponse;
   try {
