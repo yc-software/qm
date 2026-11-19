@@ -77,7 +77,7 @@ immediate and does not use embeddings.
   "routes": [
     {
       "provider": "default",
-      "scopes": ["personal", "channel", "group", "team"],
+      "scopes": ["personal", "channel", "group", "team", "persona"],
       "capture": "automatic"
     },
     {
@@ -91,7 +91,7 @@ immediate and does not use embeddings.
 }
 ```
 
-Set the compact JSON document as `MEMORY_PROVIDER_CONFIG`. `default` names QM's local/Postgres notebook. A scope selector may be a kind (`org`) or an exact scope ID (`org:acme`). Earlier matching routes can compose multiple recall providers; the first route with `manage` enabled supplies notebook editing and revision history.
+Set the compact JSON document as `MEMORY_PROVIDER_CONFIG`. `default` names QM's local/Postgres notebook. A scope selector may be a kind (`org`) or an exact scope ID (`org:acme`). The kinds are `personal`, `channel`, `group`, `team`, `org` and `persona`; a deployment that uses [personas](./personas.md) routes `persona` to the provider that should hold a persona's notebook, since a room that pins a persona saves and recalls there and a kind no route serves has no memory. Earlier matching routes can compose multiple recall providers; the first route with `manage` enabled supplies notebook editing and revision history.
 
 Capture policies are:
 
@@ -192,7 +192,11 @@ Set the four client values as `GBRAIN_RO_CLIENT_ID`, `GBRAIN_RO_CLIENT_SECRET`, 
     }
   ],
   "routes": [
-    { "provider": "default", "scopes": ["personal", "channel", "group", "team", "org"], "capture": "automatic" },
+    {
+      "provider": "default",
+      "scopes": ["personal", "channel", "group", "team", "org", "persona"],
+      "capture": "automatic"
+    },
     {
       "provider": "gbrain",
       "scopes": ["personal"],
@@ -273,7 +277,11 @@ either direction.
 {
   "providers": [{ "id": "procedures", "type": "memorable" }],
   "routes": [
-    { "provider": "default", "scopes": ["personal", "channel", "group", "team", "org"], "capture": "automatic" },
+    {
+      "provider": "default",
+      "scopes": ["personal", "channel", "group", "team", "org", "persona"],
+      "capture": "automatic"
+    },
     { "provider": "procedures", "scopes": ["personal"], "capture": "automatic", "manage": false, "label": "Procedures" }
   ]
 }

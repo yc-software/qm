@@ -4,8 +4,8 @@
 
 A persona is a reusable agent — a name, icon, description and instructions, plus skills,
 notes and credentials — that people can use in any conversation. The conversation still
-decides **who is in the room and where writes land**; the persona decides **how the agent
-behaves and what it brings**. A persona is a scope, `persona:<id>`, that a conversation
+decides **who is in the room and where writes land**, except memory in a room that pins the
+persona ([Turns](#turns)); the persona decides **how the agent behaves and what it brings**. A persona is a scope, `persona:<id>`, that a conversation
 _wears_ rather than one it _lives in_.
 
 ## Storage
@@ -91,7 +91,8 @@ everyone who can use the persona, including people who are not in that room. A r
 its own notebook while anyone from outside the organization is among its members, and for a
 turn that arrives without the room's member list, as a web conversation opened in a Slack
 channel does. The nightly memory tidy of the room that last saved to the persona's notebook
-also tidies that notebook.
+also tidies that notebook. With `MEMORY_PROVIDER_CONFIG` set, a route has to serve the
+`persona` kind ([memory providers](./memory-providers.md)).
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
@@ -121,8 +122,9 @@ identity, since Slack doesn't let an app rename those.
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
 people who could already see that conversation can see it. Holding a role on a persona,
-even owner, shows you nothing of other people's chats with it; the sidebar groups only
-your own conversations under the persona.
+even owner, shows you nothing of other people's chats with it, apart from what a room that
+pins it saved to its notebook ([Turns](#turns)); the sidebar groups only your own
+conversations under the persona.
 
 ## Page
 

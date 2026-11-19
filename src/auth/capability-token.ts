@@ -86,13 +86,7 @@ export interface CapabilityClaims {
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
-  memory?: {
-    write?: ScopeId;
-    orgWrite?: ScopeId;
-    read: ScopeId[];
-    sourceScopeId?: ScopeId;
-    notebookOnly?: true;
-  };
+  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;

@@ -133,7 +133,7 @@ import type {
 import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
 import type { SurfaceContextRequest } from "./reach/reach.ts";
-import { personalScope, scopeId } from "./types.ts";
+import { isSharedScope, personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
@@ -2849,7 +2849,7 @@ export function buildApp(
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
     sharedNotebook: async (room) => {
-      const pinned = await personaStore.pinnedIn(room);
+      const pinned = isSharedScope(room) ? await personaStore.pinnedIn(room) : null;
       return pinned ? scopeId("persona", pinned) : undefined;
     },
   });

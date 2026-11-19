@@ -127,11 +127,7 @@ test("the room that last saved to a shared notebook tidies it along with its own
   f.notebooks.set(shared, [f.fact(Date.now())]);
   const memory = withMemoryTidy({ capture: async () => 1 } as unknown as MemoryService, f.service.ensure);
   for (const room of [one, two])
-    await memory.capture(shared, ["fact"], 0, undefined, {
-      mode: "explicit",
-      conversationScopeId: room,
-      sourceScopeId: shared,
-    });
+    await memory.capture(shared, ["fact"], 0, undefined, { mode: "explicit", conversationScopeId: room });
   assert.equal(await f.service.skipFire(await f.cronOf(one)), "notebook unchanged since the last tidy");
   assert.equal(await f.service.skipFire(await f.cronOf(two)), undefined);
 });

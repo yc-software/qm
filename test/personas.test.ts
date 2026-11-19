@@ -577,7 +577,6 @@ test("rooms that pin a persona share its notebook, read by every conversation th
     publishMembers,
   });
   const dm = (who: string) => ({ kind: "dm" as const, threadRef: `dm:${who}:notes` });
-
   await built.memory.capture(scopeId("channel", "C_ONE"), ["The room met on Mondays."], Date.now());
   assert.equal(await say(ALICE, room("C_ONE"), "!memorysearch Mondays"), "");
   assert.equal(await say(ALICE, room("C_ONE"), "!memoryremember The launch moved to March 3."), "remembered 1");
@@ -588,7 +587,6 @@ test("rooms that pin a persona share its notebook, read by every conversation th
   assert.match(await say(ALICE, dm(ALICE), "!memorysearch launch moved"), /March 3/);
   assert.equal(await say(ALICE, dm(ALICE), "!memoryremember Alice likes short replies."), "remembered 1");
   assert.doesNotMatch(await built.memory.read(scopeId("persona", ada.id)), /short replies/);
-
   const one = scopeId("channel", "C_ONE");
   let tidyTurn: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);

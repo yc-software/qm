@@ -23,7 +23,6 @@ export function startMemoryCapture(turn: {
   session: Session;
   scopeId: ScopeId;
   memoryScopeId: ScopeId;
-  sourceScopeId: ScopeId | undefined;
   audienceScopeId: ScopeId | undefined;
   memoryPolicy: MemoryPolicy;
   pendingCaptures: Map<ScopeId, Promise<void>>;
@@ -45,7 +44,6 @@ export function startMemoryCapture(turn: {
     session,
     scopeId,
     memoryScopeId,
-    sourceScopeId,
     audienceScopeId,
     memoryPolicy,
     pendingCaptures,
@@ -74,7 +72,6 @@ export function startMemoryCapture(turn: {
         await onTurnEnd({
           scopeId: memoryScopeId,
           conversationScopeId: scopeId,
-          ...(sourceScopeId ? { sourceScopeId } : {}),
           ...(audienceScopeId ? { audienceScopeId } : {}),
           inheritedFacts: captureDependencies(),
           input: turnInput,

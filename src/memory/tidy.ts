@@ -38,9 +38,10 @@ export function createMemoryTidyService(deps: {
     manages,
     managesThread,
 
-    async ensure(notebook: ScopeId, scope = notebook): Promise<void> {
-      if (scope !== notebook && (await deps.store.get(notebook))?.room !== scope)
-        await deps.store.put(notebook, { room: scope });
+    async ensure(notebook: ScopeId, room?: ScopeId): Promise<void> {
+      const shared = room !== undefined && room !== notebook && (await deps.sharedNotebook?.(room)) === notebook;
+      if (shared && (await deps.store.get(notebook))?.room !== room) await deps.store.put(notebook, { room });
+      const scope = shared ? room : notebook;
       const { kind, ref } = parseScopeId(scope);
       if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
       const claimed = await deps.store.get(scope);
@@ -93,8 +94,10 @@ export function withMemoryTidy(
       : {}),
     async capture(scope, facts, at, by, context) {
       const added = await memory.capture(scope, facts, at, by, context);
-      const room = context?.sourceScopeId === scope ? context.conversationScopeId : undefined;
-      if (added > 0) await ensure(scope, room).catch((e: unknown) => reportFailure(`memory tidy: ensure ${scope}`, e));
+      if (added > 0)
+        await ensure(scope, context?.conversationScopeId).catch((e: unknown) =>
+          reportFailure(`memory tidy: ensure ${scope}`, e),
+        );
       return added;
     },
   };
