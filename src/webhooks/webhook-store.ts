@@ -3,6 +3,8 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
+  triggerPrivacy,
+  assertPrivateTrigger,
   contentPart,
   createDeduped,
   setTriggerEnabled,
@@ -36,7 +38,10 @@ export interface WebhookStore {
   list(): Promise<Webhook[]>;
   ownedBy(scopeId: string): Promise<Webhook[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
-  update(id: string, patch: { action: string }): Promise<Webhook | null>;
+  update(
+    id: string,
+    patch: { action: string; personalOnly?: true; sourceProvenance?: import("../memory/facts.ts").SourceProvenance },
+  ): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
@@ -82,6 +87,7 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         throw new Error("every webhook filter requires a path and at least one value");
       }
       const filters = input.filters?.length ? input.filters : undefined;
+      assertPrivateTrigger(input);
       const contentId = hashId([
         contentPart(input.owner),
         contentPart(input.ownerScopeId),
@@ -89,6 +95,7 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         contentPart(input.verification),
         contentPart(filters),
         contentPart(input.destination),
+        ...(input.personalOnly || input.sourceProvenance ? [contentPart(triggerPrivacy({}, input))] : []),
       ]);
       const webhook = await createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, Date.now()),
@@ -107,7 +114,11 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
       return setTriggerEnabled(backing, id, enabled);
     },
     update(id, patch) {
-      return backing.merge(id, { action: patch.action });
+      return backing.update(id, (current) => {
+        const next = { ...current, action: patch.action, ...triggerPrivacy(current, patch) };
+        assertPrivateTrigger(next);
+        return next;
+      });
     },
     async recordFire(id, info) {
       await backing.merge(id, {

@@ -3,7 +3,7 @@ import type { Webhook } from "../triggers/types.ts";
 import type { WebhookStore } from "./webhook-store.ts";
 import { getVerifier, type VerifierInput } from "./verifiers.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
-import { ownerAuthored } from "../cron/authority.ts";
+import { ownerAuthored, cronTriggerAuthority } from "../cron/authority.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 
@@ -117,8 +117,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
       });
 
       void runTrigger(triggerDeps, {
-        owner: wh.owner,
-        ownerScopeId: wh.ownerScopeId,
+        ...cronTriggerAuthority(wh),
         input: event.input,
         securityScreenData: event.securityScreenData,
         fireKey,

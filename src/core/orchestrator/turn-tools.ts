@@ -84,6 +84,8 @@ export function createTurnBrokers(turn: {
     deps.monitors && deps.processes && readOutputTail
       ? createMonitorBroker({
           store: deps.monitors,
+          sessions: deps.sessions,
+          sessionId: session.id,
           registry: deps.processes,
           readOutputTail,
           scopeId: memoryScopeId,

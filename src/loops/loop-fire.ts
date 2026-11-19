@@ -1,3 +1,4 @@
+import { triggerPrivacy, privateTriggerAllowed } from "../triggers/trigger-store.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
@@ -583,7 +584,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { authzFailed: true, ran: false, note: errMessage(e) };
     }
     return runTrigger(deps.trigger, {
-      ...cronTriggerAuthority(cron ?? loop),
+      ...cronTriggerAuthority({ ...(cron ?? loop), ...triggerPrivacy(loop, cron ?? {}) }),
       ...(typeof input === "string" ? { input } : input),
       fireKey,
       threadRef,
@@ -687,6 +688,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       verdict.escalate &&
       healthWorsened(previous, verdict.health) &&
       destination &&
+      privateTriggerAllowed({
+        ...loop,
+        ...triggerPrivacy(loop, loop.cronId ? ((await deps.crons?.get(loop.cronId)) ?? {}) : {}),
+        destination,
+      }) &&
       (await destinationVisible(deps.trigger, loop.owner, destination))
     ) {
       const lines = [

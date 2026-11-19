@@ -205,7 +205,7 @@ export type ReachNowResult =
 
 export type VisibleCron = Cron & { scopeName?: string };
 
-export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
+export type CronEditor = PrivateContext & Pick<CapabilityClaims, "runId">;
 
 export type ProjectView = Project & {
   scopeId: ScopeId;
@@ -484,8 +484,8 @@ export interface App {
   ): Promise<FileListItem | null>;
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   loopAdministration(
-    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-    loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
+    actor: PrivateContext,
+    loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor" | "personalOnly">[],
   ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
@@ -537,22 +537,22 @@ export interface App {
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
-  listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
+  listCronsForViewer(principalId: string | PrivateContext): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
   updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
-  setCronEnabled(id: string, enabled: boolean): Promise<void>;
+  setCronEnabled(id: string, enabled: boolean, by?: CronEditor): Promise<void>;
   setCronFireNote(id: string, note: CronFireNote, by: CronEditor): Promise<"applied" | "superseded" | "missing">;
   listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
+  setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>, by?: CronEditor): Promise<Cron | null>;
   setCronDestination(id: string, destination: Destination | undefined, by: CronEditor): Promise<Cron | null>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
-  setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
-  updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
+  setWebhookEnabled(id: string, enabled: boolean, by?: PrivateContext): Promise<void>;
+  updateWebhook(id: string, patch: { action: string }, by?: PrivateContext): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;

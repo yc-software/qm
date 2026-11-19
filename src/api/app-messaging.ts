@@ -1,8 +1,20 @@
+import { ambientTenant } from "../tenants/context.ts";
+import { cronRef, encodeRef } from "../acl/resource-ref.ts";
+import { refreshPrivateContext, inheritContextSources, privateSourceAllowed } from "../sessions/private-context.ts";
+import { triggerPrivacy, assertPrivateTrigger } from "../triggers/trigger-store.ts";
+import type { CreateTriggerInput } from "../triggers/trigger-store.ts";
 import { loopAdministration } from "./loop-administration.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId } from "../types.ts";
-import { personIds, personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
+import { personalScope, parseScopeId, scopeId } from "../types.ts";
+import {
+  samePerson,
+  personIds,
+  personKey,
+  personKeys,
+  samePersonInDirectory,
+  samePersonMatcher,
+} from "../directory/person.ts";
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
@@ -191,11 +203,51 @@ export function createMessagingMethods(
         : {}),
     });
 
+  const triggerInput = async <T extends CreateTriggerInput>(input: T): Promise<T> => {
+    const context = input.context;
+    if (!context) {
+      assertPrivateTrigger(input);
+      return input;
+    }
+    await refreshPrivateContext(deps.sessions, context);
+    const next = { ...input, ...triggerPrivacy(input, context) };
+    if (
+      next.personalOnly &&
+      (!privateSourceAllowed(context, input.ownerScopeId) ||
+        input.ownerScopeId !== personalScope(context.actorId) ||
+        !samePerson(input.owner, context.actorId))
+    )
+      throw new Error("Private scheduled outputs must belong to the current person.");
+    assertPrivateTrigger(next);
+    return next;
+  };
+
+  const cronPrivacy = async (
+    before: Cron,
+    by: CronEditor,
+    patch: Partial<Pick<Cron, "owner" | "destination" | "personalOnly" | "sourceProvenance">> = {},
+  ) => {
+    await refreshPrivateContext(deps.sessions, by);
+    if (before.loopId && (by.personalOnly || before.personalOnly))
+      throw new Error("Use loop controls to change a private loop schedule.");
+    if ((await inheritContextSources(deps.sessions, by, [before])).has(before.id))
+      throw new Error("This scheduled output is private to its owner.");
+    const desired = await triggerInput({ ...before, ...patch, context: by });
+    if (
+      desired.personalOnly &&
+      (await deps.acl.grantsFor(ambientTenant(), before.ownerScopeId, encodeRef(cronRef(before.id)))).length
+    )
+      throw new Error("Private context cannot update a shared schedule. Create a personal schedule instead.");
+    return triggerPrivacy(before, desired);
+  };
+
   return {
     async createCron(input, trial) {
+      input = await triggerInput(input);
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
       await trialBeforeSave(input.script, input.schedule, trial);
+      input = await triggerInput(input);
       const cron = await deps.crons.create(input);
       auditCron("cron_create", cron, { actorId: cron.createdBy, botActor: cron.botActor });
       return cron;
@@ -216,6 +268,8 @@ export function createMessagingMethods(
       return deps.crons.list(ids);
     },
     async listCronsForViewer(principalId) {
+      const context = typeof principalId === "string" ? { actorId: principalId } : principalId;
+      principalId = context.actorId;
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
       const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c));
@@ -226,47 +280,68 @@ export function createMessagingMethods(
           const name = scopeNames.get(c.ownerScopeId);
           return name ? { ...c, scopeName: name } : c;
         });
-      return { owned, visible };
+      const blocked = await inheritContextSources(deps.sessions, context, [...owned, ...visible]);
+      return { owned: owned.filter((c) => !blocked.has(c.id)), visible: visible.filter((c) => !blocked.has(c.id)) };
     },
     async updateCron(id, patch, by, trial) {
-      const before = await deps.crons.get(id);
-      if (!before) return null;
-      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
-      if (patch.schedule) validateUserSchedule(patch.schedule);
-      await trialBeforeSave(patch.script, patch.schedule, trial);
-      const updated = await deps.crons.update(id, patch);
-      auditCron("cron_update", before, by);
-      return updated;
+      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return null;
+        await cronPrivacy(before, by, patch);
+        if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
+        if (patch.schedule) validateUserSchedule(patch.schedule);
+        await trialBeforeSave(patch.script, patch.schedule, trial);
+        const privacy = await cronPrivacy(before, by, patch);
+        const updated = await deps.crons.update(id, { ...patch, ...privacy });
+        auditCron("cron_update", before, by);
+        return updated;
+      });
     },
     async deleteCron(id, by) {
       const before = await deps.crons.get(id);
       await deps.crons.delete(id);
       if (before) auditCron("cron_delete", before, by);
     },
-    setCronEnabled(id, enabled) {
-      return deps.crons.setEnabled(id, enabled);
+    async setCronEnabled(id, enabled, by) {
+      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return;
+        if (by) await deps.crons.update(id, await cronPrivacy(before, by));
+        await deps.crons.setEnabled(id, enabled);
+      });
     },
     async setCronFireNote(id, note, by) {
-      const before = await deps.crons.get(id);
-      if (!before) return "missing";
-      const outcome = await deps.crons.setFireNote(id, note);
-      if (outcome === "applied") auditCron("cron_note", before, by);
-      return outcome;
+      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return "missing";
+        const privacy = await cronPrivacy(before, by);
+        await deps.crons.update(id, privacy);
+        const outcome = await deps.crons.setFireNote(id, note);
+        if (outcome === "applied") auditCron("cron_note", before, by);
+        return outcome;
+      });
     },
-    async setCronRuntime(id, runtime) {
-      const before = await deps.crons.get(id);
-      if (!before) return null;
-      await validateRuntime({ ...before, runtime });
-      return deps.crons.update(id, { runtime });
+    async setCronRuntime(id, runtime, by) {
+      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return null;
+        await validateRuntime({ ...before, runtime });
+        const privacy = by ? await cronPrivacy(before, by) : {};
+        return deps.crons.update(id, { runtime, ...privacy });
+      });
     },
     async setCronDestination(id, destination, by) {
-      const before = await deps.crons.get(id);
-      if (!before) return null;
-      await deps.crons.setDestination(id, destination);
-      auditCron("cron_retarget", before, by);
-      return deps.crons.get(id);
+      return deps.advisoryLock.withLock(`cron-access:${id}`, async () => {
+        const before = await deps.crons.get(id);
+        if (!before) return null;
+        const privacy = await cronPrivacy(before, by, { destination });
+        await deps.crons.setDestination(id, destination, privacy);
+        auditCron("cron_retarget", before, by);
+        return deps.crons.get(id);
+      });
     },
     async createWebhook(input) {
+      input = await triggerInput(input);
       const webhook = await deps.webhooks.create(input);
       h.recordAudit({
         at: Date.now(),
@@ -293,11 +368,31 @@ export function createMessagingMethods(
     listWebhooks() {
       return deps.webhooks.list();
     },
-    setWebhookEnabled(id, enabled) {
-      return deps.webhooks.setEnabled(id, enabled);
+    async setWebhookEnabled(id, enabled, by) {
+      return deps.advisoryLock.withLock(`webhook-access:${id}`, async () => {
+        const before = await deps.webhooks.get(id);
+        if (!before) return;
+        if (by) {
+          await refreshPrivateContext(deps.sessions, by);
+          if ((await inheritContextSources(deps.sessions, by, [before])).has(id))
+            throw new Error("This webhook is private to its owner.");
+          const desired = await triggerInput({ ...before, context: by });
+          await deps.webhooks.update(id, { action: before.action, ...triggerPrivacy(before, desired) });
+        }
+        await deps.webhooks.setEnabled(id, enabled);
+      });
     },
-    updateWebhook(id, patch) {
-      return deps.webhooks.update(id, patch);
+    async updateWebhook(id, patch, by) {
+      return deps.advisoryLock.withLock(`webhook-access:${id}`, async () => {
+        const before = await deps.webhooks.get(id);
+        if (!before) return null;
+        if (!by) return deps.webhooks.update(id, patch);
+        await refreshPrivateContext(deps.sessions, by);
+        if ((await inheritContextSources(deps.sessions, by, [before])).has(id))
+          throw new Error("This webhook is private to its owner.");
+        const desired = await triggerInput({ ...before, ...patch, context: by });
+        return deps.webhooks.update(id, { ...patch, ...triggerPrivacy(before, desired) });
+      });
     },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);

@@ -1,3 +1,5 @@
+import { privateTriggerAllowed } from "./trigger-store.ts";
+import { artifactProvenance, mergeProvenance, UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import type { CronScript } from "./types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
@@ -40,6 +42,8 @@ export interface TriggerSpec extends Pick<
   TurnRequest,
   "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
 > {
+  personalOnly?: true;
+  sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -180,6 +184,8 @@ function homeRoster(
 }
 
 export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
+  if (!privateTriggerAllowed(spec))
+    return { authzFailed: true, ran: false, note: "Private scheduled output cannot use this scope or destination." };
   await deps.identity.refresh();
   const runsAsScope = actsAsScope(spec.owner, spec.ownerScopeId);
   const scheduled = SCHEDULED_SURFACES.has(spec.surface);
@@ -294,6 +300,17 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       return;
     }
     const res = await deps.run({
+      ...(spec.personalOnly || spec.sourceProvenance || spec.securityScreenData !== undefined
+        ? {
+            contextProvenance: mergeProvenance(
+              [
+                artifactProvenance(spec.ownerScopeId, spec.sourceProvenance, spec.personalOnly),
+                ...(spec.securityScreenData !== undefined ? [UNTRACKED_PROVENANCE] : []),
+              ],
+              "ordinary",
+            ),
+          }
+        : {}),
       surface: spec.surface,
       actor: { externalId: actorId },
       conversation,

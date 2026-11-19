@@ -1,3 +1,4 @@
+import { inheritRequestSources, requestPrivateContext } from "../private-context.ts";
 import { randomBytes } from "node:crypto";
 import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
@@ -163,7 +164,9 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
   const allowed = await Promise.all(
     all.map((webhook) => canAdministerWebhook(app, webhook, capability ?? { actorId: viewer }, isViewer)),
   );
-  const visible = all.filter((_webhook, index) => allowed[index]);
+  const candidates = all.filter((_webhook, index) => allowed[index]);
+  const blocked = await inheritRequestSources(ctx, candidates, viewer);
+  const visible = candidates.filter((webhook) => !blocked.has(webhook.id));
   return sendJson(res, 200, {
     webhooks: visible.map((webhook) => ({ ...redactWebhook(webhook), url: inboundUrl(deps.publicUrl, webhook.id) })),
   });
@@ -176,7 +179,17 @@ async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
   if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, capability ?? { actorId: viewer }))) {
     return sendJson(res, 404, { error: "not_found" });
   }
-  return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
+  if ((await inheritRequestSources(ctx, [webhook], viewer)).has(webhook.id))
+    return sendJson(res, 404, { error: "not_found" });
+  const events = await app.listWebhookEvents(webhook.id, viewer);
+  const current = await app.getWebhook(webhook.id);
+  if (
+    !current ||
+    !(await canAdministerWebhook(app, current, capability ?? { actorId: viewer })) ||
+    (await inheritRequestSources(ctx, [current], viewer)).has(current.id)
+  )
+    return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 200, { events });
 }
 
 async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
@@ -192,7 +205,7 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
       ...(capability ? { message: "not your webhook" } : {}),
     });
   }
-  await app.setWebhookEnabled(id, enabled);
+  await app.setWebhookEnabled(id, enabled, requestPrivateContext(ctx, principalId));
   return sendJson(res, 200, { ok: true });
 }
 

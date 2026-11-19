@@ -295,6 +295,7 @@ export function createTurnMethods(
       };
 
       const input = {
+        ...(req.contextProvenance ? { contextProvenance: req.contextProvenance } : {}),
         surface: req.surface,
         ...(req.surfaceOrigin ? { surfaceOrigin: req.surfaceOrigin } : {}),
         ...(req.spawned && req.sessionSenderId ? { sessionSenderId: req.sessionSenderId } : {}),

@@ -1,4 +1,4 @@
-import { personalScope, type ScopeId } from "../types.ts";
+import { personalScope, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import {
@@ -22,11 +22,13 @@ export interface PrivateContext {
 type ContextSessions = Pick<SessionStore, "getMany" | "recordContextProvenance">;
 
 export async function refreshPrivateContext(
-  sessions: Pick<SessionStore, "getMany" | "recordContextProvenance">,
+  sessions: Pick<SessionStore, "recordContextProvenance"> & {
+    get(id: string): Promise<Pick<Session, "id" | "scopeId" | "personalOnly" | "sourceProvenance"> | null>;
+  },
   context: PrivateContext,
 ): Promise<PrivateContext> {
   if (!context.sessionId) return context;
-  const [session] = await sessions.getMany({ ids: [context.sessionId], threadRefs: [] });
+  const session = await sessions.get(context.sessionId);
   if (!session || session.scopeId !== context.scopeId) throw new Error("The conversation context no longer exists.");
   const personalOnly = context.personalOnly || session.personalOnly;
   if (personalOnly && !privateSourceAllowed(context, session.scopeId))

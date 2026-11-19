@@ -1272,7 +1272,15 @@ export function createSessionMethods(
         };
         await deps.deploy.grantAppAccess(g);
       }
-      if (ref.kind !== "deploy") await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
+      if (ref.kind === "cron") {
+        await deps.advisoryLock.withLock(`cron-access:${ref.id}`, async () => {
+          const cron = await deps.crons.get(ref.id);
+          if (!cron || cron.ownerScopeId !== g.ownerScopeId)
+            throw new Error("The current schedule does not match this grant.");
+          if (cron.personalOnly) throw new Error("Share this private schedule explicitly before granting access.");
+          await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
+        });
+      } else if (ref.kind !== "deploy") await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,

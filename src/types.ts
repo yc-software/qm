@@ -385,6 +385,7 @@ export interface ClientToolResult {
 }
 
 export interface TurnRequest {
+  contextProvenance?: import("./memory/facts.ts").MemoryProvenance;
   desktopClientId?: string;
   clientSurface?: ClientSurface;
   midTurn?: "steer" | "queue";

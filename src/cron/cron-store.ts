@@ -10,6 +10,8 @@ import {
 } from "./fire-store.ts";
 import {
   assertNoEscalation,
+  assertPrivateTrigger,
+  triggerPrivacy,
   buildTriggerBase,
   contentPart,
   createDeduped,
@@ -35,6 +37,8 @@ export interface CreateCronInput extends CreateTriggerInput {
 }
 
 export interface CronPatch {
+  personalOnly?: true;
+  sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
   runtime?: Cron["runtime"];
   title?: string;
   action?: string;
@@ -64,7 +68,11 @@ export interface CronStore {
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
-  setDestination(id: string, destination: Destination | undefined): Promise<void>;
+  setDestination(
+    id: string,
+    destination: Destination | undefined,
+    privacy?: Pick<Cron, "personalOnly" | "sourceProvenance">,
+  ): Promise<void>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
   runningFires(now: number): Promise<CronFireRecord[]>;
@@ -117,6 +125,7 @@ export function createCronStore(
   return {
     async create(input) {
       assertNoEscalation(input);
+      assertPrivateTrigger(input);
       assertCronRuntime(input);
       const now = Date.now();
       const title = normalizeTitle(input.title);
@@ -132,6 +141,7 @@ export function createCronStore(
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
         ...(input.script ? [contentPart(input.script)] : []),
+        ...(input.personalOnly || input.sourceProvenance ? [contentPart(triggerPrivacy({}, input))] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -178,14 +188,22 @@ export function createCronStore(
       if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
       if (patch.script !== undefined) fields.script = patch.script ?? undefined;
-      return backing.merge(id, fields);
+      return backing.update(id, (current) => {
+        const next = { ...current, ...fields, ...triggerPrivacy(current, patch) };
+        assertPrivateTrigger(next);
+        return next;
+      });
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {
       await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
     },
-    async setDestination(id, destination) {
-      await backing.merge(id, { destination });
+    async setDestination(id, destination, privacy) {
+      await backing.update(id, (current) => {
+        const next = { ...current, destination, ...triggerPrivacy(current, privacy ?? {}) };
+        assertPrivateTrigger(next);
+        return next;
+      });
     },
     async beginFire(id, entry, opts) {
       if ((await backing.get(id)) === null) return { begun: false };

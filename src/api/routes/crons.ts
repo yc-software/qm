@@ -22,6 +22,9 @@ function defaultTimezoneFor(capability: CapabilityClaims | null): string {
 function isCreateCron(b: unknown): b is CreateCronInput {
   return (
     isObj(b) &&
+    b.context === undefined &&
+    b.personalOnly === undefined &&
+    b.sourceProvenance === undefined &&
     isCronRuntime(b.runtime) &&
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
@@ -225,7 +228,7 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   }
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
-  const { owned, visible } = await app.listCronsForViewer(viewer);
+  const { owned, visible } = await app.listCronsForViewer(capability ?? viewer);
   const decorate = async (cron: Cron) => ({
     ...cron,
     permission: (await canAdministerCron(app, cron, { actorId: viewer })) ? "manage" : "read",

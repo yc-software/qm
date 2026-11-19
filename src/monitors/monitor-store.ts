@@ -4,6 +4,8 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
+  triggerPrivacy,
+  assertPrivateTrigger,
   setTriggerEnabled,
   type CreateTriggerInput,
   ownedBy,
@@ -33,7 +35,16 @@ export interface MonitorStore {
   delete(id: string): Promise<void>;
   deleteDefunct(now: number): Promise<number>;
   advance(id: string, fields: { cursor: number; tail?: string; firedAt?: number }): Promise<void>;
-  update(id: string, fields: { instructions?: string; pattern?: string; cursor?: number }): Promise<void>;
+  update(
+    id: string,
+    fields: {
+      instructions?: string;
+      pattern?: string;
+      cursor?: number;
+      personalOnly?: true;
+      sourceProvenance?: Monitor["sourceProvenance"];
+    },
+  ): Promise<void>;
   recordError(id: string, error: string): Promise<void>;
 }
 
@@ -102,7 +113,12 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
         ...(fields.pattern !== undefined ? { pattern: fields.pattern } : {}),
         ...(fields.cursor !== undefined ? { cursor: fields.cursor, tail: undefined } : {}),
       };
-      if (Object.keys(patch).length) await backing.merge(id, patch);
+      if (Object.keys(patch).length || fields.personalOnly || fields.sourceProvenance)
+        await backing.update(id, (current) => {
+          const next = { ...current, ...patch, ...triggerPrivacy(current, fields) };
+          assertPrivateTrigger(next);
+          return next;
+        });
     },
     async recordError(id, error) {
       await backing.merge(id, { lastError: error });

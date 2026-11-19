@@ -860,7 +860,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const document = storedSession
         ? await deps.documentConversations?.knowledgeForSession(storedSession.id, actor.id)
         : null;
-      let personalOnlyContext = storedSession?.personalOnly === true || document?.mode === "private";
+      let personalOnlyContext =
+        storedSession?.personalOnly === true ||
+        document?.mode === "private" ||
+        input.contextProvenance?.personalOnly === true;
       if (personalOnlyContext && (audienceScopeId ?? scopeId) !== toScopeId("personal", actor.id))
         return { status: "refused", reason: "This private conversation cannot deliver to another audience." };
       let privateSession = storedSession ?? undefined;
@@ -874,7 +877,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(input.botActor ? { botActor: true } : {}),
       };
       const files = contextualFiles(deps.files, deps.sessions, fileContext);
-      let pendingProvenance: import("../memory/facts.ts").MemoryProvenance | undefined;
+      let pendingProvenance: import("../memory/facts.ts").MemoryProvenance | undefined = input.contextProvenance;
       const protectPersonalContext = async () => {
         personalOnlyContext = true;
         if (privateSession && !privateSession.personalOnly) {

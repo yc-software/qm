@@ -221,7 +221,7 @@ export class DeployAccessError extends Error {
 }
 
 export interface DeployServiceDeps {
-  sessions?: Pick<SessionStore, "getMany" | "recordContextProvenance">;
+  sessions?: Pick<SessionStore, "get" | "getMany" | "recordContextProvenance">;
   deliveries?: DeliveryStore;
   deployAppsDomain?: string;
   publicLinksAvailable?: boolean;

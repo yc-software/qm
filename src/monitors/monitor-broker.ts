@@ -1,3 +1,7 @@
+import type { SessionStore } from "../sessions/session-store.ts";
+import { refreshPrivateContext } from "../sessions/private-context.ts";
+import { triggerPrivacy, assertPrivateTrigger } from "../triggers/trigger-store.ts";
+import { principalDestination } from "../reach/reach.ts";
 import { isSystemActor, type Destination, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { personOrOwningBot } from "../auth/capability-token.ts";
@@ -96,6 +100,8 @@ export function compileMonitorPattern(pattern: string): (line: string) => boolea
 }
 
 export interface MonitorBrokerDeps {
+  sessions?: Pick<SessionStore, "get" | "recordContextProvenance">;
+  sessionId?: string;
   store: MonitorStore;
   registry: ProcessRegistry;
   readOutputTail(processId: string, maxBytes: number): Promise<BackgroundOutputTail>;
@@ -112,6 +118,18 @@ export interface MonitorBrokerDeps {
 
 export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
   const graceMs = deps.graceMs ?? EXPIRY_GRACE_MS;
+  const currentPrivacy = async () => {
+    if (!deps.sessions) return {};
+    if (!deps.sessionId) throw new Error("The monitor's conversation is unavailable.");
+    const context = await refreshPrivateContext(deps.sessions, {
+      actorId: deps.owner,
+      scopeId: deps.ownerScopeId,
+      sessionId: deps.sessionId,
+      botActor: deps.botActor,
+      audienceScopeId: deps.destination?.audienceScopeId,
+    });
+    return triggerPrivacy({}, context);
+  };
   return {
     async watch(processId, opts) {
       const rec = await deps.registry.get(processId);
@@ -121,6 +139,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       await deps.assertComputerUsable?.(rec.sandboxId);
       if (rec.status !== "running") {
         const tail = await deps.readOutputTail(processId, WATCH_COMPLETED_TAIL_BYTES);
+        await currentPrivacy();
         return {
           processId,
           completed: true,
@@ -145,20 +164,26 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
           samePerson(m.owner, deps.owner) &&
           Boolean(m.botActor) === Boolean(deps.botActor),
       );
+      const privacy = await currentPrivacy();
       if (existing) {
+        const inherited = triggerPrivacy(existing, privacy);
+        assertPrivateTrigger({ ...existing, ...inherited });
         await deps.store.update(existing.id, {
+          ...inherited,
           ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
           ...(opts?.pattern !== undefined ? { pattern: opts.pattern } : {}),
           ...(opts?.sinceCursor !== undefined ? { cursor: opts.sinceCursor } : {}),
         });
         return { monitorId: existing.id, processId, reattached: true, expiresAt: existing.expiresAt };
       }
+      const destination = privacy.personalOnly ? principalDestination(deps.owner, deps.owner) : deps.destination;
       const monitor = await deps.store.create({
+        ...privacy,
         owner: deps.owner,
         createdBy: deps.owner,
         ownerScopeId: deps.ownerScopeId,
         ...(deps.botActor ? { botActor: true } : {}),
-        ...(deps.destination && !deps.returnsToParent ? { destination: deps.destination } : {}),
+        ...(destination && !deps.returnsToParent ? { destination } : {}),
         processId,
         command: rec.command,
         ...(rec.purpose ? { purpose: rec.purpose } : {}),

@@ -2,6 +2,8 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import type { Destination, ScopeId, TurnResult } from "../types.ts";
 
 export interface TriggerBase {
+  personalOnly?: true;
+  sourceProvenance?: import("../memory/facts.ts").SourceProvenance;
   id: string;
   ownerScopeId: ScopeId;
   owner: string;

@@ -1,7 +1,7 @@
 import type { TriggerSpec } from "../triggers/run-trigger.ts";
 import type { TriggerBase } from "../triggers/types.ts";
 
-type TriggerAuthority = Pick<TriggerSpec, "owner" | "ownerScopeId" | "botActor">;
+type TriggerAuthority = Pick<TriggerSpec, "owner" | "ownerScopeId" | "botActor" | "personalOnly" | "sourceProvenance">;
 
 export function authoredNow(atKeyboard: boolean): { taskAuthor?: "automation" } {
   return atKeyboard ? {} : { taskAuthor: "automation" };
@@ -24,5 +24,7 @@ export function cronTriggerAuthority(cron: TriggerAuthority): TriggerAuthority {
     owner: cron.owner,
     ownerScopeId: cron.ownerScopeId,
     ...(cron.botActor ? { botActor: true } : {}),
+    ...(cron.personalOnly ? { personalOnly: true } : {}),
+    ...(cron.sourceProvenance ? { sourceProvenance: cron.sourceProvenance } : {}),
   };
 }

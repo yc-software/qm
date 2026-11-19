@@ -1,4 +1,4 @@
-import { inheritRequestSources } from "../../private-context.ts";
+import { inheritRequestSources, requestPrivateContext } from "../../private-context.ts";
 import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -46,8 +46,10 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return name && name !== principalId ? name : undefined;
   };
   if (resource === "crons") {
-    const crons = (await app.listCrons())
-      .filter((c) => orgWide || c.ownerScopeId === scope)
+    const cronRows = (await app.listCrons()).filter((c) => orgWide || c.ownerScopeId === scope);
+    const blocked = await inheritRequestSources(ctx, cronRows, actor.id);
+    const crons = cronRows
+      .filter((c) => !blocked.has(c.id))
       .map((c) => ({
         id: c.id,
         ownerScopeId: c.ownerScopeId,
@@ -133,6 +135,8 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
     "cron",
   );
   if (!scoped) return;
+  if ((await inheritRequestSources(ctx, [scoped.record], scoped.actor.id)).has(id))
+    return sendJson(res, 404, { error: "not_found" });
   if (
     typeof body !== "object" ||
     body === null ||
@@ -143,7 +147,7 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
   )
     return sendJson(res, 400, { error: "bad_request", message: "runtime is required; use null to inherit" });
   try {
-    const updated = await app.setCronRuntime(id, body.runtime);
+    const updated = await app.setCronRuntime(id, body.runtime, requestPrivateContext(ctx, scoped.actor.id));
     audit(ctx, {
       principalId: scoped.actor.id,
       action: "cron.runtime.update",
@@ -167,6 +171,8 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: cron } = scoped;
+  if ((await inheritRequestSources(ctx, [cron], actor.id)).has(cron.id))
+    return sendJson(res, 404, { error: "not_found" });
   if (typeof body !== "object" || body === null || !("destination" in body)) {
     return sendJson(res, 400, { error: "bad_request", message: "destination is required; use null to clear" });
   }
@@ -181,7 +187,7 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   }
   if (isDeepStrictEqual(cron.destination, next))
     return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
-  const updated = await app.setCronDestination(id, next, { actorId: actor.id });
+  const updated = await app.setCronDestination(id, next, requestPrivateContext(ctx, actor.id));
   await notifyOwnerOfCronEdit(app, {
     cron,
     editorId: actor.id,
