@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
@@ -15,7 +16,7 @@ test("mirror selects newest channel roots and the first thread page", async () =
   await cache.ingest(
     Array.from({ length: 250 }, (_, i) => ({ container: "C1", ts: ts(300 + i), sub: ts(204), text: "reply" })),
   );
-  const read = createSlackHistoryReader({
+  const read = createSlackHistoryReader(captureTenant, {
     ids,
     core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
   });

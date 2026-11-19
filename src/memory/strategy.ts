@@ -16,7 +16,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 
 export interface MemoryStrategy {
-  onTurnEnd?(ctx: MemoryCaptureTurn): Promise<void>;
+  onTurnEnd?(tenant: Tenant, ctx: MemoryCaptureTurn): Promise<void>;
   enqueueTurnEnd?(tenant: Tenant, ctx: MemoryCaptureTurn): Promise<void>;
   start?(): Promise<void>;
   stopClaims?(): Promise<void>;
@@ -56,7 +56,7 @@ export function createMemoryStrategy(
     databaseUrl: deps.databaseUrl,
     quietMs: deps.captureQuietMs ?? DEFAULT_CAPTURE_QUIET_MS,
     maxTurns: deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,
-    capture: async (turns, id, signal) => {
+    capture: async (tenant, turns, id, signal) => {
       try {
         const first = turns[0]!;
         const session = first.sessionId ? await deps.sessions?.get(first.sessionId) : undefined;
@@ -67,7 +67,7 @@ export function createMemoryStrategy(
             scopeId: first.conversationScopeId ?? first.scopeId,
             origin: session ? await deps.sessions!.inheritedOrigin(session) : undefined,
           },
-          () => captureMemoryTurns({ agent: deps.agent, memory }, turns, id, signal),
+          () => captureMemoryTurns(tenant, { agent: deps.agent, memory }, turns, id, signal),
         );
       } catch (error) {
         if (!signal.aborted) deps.onCaptureError?.(error, turns[0]!.scopeId);

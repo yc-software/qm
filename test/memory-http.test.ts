@@ -39,7 +39,7 @@ test("a user edits and forgets facts in their OWN personal notebook only", async
   const s = start();
   try {
     const mine = scopeId("personal", "U1");
-    await s.built.memory.capture(mine, ["Prefers terse replies", "Works in ET"], Date.parse("2026-05-31"));
+    await s.built.memory.capture(testTenant, mine, ["Prefers terse replies", "Works in ET"], Date.parse("2026-05-31"));
     const [terse, tz] = (await json(await fetch(`${s.base}/v1/memory?principalId=U1`))).facts;
     assert.equal(terse.text, "Prefers terse replies");
 
@@ -74,7 +74,7 @@ test("an admin edits any scope's facts by id; non-admins are refused without a w
   try {
     const scope = "channel:C9";
     const path = `/v1/admin/memory?scope=${encodeURIComponent(scope)}`;
-    await s.built.memory.capture(scope, ["The standup is at 10am"], Date.parse("2026-05-31"));
+    await s.built.memory.capture(testTenant, scope, ["The standup is at 10am"], Date.parse("2026-05-31"));
     const [fact] = (await json(await fetch(`${s.base}${path}`, { headers: ALICE_ADMIN }))).facts;
 
     const nobody = { "x-admin-actor": "nobody@default-org" };
@@ -109,7 +109,7 @@ test("the admin memory directory lists every known scope, notebooks-first (power
   try {
     const session = await s.built.sessions.getOrCreateByThread("T1", "channel", "channel:C9", "eng");
     await s.built.sessions.addParticipant(session.id, "U1");
-    await s.built.memory.capture("channel:C9", ["The standup is at 10am"], Date.parse("2026-05-31"));
+    await s.built.memory.capture(testTenant, "channel:C9", ["The standup is at 10am"], Date.parse("2026-05-31"));
 
     const r = await fetch(`${s.base}/v1/admin/memory/scopes`, { headers: ALICE_ADMIN });
     assert.equal(r.status, 200);

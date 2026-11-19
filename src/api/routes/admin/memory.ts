@@ -65,7 +65,7 @@ export async function adminMemory(ctx: ApiCtx): Promise<void> {
   if (method === "POST") {
     const facts = parseFacts(body);
     if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    await memory.capture(scope, facts, Date.now(), by, { mode: "explicit", ...provenance });
+    await memory.capture(tenantOf(ctx), scope, facts, Date.now(), by, { mode: "explicit", ...provenance });
   } else if (method === "PATCH") {
     const edits = parseEdits(body);
     if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });

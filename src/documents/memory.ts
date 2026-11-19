@@ -7,7 +7,7 @@ import {
 } from "../memory/facts.ts";
 import { writeFacts } from "../memory/provider-outcome.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { ambientTenant, type Tenant } from "../tenants/context.ts";
+import type { Tenant } from "../tenants/context.ts";
 import type { DocumentConversations } from "./conversations.ts";
 import { DOCUMENT_GROUP_PREFIX } from "./groups.ts";
 import { projectIdFromGroupRef } from "../projects/project-store.ts";
@@ -91,11 +91,11 @@ export function createDocumentMemory(
       };
       return createDocumentMemory(disclosedMemory(memory, { ...access, nativeSources }), documents, auditLog, sessions);
     },
-    async capture(scope, facts, at, by, context) {
+    async capture(tenant, scope, facts, at, by, context) {
       const bound = await metadata(scope, by, context);
-      const added = await memory.capture(scope, facts, at, by, context ? { ...context, ...bound } : undefined);
+      const added = await memory.capture(tenant, scope, facts, at, by, context ? { ...context, ...bound } : undefined);
       if (bound?.document && by?.actorId)
-        auditLog.record(ambientTenant(), {
+        auditLog.record(tenant, {
           at: Date.now(),
           principalId: by.actorId,
           action: "documents.memory.capture",
@@ -163,6 +163,7 @@ export async function publishDocumentLearning(
         "The selected learning cannot be published here while its source restrictions remain in effect.",
       );
     const result = await writeFacts(
+      tenant,
       memory,
       scope,
       selected.map((fact) => fact.text),

@@ -1209,6 +1209,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const write = writableNotebook(deps.memoryAccess, scope);
       if (!memory || !write) return null;
       return writeFacts(
+        deps.tenant,
         memory,
         write,
         facts,

@@ -1,3 +1,4 @@
+import type { Tenant } from "../../src/tenants/context.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -28,7 +29,10 @@ async function main(): Promise<void> {
     backgroundWorkEnabled: true,
     turnWallClockMs: 180_000,
   });
-  const failures = await inBootTenant(bootTenant(), () => qualify(built));
+  const failures = await inBootTenant(bootTenant(), (tenant) => {
+    if (!tenant) throw new Error("Provider qualification requires a tenant");
+    return qualify(tenant, built);
+  });
   await stop();
   if (failures.length)
     throw new AggregateError(failures, `local qualification failed: ${failures.map(String).join("; ")}`);
@@ -42,13 +46,13 @@ async function main(): Promise<void> {
   );
 }
 
-async function qualify(built: Awaited<ReturnType<typeof startQm>>["built"]): Promise<unknown[]> {
+async function qualify(tenant: Tenant, built: Awaited<ReturnType<typeof startQm>>["built"]): Promise<unknown[]> {
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;
   const name = `local-${randomUUID()}`;
   const failures: unknown[] = [];
   try {
-    await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), {
+    await setOnboardingStatus(tenant, built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), {
       actorId: actorId,
       context: "conversation",
     });

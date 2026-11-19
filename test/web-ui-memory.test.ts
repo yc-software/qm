@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
@@ -49,7 +50,12 @@ test("a signed-in user lists, edits and forgets their own facts; identity is the
   assert.equal(empty.status, 200);
   assert.deepEqual(((await empty.json()) as Facts).facts, []);
 
-  await built.memory.capture("personal:alice", ["Calls me Al", "Lives in Oakland"], Date.UTC(2026, 0, 2));
+  await built.memory.capture(
+    captureTenant,
+    "personal:alice",
+    ["Calls me Al", "Lives in Oakland"],
+    Date.UTC(2026, 0, 2),
+  );
   const [al, oakland] = ((await (await fetch(`${coreBase}/api/memory`, asUser("alice"))).json()) as Facts).facts;
 
   const edit = await fetch(

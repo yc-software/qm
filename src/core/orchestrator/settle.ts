@@ -156,7 +156,7 @@ export async function startMemoryCapture(turn: {
     const capture = (async () => {
       if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
       try {
-        await onTurnEnd(context);
+        await onTurnEnd(tenant, context);
       } catch (error) {
         deps.errors.record(
           tenant,

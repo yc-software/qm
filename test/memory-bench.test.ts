@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -47,7 +48,7 @@ test("replayConversation runs every turn through the strategy and writes the not
       { input: "remember that I prefer terse replies", reply: "ok" },
     ],
   };
-  await replayConversation(strategy, "user:U1", conv);
+  await replayConversation(captureTenant, strategy, "user:U1", conv);
   const notebook = await memory.read("user:U1");
   assert.match(notebook, /billing service/);
   assert.match(notebook, /terse replies/);
@@ -57,7 +58,7 @@ test("replayConversation tolerates strategies with no automatic capture (agent-o
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const { strategy } = createMemoryStrategy("agent-only", { agent: createMockAgent(), memory });
   const conv: BenchConversation = { id: "t", description: "test", turns: [{ input: "hi", reply: "yo" }] };
-  await replayConversation(strategy, "user:U1", conv);
+  await replayConversation(captureTenant, strategy, "user:U1", conv);
   assert.equal(await memory.read("user:U1"), "");
 });
 

@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
 import { isOwnStatusCard } from "./message-gating.ts";
 import { slackMessageToIngestEvent } from "./mirror.ts";
@@ -29,14 +30,17 @@ export type SlackHistoryReader = (
 const MIRROR_CONTEXT_NOTE =
   "Context comes from stored Slack events. Earlier messages, missed events, reactions, and attachment details may be absent; this is not a complete Slack history.";
 
-export function createSlackHistoryReader(deps: {
-  core: SlackCoreClient;
-  ids: BotIdentity;
-  managed?: boolean;
-  historyLimit?: number;
-  setupUrl?: string;
-  historyClient?: { conversations: { history(args: any): Promise<unknown>; replies(args: any): Promise<unknown> } };
-}): SlackHistoryReader {
+export function createSlackHistoryReader(
+  tenant: Tenant,
+  deps: {
+    core: SlackCoreClient;
+    ids: BotIdentity;
+    managed?: boolean;
+    historyLimit?: number;
+    setupUrl?: string;
+    historyClient?: { conversations: { history(args: any): Promise<unknown>; replies(args: any): Promise<unknown> } };
+  },
+): SlackHistoryReader {
   const limit = deps.managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? 200);
   async function liveHistory(
     client: any,
@@ -214,6 +218,7 @@ export function createSlackHistoryReader(deps: {
       if (!before && slackHistoryRateLimitMessage(error) && deps.core.noteSurfaceHistoryGap)
         await deps.core
           .noteSurfaceHistoryGap(
+            tenant,
             channel,
             `Slack rate-limited the initial history pull for ${threadTs ? `thread ${threadTs} in ` : ""}this channel, so messages from before QM joined were not loaded.`,
           )

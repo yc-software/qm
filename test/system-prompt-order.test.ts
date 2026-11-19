@@ -182,7 +182,7 @@ const slackDm = (thread: string, text: string, extra: Partial<OrchestratorInput>
 test("system prompt is ordered cached-prefix → volatile tail, with memory LAST (after every other block)", async () => {
   const { orchestrator: orch, memory } = buildOrchestrator();
 
-  await memory.capture(scopeId("personal", actor.id), ["my favorite color is chartreuse"], Date.now());
+  await memory.capture(tenant, scopeId("personal", actor.id), ["my favorite color is chartreuse"], Date.now());
 
   let prompt = "";
   for (let i = 0; i < 200 && !/chartreuse/.test(prompt); i++) {
@@ -396,7 +396,10 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
   const personal = scopeId("personal", actor.id);
   const channelScope = scopeId("channel", "C1");
   await config.setSharingPosture(scopeId("org", ORG), "open");
-  await memory.capture(personal, ["PERSONAL_OPEN_MEMORY"], Date.now(), { actorId: actor.id, context: "conversation" });
+  await memory.capture(tenant, personal, ["PERSONAL_OPEN_MEMORY"], Date.now(), {
+    actorId: actor.id,
+    context: "conversation",
+  });
   const channelConversation: Conversation = {
     kind: "channel",
     threadRef: "C1:memory",
@@ -671,7 +674,7 @@ for (const mode of ["off", "writable", "skip"] as const) {
       isCurrentSharedScopeMember: async () => true,
     });
     await config.setSharingPosture(scopeId("org", ORG), "open");
-    await memory.capture(scopeId("personal", actor.id), ["DO_NOT_RECALL_PRIVATE_NOTE"], Date.now(), {
+    await memory.capture(tenant, scopeId("personal", actor.id), ["DO_NOT_RECALL_PRIVATE_NOTE"], Date.now(), {
       actorId: actor.id,
       context: "conversation",
     });
@@ -720,7 +723,10 @@ test("Open source memory is never exported into a reusable sandbox bearer token"
   const personal = scopeId("personal", actor.id);
   const room = scopeId("channel", "C1");
   await config.setSharingPosture(scopeId("org", ORG), "open");
-  await memory.capture(personal, ["OPEN_TOKEN_PRIVATE"], Date.now(), { actorId: actor.id, context: "conversation" });
+  await memory.capture(tenant, personal, ["OPEN_TOKEN_PRIVATE"], Date.now(), {
+    actorId: actor.id,
+    context: "conversation",
+  });
   const result = await orchestrator.handleTurn({
     surface: "test",
     actor,
@@ -740,7 +746,10 @@ test("Open source memory is never exported into a reusable sandbox bearer token"
   assert.ok(claims);
   assert.ok(claims.memory?.read.includes(room));
   assert.equal(claims.memory?.read.includes(personal), false);
-  await memory.capture(room, ["ROOM_TOKEN_PRIVATE"], Date.now(), { actorId: actor.id, context: "conversation" });
+  await memory.capture(tenant, room, ["ROOM_TOKEN_PRIVATE"], Date.now(), {
+    actorId: actor.id,
+    context: "conversation",
+  });
   const dmResult = await orchestrator.handleTurn(dm("dm:U1:open-token", "!run echo ok", { origin: { kind: "human" } }));
   assert.equal(dmResult.status, "ok", dmResult.reason);
   const dmClaims = await verifyCapabilityToken(env.AGENT_API_TOKEN, "test-signing-secret");
@@ -1543,7 +1552,7 @@ for (const surfaceTools of [false, true]) {
     };
     const { orchestrator, memory, sessions } = buildOrchestrator({ agent });
     const personal = scopeId("personal", actor.id);
-    await memory.capture(personal, ["ALPHA_MARKER", "BETA_MARKER"], Date.now());
+    await memory.capture(tenant, personal, ["ALPHA_MARKER", "BETA_MARKER"], Date.now());
     const input = slackDm("memory-once", "hello", { surfaceTools });
     const first = await orchestrator.handleTurn(input);
     assert.equal(first.status, "ok");
@@ -1552,7 +1561,7 @@ for (const surfaceTools of [false, true]) {
     assert.doesNotMatch(seen[1]!.environment ?? "", /ALPHA_MARKER|BETA_MARKER|What you remember/);
     const beta = (await memory.facts!(personal)).find((fact) => fact.text.includes("BETA_MARKER"))!;
     await memory.delete!(personal, [beta.id]);
-    await memory.capture(personal, ["GAMMA_MARKER"], Date.now());
+    await memory.capture(tenant, personal, ["GAMMA_MARKER"], Date.now());
     await orchestrator.handleTurn({ ...input, text: "third" });
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);

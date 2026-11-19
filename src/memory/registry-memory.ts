@@ -117,11 +117,11 @@ export function createRegistryMemoryService(opts: {
           disabled.map((route) => route.query(scopeId, q, limit, context)),
         );
       },
-      async capture(scopeId, facts, at, by, context) {
+      async capture(tenant, scopeId, facts, at, by, context) {
         const { service, disabled } = await serve();
         return alongside(
-          service.capture(scopeId, facts, at, by, context),
-          disabled.map((route) => route.capture(scopeId, facts, at, by, context)),
+          service.capture(tenant, scopeId, facts, at, by, context),
+          disabled.map((route) => route.capture(tenant, scopeId, facts, at, by, context)),
         );
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),

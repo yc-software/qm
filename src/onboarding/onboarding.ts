@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import type { ScopeId, TurnRequest } from "../types.ts";
 import type { MemoryAuthority, MemoryService } from "../memory/memory-service.ts";
 
@@ -27,6 +28,7 @@ export function detectOnboardingStatus(memory: string, version = ONBOARDING_VERS
 }
 
 export async function setOnboardingStatus(
+  tenant: Tenant,
   memory: MemoryService,
   scope: ScopeId,
   status: OnboardingStatus,
@@ -45,7 +47,7 @@ export async function setOnboardingStatus(
     status === "pending"
       ? `Onboarding: pending ${version} since ${today}.`
       : `Onboarding: ${status} ${version} on ${today}.`;
-  await memory.capture(scope, [line], Date.now(), by, { mode: "explicit" });
+  await memory.capture(tenant, scope, [line], Date.now(), by, { mode: "explicit" });
 }
 
 export function isIdeasConversation(input: {

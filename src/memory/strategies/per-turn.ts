@@ -1,3 +1,4 @@
+import type { Tenant } from "../../tenants/context.ts";
 import { withAbort } from "../../util/async.ts";
 import { memoryCaptureBurst, type MemoryCaptureBurst, type MemoryCaptureTurn } from "../capture-context.ts";
 import { isObj } from "../../util/objects.ts";
@@ -107,6 +108,7 @@ interface CaptureDeps {
 }
 
 export async function captureMemoryTurns(
+  tenant: Tenant,
   deps: CaptureDeps,
   turns: readonly MemoryCaptureTurn[],
   id?: string,
@@ -126,16 +128,19 @@ export async function captureMemoryTurns(
       if (!texts.length) continue;
       const scope = applicability === "team" ? burst.document.teamScopeId : burst.document.documentScopeId;
       signal?.throwIfAborted();
-      await deps.memory.capture(scope, texts, Date.now(), by, { ...burstCaptureContext(burst), sensitivity });
+      await deps.memory.capture(tenant, scope, texts, Date.now(), by, { ...burstCaptureContext(burst), sensitivity });
     }
     return;
   }
   const { facts, sensitivity } = await extractFacts(deps.agent, burst.turns, signal);
   signal?.throwIfAborted();
   if (facts.length)
-    await deps.memory.capture(burst.scopeId, facts, Date.now(), by, { ...burstCaptureContext(burst), sensitivity });
+    await deps.memory.capture(tenant, burst.scopeId, facts, Date.now(), by, {
+      ...burstCaptureContext(burst),
+      sensitivity,
+    });
 }
 
 export function createPerTurnStrategy(deps: CaptureDeps): MemoryStrategy {
-  return { onTurnEnd: (turn) => captureMemoryTurns(deps, [turn]) };
+  return { onTurnEnd: (tenant, turn) => captureMemoryTurns(tenant, deps, [turn]) };
 }

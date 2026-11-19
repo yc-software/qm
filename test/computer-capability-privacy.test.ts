@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { ProjectRosterChanged } from "../src/core/orchestrator/admit.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
@@ -61,6 +62,7 @@ test("ordinary computer credentials cannot read private managed data or gain acc
   await built.skills.review(skill.id, actor, []);
   await built.skills.publish(skill.id);
   await built.memory.capture(
+    captureTenant,
     owner,
     ["PrivateMemoryCedar7301"],
     Date.now(),

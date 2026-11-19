@@ -51,11 +51,11 @@ function stricter(a: Sensitivity | undefined, b: Sensitivity): Sensitivity {
 export function classifiedMemory(base: MemoryService, agent: ModelUtilities): MemoryService {
   return {
     ...base,
-    async capture(scope, facts, at, by, context) {
+    async capture(tenant, scope, facts, at, by, context) {
       let sensitivity = context?.sensitivity;
       if (context?.mode !== "automatic" || sensitivity === undefined)
         sensitivity = stricter(sensitivity, await classify(agent, facts, scope, by?.actorId));
-      return base.capture(scope, facts, at, by, {
+      return base.capture(tenant, scope, facts, at, by, {
         ...context,
         mode: context?.mode ?? "explicit",
         sensitivity,

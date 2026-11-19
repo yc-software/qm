@@ -107,7 +107,7 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
   try {
     const cap = await capFor("admin-alice");
     const ended = await capFor("admin-alice", { runId: "ended-run" });
-    await s.built.memory.capture(ORG, ["seed"], 0);
+    await s.built.memory.capture(tenant, ORG, ["seed"], 0);
     const patch = (token: string, text: string) =>
       fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
         method: "PATCH",
@@ -156,7 +156,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
     assert.equal(rejected.status, 431);
     await rejected.text();
     const token = await mintCapabilityToken(claims, SECRET, true);
-    await s.built.memory.capture(ORG, ["seed"], 0);
+    await s.built.memory.capture(tenant, ORG, ["seed"], 0);
     const response = await fetch(url, {
       method: "PATCH",
       headers: { "x-agent-capability": token, "content-type": "application/json" },
@@ -201,7 +201,7 @@ test("a non-admin's capability token gets 403 from admin routes (gate routes, th
   const s = await start();
   try {
     const cap = await capFor("U1");
-    await s.built.memory.capture(ORG, ["seed"], 0);
+    await s.built.memory.capture(tenant, ORG, ["seed"], 0);
     const res = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       method: "PATCH",
       headers: { "x-agent-capability": cap, "content-type": "application/json" },
@@ -228,7 +228,7 @@ test("x-admin-actor cannot escalate a capability token — the header is the por
       "the header must not turn a non-admin token into an admin",
     );
 
-    await s.built.memory.capture(ORG, ["seed"], 0);
+    await s.built.memory.capture(tenant, ORG, ["seed"], 0);
     const write = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       method: "PATCH",
       headers: { ...spoof, "content-type": "application/json" },
@@ -265,7 +265,7 @@ test("a token carrying no person's authority cannot act as an admin, even when i
       const whoami = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": cap } });
       assert.equal(((await whoami.json()) as any).isAdmin, true, "whoami stays answerable — introspection, not reach");
 
-      await s.built.memory.capture(ORG, ["seed"], 0);
+      await s.built.memory.capture(tenant, ORG, ["seed"], 0);
       const write = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
         method: "PATCH",
         headers: { "x-agent-capability": cap, "content-type": "application/json" },
@@ -456,7 +456,7 @@ test("content reads need a DM-scoped token", async () => {
     );
     assert.equal(personalNotebook.status, 403);
 
-    await s.built.memory.capture(ORG, ["seed"], 0);
+    await s.built.memory.capture(tenant, ORG, ["seed"], 0);
     const put = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       method: "PATCH",
       headers: { "x-agent-capability": fromChannel, "content-type": "application/json" },
@@ -531,7 +531,7 @@ test("revoking the admin grant cuts off an already-minted token immediately", as
 
     const after = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": cap } });
     assert.equal(((await after.json()) as any).isAdmin, false);
-    await s.built.memory.capture(ORG, ["seed"], 0);
+    await s.built.memory.capture(tenant, ORG, ["seed"], 0);
     const write = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       method: "PATCH",
       headers: { "x-agent-capability": cap, "content-type": "application/json" },
@@ -669,7 +669,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       const headers = { "x-agent-capability": cap, "content-type": "application/json" };
       const personal = scopeId("personal", "admin-alice");
       const target = scopeId("personal", "U1");
-      await s.built.memory.capture(target, ["private test sentinel"], Date.now());
+      await s.built.memory.capture(tenant, target, ["private test sentinel"], Date.now());
       const path = `/v1/admin/memory?scope=${encodeURIComponent(target)}`;
       const read = () => fetch(`${s.base}${path}`, { headers });
       const response = await read();
@@ -834,7 +834,7 @@ test("native admin tools use the authenticated handler, including its live autho
       { current: { admin: { call, operationsAvailable: true } } as ToolContext },
       { controlTools: true },
     ).find((t) => t.name === "admin")!;
-    await s.built.memory.capture(target, ["draft fixture"], Date.UTC(2026, 0, 2));
+    await s.built.memory.capture(tenant, target, ["draft fixture"], Date.UTC(2026, 0, 2));
     const [seeded] = (await s.built.memory.facts!(target))!;
     const written = await tool.execute(
       "native-write",

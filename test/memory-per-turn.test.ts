@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
@@ -23,10 +24,10 @@ const REPLY = "Noted.";
 for (const origin of [CHANNEL, GROUP, DM]) {
   test(`automatic capture writes only to ${origin} and leaves existing notebooks untouched`, async () => {
     const { memory } = freshMemory();
-    await memory.capture(PERSONAL, ["Existing fact"], Date.now());
+    await memory.capture(captureTenant, PERSONAL, ["Existing fact"], Date.now());
     const before = await memory.read(PERSONAL);
     const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory });
-    await strategy.onTurnEnd!({ scopeId: origin, input: INPUT, reply: REPLY, actorId: ACTOR });
+    await strategy.onTurnEnd!(captureTenant, { scopeId: origin, input: INPUT, reply: REPLY, actorId: ACTOR });
     assert.match(await memory.read(origin), /task list is ship the launch/);
     if (origin !== PERSONAL) assert.equal(await memory.read(PERSONAL), before);
     else assert.equal((await memory.read(PERSONAL)).split("task list is ship the launch").length - 1, 1);
@@ -36,7 +37,7 @@ for (const origin of [CHANNEL, GROUP, DM]) {
 test("redirected capture writes only to the resolved target, not the speaker's notebook", async () => {
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory });
-  await strategy.onTurnEnd!({
+  await strategy.onTurnEnd!(captureTenant, {
     scopeId: "personal:U2",
     conversationScopeId: CHANNEL,
     input: INPUT,
@@ -51,13 +52,13 @@ test("redirected capture writes only to the resolved target, not the speaker's n
 test("different speakers in one channel keep capture in the channel", async () => {
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory });
-  await strategy.onTurnEnd!({
+  await strategy.onTurnEnd!(captureTenant, {
     scopeId: CHANNEL,
     input: "remember that my task list is ship the launch",
     reply: REPLY,
     actorId: ACTOR,
   });
-  await strategy.onTurnEnd!({
+  await strategy.onTurnEnd!(captureTenant, {
     scopeId: CHANNEL,
     input: "remember that my task list is write the memo",
     reply: REPLY,

@@ -49,6 +49,7 @@ test("authorized document notebooks follow the team roster and automatic recall 
       inheritedFacts: [],
     };
     await memory.capture(
+      testTenant,
       a.knowledge.teamScopeId,
       ["Team procedure"],
       at,
@@ -56,6 +57,7 @@ test("authorized document notebooks follow the team roster and automatic recall 
       capture,
     );
     await memory.capture(
+      testTenant,
       a.knowledge.documentScopeId,
       ["Document A assumption"],
       at,
@@ -120,6 +122,7 @@ test("authorized document notebooks follow the team roster and automatic recall 
     assert.deepEqual(new Set(rosters.get(a.knowledge.documentScopeId.slice(6))), new Set(["owner", "member"]));
     await assert.rejects(
       memory.capture(
+        testTenant,
         a.knowledge.documentScopeId,
         ["Wrong document"],
         at,
@@ -141,6 +144,7 @@ test("authorized document notebooks follow the team roster and automatic recall 
     );
     await assert.rejects(
       memory.capture(
+        testTenant,
         b.knowledge.documentScopeId,
         ["Revoked write"],
         at,
@@ -179,6 +183,7 @@ test("private capture restrictions survive storage, duplicate merges, edits, and
       inheritedFacts: [],
     };
     await memory.capture(
+      testTenant,
       "personal:owner",
       ["Private convention"],
       100,
@@ -186,6 +191,7 @@ test("private capture restrictions survive storage, duplicate merges, edits, and
       metadata,
     );
     await raw.capture(
+      testTenant,
       "personal:owner",
       ["Private convention"],
       101,
@@ -195,6 +201,7 @@ test("private capture restrictions survive storage, duplicate merges, edits, and
     const child = await built.sessions.getOrCreateByThread("web:owner:private-child", "dm", "personal:owner");
     await built.sessions.setParentSession(ancestryTenant, child.id, binding.conversation.sessionId);
     await memory.capture(
+      testTenant,
       "personal:owner",
       ["Private child convention"],
       101,
@@ -217,7 +224,7 @@ test("private capture restrictions survive storage, duplicate merges, edits, and
     const stored = createPostgresMemoryService(databaseUrl);
     const updated = (await stored.facts!("personal:owner"))[0]!;
     assert.equal(updated.personalOnly, true);
-    await raw.capture("org:test", ["Derived private convention"], 102, undefined, {
+    await raw.capture(testTenant, "org:test", ["Derived private convention"], 102, undefined, {
       mode: "explicit",
       inheritedFacts: [updated],
       sensitivity: "ordinary",
@@ -245,6 +252,7 @@ test("private capture restrictions survive storage, duplicate merges, edits, and
     );
     await assert.rejects(
       memory.capture(
+        testTenant,
         "org:test",
         ["Forbidden publication"],
         103,
@@ -283,7 +291,7 @@ test("recorded document extraction routes a team procedure and workbook assumpti
       memory,
       agent: { oneShot: async () => fixture.response },
     });
-    await strategy.onTurnEnd!({
+    await strategy.onTurnEnd!(testTenant, {
       ...fixture.turns[0]!,
       scopeId: binding.conversation.scopeId,
       conversationScopeId: binding.conversation.scopeId,
@@ -325,7 +333,7 @@ test("HTTP edits in a private document mark previously ordinary personal facts a
     if (binding.status !== "ok") throw new Error("missing private conversation");
     assert.ok(config.databaseUrl);
     const raw = createPostgresMemoryService(config.databaseUrl);
-    await raw.capture("personal:owner", ["An ordinary convention"], 100, undefined, {
+    await raw.capture(testTenant, "personal:owner", ["An ordinary convention"], 100, undefined, {
       mode: "explicit",
       inheritedFacts: [],
       sensitivity: "ordinary",
@@ -394,6 +402,7 @@ test("selected private learning publishes only to its authorized document team a
     const raw = createPostgresMemoryService(config.databaseUrl);
     const memory = createDocumentMemory(raw, built.documentConversations, built.auditLog);
     await memory.capture(
+      testTenant,
       "personal:member",
       ["Selected procedure", "Unrelated private preference"],
       Date.now(),
@@ -469,6 +478,7 @@ test("selected private learning publishes only to its authorized document team a
     );
     assert.ok((await raw.facts!("personal:member")).every((fact) => fact.personalOnly));
     await memory.capture(
+      testTenant,
       "personal:member",
       ["Workbook-only procedure"],
       Date.now(),
@@ -486,6 +496,7 @@ test("selected private learning publishes only to its authorized document team a
       ["Workbook-only procedure"],
     );
     await memory.capture(
+      testTenant,
       "personal:member",
       ["Organization procedure"],
       Date.now(),
@@ -505,6 +516,7 @@ test("selected private learning publishes only to its authorized document team a
     );
     const restrictedProject = await built.projects.create({ name: "Restricted", ownerId: "member" });
     await memory.capture(
+      testTenant,
       "personal:member",
       ["Restricted project detail"],
       Date.now(),
@@ -541,6 +553,7 @@ test("selected private learning publishes only to its authorized document team a
     await built.projects.removeMember(restrictedProject.id, "member", "owner");
     assert.ok(!(await shared.facts!(knowledge.teamScopeId)).some((fact) => fact.id === restricted.id));
     await memory.capture(
+      testTenant,
       "personal:member",
       ["Unverified origin"],
       Date.now(),
@@ -610,6 +623,7 @@ test("skipMemory prevents an approved private-learning publication from writing 
     });
     if (privateBinding.status !== "ok") throw new Error("missing private binding");
     await raw.capture(
+      testTenant,
       "personal:U1",
       ["Selected private fact"],
       Date.now(),

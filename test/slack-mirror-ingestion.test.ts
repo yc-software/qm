@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import bolt from "@slack/bolt";
@@ -483,7 +484,7 @@ test("real message handler checks prior stake in the mirror before ingesting the
       },
     },
   };
-  const reader = createSlackHistoryReader({
+  const reader = createSlackHistoryReader(captureTenant, {
     ids,
     core: {
       readSurfaceMessages: async (channel: string, opts: any) => {

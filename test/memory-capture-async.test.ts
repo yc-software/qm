@@ -150,7 +150,7 @@ test("memory capture runs only for a person's own turn in a human conversation",
     createMockAgent(),
     undefined,
     {
-      onTurnEnd: async ({ input }) => {
+      onTurnEnd: async (_tenant, { input }) => {
         captured.push(input);
       },
     },

@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -37,15 +38,21 @@ test("onboarding memory markers are detected from readable memory bullets", () =
 test("setOnboardingStatus replaces the marker fact and round-trips through detect", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
-  await memory.capture(scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
+  await memory.capture(captureTenant, scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
 
-  await setOnboardingStatus(memory, scope, "completed", "2026-06-22", { actorId: "admin", context: "admin" });
+  await setOnboardingStatus(captureTenant, memory, scope, "completed", "2026-06-22", {
+    actorId: "admin",
+    context: "admin",
+  });
   const completed = await memory.read(scope);
   assert.equal(detectOnboardingStatus(completed), "completed");
   assert.doesNotMatch(completed, /pending/i);
   assert.match(completed, /some prefs/);
 
-  await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", { actorId: "admin", context: "admin" });
+  await setOnboardingStatus(captureTenant, memory, scope, "not_started", "2026-06-22", {
+    actorId: "admin",
+    context: "admin",
+  });
   assert.equal(detectOnboardingStatus(await memory.read(scope)), "not_started");
   assert.match(await memory.read(scope), /some prefs/);
 });

@@ -827,10 +827,13 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     return handle(ctx, memory, capability, write);
   });
 
-const captureFacts = writeMemory(async ({ res, deps, tenant, body, sourceProvenance }, memory, capability, write) => {
+const captureFacts = writeMemory(async (ctx, memory, capability, write) => {
+  const { res, deps, body, sourceProvenance } = ctx;
+  const tenant = tenantOf(ctx);
   const facts = parseFacts(body);
   if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
   const { added, outcomes, problems } = await writeFacts(
+    tenant,
     memory,
     write,
     facts,

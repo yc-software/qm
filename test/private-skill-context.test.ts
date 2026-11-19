@@ -63,6 +63,7 @@ test("private document capability and skill privacy survive memory opt-out and a
         if (input.input.includes("Read late private memory")) {
           assert.equal((await built.sessions.get(input.session.id))?.personalOnly, undefined);
           await raw.capture(
+            ancestryTenant,
             "personal:admin-alice",
             ["Late private memory"],
             Date.now(),
@@ -407,7 +408,7 @@ test("private document capability and skill privacy survive memory opt-out and a
     assert.equal((await built.skills.get(copiedId))?.personalOnly, true);
     await built.skills.archive(copiedId);
   }
-  await raw.capture("group:restricted", ["Restricted source procedure"], Date.now(), undefined, {
+  await raw.capture(ancestryTenant, "group:restricted", ["Restricted source procedure"], Date.now(), undefined, {
     mode: "explicit",
     sensitivity: "restricted",
     inheritedFacts: [{ sensitivity: "restricted", sources: ["group:restricted"], sourceUnknown: false }],
@@ -673,6 +674,7 @@ test("private document capability and skill privacy survive memory opt-out and a
   assert.ok(origin?.sources.includes(teamScope));
   assert.ok(!origin?.sources.includes(personal));
   await built.memory.capture(
+    ancestryTenant,
     teamScope,
     ["Use the shared reporting procedure."],
     Date.now(),

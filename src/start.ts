@@ -1,3 +1,4 @@
+import type { Tenant } from "./tenants/context.ts";
 import { jobQueueMisconfigured } from "./persistence/job-queue.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
@@ -36,7 +37,7 @@ function tenantBranding(load: () => Promise<OrgBranding>): () => Promise<OrgBran
 function envSlackAccountRuntimes(
   env: NodeJS.ProcessEnv,
   tenant: string | undefined,
-  startPlugin: (config: SlackPluginConfig, tenant: string) => Promise<{ stop(): Promise<void> }>,
+  startPlugin: (config: SlackPluginConfig, tenant: Tenant) => Promise<{ stop(): Promise<void> }>,
 ) {
   const accounts = slackAccountConfigsFromEnv(env);
   if (!tenant) {
@@ -48,7 +49,11 @@ function envSlackAccountRuntimes(
     createSlackRuntimeReconciler({
       startPaused: true,
       load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
-      startPlugin: (config) => startPlugin(config, tenant),
+      startPlugin: (config) =>
+        inBootTenant(tenant, (token) => {
+          if (!token) throw new Error("Slack account startup requires a tenant");
+          return startPlugin(config, token);
+        }),
       onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
     }),
   );
@@ -160,7 +165,7 @@ export async function startQm(
   if (!config.backgroundWorkEnabled)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 
-  const slackRuntimeFor = (slackTenant: string) =>
+  const slackRuntimeFor = (slackTenant: string, slackToken: Tenant) =>
     createSlackRuntimeReconciler({
       startPaused: true,
       load: async () => {
@@ -186,7 +191,7 @@ export async function startQm(
         if (slackConfig && slackTenant === tenant) return { version: "environment", config: slackConfig };
         return null;
       },
-      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, slackTenant),
+      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, slackToken),
       onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${slackTenant}`),
     });
   const slackRuntime = createTenantSlackRuntimes({

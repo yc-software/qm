@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -36,9 +37,9 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
 
 test("each notebook keeps its own semantic order under one heading, in scope order", async (t) => {
   const { base, memory, calls } = await fixture(t);
-  await base.capture("personal:a", ["0.7 local near tie", "0.1 irrelevant local"], AT);
-  await base.capture("channel:b", ["0.72 remote near tie", "0.99 remote best"], AT);
-  await base.capture("personal:forbidden", ["1 never authorized"], AT);
+  await base.capture(captureTenant, "personal:a", ["0.7 local near tie", "0.1 irrelevant local"], AT);
+  await base.capture(captureTenant, "channel:b", ["0.72 remote near tie", "0.99 remote best"], AT);
+  await base.capture(captureTenant, "personal:forbidden", ["1 never authorized"], AT);
   const out = renderRecall(
     await recallAcrossScopes(memory, ["personal:a", "channel:b"], {
       query: "verify",
@@ -55,8 +56,8 @@ test("each notebook keeps its own semantic order under one heading, in scope ord
 
 test("global packing counts source labels, skips oversized rows, deduplicates, and doesn't pad weak facts", async (t) => {
   const { base, memory } = await fixture(t);
-  await base.capture("personal:a", [`0.9 ${"x".repeat(6100)}`, "0.8 duplicate", "0.1 weak"], AT);
-  await base.capture("channel:b", ["0.8 duplicate", "0.85 remote high"], AT);
+  await base.capture(captureTenant, "personal:a", [`0.9 ${"x".repeat(6100)}`, "0.8 duplicate", "0.1 weak"], AT);
+  await base.capture(captureTenant, "channel:b", ["0.8 duplicate", "0.85 remote high"], AT);
   const scopes = ["personal:a", "channel:b", "personal:a"];
   const out = renderRecall(
     await recallAcrossScopes(memory, scopes, {
@@ -75,8 +76,8 @@ test("global packing counts source labels, skips oversized rows, deduplicates, a
 
 test("provider routing excludes recall-disabled routes and embeds the query once", async (t) => {
   const { base, memory, calls } = await fixture(t);
-  await base.capture("personal:a", ["0.6 local"], AT);
-  await base.capture("channel:b", ["0.99 remote"], AT);
+  await base.capture(captureTenant, "personal:a", ["0.6 local"], AT);
+  await base.capture(captureTenant, "channel:b", ["0.99 remote"], AT);
   const routed = createRoutedMemoryService({
     providers: {
       default: memory,
@@ -129,6 +130,7 @@ test("many large notebooks still share one 6000 character maximum", async (t) =>
   const scopes = Array.from({ length: 25 }, (_, i) => `channel:${i}`);
   for (const scope of scopes)
     await base.capture(
+      captureTenant,
       scope,
       Array.from({ length: 80 }, (_, i) => `0.8 ${scope} entry ${i} ${"x".repeat(70)}`),
       AT,
@@ -141,11 +143,12 @@ test("many large notebooks still share one 6000 character maximum", async (t) =>
 test("grep interleaves notebooks and scope-targeted queries can reach later results", async (t) => {
   const { base } = await fixture(t);
   await base.capture(
+    captureTenant,
     "personal:a",
     Array.from({ length: 50 }, (_, i) => `match local ${i}`),
     AT,
   );
-  await base.capture("channel:b", ["match remote"], AT);
+  await base.capture(captureTenant, "channel:b", ["match remote"], AT);
   assert.deepEqual(await searchAcrossScopes(base, ["personal:a", "channel:b"], "match", 2), [
     { scopeId: "personal:a", fact: "#1 (2026-10-01) match local 0" },
     { scopeId: "channel:b", fact: "#51 (2026-10-01) match remote" },
@@ -157,7 +160,7 @@ test("grep interleaves notebooks and scope-targeted queries can reach later resu
 
 test("candidate routing preserves fail-open/fail-closed providers without embedding their text", async (t) => {
   const { base, memory, calls } = await fixture(t);
-  await base.capture("personal:a", ["0.8 local fact"], AT);
+  await base.capture(captureTenant, "personal:a", ["0.8 local fact"], AT);
   const external = { ...base, recall: async () => [{ text: "External provider answer" }] };
   const failing = {
     ...base,
@@ -195,6 +198,7 @@ test("candidate routing preserves fail-open/fail-closed providers without embedd
 test("a recall-only provider's block gets one heading and fills the remaining budget", async (t) => {
   const { base } = await fixture(t);
   await base.capture(
+    captureTenant,
     "personal:a",
     Array.from({ length: 60 }, (_, i) => `old fact ${i} ${"x".repeat(100)}`),
     AT,
@@ -215,7 +219,7 @@ test("a recall-only provider's block gets one heading and fills the remaining bu
 
 test("an external block that fills its maxChars is trimmed to the remaining budget, not dropped", async (t) => {
   const { base } = await fixture(t);
-  await base.capture("personal:a", ["notebook fact"], AT);
+  await base.capture(captureTenant, "personal:a", ["notebook fact"], AT);
   const external = {
     ...base,
     recall: async (_scope: string, context?: { maxChars?: number }) => [
@@ -236,8 +240,11 @@ test("an external block that fills its maxChars is trimmed to the remaining budg
 
 test("facts captured in a session are not recalled or searched back into that session", async (t) => {
   const { base, memory } = await fixture(t);
-  await base.capture("personal:a", ["0.9 said in session S"], AT, undefined, { mode: "automatic", sessionId: "S" });
-  await base.capture("personal:a", ["0.8 said elsewhere"], AT);
+  await base.capture(captureTenant, "personal:a", ["0.9 said in session S"], AT, undefined, {
+    mode: "automatic",
+    sessionId: "S",
+  });
+  await base.capture(captureTenant, "personal:a", ["0.8 said elsewhere"], AT);
   const recalled = async (sessionId?: string) =>
     (await recallAcrossScopes(memory, ["personal:a"], { query: "verify", ...(sessionId ? { sessionId } : {}) })).map(
       (fact) => fact.text,

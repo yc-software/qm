@@ -1,3 +1,4 @@
+import { inBootTenant, readBootTenant } from "../src/tenants/boot.ts";
 import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -46,56 +47,59 @@ const conversations = readdirSync(fixtureDir)
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
-const config = loadConfig();
-const agent = createAgent({
-  ...agentConfigOptions(config),
-  routes: createModelRoutes(configRouteOptions(config)),
-  tempDirPrefix: "membench",
-});
-if (!agent.oneShot) {
-  console.error("agent has no oneShot — cannot judge");
-  process.exit(1);
-}
-const oneShot = agent.oneShot.bind(agent);
+await inBootTenant(await readBootTenant(databaseUrl), async (tenant) => {
+  if (!tenant) throw new Error("Memory benchmark requires a single-tenant database");
+  const config = loadConfig();
+  const agent = createAgent({
+    ...agentConfigOptions(config),
+    routes: createModelRoutes(configRouteOptions(config)),
+    tempDirPrefix: "membench",
+  });
+  if (!agent.oneShot) {
+    console.error("agent has no oneShot — cannot judge");
+    process.exit(1);
+  }
+  const oneShot = agent.oneShot.bind(agent);
 
-const results: BenchResult[] = [];
-for (const kind of kinds) {
-  for (const conversation of conversations) {
-    const memory = createPostgresMemoryService(databaseUrl);
-    const { strategy } = createMemoryStrategy(kind, { agent, memory });
-    const scopeId = `user:bench-${kind}-${conversation.id}-${Date.now()}`;
-    if (!strategy.onTurnEnd) {
-      console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);
+  const results: BenchResult[] = [];
+  for (const kind of kinds) {
+    for (const conversation of conversations) {
+      const memory = createPostgresMemoryService(databaseUrl);
+      const { strategy } = createMemoryStrategy(kind, { agent, memory });
+      const scopeId = `user:bench-${kind}-${conversation.id}-${Date.now()}`;
+      if (!strategy.onTurnEnd) {
+        console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);
+      }
+      await replayConversation(tenant, strategy, scopeId, conversation);
+      const notebook = await memory.read(scopeId);
+      const judgeOut = await oneShot(JUDGE_PROMPT, renderJudgeInput(conversation, notebook));
+      const verdict = parseJudgeVerdict(judgeOut ?? "");
+      results.push({ kind, conversationId: conversation.id, notebook, verdict });
+      console.log(
+        `[${kind}] ${conversation.id}: s/n=${verdict.signalToNoise} stale=${verdict.staleness} ` +
+          `infer=${verdict.inferenceVsObservation} — ${verdict.notes}`,
+      );
     }
-    await replayConversation(strategy, scopeId, conversation);
-    const notebook = await memory.read(scopeId);
-    const judgeOut = await oneShot(JUDGE_PROMPT, renderJudgeInput(conversation, notebook));
-    const verdict = parseJudgeVerdict(judgeOut ?? "");
-    results.push({ kind, conversationId: conversation.id, notebook, verdict });
-    console.log(
-      `[${kind}] ${conversation.id}: s/n=${verdict.signalToNoise} stale=${verdict.staleness} ` +
-        `infer=${verdict.inferenceVsObservation} — ${verdict.notes}`,
-    );
   }
-}
 
-const rows = summarize(results);
-console.log(`\n${formatTable(rows)}\n`);
+  const rows = summarize(results);
+  console.log(`\n${formatTable(rows)}\n`);
 
-const outPath = process.env.MEMORY_BENCH_OUT;
-if (outPath) {
-  writeFileSync(outPath, JSON.stringify({ generatedAt: new Date().toISOString(), rows, results }, null, 2));
-  console.log(`report written to ${outPath}`);
-}
-
-const defaultRow = rows.find((r) => r.kind === DEFAULT_MEMORY_STRATEGY);
-if (defaultRow) {
-  const failures = floorFailures(defaultRow);
-  if (failures.length) {
-    console.error(
-      `default strategy '${DEFAULT_MEMORY_STRATEGY}' is below its quality floors ` +
-        `(${JSON.stringify(DEFAULT_STRATEGY_FLOORS)}): ${failures.join("; ")}`,
-    );
-    process.exit(2);
+  const outPath = process.env.MEMORY_BENCH_OUT;
+  if (outPath) {
+    writeFileSync(outPath, JSON.stringify({ generatedAt: new Date().toISOString(), rows, results }, null, 2));
+    console.log(`report written to ${outPath}`);
   }
-}
+
+  const defaultRow = rows.find((r) => r.kind === DEFAULT_MEMORY_STRATEGY);
+  if (defaultRow) {
+    const failures = floorFailures(defaultRow);
+    if (failures.length) {
+      console.error(
+        `default strategy '${DEFAULT_MEMORY_STRATEGY}' is below its quality floors ` +
+          `(${JSON.stringify(DEFAULT_STRATEGY_FLOORS)}): ${failures.join("; ")}`,
+      );
+      process.exit(2);
+    }
+  }
+});

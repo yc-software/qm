@@ -119,7 +119,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     ["U2", "BOB_PAYLOAD"],
   ]) {
     await b.file(`personal:${id}`, "notes.txt", marker!);
-    await b.memory.capture(`personal:${id}`, [`OWN_MEMORY_${id}`], Date.now(), {
+    await b.memory.capture(testTenant, `personal:${id}`, [`OWN_MEMORY_${id}`], Date.now(), {
       actorId: id!,
       context: "conversation",
     });
@@ -180,7 +180,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   await b.directory.replace(
     ["U1", "U2", "U3"].map((principalId) => ({ principalId, displayName: principalId, type: "internal" })),
   );
-  await b.memory.capture("channel:C1", ["ROOM_FROM_U1"], Date.now(), undefined, {
+  await b.memory.capture(testTenant, "channel:C1", ["ROOM_FROM_U1"], Date.now(), undefined, {
     mode: "automatic",
     sensitivity: "ordinary",
     inheritedFacts: [],
@@ -327,7 +327,10 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
 test("sharing e2e: room file and memory access is revoked on the next DM turn", async (t) => {
   const b = await fixture(t);
   await b.file("channel:C1", "plan.txt", "ROOM_FILE");
-  await b.memory.capture("channel:C1", ["ROOM_MEMORY"], Date.now(), { actorId: "U1", context: "conversation" });
+  await b.memory.capture(testTenant, "channel:C1", ["ROOM_MEMORY"], Date.now(), {
+    actorId: "U1",
+    context: "conversation",
+  });
   await b.turn("hello", true);
   assert.equal(await b.turn(`!read ${b.filePath("channel:C1", "plan.txt")}`), "ROOM_FILE");
   assert.match(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
@@ -412,7 +415,7 @@ test("sharing e2e: local skill name wins, then exposes the carried fallback when
 test("sharing e2e: writes and memory capture remain local while reading carried context", async (t) => {
   const b = await fixture(t, { memoryCapture: "writable" });
   await b.file("personal:U1", "notes.txt", "SOURCE_UNCHANGED");
-  await b.memory.capture("personal:U1", ["PERSONAL_SOURCE_MEMORY"], Date.now(), {
+  await b.memory.capture(testTenant, "personal:U1", ["PERSONAL_SOURCE_MEMORY"], Date.now(), {
     actorId: "U1",
     context: "conversation",
   });
@@ -501,7 +504,7 @@ for (const memoryRecall of ["off", "writable"] as const) {
   test(`sharing e2e: memory ${memoryRecall} does not disable carried files or skills`, async (t) => {
     const b = await fixture(t, { memoryRecall });
     await b.file("personal:U1", "notes.txt", "FILE_WITH_MEMORY_RESTRICTED");
-    await b.memory.capture("personal:U1", ["NO_CARRIED_MEMORY"], Date.now(), {
+    await b.memory.capture(testTenant, "personal:U1", ["NO_CARRIED_MEMORY"], Date.now(), {
       actorId: "U1",
       context: "conversation",
     });
@@ -564,12 +567,16 @@ test("sharing e2e: the execution capability excludes carried memories in both di
 test("sharing e2e: local notebooks retain late facts while unclassified carried memory stays private", async (t) => {
   const b = await fixture(t);
   await b.memory.capture(
+    testTenant,
     "personal:U1",
     Array.from({ length: 120 }, (_, i) => `PERSONAL_FACT_${i} ${"context ".repeat(12)}`),
     Date.now(),
     { actorId: "U1", context: "conversation" },
   );
-  await b.memory.capture("channel:C1", ["ROOM_FACT_END"], Date.now(), { actorId: "U1", context: "conversation" });
+  await b.memory.capture(testTenant, "channel:C1", ["ROOM_FACT_END"], Date.now(), {
+    actorId: "U1",
+    context: "conversation",
+  });
   const p = await b.turn("!sysprompt", true);
   assert.doesNotMatch(p, /PERSONAL_FACT_119/);
   assert.match(p, /### #engineering[\s\S]*ROOM_FACT_END/);

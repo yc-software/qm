@@ -50,8 +50,8 @@ async function fixture() {
     files,
     auditLog,
   };
-  await memory.capture("personal:alice", ["LOCAL_FACT"], Date.now());
-  await memory.capture("channel:eng", ["SHARED_FACT", "long fact ".repeat(1500), "LAST_FACT"], Date.now());
+  await memory.capture(tenant, "personal:alice", ["LOCAL_FACT"], Date.now());
+  await memory.capture(tenant, "channel:eng", ["SHARED_FACT", "long fact ".repeat(1500), "LAST_FACT"], Date.now());
   await files.put({
     id: "1".repeat(32),
     ownerScopeId: "channel:eng",
@@ -254,7 +254,7 @@ test("source selection precedes name shadowing and preserves skill-level grants"
 
 test("semantic recall reuses the turn's memory snapshot instead of reloading notebooks", async () => {
   const { input, memory } = await fixture();
-  await memory.capture("org:test", ["ORG_FACT"], Date.now());
+  await memory.capture(tenant, "org:test", ["ORG_FACT"], Date.now());
   const loads: string[] = [];
   const counted = {
     ...memory,

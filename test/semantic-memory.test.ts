@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { disclosedMemory } from "../src/memory/disclosure.ts";
@@ -32,6 +33,7 @@ async function fixture() {
 test("semantic recall selects an old match, respects budget, and leaves full grep independent", async () => {
   const { base, memory } = await fixture();
   await base.capture(
+    captureTenant,
     "personal:a",
     ["browser preference", ...Array.from({ length: 120 }, (_, i) => `release ${i}: ${"x".repeat(70)}`)],
     AT,
@@ -54,7 +56,7 @@ test("semantic recall selects an old match, respects budget, and leaves full gre
 
 test("empty/deleted notebooks and other scopes cannot return cached facts", async () => {
   const { base, memory } = await fixture();
-  await base.capture("personal:a", ["browser preference"], AT);
+  await base.capture(captureTenant, "personal:a", ["browser preference"], AT);
   await recall(memory, "personal:a", { query: "verify" });
   assert.equal(await recall(memory, "personal:b", { query: "verify" }), "");
   await base.delete!("personal:a", ["1"]);
@@ -63,7 +65,7 @@ test("empty/deleted notebooks and other scopes cannot return cached facts", asyn
 
 test("recall embeds the query while the notebook is still loading", async () => {
   const { base, memory, calls } = await fixture();
-  await base.capture("personal:a", ["browser preference", "release notes"], AT);
+  await base.capture(captureTenant, "personal:a", ["browser preference", "release notes"], AT);
   const facts = await base.facts!("personal:a");
   let load!: () => void;
   const loaded = new Promise<void>((resolve) => (load = resolve));
@@ -91,7 +93,7 @@ test("embedding outage falls back to whole bullets, without disabling grep or wr
     index,
     { onError: () => errors++ },
   );
-  await memory.capture("personal:a", ["browser preference", "short"], Date.now());
+  await memory.capture(captureTenant, "personal:a", ["browser preference", "short"], Date.now());
   const fallback = await recall(memory, "personal:a", { query: "verify", maxChars: 72 });
   assert.match(fallback, /short$/);
   assert.ok(fallback.length <= 72);
@@ -159,10 +161,15 @@ test("malformed responses and provider errors do not expose provider payloads", 
 
 test("weak matches are omitted; an oversized fact doesn't displace smaller matches", async () => {
   const { base, memory } = await fixture();
-  await base.capture("personal:a", ["release note"], AT);
+  await base.capture(captureTenant, "personal:a", ["release note"], AT);
   assert.equal(await recall(memory, "personal:a", { query: "verify" }), "");
   await base.delete!("personal:a", ["1"]);
-  await base.capture("personal:a", [`browser ${"x".repeat(100)}`, "browser short", "browser second"], AT);
+  await base.capture(
+    captureTenant,
+    "personal:a",
+    [`browser ${"x".repeat(100)}`, "browser short", "browser second"],
+    AT,
+  );
   const result = await recall(memory, "personal:a", { query: "verify", maxChars: 112 });
   assert.equal(result, "- (2026-10-01) browser short\n- (2026-10-01) browser second");
 });
@@ -172,13 +179,14 @@ test("without an embedding model, prompt recall takes the newest facts across no
   const memory = createSemanticMemoryService(base, async () => undefined, index);
   const on = (date: string) => Date.parse(`${date}T12:00:00Z`);
   await base.capture(
+    captureTenant,
     "personal:a",
     Array.from({ length: 80 }, (_, i) => `old ${i} ${"x".repeat(80)}`),
     on("2026-01-01"),
   );
-  await base.capture("personal:a", ["NEWEST_LOCAL"], on("2026-10-01"));
-  await base.capture("channel:b", ["OLD_ROOM"], on("2025-02-01"));
-  await base.capture("channel:b", ["NEW_ROOM"], on("2026-09-01"));
+  await base.capture(captureTenant, "personal:a", ["NEWEST_LOCAL"], on("2026-10-01"));
+  await base.capture(captureTenant, "channel:b", ["OLD_ROOM"], on("2025-02-01"));
+  await base.capture(captureTenant, "channel:b", ["NEW_ROOM"], on("2026-09-01"));
   const out = renderRecall(
     await recallAcrossScopes(memory, ["personal:a", "channel:b"], { query: "anything" }),
     new Map(),
@@ -191,7 +199,7 @@ test("without an embedding model, prompt recall takes the newest facts across no
 
 test("query failures fall back without rebuilding facts in recall", async () => {
   const { base, embedder, calls } = await fixture();
-  await base.capture("personal:a", ["A fact"], AT);
+  await base.capture(captureTenant, "personal:a", ["A fact"], AT);
   let errors = 0;
   const memory = createSemanticMemoryService(
     base,
@@ -224,7 +232,7 @@ test("moving the embedding gateway keeps the same model identity", async () => {
 
 test("fallback reloads current disclosed facts after an edit races the index query", async () => {
   const { base, embedder } = await fixture();
-  await base.capture("personal:a", ["old private fact"], AT);
+  await base.capture(captureTenant, "personal:a", ["old private fact"], AT);
   const memory = createSemanticMemoryService(base, async () => embedder, {
     async search() {
       await base.edit!("personal:a", [{ id: "1", text: "current fact" }]);
@@ -238,7 +246,7 @@ test("fallback reloads current disclosed facts after an edit races the index que
 
 test("recall drops index matches for facts changed after the notebook was loaded", async () => {
   const { base, embedder } = await fixture();
-  await base.capture("personal:a", ["browser preference", "browser history"], AT);
+  await base.capture(captureTenant, "personal:a", ["browser preference", "browser history"], AT);
   const [first, second] = await base.facts!("personal:a");
   const memory = createSemanticMemoryService(base, async () => embedder, {
     async search() {
@@ -253,7 +261,7 @@ test("recall drops index matches for facts changed after the notebook was loaded
 
 test("semantic recall records selected private facts without reloading an authorized snapshot", async () => {
   const { base, index, embedder } = await fixture();
-  await base.capture("personal:a", ["browser preference"], AT, undefined, {
+  await base.capture(captureTenant, "personal:a", ["browser preference"], AT, undefined, {
     mode: "explicit",
     personalOnly: true,
     sensitivity: "restricted",

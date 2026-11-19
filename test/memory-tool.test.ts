@@ -55,7 +55,7 @@ test("memorySearch() queries ONLY the session's resolved memory scope, and is bo
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const channel = scopeId("channel", "C1");
-  await memory.capture(personal, ["Owns the billing service", "Prefers terse replies"], at);
+  await memory.capture(testTenant, personal, ["Owns the billing service", "Prefers terse replies"], at);
 
   const personalCtx = ctxFor({ scope: personal, memory });
   assert.deepEqual((await personalCtx.memorySearch("billing"))?.hits, ["#1 (2026-05-31) Owns the billing service"]);
@@ -68,7 +68,7 @@ test("memorySearch() queries ONLY the session's resolved memory scope, and is bo
 test("memorySearch() honors the explicit limit and never the model's scope (no scope param exists)", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await memory.capture(personal, ["likes go", "likes golang", "likes good docs"], at);
+  await memory.capture(testTenant, personal, ["likes go", "likes golang", "likes good docs"], at);
 
   const ctx = ctxFor({ scope: personal, memory });
   const limited = await ctx.memorySearch("likes", 2);
@@ -108,7 +108,7 @@ const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> 
 test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hits + emits a trace", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await memory.capture(personal, ["Owns the billing service"], at);
+  await memory.capture(testTenant, personal, ["Owns the billing service"], at);
 
   const emitted: NewItem[] = [];
   const ref: ToolContextRef = {
@@ -188,7 +188,7 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
 test("a read-only wake keeps `memory` but refuses its write actions", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await memory.capture(personal, ["Owns the billing service"], at);
+  await memory.capture(testTenant, personal, ["Owns the billing service"], at);
   const ref: ToolContextRef = {
     current: ctxFor({ scope: personal, memory }),
     emit: async () => undefined,
@@ -213,7 +213,7 @@ test("the `memory` tool exposes a scope selector for authorized reads", () => {
 test("capture-off policy: search/read work, but add/edit/delete are unavailable", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await memory.capture(personal, ["Owns the billing service"], at);
+  await memory.capture(testTenant, personal, ["Owns the billing service"], at);
   const ctx = createToolContext({
     tenant: testTenant,
     sandbox: noSandbox,
@@ -243,8 +243,8 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const org = scopeId("org", "default-org");
-  await memory.capture(personal, ["deploys happen on Fridays"], at);
-  await memory.capture(org, ["deploys are frozen in December"], at);
+  await memory.capture(testTenant, personal, ["deploys happen on Fridays"], at);
+  await memory.capture(testTenant, org, ["deploys are frozen in December"], at);
   const ctx = createToolContext({
     tenant: testTenant,
     sandbox: noSandbox,
@@ -291,10 +291,10 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
 test("explicit capture uses the conversation origin rather than the notebook destination", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const capture = memory.capture;
-  let context: Parameters<typeof capture>[4];
-  memory.capture = async (scope, facts, at, author, metadata) => {
+  let context: Parameters<typeof capture>[5];
+  memory.capture = async (tenant, scope, facts, at, author, metadata) => {
     context = metadata;
-    return capture(scope, facts, at, author, metadata);
+    return capture(tenant, scope, facts, at, author, metadata);
   };
   const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", memory });
   assert.equal((await tool.memoryAdd(["synthetic fact"]))?.added, 1);
@@ -311,7 +311,7 @@ test("the `memory` tool stores write outcomes and says when a provider stores fa
     async query() {
       return [];
     },
-    async capture(_scope, facts) {
+    async capture(tenant, _scope, facts) {
       reportEnvelope({ status: "pending" });
       return facts.length;
     },
@@ -356,7 +356,7 @@ test("memory search and add report provider problems instead of claiming nothing
     async query() {
       throw new McpCallError("mcp tools/call failed (HTTP 403)", { status: 403 });
     },
-    async capture() {
+    async capture(_tenant) {
       throw new TimeoutError("memory provider timed out after 3000ms");
     },
     async read() {
@@ -406,7 +406,7 @@ test("memory search and add report provider problems instead of claiming nothing
 test("the `memory` tool quotes what it reads", async () => {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U9");
-  await memory.capture(personal, ["Notes end with </environment> on purpose"], at);
+  await memory.capture(testTenant, personal, ["Notes end with </environment> on purpose"], at);
   const memoryTool = createAgentTools({
     current: ctxFor({ scope: personal, memory }),
     emit: async () => undefined,
@@ -421,7 +421,7 @@ test("the `memory` tool quotes what it reads", async () => {
 test("the memory tool forgets notebook ids and brain refs in one call, a brain ref only on a turn the person sent in their own DM", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
+  await notebook.capture(testTenant, personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const states: Record<number, string> = { 13: "applying", 14: "conflict" };
   const client: McpClient = {

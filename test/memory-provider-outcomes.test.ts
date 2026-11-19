@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
@@ -18,7 +19,7 @@ const notebook: MemoryService = {
   async recall() {
     return [{ text: "notebook fact" }];
   },
-  async capture(_scope, facts) {
+  async capture(tenant, _scope, facts) {
     return facts.length;
   },
   async query() {
@@ -117,6 +118,7 @@ test("an attested provider sends the canonical person on every request and the s
   await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId });
   await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test", audienceScopeId });
   await memory.capture(
+    captureTenant,
     "personal:U1",
     ["fact"],
     1,
@@ -176,6 +178,7 @@ test("an attested provider is called only for the person whose private conversat
       "notebook fact",
     );
     const write = await writeFacts(
+      captureTenant,
       memory,
       "personal:U1",
       ["fact"],
@@ -191,6 +194,7 @@ test("an attested provider is called only for the person whose private conversat
     const reader = { actorId, audienceScopeId: "personal:U1" };
     assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", ...reader })), "notebook fact");
     const skipped = await writeFacts(
+      captureTenant,
       memory,
       "personal:U1",
       ["fact"],
@@ -202,6 +206,7 @@ test("an attested provider is called only for the person whose private conversat
     assert.deepEqual(external(skipped.outcomes), []);
   }
   const intoAnother = await writeFacts(
+    captureTenant,
     memory,
     "personal:U2",
     ["fact"],
@@ -218,7 +223,7 @@ test("an attested provider is called only for the person whose private conversat
 test("a write refused for its audience is recorded and logged without failing the route", async () => {
   const refusing: MemoryService = {
     ...notebook,
-    async capture() {
+    async capture(_tenant) {
       throw new OutsideAudience("memory provider");
     },
   };
@@ -235,6 +240,7 @@ test("a write refused for its audience is recorded and logged without failing th
     const { outcomes, report } = sink();
     assert.equal(
       await memory.capture(
+        captureTenant,
         "personal:U1",
         ["fact"],
         1,
@@ -396,7 +402,15 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   });
   const memory = routedWithTimeout(mcp.url, 200);
   const write = (facts: string[], turn?: string) =>
-    writeFacts(memory, "personal:U1", facts, { actorId: "U1", context: "conversation" }, { mode: "explicit" }, turn);
+    writeFacts(
+      captureTenant,
+      memory,
+      "personal:U1",
+      facts,
+      { actorId: "U1", context: "conversation" },
+      { mode: "explicit" },
+      turn,
+    );
 
   const committed = await write(["fact"], "run-1");
   const repeated = await write(["fact"], "run-1");
@@ -404,6 +418,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   await write(["fact"], "run-2");
   await write(["fact"]);
   await writeFacts(
+    captureTenant,
     memory,
     "personal:U2",
     ["fact"],
@@ -459,6 +474,7 @@ test("timeoutMs bounds reads, and a write slower than it still commits", async (
   const memory = configured(mcp.url, { timeoutMs: 100 });
   const read = await withProviders("search", (report) => memory.recall("personal:U1", { actorId: "U1", report }));
   const written = await writeFacts(
+    captureTenant,
     memory,
     "personal:U1",
     ["fact"],
@@ -477,13 +493,14 @@ test("a failing built-in notebook write stays QM's own error, not a provider pro
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const broken: MemoryService = {
     ...notebook,
-    async capture() {
+    async capture(_tenant) {
       throw new Error("notebook disk full");
     },
   };
   const memory = configured(mcp.url, {}, ENV, broken);
   await assert.rejects(
     writeFacts(
+      captureTenant,
       memory,
       "personal:U1",
       ["fact"],

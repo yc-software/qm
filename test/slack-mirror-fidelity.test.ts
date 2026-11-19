@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
@@ -97,7 +98,7 @@ test("mirror and live render the same allowed message subtypes", async () => {
       ids,
       directory,
       externalParticipantsEnabled: async () => false,
-      readHistory: createSlackHistoryReader({ core: reader, ids }),
+      readHistory: createSlackHistoryReader(captureTenant, { core: reader, ids }),
     });
     const result = await serializer.serializeSlackConversation(
       client,
@@ -119,7 +120,7 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
       await cache.ingest(events.map((e) => toEvent(e)!));
     },
   } as SlackCoreClient;
-  const read = createSlackHistoryReader({ core, ids });
+  const read = createSlackHistoryReader(captureTenant, { core, ids });
   const page = await read(
     {
       conversations: {
@@ -175,7 +176,7 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
     readSurfaceMessages: createPostgresSurfaceCache(testDatabaseUrl()).readMessages,
   } as SlackCoreClient;
   for (const reader of [emptyCore, core]) {
-    const readHistory = createSlackHistoryReader({ core: reader, ids });
+    const readHistory = createSlackHistoryReader(captureTenant, { core: reader, ids });
     const serializer = createConversationSerializer({
       ids,
       directory: mentionDirectory,
@@ -249,7 +250,7 @@ for (const postgres of [false, true]) {
             ids,
             directory,
             externalParticipantsEnabled: async () => true,
-            readHistory: createSlackHistoryReader({ core: reader, ids }),
+            readHistory: createSlackHistoryReader(captureTenant, { core: reader, ids }),
           });
           const result = await serializer.serializeSlackConversation(
             client,

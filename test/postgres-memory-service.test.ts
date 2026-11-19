@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -91,13 +92,16 @@ test("pg memory: add, edit and delete by id; a bad id rolls back the whole call"
   const memory = createPostgresMemoryService(URL!);
   const sid = scopeId("personal", "U1");
   assert.equal(
-    await memory.capture(sid, ["Prefers terse replies", "Owns billing"], at, {
+    await memory.capture(captureTenant, sid, ["Prefers terse replies", "Owns billing"], at, {
       actorId: "U1",
       context: "conversation",
     }),
     2,
   );
-  assert.equal(await memory.capture(sid, ["prefers terse replies"], at, { actorId: "U1", context: "conversation" }), 0);
+  assert.equal(
+    await memory.capture(captureTenant, sid, ["prefers terse replies"], at, { actorId: "U1", context: "conversation" }),
+    0,
+  );
   const [terse, billing] = await memory.facts!(sid);
 
   await assert.rejects(
@@ -126,13 +130,14 @@ test("pg memory: the capturing session is stored and that session never gets the
   const memory = createPostgresMemoryService(URL!);
   const sid = scopeId("personal", "U1");
   await memory.capture(
+    captureTenant,
     sid,
     ["Owns billing"],
     at,
     { actorId: "U1", context: "self" },
     { mode: "automatic", sessionId: "S" },
   );
-  await memory.capture(sid, ["Prefers terse replies"], at, { actorId: "U1", context: "self" });
+  await memory.capture(captureTenant, sid, ["Prefers terse replies"], at, { actorId: "U1", context: "self" });
   const [billing, terse] = await memory.facts!(sid);
   assert.equal(billing!.sessionId, "S");
   assert.equal(terse!.sessionId, undefined);

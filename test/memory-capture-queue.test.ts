@@ -1,3 +1,4 @@
+import type { Tenant } from "../src/tenants/context.ts";
 import { PgBoss } from "pg-boss";
 import { captureMemoryTurns } from "../src/memory/strategies/per-turn.ts";
 import type { MemoryCaptureTurn } from "../src/memory/capture-context.ts";
@@ -44,11 +45,12 @@ test(
     const memory = createPostgresMemoryService(databaseUrl);
     const completed = Promise.withResolvers<void>();
     const captured: MemoryCaptureTurn[][] = [];
-    const capture = async (turns: MemoryCaptureTurn[]) => {
+    const capture = async (_tenant: Tenant, turns: MemoryCaptureTurn[]) => {
       assert.equal(ambientTenant().id, tenant);
       captured.push(turns);
       for (const ctx of turns)
         await memory.capture(
+          testTenant,
           ctx.scopeId,
           [ctx.input],
           Date.now(),
@@ -107,7 +109,7 @@ test(
     const release = Promise.withResolvers<void>();
     const finished = Promise.withResolvers<void>();
     const captured: number[][] = [];
-    const capture = async (turns: MemoryCaptureTurn[]) => {
+    const capture = async (_tenant: Tenant, turns: MemoryCaptureTurn[]) => {
       const ids = turns.map((ctx) => Number(ctx.idempotencyKey!.slice(5)));
       captured.push(ids);
       if (ids.includes(1)) {
@@ -152,8 +154,9 @@ test(
       databaseUrl,
       quietMs: 0,
       maxTurns: 1,
-      capture: (turns, id, signal) =>
+      capture: (tenant, turns, id, signal) =>
         captureMemoryTurns(
+          tenant,
           {
             memory,
             agent: {
@@ -172,8 +175,9 @@ test(
       databaseUrl,
       quietMs: 0,
       maxTurns: 1,
-      capture: async (turns, id, signal) => {
+      capture: async (tenant, turns, id, signal) => {
         await captureMemoryTurns(
+          tenant,
           { memory, agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Recovered private fact" } },
           turns,
           id,
@@ -272,7 +276,7 @@ test(
       databaseUrl,
       quietMs: 0,
       maxTurns: 10,
-      capture: async (turns, id) => {
+      capture: async (_tenant, turns, id) => {
         const result = { turns, id };
         seen.push(result);
         (seen.length === 1 ? one : two).resolve(result);
@@ -324,7 +328,7 @@ test("completed capture handoffs remain idempotent after queue recreation", { ti
     databaseUrl,
     quietMs: 0,
     maxTurns: 1,
-    capture: async (turns: MemoryCaptureTurn[]) => {
+    capture: async (_tenant: Tenant, turns: MemoryCaptureTurn[]) => {
       captured.push(turns);
       done.resolve();
     },
@@ -360,7 +364,7 @@ test("a failed job insert rolls its capture receipt back", { timeout: 20_000 }, 
     databaseUrl,
     quietMs: 0,
     maxTurns: 1,
-    capture: async (turns) => {
+    capture: async (_tenant, turns) => {
       captured.push(turns);
     },
   });

@@ -171,3 +171,47 @@ Other deployment authorization/store operations still use legacy tenant APIs.
 No table, column, key, index, constraint, stored JSON, HTTP/tool/job payload,
 setting, provider, migration or backfill changes. Core source callers update
 together; HTTP clients remain compatible.
+
+## Memory capture token forwarding
+
+These internal signatures prepend `tenant: Tenant`; every previous argument and
+return type remains unchanged:
+
+| Owner                | Before                                                            | After                                                                     |
+| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| MemoryService        | `capture(scopeId, facts, at, by?, context?)`                      | `capture(tenant, scopeId, facts, at, by?, context?)`                      |
+| MemoryStrategy       | `onTurnEnd?(ctx)`                                                 | `onTurnEnd?(tenant, ctx)`                                                 |
+| Queue input callback | `capture(turns, id, signal)`                                      | `capture(tenant, turns, id, signal)`                                      |
+| Function             | `captureMemoryTurns(deps, turns, id?, signal?)`                   | `captureMemoryTurns(tenant, deps, turns, id?, signal?)`                   |
+| Function             | `writeFacts(memory, scope, facts, by, context, turn)`             | `writeFacts(tenant, memory, scope, facts, by, context, turn)`             |
+| Function             | `replayConversation(strategy, scopeId, conversation)`             | `replayConversation(tenant, strategy, scopeId, conversation)`             |
+| Function             | `setOnboardingStatus(memory, scope, status, today, by, version?)` | `setOnboardingStatus(tenant, memory, scope, status, today, by, version?)` |
+| SlackCoreClient      | `noteSurfaceHistoryGap?(container, note)`                         | `noteSurfaceHistoryGap?(tenant, container, note)`                         |
+| Function             | `createSlackHistoryReader(deps)`                                  | `createSlackHistoryReader(tenant, deps)`                                  |
+
+`startSlackPlugin(cfg, core, tenantId: string)` becomes
+`startSlackPlugin(cfg, core, tenant: Tenant)`. Its middleware and delivery lane
+continue using `tenant.id` where the existing boundary takes an ID.
+`createTenantSlackRuntimes`'s `runtimeFor(tenantId)` callback becomes
+`runtimeFor(tenantId, token: Tenant)`; the existing `withTenant` callback supplies
+that token. The environment-account starter's internal `startPlugin(config,
+tenantId)` callback likewise becomes `startPlugin(config, token: Tenant)`, bound
+from its existing authoritative single-tenant ID through `inBootTenant`.
+
+Request routes and turn tools supply their existing token. The durable capture
+worker forwards the token from its existing `inTenant(job.data.tenantId, …)`
+boundary. It is never saved in the job or capture metadata. Classification,
+provider routing, registry, tidy and disclosure wrappers preserve the argument.
+The document capture audit uses it; audit destination/count/session/private
+fields retain their shapes and still contain no fact text. Notebook stores and
+provider protocols remain unchanged; this is not full memory-store conversion.
+
+The standalone memory benchmark now reads the database's boot tenant and runs
+inside that tenant binding, refusing a database without a single boot tenant.
+It adds no environment variable; the existing DATABASE_URL selects the database.
+The local live-provider qualification forwards its existing boot callback token.
+
+No table, column, key, index, constraint, stored row/JSON, HTTP/tool/job/provider
+payload, setting, provider selection, migration or backfill changes. Tokens stay
+separate from scopes, grants, capture data and external calls. Core source callers
+and typed integrations update together; HTTP/provider clients remain compatible.

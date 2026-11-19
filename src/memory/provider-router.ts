@@ -147,7 +147,7 @@ export function createRoutedMemoryService(opts: {
       return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
-    async capture(scopeId, facts, at, by, context) {
+    async capture(tenant, scopeId, facts, at, by, context) {
       const mode = context?.mode ?? "explicit";
       const personalOnly = captureProvenance(scopeId, context).personalOnly === true;
       const routes = routesFor(scopeId).filter((route) => captureAllowed(route.capture, mode));
@@ -167,7 +167,7 @@ export function createRoutedMemoryService(opts: {
               scopeId,
               "capture",
               context,
-              () => provider.capture(scopeId, facts, at, by, context),
+              () => provider.capture(tenant, scopeId, facts, at, by, context),
               settleChange,
               0,
             );

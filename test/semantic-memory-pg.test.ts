@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -27,7 +28,7 @@ test(
     const base = createPostgresMemoryService(url!);
     const index = createPostgresVectorStore(url!);
     t.after(() => index.close());
-    await base.capture(scope, ["original browser preference"], Date.now());
+    await base.capture(captureTenant, scope, ["original browser preference"], Date.now());
     const facts = await base.facts!(scope);
     await write(index, scope, facts);
     const search = () => index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(facts), limit: 10 });
@@ -89,7 +90,7 @@ test("native cosine returns one stable ranking and excludes other scopes/models"
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
   t.after(() => index.close());
-  await base.capture(scope, ["first", "second"], 1000);
+  await base.capture(captureTenant, scope, ["first", "second"], 1000);
   const facts = await base.facts!(scope);
   await write(index, scope, facts, "rank-model", () => [3, 4]);
   await write(index, scope, facts, "other-model", () => [1, 0]);
@@ -111,7 +112,7 @@ test("model and dimension drift fall back until reindexed", { skip: !url }, asyn
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
   t.after(() => index.close());
-  await base.capture(scope, ["real embedding width"], 1000);
+  await base.capture(captureTenant, scope, ["real embedding width"], 1000);
   const facts = await base.facts!(scope);
   const wide = [1, 0, 0];
   await write(index, scope, facts, "wide-model", () => wide);
@@ -160,7 +161,7 @@ test("put waits on in-flight edits and never writes stale or deleted fact vector
     await client.end();
     await index.close();
   });
-  await base.capture(scope, ["race alpha", "race beta"], 1000);
+  await base.capture(captureTenant, scope, ["race alpha", "race beta"], 1000);
   const [alpha, beta] = await base.facts!(scope);
   await client.query("BEGIN");
   await client.query("UPDATE memory_facts SET text = 'race alpha edited' WHERE id = $1", [alpha!.id]);
@@ -203,7 +204,12 @@ test("prune deletes stale model, hash, deleted, and dimension rows in bounded ba
     await client.end();
     await index.close();
   });
-  await base.capture(scope, ["prune keep", "prune edit", "prune delete", "prune wide", "prune unknown width"], 1000);
+  await base.capture(
+    captureTenant,
+    scope,
+    ["prune keep", "prune edit", "prune delete", "prune wide", "prune unknown width"],
+    1000,
+  );
   const [keep, edit, gone, wide, unknown] = await base.facts!(scope);
   await write(index, scope, [keep!, edit!, gone!, unknown!], model);
   await write(index, scope, [wide!], model, () => [1, 0, 0]);
@@ -243,7 +249,7 @@ test(
       await client.end();
       await index.close();
     });
-    await base.capture(scope, ["café ☃ naïve", "second", "third", "fourth"], 1000);
+    await base.capture(captureTenant, scope, ["café ☃ naïve", "second", "third", "fourth"], 1000);
     const facts = await base.facts!(scope);
     await base.edit!(scope, [{ id: facts[1]!.id, text: "second — edited ✓" }]);
     const edited = await base.facts!(scope);
@@ -277,6 +283,7 @@ test("search returns the nearest facts within the limit and follows re-embedded 
   const index = createPostgresVectorStore(url!);
   t.after(() => index.close());
   await base.capture(
+    captureTenant,
     scope,
     Array.from({ length: 12 }, (_, i) => `sketch fact ${i}`),
     1000,
@@ -302,11 +309,12 @@ test("unindexed facts never crowd indexed matches out of the candidate pool", { 
   const index = createPostgresVectorStore(url!);
   t.after(() => index.close());
   await base.capture(
+    captureTenant,
     scope,
     Array.from({ length: 11 }, (_, i) => `pending fact ${i}`),
     1000,
   );
-  await base.capture(scope, ["newest pending fact"], 2000);
+  await base.capture(captureTenant, scope, ["newest pending fact"], 2000);
   const facts = await base.facts!(scope);
   await write(index, scope, [facts[0]!], "pending-model", () => [1, 0, 0]);
   await write(index, scope, [facts[1]!], "pending-model", () => [0.5, 1, 1]);
@@ -343,6 +351,7 @@ test("vectors stored before the sketch column are backfilled and ranked", { skip
   const scope = "personal:legacy-vectors";
   const base = createPostgresMemoryService(fresh.toString());
   await base.capture(
+    captureTenant,
     scope,
     Array.from({ length: 12 }, (_, i) => `legacy fact ${i}`),
     1000,

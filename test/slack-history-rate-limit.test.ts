@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -90,7 +91,7 @@ for (const { managed, historyLimit } of [
         ]),
       ),
     };
-    const reader = createSlackHistoryReader({
+    const reader = createSlackHistoryReader(captureTenant, {
       core: {} as import("../src/api/slack-core-client.ts").SlackCoreClient,
       ids: { botUserId: "UBOT", ownBotId: "BBOT" } as import("../src/slack/directory.ts").BotIdentity,
       managed,

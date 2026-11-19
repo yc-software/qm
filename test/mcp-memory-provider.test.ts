@@ -1,3 +1,4 @@
+import { testTenant as captureTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
@@ -47,6 +48,7 @@ test("MCP provider passes query, actor, and explicit writes through configured t
   );
   assert.equal(
     await memory.capture(
+      captureTenant,
       "org:acme",
       ["decision"],
       10,
@@ -106,7 +108,9 @@ test("a write that carries no member is not sent to an attested provider", async
     routes: [{ provider: "knowledge", scopes: ["channel"], capture: "explicit", manage: false }],
   });
   assert.equal(
-    await memory.capture("channel:C1", ["history before May is unavailable"], 10, undefined, { mode: "explicit" }),
+    await memory.capture(captureTenant, "channel:C1", ["history before May is unavailable"], 10, undefined, {
+      mode: "explicit",
+    }),
     0,
   );
   assert.deepEqual(calls, []);
@@ -346,7 +350,7 @@ test("a write split into batches carries the turn's input and reply once", async
   });
   const context = { mode: "automatic" as const, input: "my seats", reply: "noted" };
   assert.equal(
-    await memory.capture("org:acme", facts(45), 10, { actorId: "u1", context: "conversation" }, context),
+    await memory.capture(captureTenant, "org:acme", facts(45), 10, { actorId: "u1", context: "conversation" }, context),
     45,
   );
   assert.deepEqual(
@@ -369,7 +373,14 @@ test("every batch of a split write shares the write's one deadline", async () =>
     write: { client: slow, tool: "write", timeoutMs: 250, factsArg: "facts" },
   });
   await assert.rejects(
-    memory.capture("org:acme", facts(60), 10, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
+    memory.capture(
+      captureTenant,
+      "org:acme",
+      facts(60),
+      10,
+      { actorId: "u1", context: "conversation" },
+      { mode: "automatic" },
+    ),
     /timed out/,
   );
 });
@@ -390,6 +401,7 @@ test("a split write is pending when any of its batches is, with its last batch's
     routes: [{ provider: "knowledge", scopes: ["org"], capture: "explicit", manage: false }],
   });
   await memory.capture(
+    captureTenant,
     "org:acme",
     facts(21),
     10,
@@ -424,7 +436,14 @@ test("a split write sends no batch once its deadline has passed", async () => {
     write: { client: blocking, tool: "write", timeoutMs: 100, factsArg: "facts" },
   });
   await assert.rejects(
-    memory.capture("org:acme", facts(60), 10, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
+    memory.capture(
+      captureTenant,
+      "org:acme",
+      facts(60),
+      10,
+      { actorId: "u1", context: "conversation" },
+      { mode: "automatic" },
+    ),
     /timed out after 100ms/,
   );
   assert.equal(calls, 2);
@@ -448,6 +467,7 @@ test("personal-only captures stay in a provenance-aware notebook and never reach
     ],
   });
   await memory.capture(
+    captureTenant,
     "personal:u1",
     ["Ordinary public preference"],
     100,
@@ -459,6 +479,7 @@ test("personal-only captures stay in a provenance-aware notebook and never reach
     ["Ordinary public preference"],
   );
   await memory.capture(
+    captureTenant,
     "personal:u1",
     ["Private document preference"],
     101,
@@ -477,6 +498,7 @@ test("personal-only captures stay in a provenance-aware notebook and never reach
     (fact) => fact.text === "Private document preference",
   )!;
   await memory.capture(
+    captureTenant,
     "personal:u1",
     ["Derived private preference"],
     102,
@@ -493,6 +515,7 @@ test("personal-only captures stay in a provenance-aware notebook and never reach
   });
   await assert.rejects(
     opaqueOnly.capture(
+      captureTenant,
       "personal:u1",
       ["Must not leave the notebook"],
       102,

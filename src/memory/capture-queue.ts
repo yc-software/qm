@@ -26,7 +26,7 @@ export function createMemoryCaptureQueue(input: {
   databaseUrl: string;
   quietMs: number;
   maxTurns: number;
-  capture: (turns: MemoryCaptureTurn[], id: string, signal: AbortSignal) => Promise<void>;
+  capture: (tenant: Tenant, turns: MemoryCaptureTurn[], id: string, signal: AbortSignal) => Promise<void>;
 }) {
   if (!Number.isFinite(input.quietMs)) throw new Error("Memory capture quietMs must be finite");
   if (!Number.isFinite(input.maxTurns)) throw new Error("Memory capture maxTurns must be finite");
@@ -95,7 +95,7 @@ export function createMemoryCaptureQueue(input: {
           if (!job) return;
           const signal = AbortSignal.any([job.signal, lifetime.signal]);
           try {
-            await inTenant(job.data.tenantId, () => input.capture(job.data.turns, job.id, signal));
+            await inTenant(job.data.tenantId, (tenant) => input.capture(tenant, job.data.turns, job.id, signal));
           } catch (error) {
             if (!signal.aborted) reportFailure("memory capture job failed", error, job.id);
             throw error;

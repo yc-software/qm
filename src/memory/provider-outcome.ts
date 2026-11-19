@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId } from "../config.ts";
@@ -222,6 +223,7 @@ export interface MemoryWrite {
 }
 
 export async function writeFacts(
+  tenant: Tenant,
   memory: MemoryService,
   scope: ScopeId,
   facts: string[],
@@ -231,7 +233,7 @@ export async function writeFacts(
 ): Promise<MemoryWrite> {
   const idempotencyKey = requestKey(turn ?? randomUUID(), scope, facts);
   const { value, outcomes, problems } = await withProviders("write", (report) =>
-    memory.capture(scope, facts, Date.now(), by, { ...context, idempotencyKey, report }),
+    memory.capture(tenant, scope, facts, Date.now(), by, { ...context, idempotencyKey, report }),
   );
   return { added: value ?? Math.max(0, ...outcomes.map(({ added }) => added ?? 0)), outcomes, problems };
 }

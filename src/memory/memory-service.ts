@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
@@ -93,6 +94,7 @@ export interface MemoryService {
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(
+    tenant: Tenant,
     scopeId: ScopeId,
     facts: string[],
     at: number,
@@ -180,7 +182,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       return recentCandidates(await store.list(scopeId));
     },
 
-    async capture(scopeId, facts, at, by, context) {
+    async capture(_tenant, scopeId, facts, at, by, context) {
       const lines = cleanCapturedFacts(facts);
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);
