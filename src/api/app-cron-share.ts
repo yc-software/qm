@@ -93,7 +93,7 @@ export function createCronShareMethods(
     recipient: string,
     by: string,
     sharer: string,
-  ): Promise<{ toRecipient: string; toSharer: string } | undefined> {
+  ): Promise<{ toRecipient?: string; toSharer: string } | undefined> {
     const personas = deps.personas;
     if (!personaId || !personas) return undefined;
     const worn = await personas.forTurn(personaId, by, homeScope);
@@ -118,8 +118,7 @@ export function createCronShareMethods(
         };
     }
     return {
-      toRecipient: `It runs without the persona ${name}, which only its owner can share with you.`,
-      toSharer: `Their copy runs without the persona ${name}: only its owner can give them access to it.`,
+      toSharer: `Their copy runs without the persona ${name} until its owner gives them access on the persona's page; then it posts as ${name}.`,
     };
   }
 
@@ -169,7 +168,7 @@ export function createCronShareMethods(
       const { personaId } = await originOf(origin, ownerScopeId);
       const persona = await lendPersona(personaId, origin.ownerScopeId, recipient, by, sharer);
       const what = source.action ?? source.message ?? "";
-      const linked = `${persona ? `${persona.toRecipient} ` : ""}It stays linked to ${sharer}'s cron, so their edits reach it until it is edited here; then it is a separate copy of its own.`;
+      const linked = `${persona?.toRecipient ? `${persona.toRecipient} ` : ""}It stays linked to ${sharer}'s cron, so their edits reach it until it is edited here; then it is a separate copy of its own.`;
       const text = started
         ? `${sharer} shared their cron "${title}" with you, and it is on: it runs as you, ${scheduleText(source.schedule)}, posting here.\n> ${what}\n${linked} To stop it, pause or delete cron ${copy.id}.`
         : `${sharer} wants to share their cron "${title}" with you. It would run as you, ${scheduleText(source.schedule)}, posting here.\n> ${what}\nIt is in your crons, paused. Accept by turning cron ${copy.id} on (patch enabled: true); decline by deleting it. ${linked}`;
