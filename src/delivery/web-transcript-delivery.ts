@@ -29,11 +29,6 @@ export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: nu
 type Disposition = "deliver" | "record" | "settle";
 
 function classify(d: Delivery): Disposition {
-  if (d.destination.type === "webhook") {
-    const recorded =
-      d.provenance?.sourceThreadRef === d.destination.target && d.provenance.sourceAssistantEntrySeq !== undefined;
-    return d.text.trim() && !recorded ? "record" : "deliver";
-  }
   if (d.destination.type !== "web") return "deliver";
   if (d.destination.webTranscript && d.text.trim()) return "record";
   if (!d.provenance) return "deliver";
@@ -42,7 +37,7 @@ function classify(d: Delivery): Disposition {
   return "settle";
 }
 
-const transcribed = (type: string): boolean => type === "web" || type === "webhook";
+const transcribed = (type: string): boolean => type === "web";
 
 export function withWebTranscriptDeliveries(
   store: DeliveryStore,

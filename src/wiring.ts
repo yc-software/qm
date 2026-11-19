@@ -166,7 +166,6 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
-import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { signInMembers, withSignInMembers } from "./directory/sign-in-members.ts";
@@ -2659,11 +2658,6 @@ export function buildApp(
           held: genericChatTurns.held,
         })
       : null;
-  const webhookDelivery = createDeliveryRelay(deliveries, {
-    type: "webhook",
-    send: webhookSender(config.signingSecret),
-    claimMs: WEBHOOK_CLAIM_MS,
-  });
   const webTranscriptSweeper = createSweeper(() => deliveries.transcribeUndelivered("web"), 5_000, {
     label: "web transcripts",
   });
@@ -3114,7 +3108,6 @@ export function buildApp(
       approvalDeliverySweeper.start();
       webTranscriptSweeper.start();
       genericChatDelivery?.start();
-      webhookDelivery.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -3128,7 +3121,6 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
-      webhookDelivery.stop(),
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
