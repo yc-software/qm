@@ -275,11 +275,8 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
       return session(r);
     },
     async restart(sandboxId): Promise<E2bSession> {
-      const r = records.get(sandboxId);
-      if (!r || r.expired) throw new E2bSandboxGoneError(sandboxId, "sandbox was not found");
-      killOwned(`${root}/${r.sandboxId}`);
-      r.state = "running";
-      return session(r);
+      killOwned(`${root}/${sandboxId}`);
+      return fake.client.connect(sandboxId);
     },
     async list(metadata): Promise<Array<{ sandboxId: string; state: string; metadata?: Record<string, string> }>> {
       return [...records.values()]
