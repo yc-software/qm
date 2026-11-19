@@ -224,7 +224,8 @@ qm-onboarding-welcome {
 .connection-picker-app.stale .connection-picker-trailing {
   color: var(--warning);
 }
-.connection-connected .kc-text-action {
+.connection-connected .kc-text-action,
+.connection-card .kc-text-action {
   padding: 0 2px;
   font-size: inherit;
 }
@@ -240,6 +241,43 @@ qm-onboarding-welcome {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: color-mix(in srgb, var(--secondary) 45%, var(--background));
+}
+.connection-card.compact {
+  display: flex;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 0 8px 0 6px;
+  border-radius: 10px;
+}
+.connection-card.compact .connector-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+.connection-card.compact .connector-logo svg,
+.connection-card.compact .connector-logo img {
+  width: 14px;
+  height: 14px;
+}
+.connection-card.compact .connection-card-text {
+  flex-flow: row wrap;
+  align-items: center;
+  gap: 0 10px;
+}
+.connection-card.compact strong {
+  font-size: var(--font-14);
+}
+.connection-card.compact .connection-card-actions {
+  align-self: stretch;
+  align-items: stretch;
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.connection-card.compact .kc-text-action {
+  padding: 0 6px;
 }
 .connection-card.fresh {
   animation: connection-card-settle 1.8s ease-out both;
@@ -310,6 +348,7 @@ qm-onboarding-welcome {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: var(--font-13);
 }
 .connection-card-actions .btn {
   padding: 5px 12px;

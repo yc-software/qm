@@ -52,8 +52,8 @@ test("a connection missing configured permissions can be reconnected or disconne
     const attempt = JSON.parse(sessionStorage.getItem("qm-connection-return:test:tester")!);
     assert.deepEqual([attempt.accountId, attempt.replaces], ["ca_new", "ca_old"]);
 
-    await settle(() => !widget.querySelector<HTMLButtonElement>(".connection-card .btn:not(.primary)")?.disabled);
-    const disconnect = widget.querySelector<HTMLButtonElement>(".connection-card .btn:not(.primary)")!;
+    await settle(() => !widget.querySelector<HTMLButtonElement>(".connection-card .kc-text-action")?.disabled);
+    const disconnect = widget.querySelector<HTMLButtonElement>(".connection-card .kc-text-action")!;
     assert.equal(disconnect.getAttribute("aria-label"), "Disconnect Gmail");
     const answers = [false, true];
     window.confirm = () => answers.shift()!;
@@ -65,7 +65,7 @@ test("a connection missing configured permissions can be reconnected or disconne
     await settle(() => primary() === "Connect Gmail");
     assert.deepEqual(posts.at(-1), { path: "/api/composio/disconnect", body: { accountId: "ca_old" } });
     assert.equal(widget.querySelector(".connection-card-status")?.textContent?.trim(), "Not connected");
-    assert.equal(widget.querySelector(".connection-card .btn:not(.primary)"), null);
+    assert.equal(widget.querySelector(".connection-card .kc-text-action"), null);
   } finally {
     await h.close();
   }

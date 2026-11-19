@@ -39,7 +39,7 @@ export function connectionCard(
   at?: ConnectionStanding,
 ): TemplateResult {
   if (!service.name || !at)
-    return html`<div class="connection-card" aria-busy="true">
+    return html`<div class="connection-card compact" aria-busy="true">
       ${connectorLogo(service.id, service.logoUrl)}
       <span class="connection-card-text">${ghost}${ghost}</span>
     </div>`;
@@ -54,12 +54,10 @@ export function connectionCard(
   else if (settled && !at.connected && at.outcome === "failed")
     next = button("Try again", `Try connecting ${service.name} again`, at.connect, "btn primary");
   else if (settled && !at.connected) next = button("Connect", `Connect ${service.name}`, at.connect, "btn primary");
-  return html`<div
-    class=${mark === "check" && at.outcome === "success" ? "connection-card fresh" : "connection-card"}
-    data-tone=${tone}
-    role="group"
-    aria-label=${service.name}
-  >
+  const looks = ["connection-card"];
+  if (next === nothing && tone !== "error") looks.push("compact");
+  if (mark === "check" && at.outcome === "success") looks.push("fresh");
+  return html`<div class=${looks.join(" ")} data-tone=${tone} role="group" aria-label=${service.name}>
     ${connectorLogo(service.id, service.logoUrl)}
     <span class="connection-card-text">
       <strong>${service.name}</strong>
@@ -72,7 +70,7 @@ export function connectionCard(
       >
     </span>
     <span class="connection-card-actions"
-      >${settled && at.disconnect ? button("Disconnect", `Disconnect ${service.name}`, at.disconnect) : nothing}${
+      >${settled && at.disconnect ? button("Disconnect", `Disconnect ${service.name}`, at.disconnect, "kc-text-action danger") : nothing}${
         !at.checked && at.problem ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing
       }${next}</span
     >
