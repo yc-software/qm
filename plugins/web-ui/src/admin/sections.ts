@@ -1,6 +1,5 @@
 import { errMessage } from "../../../chassis/src/errors.ts";
 import { webFetch } from "../core-bridge.ts";
-import { brandName } from "../ui.ts";
 
 export const ADMIN_SECTIONS = [
   {
@@ -47,32 +46,7 @@ export const VIEW_TITLE: Record<string, string> = {
   ackemoji: "Ack emoji",
 };
 
-const VIEW_DESCRIPTION: Record<string, string> = {
-  "my-spend": "What model calls have cost you and the spaces you can see.",
-  governance: "Rules for the commands the agent may run and the hosts it may reach.",
-  models: "The models people can choose from, and any custom providers.",
-  credentials: "Shared keys the agent uses on your team's behalf. Secrets stay in core and never reach a sandbox.",
-  connectors: "OAuth apps and the built-in connectors people can link.",
-  "slack-settings": "Connect a Slack workspace and choose how the agent behaves there.",
-  customize: "Standing instructions every conversation in the organization starts with.",
-  users: "Who can sign in, their roles, and pending invitations.",
-  spend: "Model spend across the organization, by day, person and scope.",
-  history: "Conversations, cron runs and background work across every scope.",
-  judgments: "Messages the agent saw without being addressed, and whether it replied.",
-  errors: "Failures recorded by the server and the agent.",
-  audit: "Who changed what, and when.",
-  egress: "Outbound requests from sandboxes and the credential broker.",
-  files: "Files people have shared with the agent or it has saved.",
-  skills: "Skills the agent can read, and installed skill packs.",
-  memory: "What the agent remembers, notebook by notebook.",
-  apps: "Web apps published from conversations.",
-  crons: "Scheduled jobs, who owns them, and when they run.",
-};
-
-export const viewDescription = (view: string): string | undefined =>
-  view === "general"
-    ? `Your own preferences for how ${brandName()} looks and behaves. They don't change anything for your team.`
-    : VIEW_DESCRIPTION[view];
+export const NAV_VIEWS = new Set(["general", "my-spend", ...ADMIN_SECTIONS.flatMap((section) => section.views)]);
 
 const decode = (segment: string | undefined) => {
   try {

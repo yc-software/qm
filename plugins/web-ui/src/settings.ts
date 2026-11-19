@@ -17,7 +17,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
-import { ADMIN_SECTIONS, VIEW_TITLE, viewDescription, adminMounter, settingsRoute } from "./admin/sections";
+import { ADMIN_SECTIONS, NAV_VIEWS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -674,20 +674,13 @@ function generalPane(): TemplateResult {
 function settingsPane(): TemplateResult {
   const section = settingsSection();
   const general = section === "general";
-  const description = settingsRoute(SETTINGS_BASE).session ? undefined : viewDescription(section);
+  const titled = NAV_VIEWS.has(section) && !settingsRoute(SETTINGS_BASE).session;
   return html`
     <h1 class="settings-page-title">Settings</h1>
     <div class="settings-layout with-nav">
       ${settingsNav(section)}
       <div class="settings-content" @click=${followSettingsLink}>
-        ${
-          description
-            ? html`<header class="settings-page-head">
-                <h2>${VIEW_TITLE[section]}</h2>
-                <p>${description}</p>
-              </header>`
-            : nothing
-        }
+        ${titled ? html`<h2 class="settings-page-head">${VIEW_TITLE[section]}</h2>` : nothing}
         ${general ? generalPane() : (adminHost ?? nothing)}
       </div>
     </div>

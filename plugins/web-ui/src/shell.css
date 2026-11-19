@@ -13959,25 +13959,17 @@ html.app-share-embed body {
   max-width: 960px;
   margin: 0 auto;
 }
-.settings-content > .settings-page-head {
-  max-width: 960px;
-  margin: 0 auto 28px;
-}
 #app-view #view-governance .governance-content > :nth-child(1 of section.card:not(.hidden)),
 #app-view #view-connectors :nth-child(1 of section.card:not(.hidden)) {
   padding-top: 0;
 }
-.settings-page-head h2 {
-  margin: 0;
+.settings-page-head {
+  max-width: 960px;
+  margin: 0 auto 28px;
   font-size: 24px;
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.2;
-}
-.settings-page-head p {
-  margin: 6px 0 0;
-  color: var(--muted-foreground);
-  font-size: var(--font-13);
 }
 .settings-section-head {
   display: flex;
