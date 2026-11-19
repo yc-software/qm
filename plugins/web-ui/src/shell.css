@@ -1228,9 +1228,6 @@ a.chat-row-open {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.settings-content > .settings-group {
-  margin-top: 0;
-}
 @media (max-width: 720px) {
   .settings-layout.with-nav {
     grid-template-columns: minmax(0, 1fr);
@@ -1247,13 +1244,6 @@ a.chat-row-open {
   .settings-nav-item {
     flex: none;
   }
-}
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-width: 960px;
-  margin: 12px auto 0;
 }
 .settings-row {
   display: flex;
@@ -14006,4 +13996,73 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 html.app-share-embed,
 html.app-share-embed body {
   background: transparent;
+}
+
+/* Settings page title, and General as titled sections of grouped rows. */
+.settings-general {
+  display: grid;
+  gap: 28px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+#app-view #view-governance .governance-content > :nth-child(1 of section.card:not(.hidden)),
+#app-view #view-connectors :nth-child(1 of section.card:not(.hidden)) {
+  padding-top: 0;
+}
+.settings-page-head {
+  max-width: 960px;
+  margin: 0 auto 28px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.settings-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+.settings-section-head h3 {
+  margin: 0;
+  font-size: var(--font-14);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.settings-card {
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+  border-radius: 14px;
+  background: var(--background);
+}
+html.dark .settings-card {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+.settings-card > .settings-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+.settings-card > .settings-row:last-child {
+  border-bottom: 0;
+}
+.settings-connections {
+  display: grid;
+  gap: 12px;
+}
+/* Connection cards span the column and share the settings-card surface. */
+.settings-connections .welcome-slack,
+.settings-connections .welcome-content {
+  max-width: none;
+}
+.settings-connections .welcome-content {
+  padding: 0;
+}
+.settings-connections .welcome-slack,
+.settings-connections .welcome-load,
+.settings-connections .connection-picker {
+  border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
+}
+html.dark .settings-connections .welcome-slack,
+html.dark .settings-connections .welcome-load,
+html.dark .settings-connections .connection-picker {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
 }

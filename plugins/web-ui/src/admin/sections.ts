@@ -46,6 +46,8 @@ export const VIEW_TITLE: Record<string, string> = {
   ackemoji: "Ack emoji",
 };
 
+export const NAV_VIEWS = new Set(["general", "my-spend", ...ADMIN_SECTIONS.flatMap((section) => section.views)]);
+
 const decode = (segment: string | undefined) => {
   try {
     return segment ? decodeURIComponent(segment) : null;

@@ -1,3 +1,4 @@
+import { settingsSection as titledSection } from "./settings-layout.ts";
 import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
@@ -17,7 +18,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
-import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
+import { ADMIN_SECTIONS, NAV_VIEWS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -630,21 +631,27 @@ function settingsNav(section: string): TemplateResult {
 
 function generalPane(): TemplateResult {
   return html`
-    <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${desktopRow()} ${accountRow()}
-      <div class="settings-row settings-slack-account">
-        <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
-      </div>
-      <div class="settings-row">
-        <qm-onboarding-welcome
-          .me=${appState.me}
-          .setupOnly=${true}
-          .widget=${"apps"}
-          .returnKey=${"settings"}
-          .base=${withBase("")}
-        ></qm-onboarding-welcome>
-      </div>
+    <div class="settings-general">
+      ${titledSection("Account", html`${accountRow()} ${aiAccountsRow()}`)} ${titledSection("Appearance", themeRow())}
+      ${titledSection("Chat", html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`)}
+      ${titledSection("Sidebar", html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`)}
+      ${titledSection("Desktop", desktopRow())}
+      ${titledSection(
+        "Connections",
+        html`<div class="settings-connections">
+          <div class="settings-slack-account">
+            <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+          </div>
+          <qm-onboarding-welcome
+            .me=${appState.me}
+            .setupOnly=${true}
+            .widget=${"apps"}
+            .returnKey=${"settings"}
+            .base=${withBase("")}
+          ></qm-onboarding-welcome>
+        </div>`,
+        { card: false },
+      )}
     </div>
   `;
 }
@@ -652,6 +659,7 @@ function generalPane(): TemplateResult {
 function settingsPane(): TemplateResult {
   const section = settingsSection();
   const general = section === "general";
+  const titled = NAV_VIEWS.has(section) && !settingsRoute(SETTINGS_BASE).session;
   return html`
     <h1 class="settings-page-title">Settings</h1>
     ${
@@ -665,6 +673,7 @@ function settingsPane(): TemplateResult {
     <div class="settings-layout with-nav">
       ${settingsNav(section)}
       <div class="settings-content" @click=${followSettingsLink}>
+        ${titled ? html`<h2 class="settings-page-head">${VIEW_TITLE[section]}</h2>` : nothing}
         ${general ? generalPane() : (adminHost ?? nothing)}
       </div>
     </div>
