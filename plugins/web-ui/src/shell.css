@@ -14000,3 +14000,48 @@ html.app-share-embed,
 html.app-share-embed body {
   background: transparent;
 }
+
+/* General settings: page title, then titled sections of grouped rows (matches Credentials). */
+.settings-general {
+  display: grid;
+  gap: 28px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+.settings-page-head h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.settings-page-head p {
+  margin: 6px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
+.settings-section > h3 {
+  margin: 0 0 10px;
+  font-size: var(--font-14);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.settings-card {
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+  border-radius: 14px;
+  background: var(--background);
+}
+html.dark .settings-card {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+.settings-card > .settings-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+.settings-card > .settings-row:last-child {
+  border-bottom: 0;
+}
+.settings-connections {
+  display: grid;
+  gap: 12px;
+}

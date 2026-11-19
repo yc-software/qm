@@ -636,23 +636,41 @@ function settingsNav(section: string): TemplateResult {
   `;
 }
 
+const settingsSection_ = (title: string, body: TemplateResult, card = true): TemplateResult => html`
+  <section class="settings-section">
+    <h3>${title}</h3>
+    ${card ? html`<div class="settings-card">${body}</div>` : body}
+  </section>
+`;
+
 function generalPane(): TemplateResult {
   return html`
-    <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${desktopRow()} ${accountRow()}
-      <div class="settings-row settings-slack-account">
-        <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
-      </div>
-      <div class="settings-row">
-        <qm-onboarding-welcome
-          .me=${appState.me}
-          .setupOnly=${true}
-          .widget=${"apps"}
-          .returnKey=${"settings"}
-          .base=${withBase("")}
-        ></qm-onboarding-welcome>
-      </div>
+    <div class="settings-general">
+      <header class="settings-page-head">
+        <h2>General</h2>
+        <p>Your own preferences for how ${brandName()} looks and behaves. They don't change anything for your team.</p>
+      </header>
+      ${settingsSection_("Account", html`${accountRow()} ${aiAccountsRow()}`)}
+      ${settingsSection_("Appearance", themeRow())}
+      ${settingsSection_("Chat", html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`)}
+      ${settingsSection_("Sidebar", html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`)}
+      ${settingsSection_("Desktop", desktopRow())}
+      ${settingsSection_(
+        "Connections",
+        html`<div class="settings-connections">
+          <div class="settings-slack-account">
+            <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+          </div>
+          <qm-onboarding-welcome
+            .me=${appState.me}
+            .setupOnly=${true}
+            .widget=${"apps"}
+            .returnKey=${"settings"}
+            .base=${withBase("")}
+          ></qm-onboarding-welcome>
+        </div>`,
+        false,
+      )}
     </div>
   `;
 }
