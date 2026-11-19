@@ -173,6 +173,7 @@ export function proxyToApp(req: IncomingMessage, res: ServerResponse, t: AppTarg
 
 export interface UpstreamTarget {
   forwardCookies?: boolean;
+  forwardHost?: boolean;
   baseUrl: string;
   path: string;
   search: string;
@@ -186,12 +187,13 @@ export function proxyToUpstream(
   extraHeaders: Record<string, string> = {},
 ): void {
   const upstream = new URL(t.baseUrl);
-  const headers: Record<string, string> = { host: upstream.host };
+  const host = t.forwardHost && req.headers.host ? req.headers.host : upstream.host;
+  const headers: Record<string, string> = { host };
   for (const h of forwardHeaders) {
     const v = req.headers[h];
     if (typeof v === "string") headers[h] = v;
   }
-  Object.assign(headers, extraHeaders, { host: upstream.host });
+  Object.assign(headers, extraHeaders, { host });
   relay(req, res, {
     protocol: upstream.protocol,
     hostname: upstream.hostname,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 
@@ -7,12 +7,19 @@ const seen: Array<{
   path: string | undefined;
   authorization: string | undefined;
   cookie: string | undefined;
+  host?: string | undefined;
   body: string;
 }> = [];
 const core = createServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += String(chunk);
-  seen.push({ path: req.url, authorization: req.headers.authorization, cookie: req.headers.cookie, body });
+  seen.push({
+    path: req.url,
+    authorization: req.headers.authorization,
+    cookie: req.headers.cookie,
+    host: req.headers.host,
+    body,
+  });
   res.writeHead(202, { "content-type": "application/json" });
   res.end('{"ready":false}');
 });
@@ -50,6 +57,7 @@ test("managed Slack forwards exact methods and paths with service auth but no br
     assert.deepEqual(await result.json(), { ready: false });
     assert.deepEqual(seen.at(-1), {
       path: `/v1/slack/managed/${path}`,
+      host: new URL(base).host,
       authorization: "Bearer deployment-token",
       cookie: undefined,
       body: '{"installId":"one"}',
@@ -64,4 +72,28 @@ test("managed Slack forwards exact methods and paths with service auth but no br
     assert.equal((await fetch(`${base}/v1/slack/managed/${path}`, { method })).status, 404);
   }
   assert.equal(seen.length, count);
+});
+
+test("managed Slack keeps the tenant host the relay called, so core binds that tenant", async () => {
+  const status = await new Promise<number>((resolve, reject) => {
+    const req = request(
+      `${base}/v1/slack/managed/events`,
+      {
+        method: "POST",
+        headers: {
+          host: "acme.qm.example",
+          authorization: "Bearer deployment-token",
+          "content-type": "application/json",
+        },
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      },
+    );
+    req.on("error", reject);
+    req.end('{"installId":"one"}');
+  });
+  assert.equal(status, 202);
+  assert.equal(seen.at(-1)?.host, "acme.qm.example");
 });
