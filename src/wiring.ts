@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Grant } from "./types.ts";
 import { createArtifactDisclosure } from "./memory/artifact-disclosure.ts";
 import { ATTACHMENT_STAGING_MIGRATION, ATTACHMENT_RECEIPTS_MIGRATION } from "./sessions/attachment-migrations.ts";
@@ -1312,14 +1313,31 @@ export function buildApp(
     },
     canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
   });
-  const sandboxForTurn = (resources: SandboxResources): Sandbox =>
-    createSandboxRouter({
-      resources,
-      backends: sandboxBackends,
-      defaultBackend: config.sandboxBackend,
-      onError: sandboxOnError,
+  const sandboxResourceContext = new AsyncLocalStorage<SandboxResources | undefined>();
+  const routedResources = new Proxy(sandboxResources, {
+    get(target, key) {
+      const resources = sandboxResourceContext.getStore() ?? target;
+      const value = Reflect.get(resources, key);
+      return typeof value === "function" ? value.bind(resources) : value;
+    },
+  });
+  const sandbox = createSandboxRouter({
+    resources: routedResources,
+    backends: sandboxBackends,
+    defaultBackend: config.sandboxBackend,
+    onError: sandboxOnError,
+  });
+  const inSandboxContext = (resources: SandboxResources | undefined): Sandbox =>
+    new Proxy(sandbox, {
+      get(target, key) {
+        const value = Reflect.get(target, key);
+        return typeof value === "function"
+          ? (...args: unknown[]) => sandboxResourceContext.run(resources, () => Reflect.apply(value, target, args))
+          : value;
+      },
     });
-  const sandbox = sandboxForTurn(sandboxResources);
+  const sandboxForTurn = (resources: SandboxResources): Sandbox => inSandboxContext(resources);
+  const cleanupSandbox = inSandboxContext(undefined);
   const secretSource =
     config.secretsBackend === "aws"
       ? createLayeredSecretSource(
@@ -2359,6 +2377,7 @@ export function buildApp(
     sandbox,
     sandboxResources,
     sandboxForTurn,
+    cleanupSandbox,
     swarms,
     connectorTokens,
     auditLog,

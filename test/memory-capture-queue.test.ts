@@ -237,70 +237,74 @@ test(
   },
 );
 
-test("a worker attempt between producer lookup and locking cannot mutate the burst's idempotency identity", { timeout: 20_000 }, async (t) => {
-  const databaseUrl = await readyDatabase();
-  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  const attempted = Promise.withResolvers<void>();
-  const fail = Promise.withResolvers<void>();
-  const first = createMemoryCaptureQueue({
-    databaseUrl,
-    quietMs: 0,
-    maxTurns: 10,
-    capture: async () => {
-      attempted.resolve();
-      await fail.promise;
-      throw new Error("temporary failure");
-    },
-  });
-  const seen: Array<{ turns: MemoryCaptureTurn[]; id: string }> = [];
-  const one = Promise.withResolvers<{ turns: MemoryCaptureTurn[]; id: string }>();
-  const two = Promise.withResolvers<{ turns: MemoryCaptureTurn[]; id: string }>();
-  const replacement = createMemoryCaptureQueue({
-    databaseUrl,
-    quietMs: 0,
-    maxTurns: 10,
-    capture: async (turns, id) => {
-      const result = { turns, id };
-      seen.push(result);
-      (seen.length === 1 ? one : two).resolve(result);
-    },
-  });
-  t.after(async () => {
+test(
+  "a worker attempt between producer lookup and locking cannot mutate the burst's idempotency identity",
+  { timeout: 20_000 },
+  async (t) => {
+    const databaseUrl = await readyDatabase();
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const attempted = Promise.withResolvers<void>();
+    const fail = Promise.withResolvers<void>();
+    const first = createMemoryCaptureQueue({
+      databaseUrl,
+      quietMs: 0,
+      maxTurns: 10,
+      capture: async () => {
+        attempted.resolve();
+        await fail.promise;
+        throw new Error("temporary failure");
+      },
+    });
+    const seen: Array<{ turns: MemoryCaptureTurn[]; id: string }> = [];
+    const one = Promise.withResolvers<{ turns: MemoryCaptureTurn[]; id: string }>();
+    const two = Promise.withResolvers<{ turns: MemoryCaptureTurn[]; id: string }>();
+    const replacement = createMemoryCaptureQueue({
+      databaseUrl,
+      quietMs: 0,
+      maxTurns: 10,
+      capture: async (turns, id) => {
+        const result = { turns, id };
+        seen.push(result);
+        (seen.length === 1 ? one : two).resolve(result);
+      },
+    });
+    t.after(async () => {
+      fail.resolve();
+      await Promise.all([first.stop(), replacement.stop()]);
+    });
+    await first.enqueue(turn(1));
+    const lookedUp = Promise.withResolvers<void>();
+    const releaseLookup = Promise.withResolvers<void>();
+    const findJobs = PgBoss.prototype.findJobs;
+    let pause = true;
+    t.mock.method(PgBoss.prototype, "findJobs", async function (this: PgBoss, ...args: Parameters<PgBoss["findJobs"]>) {
+      const jobs = await findJobs.apply(this, args);
+      if (pause) {
+        pause = false;
+        lookedUp.resolve();
+        await releaseLookup.promise;
+      }
+      return jobs;
+    });
+    t.after(() => releaseLookup.resolve());
+    const enqueue = replacement.enqueue(turn(2));
+    await lookedUp.promise;
+    await first.start();
+    await attempted.promise;
+    await first.stopClaims();
     fail.resolve();
-    await Promise.all([first.stop(), replacement.stop()]);
-  });
-  await first.enqueue(turn(1));
-  const lookedUp = Promise.withResolvers<void>();
-  const releaseLookup = Promise.withResolvers<void>();
-  const findJobs = PgBoss.prototype.findJobs;
-  let pause = true;
-  t.mock.method(PgBoss.prototype, "findJobs", async function (this: PgBoss, ...args: Parameters<PgBoss["findJobs"]>) {
-    const jobs = await findJobs.apply(this, args);
-    if (pause) {
-      pause = false;
-      lookedUp.resolve();
-      await releaseLookup.promise;
-    }
-    return jobs;
-  });
-  t.after(() => releaseLookup.resolve());
-  const enqueue = replacement.enqueue(turn(2));
-  await lookedUp.promise;
-  await first.start();
-  await attempted.promise;
-  await first.stopClaims();
-  fail.resolve();
-  await first.stop();
-  releaseLookup.resolve();
-  await enqueue;
-  await replacement.start();
-  const [a, b] = await Promise.all([one.promise, two.promise]);
-  assert.deepEqual([a, b].map((batch) => batch.turns.map((ctx) => ctx.idempotencyKey)).sort(), [
-    ["turn-1"],
-    ["turn-2"],
-  ]);
-  assert.notEqual(a.id, b.id);
-});
+    await first.stop();
+    releaseLookup.resolve();
+    await enqueue;
+    await replacement.start();
+    const [a, b] = await Promise.all([one.promise, two.promise]);
+    assert.deepEqual([a, b].map((batch) => batch.turns.map((ctx) => ctx.idempotencyKey)).sort(), [
+      ["turn-1"],
+      ["turn-2"],
+    ]);
+    assert.notEqual(a.id, b.id);
+  },
+);
 
 test("completed capture handoffs remain idempotent after queue recreation", { timeout: 20_000 }, async (t) => {
   const databaseUrl = await readyDatabase();

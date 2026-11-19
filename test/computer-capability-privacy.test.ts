@@ -1,3 +1,5 @@
+import { ProjectRosterChanged } from "../src/core/orchestrator/admit.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import "./support/auto-fake-sprites.ts";
 import { refreshPrivateContext, type PrivateContext } from "../src/sessions/private-context.ts";
@@ -289,4 +291,103 @@ test("computer-management and outbound file APIs preserve the computer privacy b
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   }
+});
+
+test("trusted cleanup clears an active turn context without clearing the caller's privacy", async () => {
+  const built = buildApp(testConfig());
+  const actorId = "admin-alice",
+    scopeId = `personal:${actorId}`;
+  await built.app.upsertDirectory([{ principalId: actorId, displayName: "Alice", type: "internal" }]);
+  const session = await built.sessions.getOrCreateByThread("nested-trusted-cleanup", "dm", scopeId);
+  const context: PrivateContext = { actorId, scopeId, sessionId: session.id, privateRead: true };
+  const resources = built.sandboxResources.forTurn({
+    actorId,
+    scopeId,
+    isCurrent: async () => false,
+    privacy: { current: () => refreshPrivateContext(built.sessions, context), sessions: built.sessions },
+  });
+  const computer = await resources.create(actorId, scopeId, "sprites", "ordinary cleanup test");
+  const scoped = built.sandboxForTurn(resources),
+    cleanup = built.sandboxForTurn(built.sandboxResources);
+  const handle = await scoped.provision(scopeId, { sandboxId: computer.id });
+  await scoped.writeFile(handle, "cleanup-context/probe.txt", "ordinary data");
+  built.sandbox.run = async () => {
+    await built.sessions.markPersonalOnly(session.id, scopeId);
+    await cleanup.removeDir(handle, "cleanup-context");
+    assert.equal(await cleanup.readFile(handle, "cleanup-context/probe.txt"), null);
+    return { stdout: "cleaned", stderr: "", code: 0, timedOut: false };
+  };
+  assert.equal((await scoped.run(handle, "trigger private transition")).stdout, "cleaned");
+  await assert.rejects(scoped.readFile(handle, "cleanup-context/probe.txt"), /private computer/);
+  await cleanup.teardown(handle, { keepWarm: true });
+});
+
+for (const scratch of [false, true])
+  test(`a managed project revocation rejects a cached ${scratch ? "scratch" : "persistent"} computer before further I/O`, async () => {
+    let projectId = "",
+      reached = false;
+    const built = buildApp(testConfig(), {
+      agent: {
+        ...createMockAgent(),
+        runTurn: async (input) => {
+          await input.tools.execute("echo before revocation", { scratch });
+          reached = true;
+          await built.projects.removeMember(projectId, "owner", "member");
+          try {
+            await input.tools.execute("echo after revocation", { scratch });
+            assert.fail("revoked membership allowed computer access");
+          } catch (error) {
+            assert.ok(error instanceof ProjectRosterChanged);
+            throw error;
+          }
+        },
+      },
+    });
+    await built.app.upsertDirectory([
+      { principalId: "owner", displayName: "Owner", type: "internal" },
+      { principalId: "member", displayName: "Member", type: "internal" },
+    ]);
+    const project = await built.projects.create({ name: "Revocation test", ownerId: "owner" });
+    projectId = project.id;
+    await built.projects.addMember(project.id, "owner", "member");
+    const { projectScopeId } = await import("../src/projects/project-store.ts");
+    const scope = projectScopeId(project.id);
+    const computer = await built.sandboxResources.create("owner", scope, "sprites", "managed computer");
+    await built.sandboxResources.setDefault("owner", scope, computer.id);
+    const result = await built.app.turn({
+      surface: "test",
+      actor: { externalId: "member" },
+      conversation: { kind: "group", threadRef: "managed-cached-computer", channelRef: scope.slice(6) },
+      text: "Check access",
+      origin: { kind: "human" },
+    });
+    assert.equal(reached, true);
+    assert.equal(result.status, "refused");
+  });
+
+test("an admitted channel turn can use scratch without a cached directory roster", async () => {
+  const built = buildApp(testConfig(), {
+    agent: {
+      ...createMockAgent(),
+      runTurn: async (input) => {
+        const result = await input.tools.execute("echo admitted", { scratch: true });
+        assert.equal(result.code, 0);
+        return { reply: result.stdout, modelCalls: 0 };
+      },
+    },
+  });
+  await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
+  const result = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "member" },
+    conversation: {
+      kind: "channel",
+      threadRef: "admitted-scratch",
+      channelRef: "uncached",
+      audience: [{ externalId: "member" }],
+    },
+    text: "Check scratch",
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(result.reply?.trim(), "admitted");
 });

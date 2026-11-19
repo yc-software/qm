@@ -400,7 +400,7 @@ export function createSandboxResources(opts: {
     async authorizeScratch(scopeId, personalOnly) {
       const context = await opts.privacy?.current();
       if (!context) return;
-      await authorize(context.actorId, scopeId);
+      if (scopeId !== context.scopeId) await authorize(context.actorId, scopeId);
       if (!!context.personalOnly !== personalOnly || (personalOnly && !privateSourceAllowed(context, scopeId)))
         throw new SandboxAccessError("Disposable computer privacy no longer matches this conversation.");
     },
@@ -494,7 +494,6 @@ export function createSandboxResources(opts: {
     async resolve(scopeId) {
       await initialize();
       const context = await opts.privacy?.current();
-      if (context) await authorize(context.actorId, scopeId);
       const route = await opts.defaults.get(scopeId);
       const selected = context?.personalOnly ? route?.privateSandboxId : route?.sandboxId;
       return selected ? get(selected) : null;

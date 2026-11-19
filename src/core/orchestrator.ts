@@ -1387,6 +1387,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
       const privateComputerContext = async () => {
+        if (!(await managedRosterIsCurrent())) throw new ProjectRosterChanged();
         if (session.personalOnly || personalOnlyContext) fileContext.personalOnly = true;
         const current = await refreshPrivateContext(deps.sessions, fileContext);
         if (current.personalOnly) await protectPersonalContext();
@@ -1413,7 +1414,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (turnSandboxResources)
         deps = {
           ...deps,
-          cleanupSandbox: deps.sandbox,
+          cleanupSandbox: deps.cleanupSandbox ?? deps.sandbox,
           sandbox: deps.sandboxForTurn?.(turnSandboxResources) ?? deps.sandbox,
           sandboxResources: turnSandboxResources,
         };

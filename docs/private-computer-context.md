@@ -653,3 +653,30 @@ Independent merge reviews before final delivery additions: /root/qm_head_history
 A final callback review found that failure notices omitted the execution result even though normal replies retained it. runTrigger now captures that result before the queued branch and uses it for both notice provenance and enqueue authorization. Queued results without a session ID resolve the known execution thread. An ordinary template whose execution acquires private context therefore cannot post even its refusal text to another recipient; its owner-only notice retains private metadata. No further shape, setting or SQL change.
 
 All three new refusal/queued/owner regressions fail the previous b2edd2f run-trigger module, with merged code/tests otherwise retained (/tmp/qm-private-notice-context-baseline-red.log). The affected trigger/private-trigger/publication batch passes3/3 (/tmp/qm-private-notice-context-tests.log); typecheck and focused ESLint pass. This corrects an actual missing callback, not a generic review waiver. Merged native and full-head gates remain pending.
+
+## Upgrade ordering and admitted computer access
+
+The unreleased file-origin backfill now uses migration ID
+`sessions/store/0069-file-recorded-origin` instead of
+`files/artifacts/0005-recorded-origin`, so the global migration runner applies
+session tenancy and private-document classification before reading those columns.
+The statements, retained fields, and privacy rules are unchanged. A development
+database that already applied the previous ID safely repeats the idempotent
+backfill under the new ID. Previously released private-origin files in that
+development database can become private again; reviewers must repeat any desired
+explicit publication. No production rollout of the previous ID occurred.
+
+A single sandbox router retains provider load sampling and lifecycle state.
+Per-operation async context selects the current turn's durable authorization
+facade, and trusted cleanup explicitly clears that context. Admitted home-scope
+lookup and scratch operations retain refreshed privacy and managed-roster checks;
+explicit resource selection and management keep their existing actor checks.
+
+Privacy rechecks and ordinary-to-private provisioning redirects remain inside
+tracked slot openings, including cached default and disposable handles. Cleanup
+therefore waits for privacy resolution and destroys both disposable computers
+when a transition overlaps Stop. Four barrier cases cover new/cached default and
+disposable computers. The affected lifecycle, disposable execution, turn-pool,
+and HTTP computer-privacy suites pass; old-release upgrade fixtures pass after
+the migration ordering correction. Independent focused lifecycle review accepted
+95/100. These checks do not qualify the remaining full-suite failures.

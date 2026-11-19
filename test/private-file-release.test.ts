@@ -247,49 +247,30 @@ test("a private file release cannot activate grants added after authorization", 
   await assert.rejects(built.acl.preparePrivateGrant(testTenant, grant, "alice"), /already has grants/);
 });
 
-test("sharing a private output with its owner cannot remove the private boundary", async () => {
-  const { built, artifact, grant, session } = await fixture();
-  const { createControlService } = await import("../src/api/control-service.ts");
-  const result = await createControlService(built.app, built.scheduler).shareArtifact(
-    { type: "file", id: artifact.id, scope: artifact.ownerScopeId },
-    {
-      actorId: "alice",
-      scopeId: session.scopeId,
-      sessionId: session.id,
-      threadRef: session.threadRef,
-      liveActor: true,
-      exp: Date.now() + 60_000,
-    },
-  );
-  assert.equal(result.ok, false);
-  await assert.rejects(
-    built.acl.preparePrivateGrant(testTenant, { ...grant, granteeScopeId: artifact.ownerScopeId }, "alice"),
-    /already personal/,
-  );
-  assert.equal((await built.files.get(artifact.id))!.personalOnly, true);
-  assert.deepEqual(await built.acl.grantsFor(testTenant, artifact.ownerScopeId, artifact.id), []);
-});
-
-test("an equivalent personal email scope is also a self-share", async () => {
-  const actorId = "alice@example.test";
-  const { built, artifact, grant, session } = await fixture(actorId);
-  const scope = "personal:ALICE@EXAMPLE.TEST";
-  const { createControlService } = await import("../src/api/control-service.ts");
-  const result = await createControlService(built.app, built.scheduler).shareArtifact(
-    { type: "file", id: artifact.id, scope },
-    {
-      actorId,
-      scopeId: session.scopeId,
-      sessionId: session.id,
-      threadRef: session.threadRef,
-      liveActor: true,
-      exp: Date.now() + 60_000,
-    },
-  );
-  assert.equal(result.ok, false);
-  await assert.rejects(
-    built.acl.preparePrivateGrant(testTenant, { ...grant, granteeScopeId: scope }, actorId),
-    /already personal/,
-  );
-  assert.equal((await built.files.get(artifact.id))!.personalOnly, true);
-});
+for (const [actorId, scope] of [
+  ["alice", "personal:alice"],
+  ["alice@example.test", "personal:ALICE@EXAMPLE.TEST"],
+] as const) {
+  test(`private self-share preserves the boundary for ${scope}`, async () => {
+    const { built, artifact, grant, session } = await fixture(actorId);
+    const { createControlService } = await import("../src/api/control-service.ts");
+    const result = await createControlService(built.app, built.scheduler).shareArtifact(
+      { type: "file", id: artifact.id, scope },
+      {
+        actorId,
+        scopeId: session.scopeId,
+        sessionId: session.id,
+        threadRef: session.threadRef,
+        liveActor: true,
+        exp: Date.now() + 60_000,
+      },
+    );
+    assert.equal(result.ok, false);
+    await assert.rejects(
+      built.acl.preparePrivateGrant(testTenant, { ...grant, granteeScopeId: scope }, actorId),
+      /already personal/,
+    );
+    assert.equal((await built.files.get(artifact.id))!.personalOnly, true);
+    assert.deepEqual(await built.acl.grantsFor(testTenant, artifact.ownerScopeId, artifact.id), []);
+  });
+}

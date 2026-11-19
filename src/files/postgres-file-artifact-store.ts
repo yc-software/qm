@@ -69,7 +69,7 @@ export const FILE_ARTIFACT_MIGRATIONS = [
     ],
   },
   {
-    id: "files/artifacts/0005-recorded-origin",
+    id: "sessions/store/0069-file-recorded-origin",
     statements: [
       "SET LOCAL lock_timeout = '5s'",
       `UPDATE file_artifacts SET source_provenance=jsonb_build_object('sensitivity','unknown',

@@ -294,8 +294,8 @@ function openScratch(t: TurnPool, privateMode: boolean): Promise<SandboxHandle> 
   const { pool, turnAccess, audit, scratchKey } = t;
   const key = privateMode ? `${SCRATCH}:private` : SCRATCH;
   const cached = pool.get(key);
-  if (cached?.opening) return cached.opening;
-  if (cached?.handles.length)
+  if (cached?.pending && cached.opening) return cached.opening;
+  if (!cached?.ready && cached?.handles.length)
     return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
   audit("scratch.provision_started");
   return openSlot(
@@ -303,16 +303,24 @@ function openScratch(t: TurnPool, privateMode: boolean): Promise<SandboxHandle> 
     key,
     async (slot) => {
       try {
-        const handle = await deps.sandbox.provision(memoryScopeId, {
-          ...turnAccess,
-          env: await computerEnv(t.ctx, undefined, privateMode),
-          scratch: {
-            key: `${scratchKey()}:${privateMode ? "private" : "ordinary"}`,
-            ...(privateMode ? { personalOnly: true as const } : {}),
-          },
-        });
-        slot.handles.push(handle);
-        audit("scratch.provision_ready", handle);
+        const current = await t.ctx.privateContext?.();
+        if (!privateMode && (current?.personalOnly || t.ctx.session.personalOnly)) return openScratch(t, true);
+        const handle =
+          cached?.ready ??
+          (await deps.sandbox.provision(memoryScopeId, {
+            ...turnAccess,
+            env: await computerEnv(t.ctx, undefined, privateMode),
+            scratch: {
+              key: `${scratchKey()}:${privateMode ? "private" : "ordinary"}`,
+              ...(privateMode ? { personalOnly: true as const } : {}),
+            },
+          }));
+        if (!cached?.ready) {
+          slot.handles.push(handle);
+          audit("scratch.provision_ready", handle);
+        }
+        if (!privateMode && ((await t.ctx.privateContext?.())?.personalOnly || t.ctx.session.personalOnly))
+          return openScratch(t, true);
         return handle;
       } catch (error) {
         if (error instanceof SandboxProvisionCleanupError) slot.handles.push(error.handle);
@@ -447,18 +455,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const provisionForPrivacy = (eager: boolean, privateMode: boolean): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
     const key = privateMode ? PRIVATE_SCOPED : SCOPED;
-    const opening = pool.get(key)?.opening;
-    const work =
-      opening ??
-      openSlot(pool, key, async (slot) => {
-        const current = await ctx.privateContext?.();
-        if (!privateMode && (current?.personalOnly || session.personalOnly)) return provisionForPrivacy(eager, true);
-        return tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager));
-      });
-    return work.then(async (handle) => {
+    const cached = pool.get(key);
+    if (cached?.pending && cached.opening) return cached.opening;
+    return openSlot(pool, key, async (slot) => {
       const current = await ctx.privateContext?.();
       if (!privateMode && (current?.personalOnly || session.personalOnly)) return provisionForPrivacy(eager, true);
-      if (opening) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
+      const handle = cached?.ready ?? (await tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)));
+      if (!privateMode && ((await ctx.privateContext?.())?.personalOnly || session.personalOnly))
+        return provisionForPrivacy(eager, true);
+      if (cached?.ready) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
       return handle;
     });
   };
@@ -506,13 +511,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
   ): Promise<SandboxHandle> => openResource(turnPool, input, authorize);
-  const provisionScratch = async (): Promise<SandboxHandle> => {
-    const privateMode = !!((await ctx.privateContext?.())?.personalOnly || session.personalOnly);
-    const handle = await openScratch(turnPool, privateMode);
-    if (!privateMode && ((await ctx.privateContext?.())?.personalOnly || session.personalOnly))
-      return provisionScratch();
-    return handle;
-  };
+  const provisionScratch = (): Promise<SandboxHandle> => openScratch(turnPool, session.personalOnly === true);
   const turnSkills = createTurnSkills({
     tenant,
     deps,

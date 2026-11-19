@@ -245,26 +245,52 @@ test("impersonation is ignored on requests from another origin", async () => {
 
 test("only portal-verified development views carry impersonation across origins", async () => {
   await withTenant("00000000-0000-0000-0000-000000000001", async (tenant) => {
-    const session = { k: "session" as const, sub: "admin-alice", org: orgId(), t: tenant.id, iat: nowS(), exp: nowS() + 600 };
+    const session = {
+      k: "session" as const,
+      sub: "admin-alice",
+      org: orgId(),
+      t: tenant.id,
+      iat: nowS(),
+      exp: nowS() + 600,
+    };
     const key = deriveKey(SESSION, "portal.impersonate.v1");
-    const selected = seal({ k: "impersonate", actor: session.sub, target: "carol", org: session.org, iat: nowS(), exp: nowS() + 600 }, key);
+    const selected = seal(
+      { k: "impersonate", actor: session.sub, target: "carol", org: session.org, iat: nowS(), exp: nowS() + 600 },
+      key,
+    );
     const name = `portal_development_${createHash("sha256").update("view-a").digest("hex")}`;
     const req = new IncomingMessage(new Socket());
     req.method = "GET";
     req.url = "/me?development_view=view-a&development_impersonating=1";
-    req.headers = { origin: "https://embedder.example.com", cookie: `${sessionCookie(session)}; ${name}=${encodeURIComponent(selected)}` };
+    req.headers = {
+      origin: "https://embedder.example.com",
+      cookie: `${sessionCookie(session)}; ${name}=${encodeURIComponent(selected)}`,
+    };
     const deps = {
-      signingSecret: SIGNING, portalUrl: ORIGIN, admin,
+      signingSecret: SIGNING,
+      portalUrl: ORIGIN,
+      admin,
       portalSession: { secret: SESSION, maxAgeSeconds: 3600 },
     } as ServerDeps;
     const before = await browserIdentity(req, "GET", deps, false, tenant);
     assert.equal("p" in before && before.p, "admin-alice");
-    assert.equal(await developmentImpersonation({
-      req, res: new ServerResponse(req), url: new URL(req.url, ORIGIN), session,
-      enabled: true, allowedOrigin: true, key, secure: true, ttlSeconds: 600,
-      isAdmin: async () => true, canonical: async () => null,
-      impersonate: async () => ({ ok: true, status: 200 }),
-    }), false);
+    assert.equal(
+      await developmentImpersonation({
+        req,
+        res: new ServerResponse(req),
+        url: new URL(req.url, ORIGIN),
+        session,
+        enabled: true,
+        allowedOrigin: true,
+        key,
+        secure: true,
+        ttlSeconds: 600,
+        isAdmin: async () => true,
+        canonical: async () => null,
+        impersonate: async () => ({ ok: true, status: 200 }),
+      }),
+      false,
+    );
     const verified = await browserIdentity(req, "GET", deps, false, tenant);
     assert.equal("p" in verified && verified.p, "carol");
     assert.equal("imp" in verified && verified.imp, "admin-alice");

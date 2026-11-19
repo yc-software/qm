@@ -13,6 +13,7 @@ function fixture(
     botActor?: true;
     external?: true;
     defaultOwners?: string[];
+    privacyCheck?: () => Promise<void>;
   } = {},
 ) {
   const provisions: Array<ProvisionOptions | undefined> = [];
@@ -125,12 +126,15 @@ function fixture(
     connectorEnv: {},
     egressTokenForPolicy: async () => undefined,
     openResourceAccess: true,
-    privateContext: async () => ({
-      actorId: "alice",
-      scopeId: OWN,
-      sessionId: "s",
-      ...(privateMode ? { personalOnly: true } : {}),
-    }),
+    privateContext: async () => {
+      await over.privacyCheck?.();
+      return {
+        actorId: "alice",
+        scopeId: OWN,
+        sessionId: "s",
+        ...(privateMode ? { personalOnly: true } : {}),
+      };
+    },
     visibleSkillsForTurn: async () => [],
   } as unknown as TurnSandboxContext);
   const released = () => Object.fromEntries(teardowns);
@@ -445,3 +449,36 @@ test("a late private read replaces ordinary scratch instead of reusing its crede
   await f.turn.reclaimBox();
   assert.deepEqual(f.released(), { [ordinary.id]: { destroy: true }, [personal.id]: { destroy: true } });
 });
+
+for (const method of ["provision", "provisionScratch"] as const)
+  for (const cached of [false, true])
+    test(`reclaim includes a privacy redirect during ${cached ? "cached" : "new"} ${method}`, async () => {
+      const entered = Promise.withResolvers<void>(),
+        resume = Promise.withResolvers<void>();
+      let armed = false,
+        checks = 0,
+        reclaimed = false;
+      const f = fixture({
+        privacyCheck: async () => {
+          if (armed && ++checks === 2) {
+            entered.resolve();
+            await resume.promise;
+          }
+        },
+      });
+      if (cached) await f.turn[method]();
+      armed = true;
+      const opening = f.turn[method]();
+      await entered.promise;
+      const reclaim = f.turn.reclaimBox().then(() => {
+        reclaimed = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(reclaimed, false);
+      f.markPrivate();
+      resume.resolve();
+      const [handle] = await Promise.all([opening, reclaim]);
+      assert.ok(f.tornDown.some((item) => item.id === handle.id));
+      assert.equal(f.teardowns.length, f.provisions.length);
+      assert.equal(f.provisions.length, 2);
+    });
