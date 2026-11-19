@@ -9,7 +9,6 @@ import {
   credentialsCard,
   keychainCard,
   loadCredentials,
-  addCredential,
   credentialState,
 } from "./settings-credentials.ts";
 import { providersCard, useProviders, loadProviders } from "./settings-providers.ts";
@@ -307,7 +306,7 @@ function template() {
       decisionsCard(),
     ],
   };
-  return html`${pageHeader({ actions: view === "credentials" ? addCredential() : nothing })}
+  return html`${pageHeader({ actions: nothing })}
     <div id="view-governance">
       <div class="governance-content">
         ${status ? html`<p class="hint" role="status">${status}</p>` : nothing}${cards[view]()}

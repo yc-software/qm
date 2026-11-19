@@ -2842,3 +2842,33 @@
     display: none;
   }
 }
+
+/* Credentials: page header — one title, one line, action on the same row */
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head p {
+  max-width: none;
+  margin: 6px 0 0;
+  color: var(--muted-foreground);
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head .viewlink {
+  margin-inline-start: 4px;
+  white-space: nowrap;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head #sc-add {
+  flex: none;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .body {
+  margin-top: 32px;
+}

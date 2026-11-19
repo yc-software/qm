@@ -546,13 +546,15 @@ export function credentialsCard() {
     class=${classMap({ card: true, "sv-credentials": true, dirty: s.dirty })}
     id="card-service-credentials"
   >
-    <div class="head">
-      <h2>Shared service credentials</h2>
-      <p>
-        The agent calls these services by proxy such that secrets never reach a sandbox. Review the complete effective
-        capability (destination, authentication, methods, paths, and principals) before saving.
-      </p>
-      <a class="viewlink" href=${page.href("audit")}>View usage ›</a>
+    <div class="head cred-page-head">
+      <div>
+        <h2>Credentials</h2>
+        <p>
+          Shared keys the agent uses on your team's behalf. Secrets stay in core and never reach a sandbox.
+          <a class="viewlink" href=${page.href("audit")}>View usage</a>
+        </p>
+      </div>
+      ${addCredential()}
     </div>
     <div class="body">
       <div id="sc-list" role="status" aria-live="polite" class=${credentialState.rows.length ? "" : "hint"}>
