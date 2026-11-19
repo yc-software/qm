@@ -787,7 +787,7 @@ test("post replies remain visible in new and continuing conversations", async (t
             }
           };
           const before = FakeEventSource.instances.length;
-          conv!.catchUp();
+          conv!.resumeIfIdle();
           await until(() => FakeEventSource.instances.length > before);
           const turn = agent.waitForIdle();
           const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;

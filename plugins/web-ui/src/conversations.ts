@@ -5,7 +5,7 @@ import { subscribeDeliveries } from "./core-bridge";
 import { applySessionState } from "./session-list";
 import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
-import { refreshCachedTranscript, resyncTranscriptCache } from "./transcript-cache";
+import { clearTranscriptCache, refreshCachedTranscript } from "./transcript-cache";
 import { handleUiSignal, releaseUiCanvas, resyncUiCanvas } from "./ui-canvas";
 import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
 
@@ -128,12 +128,12 @@ export function ensureDeliveryStream(): void {
         void refreshSessions({ silent: true });
         refreshTreesFor(event.threadRef);
       }
-      if (event.state === "working") for (const conv of live) conv.catchUp();
+      if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => {
       const openIds = [...live].flatMap((conv) => (conv.state.sessionId ? [conv.state.sessionId] : []));
-      resyncTranscriptCache(openIds);
+      clearTranscriptCache();
       void refreshSessions({ silent: true });
       refreshOpenTrees();
       resyncUiCanvas(openIds);

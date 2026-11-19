@@ -829,14 +829,28 @@ export function createChatSurface(
     }
   }
 
+  function resumeIfIdle(): void {
+    const agent = chatState.agent;
+    if (!agent || agent.state.isStreaming || !chatState.threadRef || !chatState.normalStreamFn || !chatState.onWork)
+      return;
+    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork);
+  }
+
+  let catchingUp = false;
+
   function catchUp(): void {
     if (readOnlyView) return onDelivery(readOnlyView.threadRef);
     const { agent, threadRef, normalStreamFn, onWork } = chatState;
-    if (!agent || agent.state.isStreaming || !threadRef) return;
-    if (!normalStreamFn || !onWork) return onDelivery(threadRef);
-    void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork).then((resumed) => {
-      if (!resumed) onDelivery(threadRef);
-    });
+    if (!agent || agent.state.isStreaming || !threadRef || catchingUp) return;
+    catchingUp = true;
+    const resumed = normalStreamFn && onWork ? resumeTrackedRun(agent, threadRef, normalStreamFn, onWork) : false;
+    void Promise.resolve(resumed)
+      .then((ok) =>
+        ok || agent !== chatState.agent || agent.state.isStreaming ? undefined : refreshTranscriptFromItems(agent),
+      )
+      .finally(() => {
+        catchingUp = false;
+      });
   }
 
   function syncLocation(): void {
@@ -3919,6 +3933,7 @@ export function createChatSurface(
     applyTranscript,
     mountReadOnlyPage,
     transcriptAnchor,
+    resumeIfIdle,
     catchUp,
     redraw: () => drawActiveChat(),
     dispose,
