@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 
+extension EnvironmentValues {
+  // True while the drawer animates to a state it was told to take, such as closing over a
+  // conversation just chosen from the list.
+  @Entry var conversationDrawerSettling = false
+}
+
 struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
   @Binding var isOpen: Bool
   let hasSelection: Bool
@@ -12,6 +18,7 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
 
   var body: some View {
     let revision = UUID()
+    let settling = isOpen != motion.restingOpen
     GeometryReader { geometry in
       let sidebarWidth = min(geometry.size.width * 0.8, 400)
       let drawer = hasSelection && !showsSidebarPage
@@ -30,6 +37,7 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
             motion: motion, width: sidebarWidth,
             content: DrawerContent(revision: revision) {
               detail()
+                .environment(\.conversationDrawerSettling, settling)
                 .frame(width: geometry.size.width)
                 .background(QMTheme.paper.ignoresSafeArea(.container, edges: .vertical))
                 .disabled(isOpen || showsSidebarPage)
@@ -58,13 +66,18 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       .mask { Rectangle().ignoresSafeArea(.container, edges: .vertical) }
     }
     .background(QMTheme.paper.ignoresSafeArea())
-    .onAppear { motion.position = isOpen ? 1 : 0 }
+    .onAppear {
+      motion.position = isOpen ? 1 : 0
+      motion.restingOpen = isOpen
+    }
     .onChange(of: isOpen) { _, open in
       // A drag commits `isOpen` only after its spring lands, so the card is already there.
       let target: CGFloat = open ? 1 : 0
       guard motion.dragStart == nil, motion.position != target else { return }
       withAnimation(reduceMotion ? nil : .smooth(duration: 0.32)) {
         motion.position = target
+      } completion: {
+        if motion.position == target { motion.restingOpen = open }
       }
     }
   }
@@ -97,8 +110,9 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       motion.position = target
     } completion: {
       // Flipping `isOpen` re-renders the conversation; doing it mid-spring drops frames.
-      guard motion.dragStart == nil, motion.position == target, isOpen != open else { return }
-      isOpen = open
+      guard motion.dragStart == nil, motion.position == target else { return }
+      motion.restingOpen = open
+      if isOpen != open { isOpen = open }
     }
   }
 }
@@ -106,6 +120,8 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
 @Observable
 final class DrawerMotion {
   var position: CGFloat = 0
+  // The state the card last came to rest in; only the drawer body reads it, once per settle.
+  var restingOpen = false
   @ObservationIgnored var dragStart: CGFloat?
 
   func track(_ translation: CGFloat, width: CGFloat) {

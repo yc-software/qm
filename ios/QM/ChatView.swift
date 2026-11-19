@@ -15,6 +15,10 @@ struct ChatView: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.conversationDrawerSettling) private var drawerSettling
+  // History stays behind the placeholder until the drawer lands, so laying out a long
+  // transcript never lands inside the slide.
+  @State private var historyRevealed = false
   @Environment(\.qmIdentity) private var identity
   @Environment(AppModel.self) private var app: AppModel?
   @State private var approvalToConfirm: Approval?
@@ -124,6 +128,9 @@ struct ChatView: View {
       }
     }
     .background(QMTheme.paper)
+    .onChange(of: drawerSettling, initial: true) { _, settling in
+      if !settling { historyRevealed = true }
+    }
     .toolbarBackground(QMTheme.paper, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
     .environment(\.qmSessionID, model.conversation.id)
@@ -485,6 +492,10 @@ struct ChatView: View {
       && model.displayedPartial.isEmpty && model.pending == nil && !model.sending
   }
 
+  private var holdsHistory: Bool { !historyRevealed && model.conversation.localOnly != true }
+
+  private var showsPlaceholder: Bool { showsInitialHistoryPlaceholder || holdsHistory }
+
   private var transcript: some View {
     let messages = model.messages
     let liveTimeline = model.liveTimeline
@@ -493,8 +504,11 @@ struct ChatView: View {
     let inherited = timeline.filter { $0.isInherited(in: model.conversation) }
     let current = timeline.filter { !$0.isInherited(in: model.conversation) }
     let visible = inheritedExpanded ? inherited + current : current
-    let sections = NativeChatTranscriptSection.grouped(
-      visible, activeRunID: model.activeRunID, status: model.workStatus)
+    let sections =
+      holdsHistory
+      ? []
+      : NativeChatTranscriptSection.grouped(
+        visible, activeRunID: model.activeRunID, status: model.workStatus)
     let showSpeakers =
       model.conversation.isShared
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
@@ -502,7 +516,7 @@ struct ChatView: View {
       Group {
         pinsSection
         forkOrigin
-        if model.earlierItems > 0,
+        if !holdsHistory, model.earlierItems > 0,
           inheritedExpanded || model.conversation.forkBoundarySeq == nil
             || model.earlierItems > (model.conversation.forkBoundarySeq ?? -1) + 1
         {
@@ -516,7 +530,7 @@ struct ChatView: View {
               busy: model.loadingEarlier)
           }.disabled(model.loadingEarlier)
         }
-        if showsInitialHistoryPlaceholder {
+        if showsPlaceholder {
           NativeChatHistoryPlaceholder()
             .transition(.opacity)
         } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
@@ -567,7 +581,7 @@ struct ChatView: View {
           .id(section.id)
           .transition(.opacity.combined(with: .offset(y: 16)))
         }
-        if liveTimeline == nil, !model.displayedPartial.isEmpty {
+        if !holdsHistory, liveTimeline == nil, !model.displayedPartial.isEmpty {
           VStack(alignment: .leading, spacing: 8) {
             MessageMarkdown(text: model.displayedPartial, client: model.client)
           }.accessibilityIdentifier("streamingResponse")
@@ -582,7 +596,7 @@ struct ChatView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     // Arriving history fades and rises in place of the skeleton rather than popping in.
     .animation(
-      reduceMotion ? nil : .smooth(duration: 0.45), value: showsInitialHistoryPlaceholder)
+      reduceMotion ? nil : .smooth(duration: 0.45), value: showsPlaceholder)
     .id("transcript")
   }
 
