@@ -1,3 +1,4 @@
+import { switchTrack } from "../switch.ts";
 import { badge } from "./shared.ts";
 import { reviewChange } from "./setting-controls.ts";
 import type { AdminPage } from "./sections.ts";
@@ -571,11 +572,9 @@ const cdSwitch = (id: string, name: string, help: string, on: boolean, set: (on:
       role="switch"
       id=${id}
       .checked=${on}
-      @change=${(e: Event) => set((e.target as HTMLInputElement).checked)} /><span
-      class="setting-switch"
-      aria-hidden="true"
-    ></span
-  ></label>`;
+      @change=${(e: Event) => set((e.target as HTMLInputElement).checked)}
+    />${switchTrack(on)}</label
+  >`;
 
 export function credentialsCard() {
   const s = credentialState;

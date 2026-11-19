@@ -5879,31 +5879,8 @@ a.connector-widget:focus-visible {
   font-size: var(--font-13);
   cursor: pointer;
 }
-.cron-switch-track {
-  width: 32px;
-  height: 18px;
-  padding: 2px;
-  border-radius: 999px;
-  box-sizing: border-box;
-  background: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
-  transition: background 120ms ease;
-}
-.cron-switch-track span {
-  display: block;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--background);
-  transition: transform 120ms ease;
-}
 .cron-switch.on {
   color: var(--foreground);
-}
-.cron-switch.on .cron-switch-track {
-  background: var(--success);
-}
-.cron-switch.on .cron-switch-track span {
-  transform: translateX(14px);
 }
 .cron-more .menu-option.danger {
   color: var(--destructive);
@@ -10685,29 +10662,6 @@ h3.ambient-field-label {
 .loop-autopilot.on .loop-autopilot-sublabel {
   color: inherit;
 }
-.loop-autopilot-switch {
-  width: 38px;
-  height: 22px;
-  flex: 0 0 auto;
-  padding: 2px;
-  border-radius: 999px;
-  box-sizing: border-box;
-  background: var(--muted-foreground);
-}
-.loop-autopilot-switch span {
-  display: block;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--background);
-  transition: transform 120ms ease;
-}
-.loop-autopilot.on .loop-autopilot-switch {
-  background: var(--destructive);
-}
-.loop-autopilot.on .loop-autopilot-switch span {
-  transform: translateX(16px);
-}
 .loop-section-title {
   font-size: var(--font-14);
   font-weight: 600;
@@ -10847,9 +10801,6 @@ h3.ambient-field-label {
 }
 .loop-triage .loop-autopilot.on .loop-autopilot-sublabel {
   color: var(--muted-foreground);
-}
-.loop-triage .loop-autopilot.on .loop-autopilot-switch {
-  background: var(--cta);
 }
 .loop-triage .loop-playbook-actions {
   justify-content: flex-end;
@@ -14072,4 +14023,53 @@ html.dark .settings-connections .welcome-slack,
 html.dark .settings-connections .welcome-load,
 html.dark .settings-connections .connection-picker {
   background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+
+/* The one switch (switch.ts): white knob on a quiet track, the accent colour when on. */
+.qm-switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  transition: background-color 160ms ease;
+}
+.qm-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.24),
+    0 0 0 0.5px rgb(0 0 0 / 0.06);
+  transition: transform 180ms cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+.qm-switch.on,
+input:checked + .qm-switch {
+  background: var(--cta);
+}
+.qm-switch.on::after,
+input:checked + .qm-switch::after {
+  transform: translateX(14px);
+}
+input:focus-visible + .qm-switch,
+button:focus-visible .qm-switch {
+  outline: 2px solid var(--ring, var(--cta));
+  outline-offset: 2px;
+}
+input:disabled + .qm-switch,
+button:disabled .qm-switch {
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qm-switch,
+  .qm-switch::after {
+    transition: none;
+  }
 }

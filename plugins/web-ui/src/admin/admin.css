@@ -1124,36 +1124,6 @@
   opacity: 0;
   pointer-events: none;
 }
-#app-view .setting-switch {
-  position: relative;
-  flex: none;
-  width: 32px;
-  height: 18px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--border);
-}
-#app-view .setting-switch::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: var(--background);
-}
-#app-view .setting-toggle input:checked + .setting-switch {
-  border-color: var(--foreground);
-  background: var(--foreground);
-}
-#app-view .setting-toggle input:checked + .setting-switch::after {
-  transform: translateX(14px);
-}
-#app-view .setting-toggle input:focus-visible + .setting-switch {
-  outline: 2px solid var(--foreground);
-  outline-offset: 2px;
-}
 #app-view .setting-copy {
   min-width: 0;
 }
@@ -1839,13 +1809,6 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
   grid-column: 2;
   margin: 0;
 }
-#app-view #view-governance .setting-toggle input:checked + .setting-switch {
-  border-color: var(--cta);
-  background: var(--cta);
-}
-#app-view #view-governance .setting-toggle input:focus-visible + .setting-switch {
-  outline-color: var(--cta);
-}
 #app-view .model-list {
   display: flex;
   flex-wrap: wrap;
@@ -2089,9 +2052,6 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 }
 #app-view #view-governance .sv-customize .setting-toggle {
   align-items: flex-start;
-}
-#app-view #view-governance .sv-customize .setting-switch {
-  margin-top: 1px;
 }
 #app-view #view-governance .sv-customize .setting-copy strong,
 #app-view #view-governance .sv-customize .setting-copy small {
@@ -2371,10 +2331,6 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 }
 :where(#app-view) :is(.admin-main, dialog) input[type="checkbox"] {
   accent-color: var(--cta);
-}
-:where(#app-view) :is(.admin-main, dialog) .setting-toggle input:checked + .setting-switch {
-  border-color: var(--cta);
-  background: var(--cta);
 }
 :where(#app-view) :is(.admin-main, dialog) .model-chip {
   display: inline-flex;

@@ -1,3 +1,4 @@
+import { switchTrack } from "../switch.ts";
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { page, draw as redraw } from "./settings.ts";
@@ -171,7 +172,7 @@ function optionFields(d: any, o: any, i: number) {
                 type="checkbox"
                 .checked=${o.fastMode}
                 @change=${(e: Event) => (o.fastMode = (e.target as HTMLInputElement).checked)}
-              />Fast mode</label
+              />${switchTrack(!!o.fastMode)}Fast mode</label
             >`
         : ""
     }

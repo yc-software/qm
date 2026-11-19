@@ -1,3 +1,4 @@
+import { switchTrack } from "../switch.ts";
 import { cardClass, choiceGroup, settingStatus, saveFooter, textField, toggleField } from "./setting-controls.ts";
 import { badge } from "./shared.ts";
 import { html, nothing, render } from "lit";
@@ -136,7 +137,7 @@ function pinCard() {
           .checked=${!!s.draft.on}
           @change=${(e: Event) => s.change({ on: (e.target as HTMLInputElement).checked })}
         />
-        <span class="setting-switch" aria-hidden="true"></span>
+        ${switchTrack(!!s.draft.on)}
         <span class="setting-copy"
           ><strong>Post and pin this message by default</strong
           ><small
