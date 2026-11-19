@@ -439,8 +439,7 @@ function credentialRow(c: Data) {
         ]
           .filter(Boolean)
           .join(" · ");
-  const body = html`<span class="cred-mark" aria-hidden="true">${(c.name || c.slug).trim().charAt(0).toUpperCase()}</span>
-    <span class="cred-text">
+  const body = html`<span class="cred-text">
       <span class="cred-name">${c.name || c.slug}<span class="credential-slug">${c.slug}</span></span>
       <span class="cred-meta">${meta}</span>
     </span>

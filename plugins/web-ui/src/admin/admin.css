@@ -2777,18 +2777,6 @@
 #app-view .cred-row.is-locked {
   cursor: default;
 }
-#app-view .cred-mark {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--foreground) 7%, var(--background));
-}
 #app-view .cred-text {
   flex: 1;
   min-width: 0;
