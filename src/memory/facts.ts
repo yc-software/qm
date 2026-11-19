@@ -61,13 +61,10 @@ export function mergeProvenance(
 
 export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
   const merged = mergeProvenance(context?.inheritedFacts ?? [], context?.sensitivity ?? "unknown");
-  const room = context?.conversationScopeId ?? scope;
-  const pooled = parseScopeId(scope).kind === "persona";
-  const source = pooled ? scope : room;
-  const inherited = pooled ? merged.sources.filter((from) => from !== room) : merged.sources;
+  const source = parseScopeId(scope).kind === "persona" ? scope : (context?.conversationScopeId ?? scope);
   return {
     sensitivity: merged.sensitivity,
-    sources: inherited.includes(source) ? inherited : [...inherited, source],
+    sources: merged.sources.includes(source) ? merged.sources : [...merged.sources, source],
     sourceUnknown: merged.sourceUnknown || context?.inheritedFacts === undefined,
   };
 }

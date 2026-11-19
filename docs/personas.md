@@ -83,12 +83,11 @@ If the sender has no role, the persona is skipped and the block says so. Files a
 stay in the conversation's scope, and so does memory in a DM or in a conversation that only
 picked the persona.
 
-A channel or group that pins a persona saves what it remembers to the persona's notebook
-instead of its own, by automatic capture and by the `memory` tool alike. Every conversation
-that uses the persona reads that notebook, so what one pinned room remembers from then on
-is shown in the others and to everyone who can use the persona, including people who are
-not in that room. The room still reads what it remembered before the pin, and unpinning
-returns it to its own notebook.
+A channel or group that pins a persona uses the persona's notebook in place of its own:
+automatic capture and the `memory` tool save there, and the room's own notebook is kept but
+not read until the persona is unpinned. Every conversation that uses the persona reads the
+persona's notebook, so what one pinned room remembers is shown in the others and to
+everyone who can use the persona, including people who are not in that room.
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates

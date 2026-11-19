@@ -568,6 +568,7 @@ test("rooms that pin a persona share its notebook, read by every conversation th
   const dm = (who: string) => ({ kind: "dm" as const, threadRef: `dm:${who}:notes` });
 
   await built.memory.capture(scopeId("channel", "C_ONE"), ["The room met on Mondays."], Date.now());
+  assert.equal(await say(ALICE, room("C_ONE"), "!memorysearch Mondays"), "");
   assert.equal(await say(ALICE, room("C_ONE"), "!memoryremember The launch moved to March 3."), "remembered 1");
   assert.doesNotMatch(await built.memory.read(scopeId("channel", "C_ONE")), /March 3/);
   assert.match(await say(BOB, room("C_TWO"), "!memorysearch launch moved"), /March 3/);

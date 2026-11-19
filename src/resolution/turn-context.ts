@@ -53,7 +53,7 @@ export async function resolveTurnContext(input: ContextInput) {
   const memoryScopeId = resolution.writableScopeId;
   const notebookScopeId = input.sharedNotebook ?? memoryScopeId;
   const baseRecallScopes = useMemory
-    ? recallMemoryScopes(memoryPolicy, notebookScopeId, [memoryScopeId, ...resolution.readOnlyScopeIds])
+    ? recallMemoryScopes(memoryPolicy, notebookScopeId, resolution.readOnlyScopeIds)
     : [];
   const read = [
     ...new Set([...baseRecallScopes, ...(useMemory && memoryPolicy.recall === "visible" ? sharingSources : [])]),
