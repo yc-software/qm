@@ -1220,6 +1220,21 @@ a.chat-row-open {
   line-height: 1.45;
   text-wrap: pretty;
 }
+.settings-tip-top {
+  display: none;
+}
+@media (max-width: 720px) {
+  .settings-nav .settings-tip {
+    display: none;
+  }
+  .settings-tip.settings-tip-top {
+    display: block;
+    max-width: 1180px;
+    margin: 0 auto;
+    font-size: var(--font-13);
+    line-height: inherit;
+  }
+}
 .settings-page-title {
   position: absolute;
   width: 1px;
@@ -14000,71 +14015,87 @@ html.app-share-embed body {
   background: transparent;
 }
 
-/* Settings page title, and General as titled sections of grouped rows. */
-.settings-general {
-  display: grid;
-  gap: 28px;
-  max-width: 960px;
-  margin: 0 auto;
+/* Settings page title, and General as titled sections of grouped rows. Desktop only:
+   narrow screens keep the flat list of rows, in the new order. */
+@media (min-width: 721px) {
+  .settings-general {
+    display: grid;
+    gap: 28px;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  #app-view #view-governance .governance-content > :nth-child(1 of section.card:not(.hidden)),
+  #app-view #view-connectors :nth-child(1 of section.card:not(.hidden)) {
+    padding-top: 0;
+  }
+  .settings-page-head {
+    max-width: 960px;
+    margin: 0 auto 28px;
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .settings-section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0 0 10px;
+  }
+  .settings-section-head h3 {
+    margin: 0;
+    font-size: var(--font-14);
+    font-weight: 500;
+    color: var(--foreground);
+  }
+  .settings-card {
+    border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+    border-radius: 14px;
+    background: var(--background);
+  }
+  html.dark .settings-card {
+    background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+  }
+  .settings-card > .settings-row {
+    padding: 14px 18px;
+    border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+  }
+  .settings-card > .settings-row:last-child {
+    border-bottom: 0;
+  }
+  .settings-connections {
+    display: grid;
+    gap: 12px;
+  }
+  /* Connection cards span the column and share the settings-card surface. */
+  .settings-connections .welcome-slack,
+  .settings-connections .welcome-content {
+    max-width: none;
+  }
+  .settings-connections .welcome-content {
+    padding: 0;
+  }
+  .settings-connections .welcome-slack,
+  .settings-connections .welcome-load,
+  .settings-connections .connection-picker {
+    border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
+  }
+  html.dark .settings-connections .welcome-slack,
+  html.dark .settings-connections .welcome-load,
+  html.dark .settings-connections .connection-picker {
+    background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+  }
 }
-#app-view #view-governance .governance-content > :nth-child(1 of section.card:not(.hidden)),
-#app-view #view-connectors :nth-child(1 of section.card:not(.hidden)) {
-  padding-top: 0;
-}
-.settings-page-head {
-  max-width: 960px;
-  margin: 0 auto 28px;
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-.settings-section-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 0 0 10px;
-}
-.settings-section-head h3 {
-  margin: 0;
-  font-size: var(--font-14);
-  font-weight: 500;
-  color: var(--foreground);
-}
-.settings-card {
-  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
-  border-radius: 14px;
-  background: var(--background);
-}
-html.dark .settings-card {
-  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
-}
-.settings-card > .settings-row {
-  padding: 14px 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
-}
-.settings-card > .settings-row:last-child {
-  border-bottom: 0;
-}
-.settings-connections {
-  display: grid;
-  gap: 12px;
-}
-/* Connection cards span the column and share the settings-card surface. */
-.settings-connections .welcome-slack,
-.settings-connections .welcome-content {
-  max-width: none;
-}
-.settings-connections .welcome-content {
-  padding: 0;
-}
-.settings-connections .welcome-slack,
-.settings-connections .welcome-load,
-.settings-connections .connection-picker {
-  border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
-}
-html.dark .settings-connections .welcome-slack,
-html.dark .settings-connections .welcome-load,
-html.dark .settings-connections .connection-picker {
-  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+@media (max-width: 720px) {
+  .settings-page-head,
+  .settings-general .settings-section-head {
+    display: none;
+  }
+  .settings-general .settings-section:not(:last-child) .settings-row:last-child,
+  .settings-connections > .settings-slack-account {
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-connections > * {
+    padding: 16px 2px;
+  }
 }

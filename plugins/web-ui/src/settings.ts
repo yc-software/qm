@@ -615,6 +615,14 @@ function navItem(view: string, section: string): TemplateResult {
   `;
 }
 
+function settingsTip(variant = ""): TemplateResult | typeof nothing {
+  if (!can("admin")) return nothing;
+  return html`<p class=${variant ? `settings-tip ${variant}` : "settings-tip"}>
+    The easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for you and
+    confirm what changed.
+  </p>`;
+}
+
 function settingsNav(section: string): TemplateResult {
   return html`
     <nav class="settings-nav" aria-label="Settings sections">
@@ -625,14 +633,7 @@ function settingsNav(section: string): TemplateResult {
           ${group.views.map((view) => navItem(view, section))}
         `,
       )}
-      ${
-        can("admin")
-          ? html`<p class="settings-tip">
-              The easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for you
-              and confirm what changed.
-            </p>`
-          : nothing
-      }
+      ${settingsTip()}
     </nav>
   `;
 }
@@ -670,6 +671,7 @@ function settingsPane(): TemplateResult {
   const titled = NAV_VIEWS.has(section) && !settingsRoute(SETTINGS_BASE).session;
   return html`
     <h1 class="settings-page-title">Settings</h1>
+    ${settingsTip("settings-tip-top")}
     <div class="settings-layout with-nav">
       ${settingsNav(section)}
       <div class="settings-content" @click=${followSettingsLink}>
