@@ -14015,8 +14015,105 @@ html.app-share-embed body {
   background: transparent;
 }
 
-/* Settings page title, and General as titled sections of grouped rows. Desktop only:
-   narrow screens keep the flat list of rows, in the new order. */
+/* Titled settings sections (settings-layout.ts): a heading with an optional note and action, over a
+   rounded card of rows. General and Credentials use them. */
+.settings-sections {
+  display: grid;
+  gap: 28px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+.settings-stack {
+  display: grid;
+  gap: 28px;
+}
+.settings-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  margin: 0 0 10px;
+}
+.settings-section-head h3 {
+  margin: 0;
+  font-size: var(--font-14);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.settings-section-head span {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+.settings-section-head > a {
+  margin-left: auto;
+}
+.settings-card {
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+  border-radius: 14px;
+  background: var(--background);
+}
+html.dark .settings-card {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+.settings-card > .settings-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+.settings-card > .settings-row:last-child {
+  border-bottom: 0;
+}
+
+/* The one switch (switch.ts): white knob on a quiet track, the accent colour when on. */
+.qm-switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  transition: background-color 160ms ease;
+}
+.qm-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.24),
+    0 0 0 0.5px rgb(0 0 0 / 0.06);
+  transition: transform 180ms cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+.qm-switch.on,
+input:checked + .qm-switch {
+  background: var(--cta);
+}
+.qm-switch.on::after,
+input:checked + .qm-switch::after {
+  transform: translateX(14px);
+}
+input:focus-visible + .qm-switch,
+button:focus-visible .qm-switch {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+input:disabled + .qm-switch,
+button:disabled .qm-switch {
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qm-switch,
+  .qm-switch::after {
+    transition: none;
+  }
+}
+
+/* Settings page title, and General's sections. Desktop only: narrow screens keep General as a flat
+   list of rows, in the same order. */
 @media (min-width: 721px) {
   .settings-general {
     display: grid;
@@ -14031,27 +14128,6 @@ html.app-share-embed body {
     font-weight: 600;
     letter-spacing: -0.01em;
     line-height: 1.2;
-  }
-  .settings-section-head {
-    margin: 0 0 10px;
-    font-size: var(--font-14);
-    font-weight: 500;
-    color: var(--foreground);
-  }
-  .settings-card {
-    border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
-    border-radius: 14px;
-    background: var(--background);
-  }
-  html.dark .settings-card {
-    background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
-  }
-  .settings-card > .settings-row {
-    padding: 14px 18px;
-    border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
-  }
-  .settings-card > .settings-row:last-child {
-    border-bottom: 0;
   }
   .settings-connections {
     display: grid;
@@ -14077,8 +14153,18 @@ html.app-share-embed body {
 }
 @media (max-width: 720px) {
   .settings-page-head,
-  .settings-section-head {
+  .settings-general .settings-section-head {
     display: none;
+  }
+  .settings-general .settings-card {
+    display: contents;
+  }
+  .settings-general .settings-card > .settings-row {
+    padding: 16px 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-general .settings-card > .settings-row:last-child {
+    border-bottom: 0;
   }
   .settings-general .settings-section:not(:last-child) .settings-row:last-child,
   .settings-connections > .settings-slack-account {

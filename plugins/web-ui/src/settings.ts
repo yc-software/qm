@@ -1,3 +1,4 @@
+import { settingsSection as titledSection } from "./settings-layout";
 import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
@@ -629,20 +630,13 @@ function settingsNav(section: string): TemplateResult {
   `;
 }
 
-const titledSection = (title: string, body: TemplateResult): TemplateResult =>
-  html`<section class="settings-section">
-    <h3 class="settings-section-head">${title}</h3>
-    ${body}
-  </section>`;
-
 function generalPane(): TemplateResult {
-  const card = (rows: TemplateResult) => html`<div class="settings-card">${rows}</div>`;
   return html`
     <div class="settings-general">
-      ${titledSection("Plan", card(aiAccountsRow()))} ${titledSection("Appearance", card(themeRow()))}
-      ${titledSection("Chat", card(html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`))}
-      ${titledSection("Sidebar", card(html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`))}
-      ${titledSection("Desktop", card(desktopRow()))}
+      ${titledSection("Plan", aiAccountsRow())} ${titledSection("Appearance", themeRow())}
+      ${titledSection("Chat", html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`)}
+      ${titledSection("Sidebar", html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`)}
+      ${titledSection("Desktop", desktopRow())}
       ${titledSection(
         "Connections",
         html`<div class="settings-connections">
@@ -657,8 +651,9 @@ function generalPane(): TemplateResult {
             .base=${withBase("")}
           ></qm-onboarding-welcome>
         </div>`,
+        { card: false },
       )}
-      ${titledSection("Account", card(accountRow()))}
+      ${titledSection("Account", accountRow())}
     </div>
   `;
 }
