@@ -308,7 +308,7 @@ export interface GrantPersistence {
 
 All nine private-file cases pass, covering: atomic grant and byte preservation, rollback after grant write, stale selection, native preflight and role checks, retained restrictions on raw grants/replacements, operation with only one query-pool connection available, refusal of concurrent/existing grants, and refusal to clear privacy through a self-share (including equivalent email scopes). The five-file initial adapter/sharing batch and the final14-file affected batch pass. Types/lint/format pass. One interim batch hit an existing manual worker-claim race in the large private-skill fixture; standalone and final affected runs pass.
 
-Independent checkpoint reviews accepted authorization94 and transaction/durability96 after correcting the nested-pool callback. These are not full-head Wall reviews.
+Independent checkpoint reviews accepted authorization95 and transaction/durability96 after correcting the nested-pool callback. These are not full-head Wall reviews.
 
 Native real-model document-surface QA produced a concrete once-only card, created exactly one Team read grant and allowed a second user's authenticated200 download of all53 original bytes. Blob, hash and other metadata stayed unchanged; the private conversation and other app/schedule stayed private; no access notifications were sent; test identities/preferences were restored. Images and private fixture identifiers remain outside the public checkout.
 
