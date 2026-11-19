@@ -1172,16 +1172,20 @@ a.chat-row-open {
   gap: 28px;
   align-items: start;
 }
+/* Whole-pixel line boxes keep every row the same height: inherited 1.5x of
+   13.5px is 20.25px, which rounds to alternating 30/31px rows. 30px rows on a
+   32px pitch; group labels get 16px above and sit 6px over their first item. */
 .settings-nav {
   position: sticky;
   top: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 .settings-nav-label {
-  margin: 14px 8px 4px;
+  margin: 16px 8px 4px;
   font-size: var(--font-12-5);
+  line-height: 16px;
   color: var(--muted-foreground);
 }
 .settings-nav-item {
@@ -1189,6 +1193,7 @@ a.chat-row-open {
   border-radius: var(--radius-sm);
   color: var(--foreground);
   font-size: var(--font-13-5);
+  line-height: 20px;
   text-decoration: none;
 }
 .settings-nav-item:hover,
