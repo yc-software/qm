@@ -86,7 +86,13 @@ test("document HTTP routes enforce signed identity and admin configuration rathe
   const server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as import("node:net").AddressInfo).port;
-  const request = async (path: string, principal: string, body: unknown, method = "POST", impersonator?: string) => {
+  const request = async (
+    path: string,
+    principal: string,
+    body: unknown,
+    method: "POST" | "PUT" = "POST",
+    impersonator?: string,
+  ) => {
     const target = `${path}?nonce=${crypto.randomUUID()}`;
     const raw = JSON.stringify(body);
     return fetch(`http://127.0.0.1:${port}${target}`, {

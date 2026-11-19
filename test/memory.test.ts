@@ -14,6 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { recallText } from "./support/recall-text.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 function freshApp(overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));
@@ -57,9 +58,11 @@ test("remembers a fact stated in one DM thread when asked in another (continuity
 });
 
 test("personal memory does NOT surface in a channel (boundary / differentiator)", async () => {
-  const { app } = freshApp();
+  const { app, memory } = freshApp();
 
   await app.turn(dm("remember that I own the billing service", "dm:U1:tA"));
+  await settle(async () => (await memory.read("personal:U1")).includes("billing service"));
+  assert.match(await memory.read("personal:U1"), /billing service/);
 
   const inChannel = await app.turn(channel("!sysprompt"));
   assert.equal(inChannel.status, "ok");

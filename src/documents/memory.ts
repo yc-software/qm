@@ -44,7 +44,7 @@ export async function nativeDocumentSources(
     }),
   );
   for (const group of groups) if (native.has(`group:${group.groupRef}`)) projects.add(group.projectId);
-  return [...groups.filter((group) => projects.has(group.projectId)).map((group) => `group:${group.groupRef}`)];
+  return groups.filter((group) => projects.has(group.projectId)).map((group) => `group:${group.groupRef}`);
 }
 
 export function createDocumentMemory(

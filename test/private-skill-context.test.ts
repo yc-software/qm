@@ -566,7 +566,7 @@ test("private document capability and skill privacy survive memory opt-out and a
   await migration.connect();
   try {
     for (const statement of FILE_ARTIFACT_MIGRATIONS.find(
-      (migration) => migration.id === "files/artifacts/0005-recorded-origin",
+      (migration) => migration.id === "sessions/store/0069-file-recorded-origin",
     )!.statements)
       await migration.query(statement);
   } finally {
