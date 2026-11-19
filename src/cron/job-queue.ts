@@ -1,6 +1,7 @@
 import { poolBoss, assertJobQueueInstalled } from "../persistence/job-queue.ts";
 import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
+import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
   tenantId: string;
@@ -33,14 +34,34 @@ const FIRE_QUEUE_OPTIONS = { policy: "short", notify: true } as const;
 export async function installCronQueue(databaseUrl: string, schema: string = "pgboss"): Promise<void> {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error(`invalid cron queue schema: ${schema}`);
   const pg = createPgPool(databaseUrl);
-  const boss = poolBoss(() => pg, { schema, supervise: false, schedule: false });
+  const boss = poolBoss(() => pg, { schema, supervise: false, schedule: false, bamIntervalSeconds: 10 });
+  let failure: Error | undefined;
+  boss.on("error", (error) => {
+    failure ??= error;
+    reportFailure("cron queue install", error);
+  });
   try {
     await boss.start();
     await boss.createQueue(FIRE_QUEUE, FIRE_QUEUE_OPTIONS);
+    let previous: string | undefined;
+    while (true) {
+      if (failure) throw failure;
+      const status = await boss.getBamStatus();
+      if (status.some((entry) => entry.status === "failed"))
+        throw new Error(`pg-boss background migrations failed: ${JSON.stringify(await boss.getBamEntries())}`);
+      if (!status.some((entry) => entry.status === "pending" || entry.status === "in_progress")) break;
+      const progress = JSON.stringify(status);
+      if (progress !== previous) {
+        console.info("[cron-queue] waiting for background migrations", status);
+        previous = progress;
+      }
+      await sleep(1_000);
+    }
   } finally {
     await boss.stop({ close: true, graceful: false }).catch(swallowAs("cron queue install: cleanup", undefined));
     await pg.close().catch(swallowAs("cron queue install: cleanup", undefined));
   }
+  if (failure) throw failure;
 }
 
 export function createPgBossCronQueue(
