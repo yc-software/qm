@@ -408,6 +408,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
         sessionByName.delete(name);
         pauseFailed.delete(name);
         await client.restart(stored.sandboxId);
+        await store.merge(scopeId, { preservationState: "running", preservationError: undefined });
       });
     },
 
