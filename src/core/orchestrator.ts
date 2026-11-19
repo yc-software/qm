@@ -2122,7 +2122,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ) => {
           const loaded = strictReadOnly
             ? { documents: [], notices: [], tokens: 0 }
-            : await loadDocumentInputs(files, metas, mayReadArtifact, {
+            : await loadDocumentInputs(tenant, files, metas, mayReadArtifact, {
                 ...documentRoom,
                 signal: turnAbort.signal,
                 existingDocuments,

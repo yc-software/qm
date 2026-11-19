@@ -6,6 +6,7 @@ import type { Readable } from "node:stream";
 import type { ScopeId } from "../types.ts";
 import type { SourceProvenance } from "../memory/facts.ts";
 import type { ByteSource } from "./durable-byte-store.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export type FileDirection = "in" | "out";
 export type FileSource = "live" | "backfill";
@@ -81,6 +82,7 @@ export class FileArtifactDeletedError extends Error {
 
 export interface FileArtifactStore {
   releasePrivate(
+    tenant: Tenant,
     id: string,
     revision: string,
     sourceProvenance: SourceProvenance,
@@ -90,7 +92,7 @@ export interface FileArtifactStore {
   publish(input: PublishFileInput, transaction?: PoolClient): Promise<{ artifact: FileArtifact; created: boolean }>;
 
   get(id: string, opts?: { includeDisabled?: boolean }): Promise<FileArtifact | null>;
-  getMany(ids: readonly string[], opts?: { includeDisabled?: boolean }): Promise<FileArtifact[]>;
+  getMany(tenant: Tenant, ids: readonly string[], opts?: { includeDisabled?: boolean }): Promise<FileArtifact[]>;
 
   open(id: string): Promise<{ artifact: FileArtifact; sizeBytes: number; stream: Readable } | null>;
 

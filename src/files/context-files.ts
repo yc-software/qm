@@ -31,7 +31,7 @@ export function contextualFiles(
     ...files,
     put: (input) => files.put({ ...input, contextSessionIds: ids(input) }),
     publish: (input, transaction) => files.publish({ ...input, contextSessionIds: ids(input) }, transaction),
-    getMany: async (ids, opts) => shown(await files.getMany(ids, opts)),
+    getMany: async (tenant, ids, opts) => shown(await files.getMany(tenant, ids, opts)),
     async get(id, opts) {
       const file = await files.get(id, opts);
       return file ? ((await shown([file]))[0] ?? null) : null;

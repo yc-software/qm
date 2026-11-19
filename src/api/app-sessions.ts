@@ -1307,7 +1307,7 @@ export function createSessionMethods(
         const provenance = await deps.discloseArtifact(file, g.granteeScopeId, g.grantedBy);
         if (!provenance) throw new Error("The selected private file has no source provenance.");
         const writeGrant = await deps.acl.preparePrivateGrant(tenant, g, file.createdBy);
-        await deps.files.releasePrivate(ref.id, opts.privateRevision, provenance, writeGrant);
+        await deps.files.releasePrivate(tenant, ref.id, opts.privateRevision, provenance, writeGrant);
       } else if (ref.kind === "skill" && opts?.privateRevision && opts.context) {
         const context = await refreshPrivateContext(deps.sessions, opts.context);
         if (!privateSourceAllowed(context, g.ownerScopeId) || !samePerson(context.actorId, g.grantedBy))

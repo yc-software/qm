@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
@@ -234,7 +235,7 @@ test("escape-heavy text near the byte budget still sheds inline images", () => {
 test("empty documents restore as empty content on every turn", async () => {
   const { store, meta } = storeFor(Buffer.alloc(0));
   for (let turn = 0; turn < 2; turn++) {
-    const result = await loadDocumentInputs(store, [meta], () => true);
+    const result = await loadDocumentInputs(testTenant, store, [meta], () => true);
     assert.deepEqual(
       result.documents.map((document) => document.dataBase64),
       [""],
@@ -257,7 +258,7 @@ function storeFor(data = Buffer.from("QUARTZ-731")) {
   let opens = 0;
   const store = {
     get: async () => artifact,
-    getMany: async (ids: readonly string[]) =>
+    getMany: async (_tenant: typeof testTenant, ids: readonly string[]) =>
       (await Promise.all(ids.map((id) => store.get(id)))).filter((file): file is FileArtifact => file !== null),
     open: async () => {
       opens++;
@@ -280,7 +281,7 @@ test("restores stopped/restarted turns from durable document metadata and dedupl
     storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, { sessionId: "s", seq: 0, createdAt: 0 }),
     storedItem({ kind: "AgentMessage", text: "stopped" }, { sessionId: "s", seq: 1, createdAt: 0 }),
   ];
-  const inputs = await loadDocumentInputs(store, [...turnDocumentMetas(history, 0), meta], () => true);
+  const inputs = await loadDocumentInputs(testTenant, store, [...turnDocumentMetas(history, 0), meta], () => true);
   assert.equal(inputs.documents.length, 1);
   assert.equal(opens(), 1);
   assert.match(await documentFallbackText(inputs.documents[0]!), /QUARTZ-731/);
@@ -296,6 +297,7 @@ test("reuploaded identical documents consume the input budget once and retain th
   };
   const checked: string[] = [];
   const inputs = await loadDocumentInputs(
+    testTenant,
     store,
     [meta, { ...meta, artifactId: "new-upload" }],
     (file) => {
@@ -314,10 +316,11 @@ test("reuploaded identical documents consume the input budget once and retain th
 
 test("steered reuploads already in the turn do not consume another document slot or emit budget notices", async () => {
   const { store, meta, artifact, opens } = storeFor();
-  const initial = await loadDocumentInputs(store, [meta], () => true);
+  const initial = await loadDocumentInputs(testTenant, store, [meta], () => true);
   store.get = async (id) => ({ ...artifact, id });
   const checked: string[] = [];
   const steered = await loadDocumentInputs(
+    testTenant,
     store,
     [{ ...meta, artifactId: "steered-upload" }],
     (file) => {
@@ -333,20 +336,20 @@ test("steered reuploads already in the turn do not consume another document slot
 
 test("later turns reuse verified document bytes but still check current access", async () => {
   const { store, meta, artifact, opens } = storeFor(Buffer.from("SAPPHIRE-204"));
-  const first = await loadDocumentInputs(store, [meta], () => true);
-  const second = await loadDocumentInputs(store, [meta], () => true);
+  const first = await loadDocumentInputs(testTenant, store, [meta], () => true);
+  const second = await loadDocumentInputs(testTenant, store, [meta], () => true);
   assert.equal(opens(), 1);
   assert.deepEqual(second, first);
   assert.equal(Buffer.from(second.documents[0]!.dataBase64, "base64").toString(), "SAPPHIRE-204");
-  assert.deepEqual((await loadDocumentInputs(store, [meta], () => false)).documents, []);
+  assert.deepEqual((await loadDocumentInputs(testTenant, store, [meta], () => false)).documents, []);
   store.get = async () => null;
-  assert.deepEqual((await loadDocumentInputs(store, [meta], () => true)).documents, []);
+  assert.deepEqual((await loadDocumentInputs(testTenant, store, [meta], () => true)).documents, []);
   store.get = async () => ({ ...artifact, name: "renamed.txt" });
-  const renamed = await loadDocumentInputs(store, [meta], () => true);
+  const renamed = await loadDocumentInputs(testTenant, store, [meta], () => true);
   assert.equal(renamed.documents[0]!.name, "renamed.txt");
   assert.equal(opens(), 1);
   store.get = async () => ({ ...artifact, sha256: "replaced" });
-  assert.deepEqual((await loadDocumentInputs(store, [meta], () => true)).documents, []);
+  assert.deepEqual((await loadDocumentInputs(testTenant, store, [meta], () => true)).documents, []);
   assert.equal(opens(), 2);
 });
 
@@ -374,9 +377,9 @@ test("only the current turn's own user messages contribute documents", () => {
 
 test("document restoration checks current access and budgets before opening bytes", async () => {
   const { store, meta, opens } = storeFor();
-  assert.equal((await loadDocumentInputs(store, [meta], () => false)).documents.length, 0);
+  assert.equal((await loadDocumentInputs(testTenant, store, [meta], () => false)).documents.length, 0);
   assert.equal(opens(), 0);
-  const result = await loadDocumentInputs(store, [meta], () => true, { maxBytes: 1 });
+  const result = await loadDocumentInputs(testTenant, store, [meta], () => true, { maxBytes: 1 });
   assert.equal(result.documents.length, 0);
   assert.match(result.notices[0]!, /not included inline/);
   assert.equal(opens(), 0);
@@ -385,7 +388,7 @@ test("document restoration checks current access and budgets before opening byte
 test("document restoration rejects tampered bytes", async () => {
   const { store, meta, artifact } = storeFor();
   artifact.sha256 = "bad";
-  const result = await loadDocumentInputs(store, [meta], () => true);
+  const result = await loadDocumentInputs(testTenant, store, [meta], () => true);
   assert.equal(result.documents.length, 0);
   assert.match(result.notices[0]!, /integrity/);
 });
@@ -441,7 +444,7 @@ test("one failed historical document does not prevent loading another document",
     if (id === "broken") throw new Error("storage unavailable");
     return open(id);
   };
-  const result = await loadDocumentInputs(store, [meta, { ...meta, artifactId: "broken" }], () => true);
+  const result = await loadDocumentInputs(testTenant, store, [meta, { ...meta, artifactId: "broken" }], () => true);
   assert.equal(result.documents.length, 1);
   assert.match(result.notices[0]!, /unavailable/);
 });
@@ -451,7 +454,7 @@ test("document loading aborts active streams promptly", async () => {
   const stream = new Readable({ read() {} });
   store.open = async () => ({ artifact, sizeBytes: artifact.sizeBytes, stream });
   const controller = new AbortController();
-  const pending = loadDocumentInputs(store, [meta], () => true, { signal: controller.signal });
+  const pending = loadDocumentInputs(testTenant, store, [meta], () => true, { signal: controller.signal });
   setTimeout(() => controller.abort(new Error("cancelled")), 10);
   await assert.rejects(pending, /cancelled/);
   assert.equal(stream.destroyed, true);

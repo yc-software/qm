@@ -40,6 +40,7 @@ test("private file release commits the selected bytes and grant together", async
   const { built, artifact, grant, session } = await fixture();
   const writeGrant = await built.acl.preparePrivateGrant(testTenant, grant, "alice");
   const published = await built.files.releasePrivate(
+    testTenant,
     artifact.id,
     fileSharingRevision(artifact),
     { ...artifact.sourceProvenance!, sources: [] },
@@ -61,6 +62,7 @@ test("a failed private file release rolls its grant back and remains private", a
   const writeGrant = await built.acl.preparePrivateGrant(testTenant, grant, "alice");
   await assert.rejects(
     built.files.releasePrivate(
+      testTenant,
       artifact.id,
       fileSharingRevision(artifact),
       artifact.sourceProvenance!,
@@ -80,9 +82,15 @@ test("a stale private file selection cannot write a grant", async () => {
   let committed = false;
   await built.files.setEnabled(artifact.id, false);
   await assert.rejects(
-    built.files.releasePrivate(artifact.id, fileSharingRevision(artifact), artifact.sourceProvenance!, async () => {
-      committed = true;
-    }),
+    built.files.releasePrivate(
+      testTenant,
+      artifact.id,
+      fileSharingRevision(artifact),
+      artifact.sourceProvenance!,
+      async () => {
+        committed = true;
+      },
+    ),
     /changed after approval/,
   );
   assert.equal(committed, false);
@@ -239,7 +247,13 @@ test("a private file release cannot activate grants added after authorization", 
   const outsider = { ...grant, granteeScopeId: "personal:carol" };
   await createPostgresGrantStore(databaseUrl).put(testTenant, outsider);
   await assert.rejects(
-    built.files.releasePrivate(artifact.id, fileSharingRevision(artifact), artifact.sourceProvenance!, writeGrant),
+    built.files.releasePrivate(
+      testTenant,
+      artifact.id,
+      fileSharingRevision(artifact),
+      artifact.sourceProvenance!,
+      writeGrant,
+    ),
     /access changed after approval/,
   );
   assert.equal((await built.files.get(artifact.id))!.personalOnly, true);
@@ -274,3 +288,56 @@ for (const [actorId, scope] of [
     assert.deepEqual(await built.acl.grantsFor(testTenant, artifact.ownerScopeId, artifact.id), []);
   });
 }
+
+test("private release and batch reads isolate colliding file IDs without row security", async () => {
+  const { twoTenants } = await import("./support/two-tenants.ts");
+  const { withTenant } = await import("../src/tenants/context.ts");
+  const { createPostgresFileArtifactStore } = await import("../src/files/postgres-file-artifact-store.ts");
+  const { createMemoryDurableByteStore } = await import("../src/files/durable-byte-store.ts");
+  const { createPostgresSessionStore } = await import("../src/sessions/postgres-session-store.ts");
+  const db = await twoTenants();
+  try {
+    const sessions = createPostgresSessionStore(db.appDatabaseUrl);
+    const bytes = createMemoryDurableByteStore();
+    const files = createPostgresFileArtifactStore(db.appDatabaseUrl, bytes, sessions);
+    const owner = createPostgresFileArtifactStore(db.ownerDatabaseUrl, bytes);
+    const selected = new Map<string, Awaited<ReturnType<typeof files.get>>>();
+    const id = crypto.randomUUID(),
+      scope = "personal:alice";
+    for (const tenantId of db.tenants)
+      await withTenant(tenantId, async () => {
+        const session = await sessions.getOrCreateByThread("private-source", "dm", scope);
+        await sessions.markPersonalOnly(session.id, scope);
+        const { artifact } = await files.put({
+          id,
+          ownerScopeId: scope,
+          createdBy: "alice",
+          name: "selected.txt",
+          path: "selected.txt",
+          mimetype: "text/plain",
+          direction: "out",
+          data: Buffer.from(tenantId),
+          contextSessionIds: [session.id],
+        });
+        selected.set(tenantId, artifact);
+      });
+    const [other, target] = db.tenants;
+    await withTenant(target, async (tenant) => {
+      const file = selected.get(target)!;
+      assert.deepEqual(await owner.getMany(tenant, [id]), [file]);
+      const published = await owner.releasePrivate(
+        tenant,
+        id,
+        fileSharingRevision(file),
+        file.sourceProvenance!,
+        async () => {},
+      );
+      assert.equal(published.personalOnly, undefined);
+      assert.equal(published.sha256, file.sha256);
+    });
+    await withTenant(other, async () => assert.equal((await files.get(id))!.personalOnly, true));
+    await withTenant(target, async () => assert.equal((await files.get(id))!.personalOnly, undefined));
+  } finally {
+    await db.close();
+  }
+});

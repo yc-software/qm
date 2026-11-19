@@ -315,3 +315,49 @@ Native real-model document-surface QA produced a concrete once-only card, create
 Skill and schedule release, the complete resource/unknown-source audit, full-head reviews/CI and final rollout/dependency verification remain outstanding. No production merge or deployment.
 
 The owner self-share rule is also exercised through the existing app release API: all21 app cases pass, while the same new case fails on22efcad because the release incorrectly succeeds. Existing20 cases pass on that baseline. This confirms the common guard protects both release paths.
+
+## Explicit tenant reads and release
+
+The store methods now receive the existing request or turn token first:
+
+```ts
+type OldBatchRead = (ids: readonly string[], options?: { includeDisabled?: boolean }) => Promise<FileArtifact[]>;
+type BatchRead = (
+  tenant: Tenant,
+  ids: readonly string[],
+  options?: { includeDisabled?: boolean },
+) => Promise<FileArtifact[]>;
+type OldRelease = (
+  id: string,
+  revision: string,
+  provenance: SourceProvenance,
+  writeGrant: (client: PoolClient) => Promise<void>,
+) => Promise<FileArtifact>;
+type Release = (
+  tenant: Tenant,
+  id: string,
+  revision: string,
+  provenance: SourceProvenance,
+  writeGrant: (client: PoolClient) => Promise<void>,
+) => Promise<FileArtifact>;
+```
+
+`App.grant` supplies its existing token to private file release. Document loading
+receives the turn token as its first internal argument and forwards it to the
+batched read. Contextual file wrappers retain that argument. Reads, the locked
+release selection, and the release update have explicit `tenant_id` predicates.
+The advisory lock key, approved revision, grant callback, and transaction client
+remain unchanged.
+
+All HTTP requests/responses and every `FileArtifact` field are retained. There
+are no new tables, columns, keys, indexes, constraints, settings, providers,
+backfills, or serialized token fields. Source callers of the internal methods
+must supply the token in the same core build; HTTP clients need no changes.
+
+A real-Postgres regression creates colliding private IDs through app-role stores,
+then exercises batch reads and release through the database owner. It verifies
+that only the selected tenant's file is returned/released and the other remains
+private. The same API with only SQL tenant predicates removed fails this test.
+Document, private-context, file-release and replay suites pass. Focused
+independent review accepted this slice95/100; remaining session and other legacy
+store queries are outside that acceptance.

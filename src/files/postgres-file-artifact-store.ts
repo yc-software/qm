@@ -142,7 +142,8 @@ export function createPostgresFileArtifactStore(
   byteStore: DurableByteStore,
   sessionContexts?: Pick<SessionStore, "getMany">,
 ): FileArtifactStore {
-  const { q, query, pool } = createPgPool(connectionString, FILE_ARTIFACT_MIGRATIONS);
+  const pg = createPgPool(connectionString, FILE_ARTIFACT_MIGRATIONS);
+  const { q, query, pool } = pg;
 
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
@@ -209,12 +210,13 @@ export function createPostgresFileArtifactStore(
   }
 
   return {
-    async releasePrivate(id, revision, provenance, writeGrant) {
-      return withPgTransaction(await pool(), async (client) => {
+    async releasePrivate(tenant, id, revision, provenance, writeGrant) {
+      return pg.forTenant(tenant).transaction(async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${id}`]);
-        const selected = await client.query("SELECT * FROM file_artifacts WHERE id=$1 AND enabled=TRUE FOR UPDATE", [
-          id,
-        ]);
+        const selected = await client.query(
+          "SELECT * FROM file_artifacts WHERE tenant_id=$1 AND id=$2 AND enabled=TRUE FOR UPDATE",
+          [tenant.id, id],
+        );
         const file = selected.rows[0] && rowToArtifact(selected.rows[0]);
         if (!file?.personalOnly || fileSharingRevision(file) !== revision)
           throw new Error("The selected private file changed after approval. Read it again before sharing.");
@@ -222,8 +224,8 @@ export function createPostgresFileArtifactStore(
           throw new Error("The private file needs saved, verified bytes before it can be shared.");
         await writeGrant(client);
         const saved = await client.query(
-          "UPDATE file_artifacts SET personal_only=FALSE,source_provenance=$2::jsonb,updated_at=$3 WHERE id=$1 RETURNING *",
-          [id, JSON.stringify(provenance), Date.now()],
+          "UPDATE file_artifacts SET personal_only=FALSE,source_provenance=$3::jsonb,updated_at=$4 WHERE tenant_id=$1 AND id=$2 RETURNING *",
+          [tenant.id, id, JSON.stringify(provenance), Date.now()],
         );
         return rowToArtifact(saved.rows[0]);
       });
@@ -312,13 +314,15 @@ export function createPostgresFileArtifactStore(
       return transaction ? publish(transaction) : withPgTransaction(instance, publish);
     },
 
-    async getMany(ids, opts) {
+    async getMany(tenant, ids, opts) {
       if (!ids.length) return [];
       return (
-        await q("SELECT * FROM file_artifacts WHERE id=ANY($1::text[]) AND ($2::boolean OR enabled=TRUE)", [
-          ids,
-          opts?.includeDisabled === true,
-        ])
+        await pg
+          .forTenant(tenant)
+          .q(
+            "SELECT * FROM file_artifacts WHERE tenant_id=$1 AND id=ANY($2::text[]) AND ($3::boolean OR enabled=TRUE)",
+            [tenant.id, ids, opts?.includeDisabled === true],
+          )
       ).map(rowToArtifact);
     },
     async get(id, opts) {
