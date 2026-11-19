@@ -59,10 +59,11 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       html[data-qm-desktop="darwin"] .layout:not(.bannered) .brand-lockup { display: none; }
       html[data-qm-desktop="darwin"] .layout:not(.bannered).sidebar-closed .brand {
-        height: 96px; min-height: 96px; padding: 48px 0 8px; justify-content: center;
+        height: 48px; min-height: 48px; padding: 0; justify-content: center;
       }
-      html[data-qm-desktop="darwin"] .layout:not(.bannered).sidebar-closed
-        .dv-tabs-and-actions-container:not(.dv-view:not(:first-child) *) { padding-left: 32px; }
+      html[data-qm-desktop="darwin"]:has(.layout:not(.bannered).sidebar-closed) body { padding-top: 48px; }
+      html[data-qm-desktop="darwin"]:has(.layout:not(.bannered).sidebar-closed) body::before { display: block; }
+      html[data-qm-desktop="darwin"] .layout:not(.bannered).sidebar-closed { height: calc(100dvh - 48px); }
       html[data-qm-desktop="darwin"] .brand button { -webkit-app-region: no-drag; }
       html[data-qm-desktop="darwin"] .single-pane .dv-tabs-and-actions-container,
       html[data-qm-desktop="darwin"] .chat-topbar { -webkit-app-region: drag; }
