@@ -637,7 +637,7 @@ function isSourceSignedPassthrough(method: string, pathname: string): boolean {
 
 function loginProviderCookie(sub: string): string[] {
   if (!trustedOidc || !trustedSignInLabel) return [];
-  const issuerHash = createHash("sha256").update(trustedOidc.issuer).digest("hex");
+  const issuerHash = createHash("sha256").update(trustedOidc.identityIssuer).digest("hex");
   return [
     sub.startsWith(`oidc:${issuerHash}:`)
       ? setCookie("portal_login_provider", issuerHash, {
@@ -1370,7 +1370,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
           org: ORG,
-          issuer: trustedOidc!.issuer,
+          issuer: trustedOidc!.identityIssuer,
         },
         identity.subject,
       );
@@ -1399,7 +1399,7 @@ async function trustedLogin(
   const pending = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo;
   const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo") ?? pending ?? null, PUBLIC_URL, APPS_DOMAIN);
   const existing = currentSession(req);
-  const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
+  const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.identityIssuer).digest("hex")}:`;
   const signedIn = existing && !existing.appOnly && existing.sub.startsWith(trustedPrefix);
   if (signedIn && (!workspace || existing.t === workspace.tenant)) {
     res.writeHead(302, { location: returnTo, "cache-control": "no-store" });
@@ -1438,12 +1438,12 @@ const tenantChoice = createTenantChoice({
               signingSecret: CORE_SIGNING_SECRET!,
               identitySecret: PORTAL_IDENTITY_SECRET!,
               org: ORG,
-              issuer: trustedOidc!.issuer,
+              issuer: trustedOidc!.identityIssuer,
             },
             who,
             org,
           );
-          adminCache.delete(trustedPrincipal(trustedOidc!.issuer, who.subject));
+          adminCache.delete(trustedPrincipal(trustedOidc!.identityIssuer, who.subject));
           return tenant;
         },
       }
@@ -1485,7 +1485,7 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
     trustedSignInLabel &&
     url.searchParams.get("provider") !== "primary" &&
     readCookie(req.headers.cookie, "portal_login_provider") ===
-      createHash("sha256").update(trustedOidc.issuer).digest("hex")
+      createHash("sha256").update(trustedOidc.identityIssuer).digest("hex")
   ) {
     const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
     res.writeHead(302, {
