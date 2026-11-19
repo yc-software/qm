@@ -399,7 +399,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     async tenantForAppHost(label) {
-      const rows = await q("SELECT qm_tenant_for_app_label($1)::text AS id", [label]);
+      const rows = await q("SELECT qm_tenant_for_app_host($1)::text AS id", [label]);
       return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
     },
 

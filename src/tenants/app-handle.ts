@@ -102,46 +102,50 @@ const APP_HOSTS_TABLE = "app_hosts";
 export const APP_HOSTS_KEY = "app_hosts_pkey";
 
 const appHostDefiners = [
+  `CREATE OR REPLACE FUNCTION qm_app_host_label(settings jsonb, name text) RETURNS text LANGUAGE sql IMMUTABLE
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT qm_tenant_handle(settings) || '-' || name
+$f$`,
   `CREATE OR REPLACE FUNCTION qm_sync_app_host() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE handle text;
   BEGIN
     IF TG_OP = 'UPDATE' AND OLD.json->>'name' IS NOT DISTINCT FROM NEW.json->>'name' THEN RETURN NULL; END IF;
     DELETE FROM app_hosts h WHERE h.tenant = NEW.tenant_id AND h.deployment_id = NEW.id;
-    SELECT qm_tenant_handle(t.settings) INTO handle FROM tenants t WHERE t.id = NEW.tenant_id;
-    IF handle IS NOT NULL THEN
-      INSERT INTO app_hosts(label, tenant, deployment_id)
-        VALUES (handle || '-' || coalesce(NEW.json->>'name', NEW.id), NEW.tenant_id, NEW.id);
-    END IF;
+    INSERT INTO app_hosts(label, tenant, deployment_id)
+      SELECT label, NEW.tenant_id, NEW.id
+        FROM (SELECT qm_app_host_label(t.settings, coalesce(NEW.json->>'name', NEW.id)) AS label
+                FROM tenants t WHERE t.id = NEW.tenant_id) found
+       WHERE label IS NOT NULL;
     RETURN NULL;
   END $f$`,
+  `CREATE OR REPLACE FUNCTION qm_sync_tenant_app_hosts(tenant uuid) RETURNS void LANGUAGE sql SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  DELETE FROM app_hosts h WHERE h.tenant = $1;
+  INSERT INTO app_hosts(label, tenant, deployment_id)
+    SELECT label, $1, id
+      FROM (SELECT qm_app_host_label(t.settings, coalesce(d.json->>'name', d.id)) AS label, d.id
+              FROM deployments d JOIN tenants t ON t.id = d.tenant_id WHERE d.tenant_id = $1) found
+     WHERE label IS NOT NULL;
+$f$`,
   `CREATE OR REPLACE FUNCTION qm_sync_tenant_app_hosts() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE handle text := qm_tenant_handle(NEW.settings);
   BEGIN
-    IF handle IS NOT DISTINCT FROM qm_tenant_handle(OLD.settings) THEN RETURN NULL; END IF;
-    DELETE FROM app_hosts h WHERE h.tenant = NEW.id;
-    IF handle IS NOT NULL THEN
-      INSERT INTO app_hosts(label, tenant, deployment_id)
-        SELECT handle || '-' || coalesce(d.json->>'name', d.id), d.tenant_id, d.id FROM deployments d
-         WHERE d.tenant_id = NEW.id;
+    IF qm_tenant_handle(NEW.settings) IS DISTINCT FROM qm_tenant_handle(OLD.settings) THEN
+      PERFORM qm_sync_tenant_app_hosts(NEW.id);
     END IF;
     RETURN NULL;
   END $f$`,
-  `CREATE OR REPLACE FUNCTION qm_tenant_for_app_label(label text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = %1$I, pg_temp AS $f$
-  SELECT h.tenant FROM app_hosts h WHERE h.label = lower($1)
-$f$`,
   `CREATE OR REPLACE FUNCTION qm_tenant_for_app_host(label text) RETURNS uuid LANGUAGE plpgsql STABLE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE found uuid := qm_tenant_for_app_label($1);
+  DECLARE found uuid;
   BEGIN
+    SELECT h.tenant INTO found FROM app_hosts h WHERE h.label = lower($1);
     IF found IS NOT NULL THEN RETURN found; END IF;
     RETURN qm_tenant_for_deployment($1);
   END $f$`,
   `CREATE OR REPLACE FUNCTION qm_app_address_taken(name text) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  SELECT h.label FROM tenants t JOIN app_hosts h ON h.label = qm_tenant_handle(t.settings) || '-' || $1
+  SELECT h.label FROM tenants t JOIN app_hosts h ON h.label = qm_app_host_label(t.settings, $1)
    WHERE t.id = qm_bound_tenant() AND h.tenant <> t.id
 $f$`,
 ];
@@ -163,12 +167,7 @@ export const APP_HOSTS: PgMigrationDefinition = {
     ...appHostDefiners.map(
       (definer) => `DO $app_hosts$ BEGIN EXECUTE format($sql$${definer}$sql$, current_schema()); END $app_hosts$`,
     ),
-    `INSERT INTO ${APP_HOSTS_TABLE}(label, tenant, deployment_id)
-      SELECT qm_tenant_handle(t.settings) || '-' || coalesce(d.json->>'name', d.id), d.tenant_id, d.id
-        FROM deployments d JOIN tenants t ON t.id = d.tenant_id
-       WHERE qm_tenant_handle(t.settings) IS NOT NULL
-       ORDER BY d.id
-      ON CONFLICT DO NOTHING`,
+    `SELECT qm_sync_tenant_app_hosts(id) FROM tenants`,
     `DROP TRIGGER IF EXISTS app_hosts_sync ON deployments`,
     `CREATE TRIGGER app_hosts_sync AFTER INSERT OR UPDATE OF json ON deployments
       FOR EACH ROW EXECUTE FUNCTION qm_sync_app_host()`,

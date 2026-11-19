@@ -23,6 +23,7 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { loadTenant, onTenantLoad } from "../src/tenants/cache.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { TENANT_LOOKUPS } from "../src/tenants/lookup.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -191,7 +192,7 @@ test("app hosts resolve by their full label, so a hyphenated company handle work
       name,
     });
   const hostTenant = async (label: string) =>
-    (await owner.q(`SELECT qm_tenant_for_app_label($1)::text AS tenant`, [label]))[0]?.tenant;
+    (await owner.q(`SELECT qm_tenant_for_app_host($1)::text AS tenant`, [label]))[0]?.tenant;
   try {
     await owner.q(`UPDATE tenants SET settings = settings || jsonb_build_object('handle', $2::text) WHERE id = $1`, [
       TEST_TENANT,
@@ -203,6 +204,7 @@ test("app hosts resolve by their full label, so a hyphenated company handle work
     ]);
     await loadTenant();
     const board = await publish("board");
+    await owner.migrate(TENANT_LOOKUPS);
     await owner.q(`INSERT INTO deployments(tenant_id, id, json) VALUES ($1, 'theirs', '{"name":"crm"}')`, [other]);
     const taken = `the app address "${theirs}-crm" is already taken by another workspace's app; choose a different app name`;
     await assert.rejects(publish(`labs-${suffix}-crm`), { message: taken });
