@@ -60,8 +60,15 @@ export interface Cron extends TriggerBase {
   createdAt: number;
   sessionRef?: string;
   script?: CronScript;
+  sharedFrom?: string;
+  forkedAt?: number;
 
   lastFireNote?: CronFireNote;
+}
+
+export interface CronOrigin {
+  personaId?: string;
+  project?: { id: string; name: string };
 }
 
 interface WebhookVerification {

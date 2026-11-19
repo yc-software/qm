@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
 
-test("an app-scoped picker shows only the requested app and continues the chat after a verified return", async () => {
+test("a card for one app shows only that app and continues the chat after a verified return", async () => {
   const h = await harness({
     path: "/s/sess-deep?composioReturn=return-nonce&status=success&connectedAccountId=ca_test",
     connectionReturn: true,
@@ -40,10 +40,15 @@ test("an app-scoped picker shows only the requested app and continues the chat a
       await new Promise((resolve) => setTimeout(resolve, 5));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(connected, ["Gmail"]);
-    assert.match(scoped.querySelector("h3")?.textContent ?? "", /Connect Gmail/);
+    assert.equal(scoped.querySelector(".connection-card strong")?.textContent, "Gmail");
+    assert.equal(scoped.querySelector(".connection-card-status")?.textContent?.trim(), "Connected");
+    assert.deepEqual(
+      [...scoped.querySelectorAll(".connection-card button")].map((button) => button.getAttribute("aria-label")),
+      ["Reconnect Gmail", "Disconnect Gmail"],
+    );
     assert.equal(scoped.querySelector('input[type="search"]'), null);
-    assert.equal(scoped.querySelectorAll(".connection-picker-app").length, 1);
-    assert.match(scoped.textContent ?? "", /Gmail connected/);
+    assert.equal(scoped.querySelector(".connection-picker"), null);
+    assert.ok(other.querySelector(".connection-picker"), "an app the catalog does not have falls back to the picker");
   } finally {
     await h.close();
   }

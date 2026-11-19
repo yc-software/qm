@@ -102,7 +102,8 @@ const nameOf = (who: Who) => (who === "qm" ? "QM" : DEMO.people[who].name);
 
 function avatar(who: Who, size: number, round = false): TemplateResult {
   const shape = round ? " round" : "";
-  if (who === "qm") return html`<span class="ava${shape}" style="--s:${size}px">${brandMark()}</span>`;
+  if (who === "qm")
+    return html`<span class="ava qm${shape}" style="--s:${size}px">${nameOf("qm")}${brandMark()}</span>`;
   const person = DEMO.people[who];
   return html`<span class="ava pale${shape}" style="--s:${size}px;background:${person.tint}">${person.name[0]}</span>`;
 }

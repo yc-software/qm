@@ -27,8 +27,13 @@ export function genericChatRunNotice(run: Run): string | undefined {
   return noticeText(run.result, run.request.liveReplies === true);
 }
 
+const GENERIC_CHAT_GUEST_NOTICE = "I only take requests from the team I work for, so I can't help with this one here.";
+
 export function createGenericChatNotices(deps: { deliveries: DeliveryStore }) {
   return {
+    async guest(destination: Destination, idempotencyKey: string): Promise<void> {
+      await reachEnqueue({ deliveries: deps.deliveries, destination, text: GENERIC_CHAT_GUEST_NOTICE, idempotencyKey });
+    },
     async unanswered(result: Partial<TurnResult>, destination: Destination, idempotencyKey: string): Promise<void> {
       const text = noticeText(result);
       if (text) await reachEnqueue({ deliveries: deps.deliveries, destination, text, idempotencyKey });

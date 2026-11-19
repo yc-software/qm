@@ -29,6 +29,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
     ...(r.slack_api_ms != null ? { slackApiMs: Number(r.slack_api_ms) } : {}),
+    ...(r.message_ts != null ? { messageTs: r.message_ts as string } : {}),
   };
 }
 
@@ -191,7 +192,11 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       ],
     },
     {
-      id: "delivery/store/0016-creation-order",
+      id: "delivery/store/0016-message-ts",
+      statements: [`ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS message_ts TEXT`],
+    },
+    {
+      id: "delivery/store/0017-creation-order",
       statements: [
         `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE deliveries ADD COLUMN seq BIGINT NOT NULL DEFAULT 0`,
@@ -335,16 +340,17 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async ack(id, at, slackApiMs) {
+    async ack(id, at, slackApiMs, messageTs) {
       await query(
         `UPDATE deliveries
             SET delivered_at = $2,
                 expired_at = NULL,
                 failed_reason = NULL,
                 deliver_latency_ms = GREATEST(0, $2 - created_at),
-                slack_api_ms = COALESCE($3, slack_api_ms)
+                slack_api_ms = COALESCE($3, slack_api_ms),
+                message_ts = COALESCE($4, message_ts)
           WHERE id = $1 AND delivered_at IS NULL`,
-        [id, at, slackApiMs ?? null],
+        [id, at, slackApiMs ?? null, messageTs ?? null],
       );
     },
     async fail(id, reason, at) {

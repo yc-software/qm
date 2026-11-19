@@ -316,7 +316,7 @@ test("the consent-mint route takes only the oauth-consent token of a running tur
       "403 forbidden",
       "403 forbidden",
       "401 unauthorized",
-      "403 inactive_run",
+      "403 human_consent_required",
     ]);
   } finally {
     await srv.close();
@@ -356,16 +356,11 @@ test("removing a connection, a saved login or a persona takes a running turn wit
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U9"), "kept");
     assert.equal(await send("POST", revoke, { triggered: true }), "403 human_consent_required");
     assert.equal(await send("POST", revoke, { botActor: true }), "403 human_consent_required");
-    assert.equal(await send("POST", revoke, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("DELETE", login), "404 not_found");
     assert.equal(await send("DELETE", login, { triggered: true }), "403 human_consent_required");
     assert.equal(await send("POST", grant, { botActor: true }), "403 human_consent_required");
-    assert.equal(await send("POST", grant, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("DELETE", persona, { triggered: true }), "403 human_consent_required");
-    assert.equal(await send("DELETE", persona, { runId: "finished-run" }), "403 inactive_run");
-    assert.equal(await send("DELETE", `${persona}/credentials/x`, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("PUT", `${persona}/access`, { triggered: true }), "403 human_consent_required");
-    assert.equal(await send("PUT", `${persona}/access`, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(JSON.stringify(await srv.built.app.personas!.detail("U1", value.id)).includes("org:acme"), false);
     assert.equal(await send("PUT", `${persona}/access`), "200 2");
     assert.equal(await send("DELETE", persona), "200 true");

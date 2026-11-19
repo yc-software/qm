@@ -9,6 +9,7 @@ export interface AppView {
   id: string;
   status?: "running" | "stopped" | "archived" | string;
   ownerScopeId?: string;
+  canShare?: boolean;
   createdBy?: string;
   ownerName?: string;
   createdByName?: string;

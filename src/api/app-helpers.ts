@@ -49,6 +49,7 @@ import {
   type ReachDirectory,
 } from "../reach/reach.ts";
 import { createSurfaceContextPuller } from "./surface-context-puller.ts";
+import { authorPublishesSkill } from "./artifact-share.ts";
 import {
   isProjectGroupRef,
   projectGroupRef,
@@ -645,8 +646,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
     if (skill.status === "published") return skill;
-    const { kind } = parseScopeId(skill.scopeId);
-    if (kind !== "channel" && kind !== "group") return skill;
+    if (!authorPublishesSkill(skill.scopeId)) return skill;
     await deps.skills.review(skill.id, "system:skill-authoring", skill.manifest.requiredCapabilities);
     const published = await deps.skills.publish(skill.id);
     recordAudit({

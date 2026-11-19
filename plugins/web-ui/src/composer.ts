@@ -106,7 +106,7 @@ if (typeof window !== "undefined") {
   });
 }
 
-function rememberThreadPick(threadRef: string, value: ModelOptionValue): void {
+export function rememberThreadPick(threadRef: string, value: ModelOptionValue): void {
   const merged = loadThreadPicks();
   merged.delete(threadRef);
   merged.set(threadRef, value);

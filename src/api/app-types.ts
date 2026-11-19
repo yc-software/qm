@@ -72,7 +72,7 @@ import type {
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type { Delivery, Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, TriggerBase, Webhook } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin, TriggerBase, Webhook } from "../triggers/types.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -90,7 +90,7 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { PublishedApp, AppDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
-import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
+import { type ArtifactHome, type ArtifactType, type ShareAccess } from "./artifact-share.ts";
 import type {
   DeployService,
   DeployInput,
@@ -201,7 +201,14 @@ export type ReachNowResult =
       candidates?: Array<Record<string, string>>;
     };
 
-export type VisibleCron = Cron & { scopeName?: string };
+export interface CronCopy {
+  id: string;
+  owner: string;
+  status: "on" | "paused" | "edited";
+  deliversTo?: string;
+}
+
+export type VisibleCron = Cron & { scopeName?: string; copies?: CronCopy[]; sharedBy?: string };
 
 export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
 
@@ -484,6 +491,7 @@ export interface App {
     granteeScopeId: ScopeId,
     revokedBy: string,
   ): Promise<void>;
+  grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
@@ -511,7 +519,17 @@ export interface App {
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
-  listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
+  listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
+  shareCron(
+    tenant: Tenant,
+    id: string,
+    recipient: string,
+    by: string,
+  ): Promise<{ copy: Cron; existed: boolean; note?: string }>;
+  cronOrigin(cron: Cron): Promise<CronOrigin>;
+  cronCopies(id: string): Promise<CronCopy[]>;
+  cronSharing(cron: VisibleCron): Promise<VisibleCron>;
+  unshareCron(id: string, recipient: string): Promise<void>;
   updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
@@ -565,7 +583,7 @@ export interface App {
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
-  ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  ackDelivery(id: string, slackApiMs?: number, messageTs?: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;

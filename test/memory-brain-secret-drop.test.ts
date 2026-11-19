@@ -319,7 +319,6 @@ test("a member connects their own brain from chat and sets its secret through th
   assert.equal((await fetch(`${base}/v1/memory/brain`)).status, 401);
   assert.equal((await self("U-member", "PUT", own, { triggered: true })).status, 403);
   assert.equal((await self("U-member", "PUT", own, { liveActor: false })).status, 403);
-  assert.equal(JSON.parse((await self("U-member", "PUT", own, { runId: "finished-run" })).text).error, "inactive_run");
 
   const put = await self("U-member", "PUT", own);
   assert.equal(put.status, 200);

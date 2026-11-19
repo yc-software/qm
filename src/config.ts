@@ -88,6 +88,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   captureLlmRequests: boolean;
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
+  workspaceProvisionerUrl?: string;
   emailAuthPrincipals?: string[];
   emailAuthDomain?: string;
   resendApiKey?: string;
@@ -336,6 +337,27 @@ export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTranspo
   };
 }
 
+const DEPLOYMENT_MODEL_CREDENTIALS = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "CLAUDE_AUTH_CREDENTIAL",
+  "CODEX_AUTH_CREDENTIAL",
+] as const;
+
+function workspaceProvisionerUrl(env: NodeJS.ProcessEnv): string {
+  const url = env.WORKSPACE_PROVISIONER_URL!;
+  if (!URL.canParse(url)) throw new Error("WORKSPACE_PROVISIONER_URL must be an absolute URL");
+  if (!isStrongSigningSecret(env.CORE_SIGNING_SECRET))
+    throw new Error("WORKSPACE_PROVISIONER_URL requires CORE_SIGNING_SECRET to sign provisioning requests");
+  const shared = DEPLOYMENT_MODEL_CREDENTIALS.filter((name) => env[name]?.trim());
+  if (shared.length)
+    throw new Error(
+      `WORKSPACE_PROVISIONER_URL cannot be combined with deployment model credentials: ${shared.join(", ")}`,
+    );
+  return url;
+}
+
 function defaultPluginSkillDirs(): string[] {
   const root = resolve("./plugins");
   try {
@@ -547,6 +569,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(modelGateway ? { modelGateway } : {}),
     ...(brokerCredentials.length ? { brokerCredentials } : {}),
     ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),
+    ...(env.WORKSPACE_PROVISIONER_URL ? { workspaceProvisionerUrl: workspaceProvisionerUrl(env) } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS
       ? {
