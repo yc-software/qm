@@ -655,6 +655,12 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "add one Slack custom emoji — {name, image:<base64 PNG/GIF>} (optional workspace); runs under your own Slack session or a configured fallback. An error here is a real result to relay, not a reason to ask the user to upload manually",
       },
+      {
+        method: "PUT",
+        path: "/v1/emoji/session",
+        summary:
+          "save your Slack sign-in for the uploader — {cookies:[…]} from a browser the person just signed in to Slack on (optional workspace); checked against the workspace before it's stored. Use it when an upload says the session expired",
+      },
     ],
   },
   {

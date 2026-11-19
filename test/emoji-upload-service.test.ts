@@ -6,6 +6,7 @@ import {
   isValidEmojiName,
   normalizeWorkspace,
   slackCookieHeader,
+  saveSlackSession,
   EMOJI_UPLOAD_SESSION_EXPIRED,
   type EmojiUploadDeps,
 } from "../src/connectors/emoji-upload-service.ts";
@@ -51,6 +52,7 @@ interface FakeOpts {
   add?: { ok?: boolean; error?: string };
   addStatus?: number;
   addBodyIsJson?: boolean;
+  pageStatus?: number;
 }
 
 function fakeFetch(opts: FakeOpts = {}) {
@@ -69,7 +71,7 @@ function fakeFetch(opts: FakeOpts = {}) {
       opts.token === null
         ? "<html>signed out</html>"
         : `<script>window.boot={"api_token":"${opts.token ?? TOKEN}"}</script>`;
-    return new Response(html, { status: 200 });
+    return new Response(html, { status: opts.pageStatus ?? 200 });
   }) as unknown as typeof fetch;
   return { impl, calls };
 }
@@ -165,6 +167,15 @@ test("successful upload: mints a token from the cookie, POSTs emoji.add with mod
   });
 });
 
+test("a signed-in page served with a 403 still yields its token", async () => {
+  await withFallback(undefined, async () => {
+    const store = await sessionStoreWith(ACTOR);
+    const fake = fakeFetch({ pageStatus: 403 });
+    const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
+    assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: WORKSPACE });
+  });
+});
+
 test("a GIF image is sent with a .gif filename and image/gif type", async () => {
   await withFallback(undefined, async () => {
     const fake = fakeFetch({ add: { ok: true } });
@@ -218,7 +229,7 @@ test("principal selection (c): neither actor nor fallback → clear unavailable 
     const fake = fakeFetch({ add: { ok: true } });
     const res = await runEmojiUpload(buildDeps(sessionStore(), fake.impl), REQ);
     assert.equal(res.ok, false);
-    assert.match((res as { error: string }).error, /no Slack session for you/i);
+    assert.match((res as { error: string }).error, /no saved Slack session for you/i);
     assert.equal(fake.calls.length, 0);
   });
 });
@@ -247,7 +258,10 @@ test("a stored session that can't mint a token (signed out) → session-expired,
     const fake = fakeFetch({ token: null });
     const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
     assert.equal(res.ok, false);
-    assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
+    assert.equal(
+      (res as { error: string }).error,
+      `${EMOJI_UPLOAD_SESSION_EXPIRED} (${WORKSPACE} answered HTTP 200 without a session token.)`,
+    );
     assert.equal(fake.calls.length, 1, "minted (and failed) but never called emoji.add");
   });
 });
@@ -325,4 +339,33 @@ test("a network failure while minting the token is surfaced as a real result, no
     assert.equal(res.ok, false);
     assert.match((res as { error: string }).error, /couldn't reach|ECONNREFUSED/i);
   });
+});
+
+test("saveSlackSession checks the cookies against the workspace, then stores only the Slack ones for the caller", async () => {
+  const store = sessionStore();
+  const fake = fakeFetch();
+  const res = await saveSlackSession(
+    { ...buildDeps(store, fake.impl), sessionStore: store },
+    { storageStateJson: STATE("fresh") },
+  );
+  assert.deepEqual(res, { ok: true, workspace: WORKSPACE });
+  assert.equal(fake.calls[0]!.cookie, "d=d-fresh; d-s=ds-fresh");
+  assert.equal(slackCookieHeader((await store.get(ACTOR))!), "d=d-fresh; d-s=ds-fresh");
+  assert.doesNotMatch((await store.get(ACTOR))!, /example\.com/);
+});
+
+test("saveSlackSession saves nothing when the cookies aren't signed in", async () => {
+  const store = sessionStore();
+  const noD = await saveSlackSession(
+    { ...buildDeps(store, fakeFetch().impl), sessionStore: store },
+    { storageStateJson: JSON.stringify({ cookies: [{ name: "b", value: "x", domain: ".slack.com" }] }) },
+  );
+  assert.equal(noD.ok, false);
+  const signedOut = await saveSlackSession(
+    { ...buildDeps(store, fakeFetch({ token: null }).impl), sessionStore: store },
+    { storageStateJson: STATE("stale") },
+  );
+  assert.equal(signedOut.ok, false);
+  assert.match((signedOut as { error: string }).error, /aren't signed in to acme\.slack\.com/);
+  assert.equal(await store.get(ACTOR), null);
 });
