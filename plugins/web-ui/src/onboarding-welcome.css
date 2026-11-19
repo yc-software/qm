@@ -224,113 +224,57 @@ qm-onboarding-welcome {
 .connection-picker-app.stale .connection-picker-trailing {
   color: var(--warning);
 }
-.connection-connected .kc-text-action,
-.connection-card .kc-text-action {
+.connection-connected .kc-text-action {
   padding: 0 2px;
   font-size: inherit;
 }
 .connection-card {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  box-sizing: border-box;
-  width: min(100%, 440px);
-  min-height: 64px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--secondary) 45%, var(--background));
+  flex-wrap: wrap;
+  min-width: min(100%, 300px);
+  max-width: min(100%, 480px);
+  margin: 0;
 }
 .connection-card.compact {
-  display: flex;
   gap: 8px;
-  width: fit-content;
-  max-width: 100%;
-  min-height: 36px;
-  padding: 0 8px 0 6px;
+  min-width: 0;
+  padding: 6px 10px 6px 6px;
   border-radius: 10px;
 }
+.connection-card.compact .kc-text-action {
+  padding: 0 2px;
+}
 .connection-card.compact .connector-logo {
+  flex-basis: 22px;
   width: 22px;
   height: 22px;
   border-radius: 6px;
 }
-.connection-card.compact .connector-logo svg,
-.connection-card.compact .connector-logo img {
+.connection-card.compact .connector-logo :is(svg, img) {
   width: 14px;
   height: 14px;
 }
-.connection-card.compact .connection-card-text {
-  flex-flow: row wrap;
+.connection-card.compact .connector-widget-text {
+  flex-direction: row;
   align-items: center;
-  gap: 0 10px;
+  gap: 10px;
 }
-.connection-card.compact strong {
-  font-size: var(--font-14);
-}
-.connection-card.compact .connection-card-actions {
-  align-self: stretch;
-  align-items: stretch;
-  margin-left: 4px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
-}
-.connection-card.compact .kc-text-action {
-  padding: 0 6px;
-}
-.connection-card.fresh {
-  animation: connection-card-settle 1.8s ease-out both;
-}
-.connection-card .connector-logo,
-.connection-card .connector-logo img {
-  background: #fff;
-  color: #1f2328;
-}
-.connection-card .connector-logo {
-  flex: none;
-  width: 38px;
-  height: 38px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-.connection-card .connector-logo svg,
-.connection-card .connector-logo img {
-  width: 22px;
-  height: 22px;
-}
-.connection-card-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  line-height: 1.35;
-}
-.connection-card-text strong {
-  overflow-wrap: anywhere;
-  font-size: var(--font-15);
-  font-weight: 600;
-}
-.connection-card-status {
+.connection-card-status,
+.connection-card-actions {
   display: flex;
   align-items: center;
   gap: 5px;
-  min-height: 17px;
-  font-size: var(--font-13);
-  color: var(--muted-foreground);
-  overflow-wrap: anywhere;
 }
-.connection-card-status svg,
-.connection-card-status .mc-spinner {
+.connection-card-actions {
+  gap: 8px;
+  margin-left: auto;
+}
+.connection-card-status :is(svg, .mc-spinner) {
   flex: none;
 }
 .connection-card-status .mc-spinner {
-  box-sizing: border-box;
-  width: 13px;
-  height: 13px;
+  width: 10px;
+  height: 10px;
   border-width: 1.5px;
-  border-color: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
-  border-top-color: var(--muted-foreground);
 }
 .connection-card[data-tone="success"] .connection-card-status svg {
   color: var(--success);
@@ -340,72 +284,6 @@ qm-onboarding-welcome {
 }
 .connection-card[data-tone="error"] .connection-card-status {
   color: var(--destructive);
-}
-.connection-card.fresh .connection-card-status svg {
-  animation: connection-card-arrive 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
-}
-.connection-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-13);
-}
-.connection-card-actions .btn {
-  padding: 5px 12px;
-  font-size: var(--font-13);
-  font-weight: 550;
-  line-height: 1.5;
-}
-.connection-card-actions .btn:disabled {
-  opacity: 0.5;
-  pointer-events: none;
-}
-.connection-card-actions .btn:focus-visible {
-  outline: 2px solid var(--foreground);
-  outline-offset: 2px;
-}
-.connection-card-ghost {
-  display: block;
-  width: 104px;
-  height: 9px;
-  margin: 4px 0;
-  border-radius: 5px;
-  background: var(--border);
-  animation: connection-card-wait 1.4s ease-in-out infinite;
-}
-.connection-card-text > .connection-card-ghost:first-child {
-  width: 72px;
-}
-@keyframes connection-card-settle {
-  from {
-    border-color: var(--success);
-  }
-}
-@keyframes connection-card-arrive {
-  from {
-    opacity: 0;
-    transform: scale(0.4);
-  }
-}
-@keyframes connection-card-wait {
-  50% {
-    opacity: 0.45;
-  }
-}
-@media (max-width: 480px) {
-  .connection-card {
-    grid-template-columns: 38px minmax(0, 1fr);
-  }
-  .connection-card-actions {
-    grid-column: 2;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .connection-card.fresh,
-  .connection-card.fresh .connection-card-status svg,
-  .connection-card-ghost {
-    animation: none;
-  }
 }
 .connection-result strong {
   font-weight: 550;

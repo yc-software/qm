@@ -26,10 +26,10 @@ test("a cancelled reconnect leaves the existing connection in place", async () =
       returnKey: "reply:1:0:0",
     });
     document.querySelector(".message-stack")!.append(widget);
-    for (let i = 0; i < 200 && sessionStorage.getItem("qm-connection-return:test:tester"); i++)
+    const status = () => widget.querySelector(".connection-card-status")?.textContent?.trim();
+    for (let i = 0; i < 200 && status() !== "Sign-in cancelled"; i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(widget.querySelector(".connection-card-status")?.textContent?.trim(), "Needs new permissions");
+    assert.equal(status(), "Sign-in cancelled");
     assert.equal(widget.querySelector(".connection-card .btn.primary")?.getAttribute("aria-label"), "Reconnect Gmail");
     assert.deepEqual(disconnects, []);
   } finally {

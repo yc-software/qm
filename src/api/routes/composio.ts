@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
@@ -214,7 +215,7 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   if (cursor) query.set("cursor", cursor);
   try {
     let data = NO_COMPOSIO;
-    if (access.key && only) data = { items: [await toolkit(ctx, access.key, only)] };
+    if (access.key && only) data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
     else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
@@ -236,19 +237,10 @@ async function catalog(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(ctx.res, 200, {
       items: withConnectorApps(items, only ? apps.filter((app) => app.toolkit === only) : apps, !cursor),
-      nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+      nextCursor: !only && typeof data.next_cursor === "string" ? data.next_cursor : null,
     });
   } catch {
     return sendJson(ctx.res, 502, { error: "composio_unavailable", message: "Could not load apps. Please try again." });
-  }
-}
-
-async function toolkit(ctx: ApiCtx, key: string, slug: string): Promise<Record<string, unknown> | null> {
-  try {
-    return await request(ctx, key, `/toolkits/${slug}`);
-  } catch (error) {
-    if (error instanceof ComposioHttpError && error.status === 404) return null;
-    throw error;
   }
 }
 
@@ -277,25 +269,26 @@ export async function activeOwnedAccount(
   return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
-const SCOPES_TTL_MS = 5 * 60_000;
-type AuthConfig = { scopes: string[]; updatedAt: number };
-const NO_CONFIG: AuthConfig = { scopes: [], updatedAt: Number.NaN };
-const configCache = new Map<string, AuthConfig & { expiresAt: number }>();
+const scopeCache = new LRUCache<string, string[]>({ max: 5000, ttl: 5 * 60_000 });
 
-async function authConfig(ctx: ApiCtx, key: string, authConfigId: string): Promise<AuthConfig> {
-  const cacheKey = JSON.stringify([tenantOf(ctx).id, authConfigId]);
-  const cached = configCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached;
+async function scopesOf(
+  ctx: ApiCtx,
+  key: string,
+  path: "auth_configs" | "connected_accounts",
+  id: string,
+  listed: (body: Record<string, unknown>) => unknown,
+): Promise<string[]> {
+  const cacheKey = JSON.stringify([tenantOf(ctx).id, id]);
+  const cached = scopeCache.get(cacheKey);
+  if (cached) return cached;
   try {
-    const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
-    const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
-    const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    const found = { scopes, updatedAt: Date.parse(String(config.last_updated_at)) };
-    configCache.set(cacheKey, { ...found, expiresAt: Date.now() + SCOPES_TTL_MS });
+    const scopes = listed(await request(ctx, key, `/${path}/${encodeURIComponent(id)}`));
+    const found = Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [];
+    scopeCache.set(cacheKey, found);
     return found;
   } catch (error) {
-    reportComposioFailure("composio: auth config scopes", key, error, authConfigId);
-    return NO_CONFIG;
+    reportComposioFailure(`composio: ${path} scopes`, key, error, id);
+    return [];
   }
 }
 
@@ -308,27 +301,12 @@ function scopeName(scope: string): string {
   return scope.slice(scope.lastIndexOf("/") + 1) || scope;
 }
 
-type ScopedAccount = { id: string; created_at?: unknown; state?: { val?: { scope?: unknown } } };
-
-async function requestedScopes(ctx: ApiCtx, key: string, accountId: string): Promise<string[] | null> {
-  try {
-    const { requested_scopes: asked } = await request(ctx, key, `/connected_accounts/${encodeURIComponent(accountId)}`);
-    return Array.isArray(asked) && asked.length ? asked.filter((scope) => typeof scope === "string") : null;
-  } catch (error) {
-    reportComposioFailure("composio: requested scopes", key, error, accountId);
-    return null;
-  }
-}
-
-async function missingScopes(ctx: ApiCtx, key: string, account: ScopedAccount, config: AuthConfig): Promise<string[]> {
-  if (!(config.updatedAt > Date.parse(String(account.created_at)))) return [];
-  const granted = account.state?.val?.scope;
-  const held =
-    (await requestedScopes(ctx, key, account.id)) ??
-    (typeof granted === "string" && granted.trim() ? granted.split(/[\s,]+/) : null);
-  if (!held) return [];
-  const names = new Set(held.map(scopeName));
-  return config.scopes.filter((scope) => !names.has(scopeName(scope)));
+async function missingScopes(ctx: ApiCtx, key: string, accountId: string, configured: string[]): Promise<string[]> {
+  if (!configured.length) return [];
+  const asked = await scopesOf(ctx, key, "connected_accounts", accountId, (body) => body.requested_scopes);
+  if (!asked.length) return [];
+  const names = new Set(asked.map(scopeName));
+  return configured.filter((scope) => !names.has(scopeName(scope)));
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {
@@ -356,7 +334,21 @@ async function connections(ctx: ApiCtx): Promise<void> {
       ),
     ];
     const configs = new Map(
-      await Promise.all(configIds.map(async (id) => [id, await authConfig(ctx, access.key!, id)] as const)),
+      await Promise.all(
+        configIds.map(
+          async (id) =>
+            [
+              id,
+              await scopesOf(
+                ctx,
+                access.key!,
+                "auth_configs",
+                id,
+                (body) => (body.credentials as { scopes?: unknown } | undefined)?.scopes,
+              ),
+            ] as const,
+        ),
+      ),
     );
     const items = [
       ...(await Promise.all(
@@ -364,7 +356,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
           id: item.id,
           toolkit: item.toolkit.slug,
           userId: item.user_id,
-          missingScopes: await missingScopes(ctx, access.key!, item, configs.get(item.auth_config?.id) ?? NO_CONFIG),
+          missingScopes: await missingScopes(ctx, access.key!, item.id, configs.get(item.auth_config?.id) ?? []),
         })),
       )),
       ...external
