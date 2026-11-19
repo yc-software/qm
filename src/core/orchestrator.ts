@@ -1928,7 +1928,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.auditLog
             ? {
                 publishMemory: (facts: MemoryEdit[], applicability: "team" | "workbook") =>
-                  publishDocumentLearning(deps.documentConversations!, deps.memory, deps.auditLog!, {
+                  publishDocumentLearning(tenant, deps.documentConversations!, deps.memory, deps.auditLog!, {
                     sessionId: session.id,
                     actorId: actor.id,
                     disclosure: {

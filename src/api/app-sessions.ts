@@ -1287,8 +1287,8 @@ export function createSessionMethods(
           ),
         };
         if (opts?.privateRevision && opts.context) {
-          await deps.deploy.releasePrivateApp(g, opts.privateRevision, opts.context);
-        } else await deps.deploy.grantAppAccess(g);
+          await deps.deploy.releasePrivateApp(tenant, g, opts.privateRevision, opts.context);
+        } else await deps.deploy.grantAppAccess(tenant, g);
       }
       if (ref.kind === "file" && opts?.privateRevision && opts.context) {
         const context = await refreshPrivateContext(deps.sessions, opts.context);

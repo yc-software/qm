@@ -176,7 +176,7 @@ export interface DeployService {
   deployOrUpdate(input: DeployOrUpdateInput): Promise<PublishedAppWithLiveEdit>;
   appGrantees(idOrName: string): Promise<AppGrantee[]>;
   canManageApp(idOrName: string, caller: PrivateContext, actingScopeId?: ScopeId): Promise<boolean>;
-  releasePrivateApp(grant: Grant, revision: string, context: PrivateContext): Promise<void>;
+  releasePrivateApp(tenant: Tenant, grant: Grant, revision: string, context: PrivateContext): Promise<void>;
   shareApp(
     idOrName: string,
     grantee: ScopeId,
@@ -185,7 +185,7 @@ export interface DeployService {
     opts?: { notify?: boolean },
   ): Promise<AppGrantee[]>;
   assertAppOwner(d: PublishedApp, actor: AppActor): Promise<void>;
-  grantAppAccess(grant: Grant): Promise<void>;
+  grantAppAccess(tenant: Tenant, grant: Grant): Promise<void>;
   assertShareAllowed(
     d: PublishedApp,
     grantee: ScopeId,
@@ -1230,7 +1230,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await grantsOn(ambientTenant(), d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
     },
 
-    async grantAppAccess(grant) {
+    async grantAppAccess(tenant, grant) {
       const ref = parseRef(grant.ref);
       if (ref.kind !== "deploy") throw new DeployAccessError("forbidden", "Expected an app grant.");
       const id = ref.id;
@@ -1239,11 +1239,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!app || app.ownerScopeId !== grant.ownerScopeId)
           throw new DeployAccessError("not_found", "The app's current owner does not match the grant.");
         await assertShareAllowed(app, grant.granteeScopeId, grant.permission, grant.grantedBy);
-        await deps.acl.grant(ambientTenant(), grant, app.createdBy);
+        await deps.acl.grant(tenant, grant, app.createdBy);
       });
     },
 
-    async releasePrivateApp(grant, revision, caller) {
+    async releasePrivateApp(tenant, grant, revision, caller) {
       const ref = parseRef(grant.ref);
       if (ref.kind !== "deploy") throw new DeployAccessError("forbidden", "An app grant is required.");
       await withDeployLock(ref.id, async () => {
@@ -1269,7 +1269,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           context.actorId,
         );
         await inheritContextSources(deps.sessions!, context, [app]);
-        if ((await grantsOn(ambientTenant(), app)).length)
+        if ((await grantsOn(tenant, app)).length)
           throw new DeployAccessError(
             "forbidden",
             "A previous private sharing attempt did not finish. Revoke its pending grants before sharing again.",
@@ -1277,7 +1277,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const provenance = await discloseApp(app, grant.granteeScopeId, context.actorId);
         if (!provenance)
           throw new DeployAccessError("forbidden", "The private app has no verifiable source provenance.");
-        await deps.acl.grant(ambientTenant(), grant, app.createdBy, { releasePrivate: true });
+        await deps.acl.grant(tenant, grant, app.createdBy, { releasePrivate: true });
         await deps.deployStore.releaseContext(app.id, appSharingRevision(app), provenance);
         recordAudit({
           at: Date.now(),

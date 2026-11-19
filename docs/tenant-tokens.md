@@ -111,3 +111,27 @@ No tenant token enters tool inputs, HTTP bodies, saved claims or stored records.
 There are no table, column, key, index, constraint, JSON, setting, provider,
 migration or backfill changes. Core source callers must update together; HTTP
 clients need no changes. Other schedule stores remain on their legacy tenant APIs.
+
+## App grant token forwarding
+
+`DeployService.grantAppAccess(grant)` becomes
+`grantAppAccess(tenant: Tenant, grant)`, and
+`DeployService.releasePrivateApp(grant, revision, context)` becomes
+`releasePrivateApp(tenant: Tenant, grant, revision, context)`. All other argument
+and return types remain unchanged. `App.grant` already receives the request/turn
+token and forwards it to both paths. Existing locked ACL queries and writes use
+that token; no tenant mint or ambient bridge is added. Revision, disclosure,
+owner and current-session checks retain their behavior. Other deployment and
+session operations remain on legacy tenant APIs.
+
+No table, column, key, index, constraint, stored JSON, HTTP/tool/job payload,
+setting, provider, migration or backfill changes. Core callers update in the same
+build; HTTP clients are unchanged. The token remains a separate argument and is
+never added to grants or private context.
+
+`publishDocumentLearning(documents, memory, auditLog, input)` similarly becomes
+`publishDocumentLearning(tenant: Tenant, documents, memory, auditLog, input)`.
+The orchestrator supplies its existing turn token for the publication audit.
+All input fields, publication checks, return types and stored/HTTP/tool payloads
+are unchanged. No configuration, schema, migration or backfill changes. Automatic
+memory capture remains a separate legacy tenant path.

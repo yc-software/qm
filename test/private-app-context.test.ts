@@ -614,6 +614,7 @@ test("a live private edit invalidates the selected sharing revision without publ
   assert.notEqual(current.privateRevision, selected.privateRevision);
   await assert.rejects(
     f.service().releasePrivateApp(
+      testTenant,
       {
         ownerScopeId: f.ownerScopeId,
         ref: selected.grantRef,
@@ -647,7 +648,7 @@ test("a failed private release cannot expose a later edit to a stranded earlier 
     grantedBy: "alice",
   };
   await assert.rejects(
-    f.service().releasePrivateApp(grant, selected.privateRevision!, f.context()),
+    f.service().releasePrivateApp(testTenant, grant, selected.privateRevision!, f.context()),
     /injected release write failure/,
   );
   f.deployStore.releaseContext = releaseContext;
@@ -657,7 +658,14 @@ test("a failed private release cannot expose a later edit to a stranded earlier 
   }));
   const latest = (await f.app.getArtifactHome("deploy", app.id))!;
   await assert.rejects(
-    f.service().releasePrivateApp({ ...grant, granteeScopeId: "personal:carol" }, latest.privateRevision!, f.context()),
+    f
+      .service()
+      .releasePrivateApp(
+        testTenant,
+        { ...grant, granteeScopeId: "personal:carol" },
+        latest.privateRevision!,
+        f.context(),
+      ),
     /pending grants/,
   );
   assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
@@ -684,13 +692,13 @@ test("released app source restrictions still constrain later grants, public acce
     permission: "read" as const,
     grantedBy: "alice",
   };
-  await f.service().releasePrivateApp(grant, home.privateRevision!, f.context());
+  await f.service().releasePrivateApp(testTenant, grant, home.privateRevision!, f.context());
   await assert.rejects(
     f.service().shareApp(app.id, "personal:carol", "read", { createdBy: "alice" }, { notify: false }),
     /source restrictions/,
   );
   await assert.rejects(
-    f.service().grantAppAccess({ ...grant, granteeScopeId: "personal:carol" }),
+    f.service().grantAppAccess(testTenant, { ...grant, granteeScopeId: "personal:carol" }),
     /source restrictions/,
   );
   await assert.rejects(
@@ -722,6 +730,7 @@ test("private release respects a foreign source's sharing posture even for an en
     const home = (await f.app.getArtifactHome("deploy", app.id))!;
     const release = () =>
       f.service().releasePrivateApp(
+        testTenant,
         {
           ownerScopeId: f.ownerScopeId,
           ref: home.grantRef,
@@ -750,6 +759,7 @@ test("new restricted context cannot update an app already released to an unentit
   const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
   const home = (await f.app.getArtifactHome("deploy", app.id))!;
   await f.service().releasePrivateApp(
+    testTenant,
     {
       ownerScopeId: f.ownerScopeId,
       ref: home.grantRef,
@@ -812,6 +822,7 @@ test("a private app cannot be released through a grant to its owner", async () =
   const home = (await f.app.getArtifactHome("deploy", app.id))!;
   await assert.rejects(
     f.service().releasePrivateApp(
+      testTenant,
       {
         ownerScopeId: f.ownerScopeId,
         ref: home.grantRef,

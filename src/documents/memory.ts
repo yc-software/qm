@@ -7,7 +7,7 @@ import {
 } from "../memory/facts.ts";
 import { writeFacts } from "../memory/provider-outcome.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import type { DocumentConversations } from "./conversations.ts";
 import { DOCUMENT_GROUP_PREFIX } from "./groups.ts";
 import { projectIdFromGroupRef } from "../projects/project-store.ts";
@@ -116,6 +116,7 @@ export function createDocumentMemory(
 }
 
 export async function publishDocumentLearning(
+  tenant: Tenant,
   documents: Pick<DocumentConversations, "publishLearning">,
   memory: MemoryService,
   auditLog: AuditLog,
@@ -182,7 +183,7 @@ export async function publishDocumentLearning(
           "The destination has no enabled notebook that can preserve this learning's source restrictions.",
         );
     }
-    auditLog.record(ambientTenant(), {
+    auditLog.record(tenant, {
       at: Date.now(),
       principalId: input.actorId,
       action: "documents.memory.publish",

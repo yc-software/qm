@@ -407,7 +407,7 @@ test("selected private learning publishes only to its authorized document team a
     );
     const publish = async (actorId: string, applicability: "team" | "workbook", texts = ["Selected procedure"]) => {
       const facts = await raw.facts!("personal:member");
-      return publishDocumentLearning(built.documentConversations, memory, built.auditLog, {
+      return publishDocumentLearning(testTenant, built.documentConversations, memory, built.auditLog, {
         sessionId,
         actorId,
         applicability,
@@ -443,7 +443,7 @@ test("selected private learning publishes only to its authorized document team a
     });
     const selected = (await raw.facts!("personal:member")).find((fact) => fact.text === "Selected procedure")!;
     await assert.rejects(
-      publishDocumentLearning(built.documentConversations, routed, built.auditLog, {
+      publishDocumentLearning(testTenant, built.documentConversations, routed, built.auditLog, {
         sessionId,
         actorId: "member",
         applicability: "team",
@@ -558,7 +558,7 @@ test("selected private learning publishes only to its authorized document team a
       context: "self",
     });
     await assert.rejects(
-      publishDocumentLearning(built.documentConversations, memory, built.auditLog, {
+      publishDocumentLearning(testTenant, built.documentConversations, memory, built.auditLog, {
         sessionId,
         actorId: "member",
         applicability: "team",
