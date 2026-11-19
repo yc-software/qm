@@ -1110,6 +1110,8 @@ export function createChatSurface(
       if (last?.stopReason === "error" && !hasRecordedRunReply(page.items, last.interruptedRunId!))
         return drawActiveChat(agent);
       const messages = pageMessages(page);
+      if (last?.stopReason === "aborted" && !savedStopOrNewerTurn(originalMessages, messages))
+        return drawActiveChat(agent);
       await syncPendingApprovals(agent, messages);
       if (!isCurrent()) return;
       commitTranscriptPage(agent, page, messages);
@@ -1118,6 +1120,11 @@ export function createChatSurface(
       reportHandledError("web:transcript_refresh", error);
     }
     drawActiveChat(agent);
+  }
+
+  function savedStopOrNewerTurn(local: AgentMessage[], saved: AgentMessage[]): boolean {
+    const turns = (messages: AgentMessage[]) => messages.filter((message) => message.role === "user").length;
+    return (saved.at(-1) as AssistantWork | undefined)?.stopReason === "aborted" || turns(saved) > turns(local);
   }
 
   function observeLiveWork(agent: Agent): (work: WorkBlock) => void {
