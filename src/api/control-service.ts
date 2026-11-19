@@ -317,7 +317,10 @@ async function personaHome(app: App, actorId: string, ref: string): Promise<Scop
     return {
       ok: false,
       code: "forbidden",
-      message: "personas are not enabled for you, so a persona can't own this cron",
+      message:
+        listed?.status === "disabled"
+          ? "personas are not enabled for you, so a persona can't own this cron"
+          : `couldn't look up your personas (${listed?.status ?? "personas unavailable"})`,
     };
   const named = listed.value.filter((p) => p.name.trim().toLowerCase() === ref.trim().toLowerCase());
   const persona = listed.value.find((p) => p.id === ref) ?? (named.length === 1 ? named[0] : undefined);

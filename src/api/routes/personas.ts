@@ -7,6 +7,7 @@ import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
 import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 import { sessionVisibleTo } from "../../sessions/session-rows.ts";
+import { scopeId } from "../../types.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -77,7 +78,7 @@ async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string,
   return crons
     .filter(
       (c) =>
-        c.ownerScopeId === `persona:${personaId}` ||
+        c.ownerScopeId === scopeId("persona", personaId) ||
         pinned.has(c.ownerScopeId) ||
         refsOf(c).some((ref) => personaThreads.has(ref)),
     )

@@ -1158,4 +1158,13 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
 
   const theirs = await control.createCron({ ...cron, persona: personaId }, claims("U2"));
   assert.equal(theirs.ok ? "created" : theirs.code, "forbidden");
+
+  const writer = [
+    { scopeId: "personal:U1", role: "owner" },
+    { scopeId: "personal:U2", role: "write" },
+  ];
+  await built.app.personas!.setAccess("U1", personaId, writer);
+  const granted = await control.createCron({ ...cron, persona: "Ada" }, claims("U2"));
+  assert.ok(granted.ok, JSON.stringify(granted));
+  assert.ok((await built.app.listCronsForViewer("U1")).visible.some((c) => c.id === granted.cron.id));
 });

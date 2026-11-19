@@ -6,6 +6,7 @@ import { isSharedScope, parseScopeId, scopeId, type Destination, type ScopeId } 
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
 import { projectIdFromGroupRef } from "../projects/project-store.ts";
+import { recordErrorInBinding } from "../admin/error-log.ts";
 
 const LINKED_FIELDS = ["runtime", "title", "action", "message", "schedule"] as const;
 
@@ -127,8 +128,15 @@ export function createCronShareMethods(
     cronOrigin: async (cron) => {
       const source = (cron.sharedFrom ? await deps.crons.get(cron.sharedFrom) : null) ?? cron;
       const origin = await originOf(source, cron.ownerScopeId, cron.sessionRef);
-      if (cron.message === undefined || !origin.personaId) return origin;
+      if (cron.message === undefined || parseScopeId(source.ownerScopeId).kind !== "persona") return origin;
       const held = await app.personas?.forTurn(origin.personaId, cron.owner, cron.ownerScopeId);
+      if (typeof held === "string")
+        recordErrorInBinding(deps.errors, {
+          category: "cron",
+          code: "persona_unavailable",
+          message: `cron ${cron.id} posts without its persona: ${held}`,
+          scopeLabel: cron.ownerScopeId,
+        });
       if (!held || typeof held === "string") return origin;
       const { id, name, icon } = held.persona;
       return { ...origin, persona: { id, name, ...(icon ? { icon } : {}) } };
