@@ -1027,6 +1027,8 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
 
 test("a cron created and retargeted through capabilities preserves webhook routing when fired", async () => {
   const { built, control } = setup();
+  const recipient = await built.sessions.getOrCreateByThread("web:U1:conversation", "dm", "personal:U1");
+  await built.sessions.addParticipant(recipient.id, "U1");
   const candidate = {
     key: "webhook",
     label: "this conversation",

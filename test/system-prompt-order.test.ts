@@ -100,7 +100,12 @@ const connectorTokens = {
 } as unknown as ConnectorTokenStore;
 
 const skills = {
-  visibleFor: async () => [{ skill: { manifest: { name: "deploy", description: "Deploy the app" } }, shadowed: [] }],
+  visibleFor: async () => [
+    {
+      skill: { scopeId: scopeId("org", ORG), manifest: { name: "deploy", description: "Deploy the app" } },
+      shadowed: [],
+    },
+  ],
 } as unknown as SkillStore;
 
 function buildOrchestrator(
@@ -131,8 +136,9 @@ function buildOrchestrator(
     auditLog,
     acl,
   });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const databaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const files = createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore(), sessions);
   const orchestrator = createOrchestrator({
     ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -423,6 +429,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
       origin: { kind: "human" },
     }),
   );
+  assert.equal(search.status, "ok", search.reason);
   assert.match(search.reply ?? "", /\[channel:C1\].*ROOM_ONLY_MEMORY/);
   const decisionId = "5".repeat(32);
   await files.put({
@@ -508,7 +515,7 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
 
 test("the cached prefix survives skill-store reordering + a recordUse-style metadata update", async () => {
   const mkSkill = (name: string, lastUsedAt?: number) => ({
-    skill: { manifest: { name, description: `does ${name}` }, lastUsedAt },
+    skill: { scopeId: scopeId("org", ORG), manifest: { name, description: `does ${name}` }, lastUsedAt },
     shadowed: [],
   });
   let visible = [mkSkill("alpha"), mkSkill("midway"), mkSkill("zeta")];
