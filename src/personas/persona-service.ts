@@ -71,7 +71,6 @@ export interface PersonaService {
     personaId: string | undefined,
     actorId: string,
     contextScope: ScopeId,
-    route?: () => Promise<{ personaId: string; ruleId: string } | undefined>,
   ): Promise<PersonaForTurn | string | null>;
 }
 
@@ -309,7 +308,7 @@ export function createPersonaService(deps: {
     },
     startOnDefaultModel,
     adopt,
-    async forTurn(personaId, actorId, contextScope, route) {
+    async forTurn(personaId, actorId, contextScope) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
       let pinned = false;
@@ -317,25 +316,13 @@ export function createPersonaService(deps: {
         personaId = (await store.pinnedIn(contextScope)) ?? undefined;
         pinned = Boolean(personaId);
       }
-      let routedBy: string | undefined;
-      if (!personaId) {
-        const routed = await route?.();
-        if (!routed) return PERSONAS_HINT;
-        ({ personaId, ruleId: routedBy } = routed);
-      }
+      if (!personaId) return PERSONAS_HINT;
       const persona = await store.get(personaId);
-      const held = persona ? await role(actorId, personaId, contextScope) : null;
-      if (routedBy && !held)
-        return `The decision rule ${routedBy} picked ${persona ? `the persona "${persona.name}", which the sender has no access to` : `persona ${personaId}, which does not exist`}, so this turn runs without one. ${PERSONAS_HINT}`;
       if (!persona) return "This conversation's persona was deleted, so this turn runs without one.";
+      const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      return {
-        persona,
-        scope: personaScope(personaId),
-        ...(pinned ? { pinned: true } : {}),
-        ...(routedBy ? { routedBy } : {}),
-      };
+      return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
     },
   };
 }
@@ -354,5 +341,28 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): strin
   return lines.join("\n");
 }
 
-export const personaRoutedNote = (name: string, ruleId: string): string =>
-  `The decision rule ${ruleId} routed this conversation to the persona ${name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`;
+export async function routedPersonaTurn(
+  personas: Pick<PersonaService, "forTurn">,
+  routed: { persona?: string; ruleId: string } | undefined,
+  personaId: string | undefined,
+  actorId: string,
+  contextScope: ScopeId,
+): Promise<{ turn: PersonaForTurn | string | null; note?: string }> {
+  const current = await personas.forTurn(personaId, actorId, contextScope);
+  if (!routed?.persona || routed.persona === personaId) return { turn: current };
+  if (current && typeof current === "object")
+    return {
+      turn: current,
+      note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but this conversation already wears ${current.persona.name}${current.pinned ? ", pinned here," : ""} which takes precedence.`,
+    };
+  const picked = await personas.forTurn(routed.persona, actorId, contextScope);
+  if (picked && typeof picked === "object")
+    return {
+      turn: { ...picked, routedBy: routed.ruleId },
+      note: `The decision rule ${routed.ruleId} routed this conversation to the persona ${picked.persona.name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`,
+    };
+  return {
+    turn: current,
+    note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but the sender can't use it here, so the conversation's persona is unchanged. A persona owner can share it with them, or an org admin can change ${routed.ruleId} in Settings → Decision rules.`,
+  };
+}

@@ -21,9 +21,9 @@ import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
-import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
-import type { DecisionBackend } from "../src/decisions/decisions.ts";
+import type { DecisionBackend, DecisionRule } from "../src/decisions/decisions.ts";
 import { testTenant } from "./support/test-tenant.ts";
+import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
@@ -617,12 +617,13 @@ test("an agent's runtime write lands on the scope it names, only where it may wr
   }
 });
 
-test("a persona decision rule routes a conversation without one to the persona it picks", async () => {
+test("one turn_start call routes a DM to the persona it is addressed to, alongside model routing", async () => {
   const states: string[] = [];
+  let toAda = 0.9;
   const decisionBackend: DecisionBackend = {
     async choose({ state }) {
       states.push(state);
-      return { "route-ada": { ada: 0.9, keep: 0.1 } };
+      return { "route-ada": { ada: toAda, keep: 1 - toAda }, deep: { deep: 0.8, keep: 0.2 } };
     },
   };
   const { built, personas, enable, sysprompt } = setup({ decisionBackend });
@@ -630,34 +631,53 @@ test("a persona decision rule routes a conversation without one to the persona i
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
   const by = { actorId: ALICE };
   await built.decisions!.saveProvider(testTenant, { id: "gw", protocol: "chat-completions" }, by);
-  await built.decisions!.saveRule(
-    testTenant,
-    {
-      id: "route-ada",
-      hook: "persona",
-      question: "Is the latest message in a DM addressed to Ada?",
-      options: {
-        keep: { description: "No", action: "keep" },
-        ada: { description: "Yes", action: "use_persona", persona: ada.id },
+  const rule = (id: string, option: string, chosen: Omit<DecisionRule["options"][string], "description">) =>
+    built.decisions!.saveRule(
+      testTenant,
+      {
+        id,
+        hook: "turn_start",
+        question: id,
+        options: { keep: { description: "No", action: "keep" }, [option]: { description: "Yes", ...chosen } },
+        model: { provider: "gw", model: "example/decision-model" },
+        mode: "enforce",
+        onError: "keep",
       },
-      model: { provider: "gw", model: "example/decision-model" },
-      mode: "enforce",
-      onError: "keep",
-    },
-    by,
-  );
-  const dm = { kind: "dm" as const, threadRef: "dm:U_ALICE:routed" };
-  const first = await sysprompt(ALICE, dm);
-  assert.match(first.reply, /## Persona: Ada[\s\S]*route-ada/);
-  assert.equal((await built.sessions.get(first.sessionId))?.personaId, ada.id);
-  assert.match(states[0]!, /conversation: dm/);
-  const second = await sysprompt(ALICE, dm);
-  assert.match(second.reply, /## Persona: Ada/);
-  assert.equal(second.reply.includes("route-ada"), false);
-  assert.equal(states.length, 1);
+      by,
+    );
+  await rule("route-ada", "ada", { action: "use_persona", persona: ada.id });
+  await rule("deep", "deep", { action: "use_runtime", runtime: { modelId: "gpt-5.5" } });
 
+  const first = await sysprompt(ALICE, { kind: "dm", threadRef: "dm:U_ALICE:routed" });
+  assert.match(first.reply, /## Persona: Ada[\s\S]*route-ada routed this conversation/);
+  assert.equal((await built.sessions.get(first.sessionId))?.personaId, ada.id);
+  assert.equal(states.length, 1);
+  assert.match(states[0]!, /conversation: dm/);
+
+  toAda = 0.1;
+  const plain = await built.app.turn({
+    surface: "test",
+    actor: { externalId: ALICE },
+    conversation: { kind: "dm", threadRef: "dm:U_ALICE:plain" },
+    text: "hi",
+  });
+  assert.equal(plain.runtime?.modelId, "gpt-5.5");
+  assert.equal((await built.sessions.get(plain.sessionId!))?.personaId, undefined);
+  assert.equal(states.length, 2);
+
+  toAda = 0.9;
   const bob = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:routed" });
-  assert.equal(bob.reply.includes("## Persona:"), false, "no role on the persona, so no routing");
-  assert.match(bob.reply, /route-ada picked the persona "Ada"/);
+  assert.equal(bob.reply.includes("## Persona:"), false);
   assert.equal((await built.sessions.get(bob.sessionId))?.personaId, undefined);
+  assert.match(bob.reply, /route-ada picked the persona .* can.t use it here/);
+
+  const bea = ok(await personas.create(ALICE, { name: "Bea" }));
+  ok(
+    await personas.setAccess(ALICE, bea.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: "channel:C_BEA", role: "read", pinned: true },
+    ]),
+  );
+  const pinned = await sysprompt(ALICE, { kind: "channel", channelRef: "C_BEA", threadRef: "channel:C_BEA:t1" });
+  assert.match(pinned.reply, /## Persona: Bea[\s\S]*route-ada picked the persona .* already wears Bea, pinned here/);
 });

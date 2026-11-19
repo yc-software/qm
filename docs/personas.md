@@ -82,35 +82,16 @@ if the sender holds a role on the persona (counting the conversation's channel),
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
 
-An org admin can also route conversations to personas with a decision rule on the `persona`
-hook (Settings → Decision rules). Its options are `keep` or `use_persona` with a `persona` id,
-and its `onError` must be a `keep` option. The hook runs on a person's own message (a Slack or
-web message, or a turn a person submits through the API; not cron, webhook, ambient, bot,
-subagent or session-to-session turns) in a conversation that has no persona of its own and no
-pinned one; its state is the surface, the conversation kind
-(`dm`, `group` or `channel`) and the message, so "only in DMs" and which personas exist are part
-of the rule's question and options. When the enforcing rule picks a persona the sender holds a
-role on, the conversation keeps it, the turn wears it, and that turn's context names the rule and
-how to switch. If the sender has no role on it or it no longer exists, the turn goes on without
-one and its `## Personas` block says which rule picked what. Dropping a routed persona
-(`personaId: null`) returns the conversation to routing, so a later message the rule judges
-addressed to a persona routes it again; a message it isn't keeps the conversation as it is.
-Example:
-
-```json
-{
-  "id": "route-research",
-  "hook": "persona",
-  "question": "Is this direct message addressed to the Research persona, by name or as a research request?",
-  "options": {
-    "keep": { "description": "Not a DM, or not for Research", "action": "keep" },
-    "research": { "description": "A DM for Research", "action": "use_persona", "persona": "<persona id>" }
-  },
-  "model": { "provider": "gateway", "model": "<decision model>" },
-  "mode": "enforce",
-  "onError": "keep"
-}
-```
+An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
+Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
+its `turn_start` rules once, before it settles its persona, and model selection reuses the same
+verdicts, so one enforcing rule may pick a persona while another picks a runtime: the hook
+allows one enforcing rule per action. The state the rules see includes the conversation kind
+(`dm`, `group` or `channel`), so "only in DMs" and "addressed to this persona" belong in the
+rule's question and options. Ambient turns are not routed. When the enforcing rule picks a
+persona the conversation isn't already wearing and the sender holds a role on it, the
+conversation adopts it and that turn's context names the rule and how to switch; otherwise the
+persona is unchanged and the context names the rule, the persona and who can fix it.
 
 A cron set up in a conversation with a persona fires as that persona: when it fires, the
 scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
