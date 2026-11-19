@@ -3046,3 +3046,14 @@ html.dark #app-view dialog.custom-provider-dialog.cd {
 html.dark #app-view dialog.custom-provider-dialog.cd::backdrop {
   background: color-mix(in srgb, var(--scrim, #050a14) 64%, transparent);
 }
+@media (min-width: 721px) {
+  .settings-content:has(#app-view[data-subview="credentials"]) {
+    position: relative;
+  }
+  #app-view[data-subview="credentials"] .list-page-head {
+    position: absolute;
+    top: -5px;
+    right: max(0px, calc((100% - 960px) / 2));
+    margin: 0;
+  }
+}

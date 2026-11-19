@@ -384,7 +384,7 @@ async function remove(c: Data) {
 }
 export const addCredential = () =>
   html`<button
-    class="btn"
+    class="btn primary"
     type="button"
     id="sc-add"
     ?disabled=${!!credentialState.listMessage}
