@@ -21,6 +21,7 @@ const RESERVED_FIXED_HEADERS = new Set([
   "expect",
   "host",
   "x-qm-actor",
+  "x-qm-actor-aliases",
 ]);
 
 const headerError = (validate: () => void): boolean => {
@@ -73,7 +74,8 @@ export function credentialInjectionError(value: unknown): string | undefined {
     (typeof injection.header !== "string" || headerError(() => validateHeaderName(injection.header!)))
   )
     return "authentication header must be a valid HTTP header name";
-  if (injection.header?.toLowerCase() === "x-qm-actor") return "x-qm-actor is reserved for broker actor attestation";
+  if (["x-qm-actor", "x-qm-actor-aliases"].includes(injection.header?.toLowerCase() ?? ""))
+    return "actor headers are reserved for broker attestation";
   if (injection.scheme !== undefined && (typeof injection.scheme !== "string" || /[\r\n]/.test(injection.scheme)))
     return "authentication value prefix must be a single line";
   return fixedHeadersError(injection.headers, (injection.header || DEFAULT_AUTH_HEADER).toLowerCase());

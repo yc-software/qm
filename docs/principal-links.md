@@ -105,7 +105,14 @@ links have no `linked_by`. Sign-ins are stored folded: emails lower-cased.
 
 Memory providers with `attestActor` and attested MCP connectors receive the
 canonical id in the `x-qm-actor` header, so every linked sign-in reaches them
-as one person. QM attests only ids of 1 to 256 visible ASCII characters (`!`
+as one person. Actor-attested MCP and broker requests also carry
+`x-qm-actor-aliases`: a JSON array of the person's other linked sign-ins (visible
+ASCII, excluding the actor itself). For example, an invented actor
+`old@example.test` can carry `["provider:stable-7"]`. Only QM supplies these
+headers. Consumers can resolve a provider identity without treating the canonical
+email as the provider's account id. Audience checks are unchanged; aliases are
+sent only to the same destination already trusted to receive the attested actor.
+No identity records are changed. QM attests only ids of 1 to 256 visible ASCII characters (`!`
 through `~`), the rule the credential broker also applies to its actor; the
 broker checks the turn's own principal id and sends it unchanged. Slack
 ids and OIDC principals (`oidc:<issuer hash>:<subject>`) are ASCII; an email

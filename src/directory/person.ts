@@ -86,6 +86,11 @@ export function personIds(id: string): string[] {
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
+export function attestedActorHeaders(actor: string): Record<string, string> {
+  const aliases = [...new Set(personIds(actor))].filter((id) => id !== actor && attestableActor(id));
+  return { "x-qm-actor": actor, "x-qm-actor-aliases": JSON.stringify(aliases) };
+}
+
 export function ownsWebThread(threadRef: string, id: string): boolean {
   return personIds(id).some((owner) => threadRef.startsWith(`web:${owner}:`));
 }

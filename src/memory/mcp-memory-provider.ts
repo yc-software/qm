@@ -1,7 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpCallError, mcpEnvelope, mcpResultText, providerCode, type McpClient } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
-import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
+import { attestedPerson, attestedActorHeaders, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryCandidate } from "./facts.ts";
@@ -85,7 +85,7 @@ export function createMcpMemoryProvider(opts: {
     if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
       throw new OutsideAudience("memory provider");
     if (person && actorArg) args[actorArg] = person;
-    const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
+    const headers = opts.attestActor && person ? attestedActorHeaders(person) : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
