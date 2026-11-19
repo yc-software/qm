@@ -417,7 +417,8 @@ function credentialUsage(c: Data) {
 }
 const fmt = (n: number) => n.toLocaleString();
 function usageShort(c: Data) {
-  if (c.usageUnavailable || c.usageCount == null) return "";
+  if (c.usageUnavailable) return "Usage unavailable";
+  if (c.usageCount == null) return "";
   return (c.usageTruncated ? fmt(c.usageCount) + "+" : fmt(c.usageCount)) + (c.usageCount === 1 ? " use" : " uses");
 }
 function credentialFlags(c: Data) {
@@ -458,8 +459,16 @@ function credentialRow(c: Data) {
       </button>`;
 }
 const credentialGroups: [string, string, (c: Data) => boolean][] = [
-  ["Proxied services", "Called through the broker. The secret stays in core.", (c) => c.source !== "deployment" && c.delivery !== "env"],
-  ["Sandbox environment", "Injected as an env var in all-internal conversations.", (c) => c.source !== "deployment" && c.delivery === "env"],
+  [
+    "Proxied services",
+    "Called through the broker. The secret stays in core.",
+    (c) => c.source !== "deployment" && c.delivery !== "env",
+  ],
+  [
+    "Sandbox environment",
+    "Injected as an env var in all-internal conversations.",
+    (c) => c.source !== "deployment" && c.delivery === "env",
+  ],
   ["From the deployment", "Configured outside this page. Read-only here.", (c) => c.source === "deployment"],
 ];
 function credentialRows() {
@@ -470,7 +479,10 @@ function credentialRows() {
     const rows = credentialState.rows.filter(test);
     return rows.length
       ? html`<div class="cred-section">
-          <div class="cred-section-head"><h3>${title}</h3><span>${hint}</span></div>
+          <div class="cred-section-head">
+            <h3>${title}</h3>
+            <span>${hint}</span>
+          </div>
           <div class="cred-group">${repeat(rows, (c) => c.slug, credentialRow)}</div>
         </div>`
       : null;
@@ -562,8 +574,10 @@ const cdSwitch = (id: string, name: string, help: string, on: boolean, set: (on:
       role="switch"
       id=${id}
       .checked=${on}
-      @change=${(e: Event) => set((e.target as HTMLInputElement).checked)}
-    /><span class="setting-switch" aria-hidden="true"></span
+      @change=${(e: Event) => set((e.target as HTMLInputElement).checked)} /><span
+      class="setting-switch"
+      aria-hidden="true"
+    ></span
   ></label>`;
 
 export function credentialsCard() {
@@ -618,9 +632,11 @@ export function credentialsCard() {
               <option value="env">Sandbox environment variable</option>
             </select>
             <span class="cd-help"
-              >${env
-                ? "Injected into every all-internal conversation. Rooms with external guests get nothing."
-                : "QM adds the secret to outgoing requests. It never enters a sandbox."}</span
+              >${
+                env
+                  ? "Injected into every all-internal conversation. Rooms with external guests get nothing."
+                  : "QM adds the secret to outgoing requests. It never enters a sandbox."
+              }</span
             >
           </label>
         </section>
@@ -653,71 +669,83 @@ export function credentialsCard() {
           <h3>Access</h3>
           <div class="cd-group">
             ${cdSwitch("sc-enabled", "Enabled", "", s.draft.enabled !== false, (on) => s.change("enabled", on))}
-            ${env
-              ? null
-              : cdSwitch(
-                  "sc-deployments",
-                  "Published apps",
-                  "Apps can use it, acting as their publisher.",
-                  s.draft.deployments !== false,
-                  (on) => s.change("deployments", on),
-                )}
+            ${
+              env
+                ? null
+                : cdSwitch(
+                    "sc-deployments",
+                    "Published apps",
+                    "Apps can use it, acting as their publisher.",
+                    s.draft.deployments !== false,
+                    (on) => s.change("deployments", on),
+                  )
+            }
           </div>
-          ${env
-            ? html`<p class="cd-help">Every all-internal conversation gets the variable. It isn't limited by grants.</p>`
-            : html`<div class="cd-field">
-                  <span class="cd-label">Who can use it</span>
-                  <div class="cd-segmented" role="radiogroup" aria-label="Who can use it">
-                    <label
-                      ><input
-                        type="radio"
-                        name="sc-share"
-                        value="org"
-                        id="sc-share-org"
-                        .checked=${!!s.draft.org}
-                        @change=${() => s.change("org", true)}
-                      /><span>Everyone</span></label
-                    ><label
-                      ><input
-                        type="radio"
-                        name="sc-share"
-                        value="people"
-                        .checked=${!s.draft.org}
-                        @change=${() => s.change("org", false)}
-                      /><span>Specific people</span></label
-                    >
+          ${
+            env
+              ? html`<p class="cd-help">
+                  Every all-internal conversation gets the variable. It isn't limited by grants.
+                </p>`
+              : html`<div class="cd-field">
+                    <span class="cd-label">Who can use it</span>
+                    <div class="cd-segmented" role="radiogroup" aria-label="Who can use it">
+                      <label
+                        ><input
+                          type="radio"
+                          name="sc-share"
+                          value="org"
+                          id="sc-share-org"
+                          .checked=${!!s.draft.org}
+                          @change=${() => s.change("org", true)}
+                        /><span>Everyone</span></label
+                      ><label
+                        ><input
+                          type="radio"
+                          name="sc-share"
+                          value="people"
+                          .checked=${!s.draft.org}
+                          @change=${() => s.change("org", false)}
+                        /><span>Specific people</span></label
+                      >
+                    </div>
                   </div>
-                </div>
-                ${s.draft.org ? null : html`<div class="sc-picker" id="sc-picker">
-                  <input
-                    type="text"
-                    id="sc-picker-search"
-                    .value=${s.query}
-                    @input=${(e: Event) => {
+                  ${
+                  s.draft.org
+                    ? null
+                    : html`<div class="sc-picker" id="sc-picker">
+                        <input
+                          type="text"
+                          id="sc-picker-search"
+                          .value=${s.query}
+                          @input=${(e: Event) => {
                       s.query = (e.target as HTMLInputElement).value;
                       s.picker = true;
                       s.render();
                     }}
-                    @focus=${() => {
+                          @focus=${() => {
                       s.picker = true;
                       s.render();
                     }}
-                    @blur=${() =>
+                          @blur=${() =>
                       setTimeout(() => {
                         s.picker = false;
                         s.render();
                       }, 150)}
-                    placeholder="Search people or channels"
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                  <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
-                </div>`}
-                ${!s.draft.org && s.grantees().length
-                  ? html`<div class="identity-chips" id="sc-people-chips">
-                      ${s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
-                    </div>`
-                  : null}`}
+                          placeholder="Search people or channels"
+                          autocomplete="off"
+                          spellcheck="false"
+                        />
+                        <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
+                      </div>`
+                }
+                  ${
+                  !s.draft.org && s.grantees().length
+                    ? html`<div class="identity-chips" id="sc-people-chips">
+                        ${s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
+                      </div>`
+                    : null
+                }`
+          }
         </section>
         <section class="cd-section" aria-live="polite">
           <h3>Summary</h3>
@@ -733,12 +761,19 @@ export function credentialsCard() {
         </section>
       </div>
       <footer class="cd-foot" id="sc-dialog-actions">
-        ${s.editing && s.original
-          ? html`<button class="btn danger" type="button" id="sc-delete" @click=${() => remove(s.original!)}>
-              Delete
-            </button>`
-          : null}
-        <span class="cd-spacer"></span>${s.open ? statusLine() : null}<button class="btn" type="button" id="sc-reset" @click=${dismiss}>
+        ${
+          s.editing && s.original
+            ? html`<button class="btn danger" type="button" id="sc-delete" @click=${() => remove(s.original!)}>
+                Delete
+              </button>`
+            : null
+        }
+        <span class="cd-spacer"></span>${s.open ? statusLine() : null}<button
+          class="btn"
+          type="button"
+          id="sc-reset"
+          @click=${dismiss}
+        >
           Cancel</button
         ><button
           class=${classMap({ btn: true, primary: true, dirty: s.dirty })}

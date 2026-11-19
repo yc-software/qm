@@ -259,13 +259,13 @@ test("credential usage fills in when it arrives, survives failure, and ignores r
     });
     await admin.settle();
     const list = () => admin.document.getElementById("sc-list")?.textContent ?? "";
-    assert.match(list(), /Loading usage…/);
+    assert.doesNotMatch(list(), /\buses?\b|Usage unavailable/);
     if (outcome === "view") await visit(admin, "/settings/models");
     usage.resolve(
       outcome === "failed" ? { status: 500, body: {} } : { summaries: [{ slug: "example", usageCount: 7 }] },
     );
     await admin.settle();
-    if (outcome === "current") assert.match(list(), /7 successful uses/);
+    if (outcome === "current") assert.match(list(), /7 uses/);
     if (outcome === "failed") assert.match(list(), /Usage unavailable/);
     if (outcome === "view") assert.equal(list(), "");
     admin.close();
@@ -300,7 +300,8 @@ test("credentials save from the dialog and delete after review", async () => {
   await admin.settle();
   assert.equal(dialog.open, false);
   assert.match(admin.document.getElementById("sc-list")!.textContent!, /Service/);
-  click(admin, '#sc-list [aria-label="Delete Service"]');
+  click(admin, '#sc-list [aria-label="Edit Service"]');
+  click(admin, "#sc-delete");
   await admin.settle();
   assert.match(admin.document.getElementById("governance-review-title")!.textContent!, /Delete “Service”/);
   click(admin, "#governance-review-confirm");
