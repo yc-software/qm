@@ -12,7 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
+import { E2bSandboxBusyError, E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
@@ -441,6 +441,69 @@ test("pause failures are durable and visible and leave the source available for 
   await first.teardown(handle);
   assert.equal((await store.get(scope))?.preservationState, "paused");
   assert.equal((await store.get(scope))?.preservationError, undefined);
+});
+
+test("a pause refused by a busy host leaves the sandbox running and reports once until a pause succeeds", async () => {
+  const store = testMap<StoredE2bSandbox>();
+  const reported: { code: string; error: unknown }[] = [];
+  let busy = true;
+  const client = {
+    ...fake.client,
+    nativePause: true,
+    async create(options: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async pause() {
+          if (busy) throw new E2bSandboxBusyError(session.sandboxId, new Error("node is busy, please retry"));
+          await session.pause();
+        },
+      };
+    },
+  };
+  const onError = (e: { code: string }, error?: unknown): void => {
+    reported.push({ code: e.code, error });
+  };
+  const box = make({ client, store, onError });
+  await box.teardown(await box.provision(scope));
+  const handle = await box.provision(scope);
+  await box.teardown(handle);
+  assert.equal((await store.get(scope))?.preservationState, "pause_failed");
+  assert.equal(fake.current(scopeName())?.state, "running");
+  assert.deepEqual(
+    reported.map((r) => r.code),
+    ["pause_failed"],
+  );
+  assert.ok(reported[0]!.error instanceof E2bSandboxBusyError);
+  busy = false;
+  await box.teardown(handle);
+  assert.equal((await store.get(scope))?.preservationState, "paused");
+  assert.equal(fake.current(scopeName())?.state, "paused");
+});
+
+test("a pause failure hands the original error to the reporter so the caller's report is not a duplicate", async () => {
+  const reported: unknown[] = [];
+  const failure = new Error("provider pause unavailable");
+  const client = {
+    ...fake.client,
+    nativePause: true,
+    async create(options: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async pause() {
+          throw failure;
+        },
+      };
+    },
+  };
+  const onError = (_e: unknown, error?: unknown): void => {
+    reported.push(error);
+  };
+  const box = make({ client, onError });
+  const handle = await box.provision(scope);
+  await assert.rejects(box.teardown(handle), (e) => e === failure);
+  assert.deepEqual(reported, [failure]);
 });
 
 test("a lost native E2B sandbox without a recovery snapshot requires explicit recovery instead of a blank replacement", async () => {
