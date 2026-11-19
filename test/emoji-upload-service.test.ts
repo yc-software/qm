@@ -258,7 +258,10 @@ test("a stored session that can't mint a token (signed out) → session-expired,
     const fake = fakeFetch({ token: null });
     const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
     assert.equal(res.ok, false);
-    assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
+    assert.equal(
+      (res as { error: string }).error,
+      `${EMOJI_UPLOAD_SESSION_EXPIRED} (${WORKSPACE} answered HTTP 200 without a session token.)`,
+    );
     assert.equal(fake.calls.length, 1, "minted (and failed) but never called emoji.add");
   });
 });

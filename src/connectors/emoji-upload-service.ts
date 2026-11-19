@@ -125,7 +125,7 @@ async function mintApiToken(
   cookie: string,
   fetchImpl: typeof fetch,
   timeoutMs: number,
-): Promise<string | null> {
+): Promise<{ token: string | null; status: number }> {
   const r = await fetchImpl(`https://${workspace}/`, {
     headers: { Cookie: cookie, "User-Agent": "Mozilla/5.0" },
     redirect: "manual",
@@ -134,9 +134,8 @@ async function mintApiToken(
   const html = await r.text();
   const key = '"api_token":"';
   const start = html.indexOf(`${key}xoxc-`);
-  if (start < 0) return null;
-  const end = html.indexOf('"', start + key.length);
-  return end < 0 ? null : html.slice(start + key.length, end);
+  const end = start < 0 ? -1 : html.indexOf('"', start + key.length);
+  return { token: end < 0 ? null : html.slice(start + key.length, end), status: r.status };
 }
 
 async function callEmojiAdd(
@@ -189,13 +188,19 @@ export async function runEmojiUpload(deps: EmojiUploadDeps, req: EmojiUploadRequ
   const cookie = state ? slackCookieHeader(state) : null;
   if (!cookie) return { ok: false, error: EMOJI_UPLOAD_SESSION_EXPIRED };
 
-  let token: string | null;
+  let minted: { token: string | null; status: number };
   try {
-    token = await mintApiToken(workspace, cookie, fetchImpl, timeoutMs);
+    minted = await mintApiToken(workspace, cookie, fetchImpl, timeoutMs);
   } catch (e) {
     return { ok: false, error: `couldn't reach ${workspace} to start the upload: ${errMessage(e)}` };
   }
-  if (!token) return { ok: false, error: EMOJI_UPLOAD_SESSION_EXPIRED };
+  const token = minted.token;
+  if (!token) {
+    return {
+      ok: false,
+      error: `${EMOJI_UPLOAD_SESSION_EXPIRED} (${workspace} answered HTTP ${minted.status} without a session token.)`,
+    };
+  }
 
   let resp: { ok?: boolean; error?: string };
   try {
@@ -226,16 +231,16 @@ export async function saveSlackSession(
     };
   }
   const state = JSON.stringify({ cookies });
-  let token: string | null;
+  let minted: { token: string | null; status: number };
   try {
-    token = await mintApiToken(workspace, slackCookieHeader(state)!, fetchImpl, timeoutMs);
+    minted = await mintApiToken(workspace, slackCookieHeader(state)!, fetchImpl, timeoutMs);
   } catch (e) {
     return { ok: false, error: `couldn't reach ${workspace} to check the session: ${errMessage(e)}` };
   }
-  if (!token) {
+  if (!minted.token) {
     return {
       ok: false,
-      error: `Those cookies aren't signed in to ${workspace} — nothing was saved. Make sure the person signed in to that workspace (not another one) on the live view, then export again.`,
+      error: `Those cookies aren't signed in to ${workspace} (it answered HTTP ${minted.status} without a session token) — nothing was saved. Make sure the person signed in to that workspace (not another one) on the live view, then export again.`,
     };
   }
   await deps.sessionStore.put(deps.principalId, state);
