@@ -639,8 +639,7 @@ function generalPane(): TemplateResult {
   const card = (rows: TemplateResult) => html`<div class="settings-card">${rows}</div>`;
   return html`
     <div class="settings-general">
-      ${titledSection("Account", card(html`${accountRow()} ${aiAccountsRow()}`))}
-      ${titledSection("Appearance", card(themeRow()))}
+      ${titledSection("AI", card(aiAccountsRow()))} ${titledSection("Appearance", card(themeRow()))}
       ${titledSection("Chat", card(html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`))}
       ${titledSection("Sidebar", card(html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`))}
       ${titledSection("Desktop", card(desktopRow()))}
@@ -659,6 +658,7 @@ function generalPane(): TemplateResult {
           ></qm-onboarding-welcome>
         </div>`,
       )}
+      ${titledSection("Account", card(accountRow()))}
     </div>
   `;
 }
