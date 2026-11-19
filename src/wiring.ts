@@ -1872,6 +1872,8 @@ export function buildApp(
     ? createSelfServe(
         createPgPool(databaseUrl),
         provisionWorkspace.bind(null, config.workspaceProvisionerUrl, provisionerSigningKey(config.signingSecret!)),
+        admin,
+        auditLog,
       )
     : undefined;
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {

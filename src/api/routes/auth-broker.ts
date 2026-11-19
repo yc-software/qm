@@ -7,7 +7,6 @@ import { externalMemberActive, validEmail } from "../../identity/external-member
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { inTenant } from "../../tenants/claim.ts";
-import { withTenant } from "../../tenants/context.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { bootTenant } from "../../tenants/boot.ts";
 import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
@@ -295,19 +294,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
   if (!(await deps.replayDedupe.claim(`trusted-self-serve:${claims.jti}`, claims.exp)))
     return sendJson(res, 409, { error: "assertion_already_used" });
   try {
-    const admin = deps.admin;
-    const { tenant, created } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
-    await withTenant(tenant, async (bound) => {
-      const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
-      if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });
-      const { grant, granted } = await admin.provisionSelfServe(bound, claims.issuer, claims.subject, email);
-      const event = { principalId: grant.grantedBy!, scopeLabel: grant.scopeId };
-      if (granted)
-        audit(
-          { deps, tenant: bound },
-          { ...event, action: "grant.create", resource: `${grant.principalId}/org_admin` },
-        );
-    });
+    const { tenant, created } = await deps.selfServe.workspace(claims.issuer, claims.subject, email, org.data);
     return sendJson(res, 200, { tenant, created });
   } catch (error) {
     if (error instanceof AdminError)

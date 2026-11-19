@@ -337,3 +337,33 @@ test("self-serve never creates a deployment's first workspace", async (t) => {
   );
   assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenants"))[0], { n: 0 });
 });
+
+test("the provisioner can name an organization's people, who are set up as if each had signed in", async (t) => {
+  const { s, directory, isAdmin, provision } = await shared(t);
+  provision.state.reply = {
+    settings: { modelGatewayKey: "own-key" },
+    members: [
+      { subject: "m1", email: "m1@crew.test", name: "Mae One" },
+      { subject: "m2" },
+      { subject: "", email: "blank@crew.test" },
+      { subject: "m3", email: "not-an-email" },
+      { subject: "s1", email: "s1@crew.test" },
+    ],
+  };
+  const org = { id: "88", name: "Crew Co" };
+  const tenant = await withoutTenant(() => selfServeWorkspace(s.config, { subject: "s1", email: null }, org));
+  for (const subject of ["m1", "m2", "s1"]) assert.equal(await isAdmin(tenant, subject), true, subject);
+  assert.equal(await isAdmin(tenant, "m3"), false);
+  await withoutTenant(async () => {
+    assert.deepEqual(await directory.tenantsForEmail!("m1@crew.test"), [{ id: tenant, brandName: "Crew Co" }]);
+    assert.deepEqual(await directory.tenantsForPrincipal!(trustedPrincipal(issuer, "m2")), [
+      { id: tenant, brandName: "Crew Co" },
+    ]);
+  });
+  const m1 = await withTenant(tenant, () => s.built.admin.users.get(trustedPrincipal(issuer, "m1")));
+  assert.equal(m1?.displayName, "Mae One");
+  const events = await withTenant(tenant, (token) => s.built.auditLog.events(token));
+  assert.equal(events.filter((e) => e.action === "grant.create").length, 3);
+  assert.equal(await withoutTenant(() => selfServeWorkspace(s.config, { subject: "m2", email: null }, org)), tenant);
+  assert.equal(provision.state.calls.length, 1);
+});

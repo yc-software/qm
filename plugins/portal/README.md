@@ -94,8 +94,12 @@ tenant.
 A new workspace starts switched off. Core POSTs `{ tenant, brandName, issuer, externalOrg,
 nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
 `HMAC-SHA256(CORE_SIGNING_SECRET, "workspace-provisioner")` (hex). A 200 reply of
-`{ "settings": { "modelGatewayKey": "…" } }` (nothing else) gives the workspace its own
-model gateway key and switches it on, once. Until a call succeeds sign-in fails and the
+`{ "settings": { "modelGatewayKey": "…" } }` gives the workspace its own
+model gateway key and switches it on, once. The reply may also list the organization's
+people as `"members": [{ "subject": "…", "email": "…", "name": "…" }]` (`email` and `name`
+optional; `subject` is the trusted provider's subject). Core then sets each one up as if
+they had signed in (and names them when `name` is given); a member it cannot set up is
+reported and skipped without failing the rest. Until a call succeeds sign-in fails and the
 next sign-in retries, so the provisioner must answer repeated calls for a tenant with the
 same key. A self-served workspace carries `deploymentModelKey: false`, so it never falls
 back to the deployment's model key: without a key of its own its model calls fail. Core
