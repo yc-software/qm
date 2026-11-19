@@ -3,7 +3,6 @@ import { reviewChange } from "./setting-controls.ts";
 import type { AdminPage } from "./sections.ts";
 import { page, draw } from "./settings.ts";
 import { SettingState } from "./setting-state.ts";
-import { textField, toggleField } from "./setting-controls.ts";
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -533,10 +532,40 @@ const capabilityRows = [
   ["Access", "principals"],
   ["Secret", "secret"],
 ] as const;
-const only = (kind: string) =>
-  classMap({ ["sc-" + kind + "-only"]: true, hidden: (kind === "env") !== (credentialState.draft.delivery === "env") });
-const field = (key: string, label: string, hint: string | number, o: Parameters<typeof textField>[5] = {}) =>
-  textField(label, hint, "sc-" + key, credentialState.draft[key] || "", (v) => credentialState.change(key, v), o);
+type CdOptions = {
+  placeholder?: string;
+  auto?: string;
+  disabled?: boolean;
+  type?: string;
+  only?: "env" | "broker";
+  helpId?: string;
+};
+const cdField = (key: string, name: string, help: string, o: CdOptions = {}) =>
+  html`<label
+    class=${classMap({ "cd-field": true, hidden: !!o.only && (o.only === "env") !== (credentialState.draft.delivery === "env") })}
+    ><span class="cd-label">${name}</span
+    ><input
+      type=${o.type || "text"}
+      id=${"sc-" + key}
+      .value=${credentialState.draft[key] || ""}
+      @input=${(e: Event) => credentialState.change(key, (e.target as HTMLInputElement).value)}
+      ?disabled=${!!o.disabled}
+      placeholder=${o.placeholder ?? ""}
+      autocomplete=${o.auto ?? "off"}
+    />${help ? html`<span class="cd-help" id=${o.helpId ?? ""}>${help}</span>` : null}</label
+  >`;
+const cdSwitch = (id: string, name: string, help: string, on: boolean, set: (on: boolean) => void) =>
+  html`<label class="cd-switch-row"
+    ><span class="cd-switch-text"><span>${name}</span>${help ? html`<small>${help}</small>` : null}</span
+    ><input
+      type="checkbox"
+      role="switch"
+      class="cd-switch"
+      id=${id}
+      .checked=${on}
+      @change=${(e: Event) => set((e.target as HTMLInputElement).checked)}
+  /></label>`;
+
 export function credentialsCard() {
   const s = credentialState;
   const env = s.draft.delivery === "env";
@@ -563,148 +592,162 @@ export function credentialsCard() {
     <div class="foot">${s.open ? null : statusLine()}</div>
     <dialog
       id="sc-dialog"
-      class="custom-provider-dialog credential-dialog"
+      class="custom-provider-dialog credential-dialog cd"
       aria-labelledby="sc-dialog-title"
       aria-describedby="sc-dialog-description"
       @cancel=${(e: Event) => (e.preventDefault(), dismiss())}
       @click=${(e: MouseEvent) => e.target === e.currentTarget && dismiss()}
     >
-      <div class="project-dialog-head">
-        <div>
-          <h2 id="sc-dialog-title">${s.editing ? "Edit credential" : "Add credential"}</h2>
-          <p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p>
-        </div>
-        <button
-          class="project-icon-button"
-          type="button"
-          id="sc-dialog-close"
-          aria-label="Close credential dialog"
-          @click=${dismiss}
-        >
-          ×
-        </button>
-      </div>
-      <div class="body" id="sc-editor" style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px">
-        <div class="sc-semantics" aria-label="Blank value semantics">
-          <div><strong>Blank secret</strong><span id="sc-secret-semantics">${secretSemantics()}</span></div>
-          <div><strong>Blank method</strong><span>Uses the broker default: GET only.</span></div>
-          <div><strong>Blank paths</strong><span>Allows every path on the selected host.</span></div>
-        </div>
-        <div class="editor-grid">
-          <div>
-            ${field("slug", "Slug", "lowercase identifier", { placeholder: "credential-name", auto: "off", disabled: !!s.editing })}
-            ${field("name", "Display name", 12, { placeholder: "Credential display name" })}
-            <label style="display: block; margin-bottom: 8px"
-              >Delivery <span class="hint">how the secret is used</span>
-              <select
-                id="sc-delivery"
-                .value=${s.draft.delivery || ""}
-                @input=${(e: Event) => s.change("delivery", (e.target as HTMLInputElement).value)}
-                style="width: 100%"
-              >
-                <option value="broker">
-                  Broker: core stamps it onto proxied HTTP calls; the secret never leaves core
-                </option>
-                <option value="env">
-                  Sandbox env: injected into all-internal conversations under an env var (e.g. a browser-provider key
-                  for the browse skill)
-                </option>
-              </select>
-            </label>
-            ${field("envkey", "Env var", "UPPER_SNAKE_CASE; the skill reads this", { placeholder: "STEEL_API_KEY", auto: "off", cls: only("env") })}
-            ${field("host", "Destination host", "bare hostname only", { placeholder: "service.example", auto: "off", cls: only("broker") })}
-            ${field("secret", "Secret", 12, { placeholder: s.original?.hasSecret ? "Stored secret retained when blank" : "Write-only secret", type: "password", auto: "new-password" })}
-            <p class="field-hint" id="sc-secret-hint">${secretHint()}</p>
-            <div class=${classMap({ "sc-broker-only": true, hidden: env })} style="display: flex; gap: 10px">
-              ${field("header", "Authentication header", "blank = Authorization", { placeholder: "Default: Authorization", flex: true })}
-              ${field("scheme", "Value prefix", "blank = Bearer", { placeholder: "Default: Bearer", flex: true })}
-            </div>
-            ${field("methods", "Allowed HTTP methods", "comma-separated; blank = GET", { placeholder: "GET", cls: only("broker") })}
-            <label style="display: block; margin-bottom: 8px" class=${classMap({ "sc-broker-only": true, hidden: env })}
-              >Allowed path prefixes <span class="hint">one per line; blank = any path</span
-              ><textarea
-                id="sc-paths"
-                .value=${s.draft.paths || ""}
-                @input=${(e: Event) => s.change("paths", (e.target as HTMLInputElement).value)}
-                placeholder="/allowed/path/"
-              ></textarea>
-            </label>
-            ${toggleField("Credential is enabled", 12, s.draft.enabled !== false, (on) => s.change("enabled", on), { id: "sc-enabled" })}
-            ${toggleField("Published apps may use it, acting as their publisher", 12, s.draft.deployments !== false, (on) => s.change("deployments", on), { id: "sc-deployments", cls: only("broker") })}
-            <p class=${classMap({ hint: true, "sc-broker-only": true, hidden: env })} style="margin-bottom: 6px">
-              Principals with access
-            </p>
-            <p class=${classMap({ hint: true, "sc-env-only": true, hidden: !env })} style="margin-bottom: 6px">
-              Access: every all-internal conversation. Env delivery is not gated by grants. Rooms with externals get
-              nothing, everyone else gets the env var.
-            </p>
-            ${toggleField("Everyone in this organization", 12, !!s.draft.org, () => s.change("org", true), { id: "sc-share-org", name: "sc-share", value: "org", cls: only("broker") })}
-            ${toggleField("Only selected people or teams", 12, !s.draft.org, () => s.change("org", false), { name: "sc-share", value: "people", cls: only("broker") })}
-            <div
-              class=${classMap({ "sc-picker": true, "sc-broker-only": true, hidden: env })}
-              style=${s.draft.org ? "display: none" : ""}
-              id="sc-picker"
+      <header class="cd-head">
+        <h2 id="sc-dialog-title">${s.editing ? "Edit credential" : "Add credential"}</h2>
+        <p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p>
+      </header>
+      <div class="cd-body" id="sc-editor">
+        <section class="cd-section">
+          <h3>Service</h3>
+          ${cdField("name", "Name", "", { placeholder: "Example API" })}
+          ${cdField("slug", "Identifier", s.editing ? "Can't be changed after the credential is created." : "Lowercase letters, numbers and dashes. Can't be changed later.", { placeholder: "example-api", auto: "off", disabled: !!s.editing })}
+          <label class="cd-field">
+            <span class="cd-label">Delivery</span>
+            <select
+              id="sc-delivery"
+              .value=${s.draft.delivery || ""}
+              @input=${(e: Event) => s.change("delivery", (e.target as HTMLInputElement).value)}
             >
-              <input
-                type="text"
-                id="sc-picker-search"
-                .value=${s.query}
-                @input=${(e: Event) => {
-                  s.query = (e.target as HTMLInputElement).value;
-                  s.picker = true;
-                  s.render();
-                }}
-                @focus=${() => {
-                  s.picker = true;
-                  s.render();
-                }}
-                @blur=${() =>
-                  setTimeout(() => {
-                    s.picker = false;
-                    s.render();
-                  }, 150)}
-                placeholder="Search people to grant access…"
-                autocomplete="off"
-                spellcheck="false"
-              />
-              <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
-            </div>
-            <div
-              class=${classMap({ "identity-chips": true, "sc-broker-only": true, hidden: env })}
-              id="sc-people-chips"
+              <option value="broker">Proxied by QM</option>
+              <option value="env">Sandbox environment variable</option>
+            </select>
+            <span class="cd-help"
+              >${env
+                ? "Injected into every all-internal conversation. Rooms with external guests get nothing."
+                : "QM adds the secret to outgoing requests. It never enters a sandbox."}</span
             >
-              ${s.draft.org ? null : s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
-            </div>
+          </label>
+        </section>
+        <section class="cd-section">
+          <h3>Connection</h3>
+          ${cdField("host", "Host", "Hostname only, without https://.", { placeholder: "api.example.com", auto: "off", only: "broker" })}
+          ${cdField("envkey", "Variable name", "UPPER_SNAKE_CASE. The skill reads this.", { placeholder: "EXAMPLE_API_KEY", auto: "off", only: "env" })}
+          ${cdField("secret", "Secret", secretHint(), { placeholder: s.original?.hasSecret ? "••••••••  (unchanged)" : "Paste the key", type: "password", auto: "new-password", helpId: "sc-secret-hint" })}
+          <div class=${classMap({ "cd-row": true, hidden: env })}>
+            ${cdField("header", "Header", "Blank uses Authorization.", { placeholder: "Authorization" })}
+            ${cdField("scheme", "Prefix", "Blank uses Bearer.", { placeholder: "Bearer" })}
           </div>
-          <aside class="editor-panel" aria-live="polite">
-            <h3>Effective capability</h3>
-            <dl class="capability-summary">
-              ${capabilityRows.map(
-                ([label, key]) =>
-                  html`<div>
-                    <dt>${label}</dt>
-                    <dd id=${"sc-cap-" + key}>${cap[key]}</dd>
-                  </div> `,
-              )}
-            </dl>
-          </aside>
-        </div>
+        </section>
+        <section class=${classMap({ "cd-section": true, hidden: env })}>
+          <h3>Allowed requests</h3>
+          ${cdField("methods", "Methods", "Comma-separated. Blank allows GET only.", { placeholder: "GET, POST" })}
+          <label class="cd-field">
+            <span class="cd-label">Paths</span>
+            <textarea
+              id="sc-paths"
+              rows="3"
+              .value=${s.draft.paths || ""}
+              @input=${(e: Event) => s.change("paths", (e.target as HTMLInputElement).value)}
+              placeholder="/v1/search"
+            ></textarea>
+            <span class="cd-help">One prefix per line. Blank allows every path on the host.</span>
+          </label>
+        </section>
+        <section class="cd-section">
+          <h3>Access</h3>
+          <div class="cd-group">
+            ${cdSwitch("sc-enabled", "Enabled", "", s.draft.enabled !== false, (on) => s.change("enabled", on))}
+            ${env
+              ? null
+              : cdSwitch(
+                  "sc-deployments",
+                  "Published apps",
+                  "Apps can use it, acting as their publisher.",
+                  s.draft.deployments !== false,
+                  (on) => s.change("deployments", on),
+                )}
+          </div>
+          ${env
+            ? html`<p class="cd-help">Every all-internal conversation gets the variable. It isn't limited by grants.</p>`
+            : html`<div class="cd-field">
+                  <span class="cd-label">Who can use it</span>
+                  <div class="cd-segmented" role="radiogroup" aria-label="Who can use it">
+                    <label
+                      ><input
+                        type="radio"
+                        name="sc-share"
+                        value="org"
+                        id="sc-share-org"
+                        .checked=${!!s.draft.org}
+                        @change=${() => s.change("org", true)}
+                      /><span>Everyone</span></label
+                    ><label
+                      ><input
+                        type="radio"
+                        name="sc-share"
+                        value="people"
+                        .checked=${!s.draft.org}
+                        @change=${() => s.change("org", false)}
+                      /><span>Specific people</span></label
+                    >
+                  </div>
+                </div>
+                <div class="sc-picker" style=${s.draft.org ? "display: none" : ""} id="sc-picker">
+                  <input
+                    type="text"
+                    id="sc-picker-search"
+                    .value=${s.query}
+                    @input=${(e: Event) => {
+                      s.query = (e.target as HTMLInputElement).value;
+                      s.picker = true;
+                      s.render();
+                    }}
+                    @focus=${() => {
+                      s.picker = true;
+                      s.render();
+                    }}
+                    @blur=${() =>
+                      setTimeout(() => {
+                        s.picker = false;
+                        s.render();
+                      }, 150)}
+                    placeholder="Search people or channels"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
+                </div>
+                <div class="identity-chips" id="sc-people-chips">
+                  ${s.draft.org ? null : s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
+                </div>`}
+        </section>
+        <section class="cd-section" aria-live="polite">
+          <h3>Summary</h3>
+          <dl class="cd-group cd-summary">
+            ${capabilityRows.map(
+              ([label, key]) =>
+                html`<div>
+                  <dt>${label}</dt>
+                  <dd id=${"sc-cap-" + key}>${cap[key]}</dd>
+                </div>`,
+            )}
+          </dl>
+        </section>
       </div>
-      <div class="project-dialog-actions" id="sc-dialog-actions">
+      <footer class="cd-foot" id="sc-dialog-actions">
         ${s.editing && s.original
-          ? html`<button class="btn danger" type="button" id="sc-delete" style="margin-inline-end: auto" @click=${() => remove(s.original!)}>
+          ? html`<button class="btn danger" type="button" id="sc-delete" @click=${() => remove(s.original!)}>
               Delete
             </button>`
-          : null}${s.open ? statusLine() : null}<button class="btn" id="sc-reset" @click=${dismiss}>Cancel</button
+          : null}
+        <span class="cd-spacer"></span>${s.open ? statusLine() : null}<button class="btn" type="button" id="sc-reset" @click=${dismiss}>
+          Cancel</button
         ><button
           class=${classMap({ btn: true, primary: true, dirty: s.dirty })}
+          type="button"
           id="sc-save"
           ?disabled=${!s.dirty || s.saving}
           @click=${save}
         >
-          ${s.editing ? "Save changes" : "Save credential"}
+          ${s.editing ? "Save" : "Add credential"}
         </button>
-      </div>
+      </footer>
     </dialog>
   </section>`;
 }
@@ -715,10 +758,6 @@ const statusLine = () =>
     >${credentialState.message}</span
   >`;
 
-function secretSemantics() {
-  if (credentialState.original?.hasSecret) return "Keeps the stored secret unchanged.";
-  return credentialState.editing ? "A secret is required before saving." : "New credentials require a secret.";
-}
 function secretHint() {
   if (!credentialState.editing) return "The secret is write-only. It cannot be viewed after saving.";
   return credentialState.original?.hasSecret
