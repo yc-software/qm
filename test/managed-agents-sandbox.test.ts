@@ -1,4 +1,6 @@
 import { test, after, beforeEach } from "node:test";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -416,8 +418,40 @@ test("the QM template's tools are advertised as installed, not missing", () => {
   }
 });
 
-test("egress enforcement is never claimed", () => {
+test("without an egress proxy the session keeps its own network and no forwarder starts", async () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
+  const h = await sandbox.provision(scope, { egressToken: "tok", env: { HTTPS_PROXY: "http://stale.test" } });
+  assert.equal(h.env, undefined);
+  assert.ok(fake.execScripts().every((script) => !script.includes("forward.mjs")));
+});
+
+test("with an egress proxy, commands reach it through the forwarder and the session's own proxy", async (t) => {
+  const proxy = spawn(
+    process.execPath,
+    [
+      "-e",
+      `const s = require("node:http").createServer((req, res) => res.end(req.method + " " + req.url + " " + req.headers["proxy-authorization"]));
+       s.on("connect", (req, client) => { const [host, port] = req.url.split(":"); const up = require("node:net").connect(port, host, () => { client.write("HTTP/1.1 200 OK\\r\\n\\r\\n"); up.pipe(client); client.pipe(up); }); });
+       s.listen(0, "127.0.0.1", () => console.log(s.address().port));`,
+    ],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  t.after(() => proxy.kill());
+  const proxyUrl = `http://127.0.0.1:${String((await once(proxy.stdout!, "data"))[0]).trim()}`;
+  sandbox = make({ egressProxyUrl: proxyUrl });
+  assert.equal(sandbox.profile.egressEnforcement, "domain");
+  const h = await sandbox.provision(scope, { egressToken: "tok" });
+  assert.equal(h.env?.HTTPS_PROXY, "http://x:tok@127.0.0.1:3129");
+  const unrestricted = await sandbox.run(h, "true");
+  assert.match(unrestricted.stderr, /created before the egress proxy was required/);
+  process.env.HTTPS_PROXY = proxyUrl;
+  t.after(async () => {
+    await sandbox.run(h, "kill $(cat /workspace/.qm-egress/pid)");
+    delete process.env.HTTPS_PROXY;
+  });
+  const r = await sandbox.run(h, "curl -sS -m 10 http://destination.test/path");
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout, `GET http://destination.test/path Basic ${Buffer.from("x:tok").toString("base64")}`);
 });
 
 test("session status wire values map onto backend states", () => {

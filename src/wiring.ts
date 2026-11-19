@@ -1026,6 +1026,7 @@ export function buildApp(
       ...(managedAgents.snapshotIntervalSec !== undefined
         ? { snapshotIntervalMs: managedAgents.snapshotIntervalSec * 1000 }
         : {}),
+      ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
       extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
