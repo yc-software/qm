@@ -494,8 +494,6 @@ struct ChatView: View {
 
   private var holdsHistory: Bool { !historyRevealed && model.conversation.localOnly != true }
 
-  private var showsPlaceholder: Bool { showsInitialHistoryPlaceholder || holdsHistory }
-
   private var transcript: some View {
     let messages = model.messages
     let liveTimeline = model.liveTimeline
@@ -504,99 +502,104 @@ struct ChatView: View {
     let inherited = timeline.filter { $0.isInherited(in: model.conversation) }
     let current = timeline.filter { !$0.isInherited(in: model.conversation) }
     let visible = inheritedExpanded ? inherited + current : current
-    let sections =
-      holdsHistory
-      ? []
-      : NativeChatTranscriptSection.grouped(
-        visible, activeRunID: model.activeRunID, status: model.workStatus)
+    let sections = NativeChatTranscriptSection.grouped(
+      visible, activeRunID: model.activeRunID, status: model.workStatus)
     let showSpeakers =
       model.conversation.isShared
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
     return VStack(alignment: .leading, spacing: 16) {
-      Group {
-        pinsSection
-        forkOrigin
-        if !holdsHistory, model.earlierItems > 0,
-          inheritedExpanded || model.conversation.forkBoundarySeq == nil
-            || model.earlierItems > (model.conversation.forkBoundarySeq ?? -1) + 1
-        {
-          Button {
-            Task { await model.loadEarlier() }
-          } label: {
-            NativeActionLabel(
-              title: "Load earlier messages",
-              busyTitle: targetSequence != nil
-                ? "Loading selected message…" : "Loading earlier messages…",
-              busy: model.loadingEarlier)
-          }.disabled(model.loadingEarlier)
-        }
-        if showsPlaceholder {
-          NativeChatHistoryPlaceholder()
-            .transition(.opacity)
-        } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
-          && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
-          && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
-        {
-          ContentUnavailableView {
-            Text("What shall we work on?")
-          } description: {
-            Text("Ask a question or hand off a task.")
-          }
-          .padding(.top, 60)
-          if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
-            let identity, !model.conversation.isShared
+      // A conversation chosen from the list shows its placeholder until the drawer lands.
+      if holdsHistory {
+        NativeChatHistoryPlaceholder()
+          .padding(.horizontal, 16)
+          .transition(.opacity)
+      } else {
+        Group {
+          pinsSection
+          forkOrigin
+          if model.earlierItems > 0,
+            inheritedExpanded || model.conversation.forkBoundarySeq == nil
+              || model.earlierItems > (model.conversation.forkBoundarySeq ?? -1) + 1
           {
-            NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
-              guard model.draft.isEmpty else { return }
-              model.draft = activity.prompt
-              model.saveDraft()
-              composerFocused = true
+            Button {
+              Task { await model.loadEarlier() }
+            } label: {
+              NativeActionLabel(
+                title: "Load earlier messages",
+                busyTitle: targetSequence != nil
+                  ? "Loading selected message…" : "Loading earlier messages…",
+                busy: model.loadingEarlier)
+            }.disabled(model.loadingEarlier)
+          }
+          if showsInitialHistoryPlaceholder {
+            NativeChatHistoryPlaceholder()
+              .transition(.opacity)
+          } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
+            && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
+            && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
+          {
+            ContentUnavailableView {
+              Text("What shall we work on?")
+            } description: {
+              Text("Ask a question or hand off a task.")
+            }
+            .padding(.top, 60)
+            if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
+              let identity, !model.conversation.isShared
+            {
+              NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
+                guard model.draft.isEmpty else { return }
+                model.draft = activity.prompt
+                model.saveDraft()
+                composerFocused = true
+              }
             }
           }
-        }
-        ForEach(sections) { section in
-          VStack(alignment: .leading, spacing: 16) {
-            if inheritedExpanded, !inherited.isEmpty, section.items.first?.id == current.first?.id {
-              HStack {
-                Rectangle().frame(height: 1)
-                Text("This conversation").font(.caption).fixedSize()
-                Rectangle().frame(height: 1)
-              }.foregroundStyle(.secondary)
+          ForEach(sections) { section in
+            VStack(alignment: .leading, spacing: 16) {
+              if inheritedExpanded, !inherited.isEmpty, section.items.first?.id == current.first?.id {
+                HStack {
+                  Rectangle().frame(height: 1)
+                  Text("This conversation").font(.caption).fixedSize()
+                  Rectangle().frame(height: 1)
+                }.foregroundStyle(.secondary)
+              }
+              if section.isActivity {
+                NativeTimelineActivityGroup(
+                  section: section, client: model.client, user: model.user,
+                  disclosure: workDisclosure,
+                  reasoningText: model.reasoningText,
+                  onShowAgents: {
+                    composerFocused = false
+                    showingAgents = true
+                  },
+                  onInspect: { followsLatest = false })
+              } else if let item = section.items.first {
+                timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
+              }
             }
-            if section.isActivity {
-              NativeTimelineActivityGroup(
-                section: section, client: model.client, user: model.user,
-                disclosure: workDisclosure,
-                reasoningText: model.reasoningText,
-                onShowAgents: {
-                  composerFocused = false
-                  showingAgents = true
-                },
-                onInspect: { followsLatest = false })
-            } else if let item = section.items.first {
-              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .id(section.id)
+            .transition(.opacity.combined(with: .offset(y: 16)))
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .id(section.id)
-          .transition(.opacity.combined(with: .offset(y: 16)))
+          if liveTimeline == nil, !model.displayedPartial.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+              MessageMarkdown(text: model.displayedPartial, client: model.client)
+            }.accessibilityIdentifier("streamingResponse")
+          }
+          if model.conversation.canReply {
+            ForEach(model.approvals) { approval in approvalCard(approval) }
+          }
         }
-        if !holdsHistory, liveTimeline == nil, !model.displayedPartial.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
-            MessageMarkdown(text: model.displayedPartial, client: model.client)
-          }.accessibilityIdentifier("streamingResponse")
-        }
-        if model.conversation.canReply {
-          ForEach(model.approvals) { approval in approvalCard(approval) }
-        }
+        .padding(.horizontal, 16)
       }
-      .padding(.horizontal, 16)
     }
     .padding(.vertical, 20)
     .frame(maxWidth: .infinity, alignment: .leading)
     // Arriving history fades and rises in place of the skeleton rather than popping in.
     .animation(
-      reduceMotion ? nil : .smooth(duration: 0.45), value: showsPlaceholder)
+      reduceMotion ? nil : .smooth(duration: 0.45),
+      value: holdsHistory || showsInitialHistoryPlaceholder)
     .id("transcript")
   }
 

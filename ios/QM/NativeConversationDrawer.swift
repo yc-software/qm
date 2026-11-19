@@ -74,7 +74,12 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
       // A drag commits `isOpen` only after its spring lands, so the card is already there.
       let target: CGFloat = open ? 1 : 0
       guard motion.dragStart == nil, motion.position != target else { return }
-      withAnimation(reduceMotion ? nil : .smooth(duration: 0.32)) {
+      guard !reduceMotion else {
+        motion.position = target
+        motion.restingOpen = open
+        return
+      }
+      withAnimation(.smooth(duration: 0.32)) {
         motion.position = target
       } completion: {
         if motion.position == target { motion.restingOpen = open }
@@ -101,11 +106,15 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
     let remaining = target - motion.position
     let relative = abs(remaining) > 0.001 ? (velocity / width) / remaining : 0
     motion.dragStart = nil
+    guard !reduceMotion else {
+      motion.position = target
+      motion.restingOpen = open
+      if isOpen != open { isOpen = open }
+      return
+    }
     withAnimation(
-      reduceMotion
-        ? nil
-        : .interpolatingSpring(
-          duration: 0.38, bounce: 0, initialVelocity: min(max(relative, 0), 12))
+      .interpolatingSpring(
+        duration: 0.38, bounce: 0, initialVelocity: min(max(relative, 0), 12))
     ) {
       motion.position = target
     } completion: {
