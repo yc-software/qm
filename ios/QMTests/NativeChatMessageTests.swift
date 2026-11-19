@@ -36,6 +36,30 @@ final class NativeChatMessageTests: XCTestCase {
     XCTAssertGreaterThan(image.size.height, 600)
     XCTAssertEqual(image.size.width, 320)
   }
+
+  func testSelectTextCopiesOnlyTheChosenRangeOfTheRenderedMessage() async throws {
+    let scene = try XCTUnwrap(
+      UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.keyWindow
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = UIHostingController(
+      rootView: NativeTextSelectionSheet(text: "Reef **early** and [often](https://example.test)."))
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      previous?.makeKey()
+    }
+    func textView(in view: UIView) -> UITextView? {
+      view as? UITextView ?? view.subviews.lazy.compactMap(textView).first
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    let selectable = try XCTUnwrap(textView(in: window))
+    XCTAssertEqual(selectable.text, "Reef early and often.")
+    XCTAssertFalse(selectable.isEditable)
+    selectable.selectedRange = NSRange(location: 5, length: 5)
+    selectable.copy(nil)
+    XCTAssertEqual(UIPasteboard.general.string, "early")
+  }
 }
 
 @MainActor
