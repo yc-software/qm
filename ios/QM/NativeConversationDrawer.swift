@@ -30,8 +30,8 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
               .frame(width: drawer ? sidebarWidth : geometry.size.width)
           }
         )
-          .allowsHitTesting(!hasSelection || isOpen || showsSidebarPage)
-          .accessibilityHidden(hasSelection && !isOpen && !showsSidebarPage)
+        .allowsHitTesting(!hasSelection || isOpen || showsSidebarPage)
+        .accessibilityHidden(hasSelection && !isOpen && !showsSidebarPage)
         if hasSelection {
           DrawerCardLayer(
             motion: motion, width: sidebarWidth,

@@ -557,7 +557,8 @@ struct ChatView: View {
           }
           ForEach(sections) { section in
             VStack(alignment: .leading, spacing: 16) {
-              if inheritedExpanded, !inherited.isEmpty, section.items.first?.id == current.first?.id {
+              if inheritedExpanded, !inherited.isEmpty, section.items.first?.id == current.first?.id
+              {
                 HStack {
                   Rectangle().frame(height: 1)
                   Text("This conversation").font(.caption).fixedSize()
@@ -599,7 +600,8 @@ struct ChatView: View {
     // Arriving history fades and rises in place of the skeleton rather than popping in.
     .animation(
       reduceMotion ? nil : .smooth(duration: 0.45),
-      value: holdsHistory || showsInitialHistoryPlaceholder)
+      value: holdsHistory || showsInitialHistoryPlaceholder
+    )
     .id("transcript")
   }
 
