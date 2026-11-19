@@ -131,8 +131,6 @@ async function mintApiToken(
     redirect: "manual",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  // Slack can answer a signed-in page with a non-2xx status (seen: 403) while still embedding a working token,
-  // so the token in the body is the signal, not the status.
   const html = await r.text();
   const m = html.match(/"api_token":"(xoxc-[A-Za-z0-9-]+)"/);
   return m ? m[1]! : null;
