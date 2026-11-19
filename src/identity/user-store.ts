@@ -486,30 +486,31 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       return (await q(ACTIVITY)).map(toActivity);
     },
     async record(people) {
+      const seen = async (wanted: readonly SeenPerson[]) => {
+        const aliases = wanted.map((p) => foldPrincipalId(p.id));
+        const rows = await q(
+          `UPDATE users u SET
+             first_seen_at = coalesce(u.first_seen_at, ${ts("s.at")}),
+             source = CASE WHEN u.first_seen_at IS NULL THEN s.source ELSE u.source END,
+             display_name = coalesce(s.name, u.display_name)
+             FROM unnest($1::text[], $2::bigint[], $3::text[], $4::text[]) AS s(alias, at, source, name)
+             JOIN user_links l ON l.alias_id = s.alias
+            WHERE u.id = l.user_id RETURNING s.alias`,
+          [
+            aliases,
+            wanted.map((p) => p.at),
+            wanted.map((p) => p.source),
+            wanted.map((p) => cleanDisplayName(p.name) ?? null),
+          ],
+        );
+        const found = new Set(rows.map((r) => r.alias as string));
+        return wanted.filter((p) => !found.has(foldPrincipalId(p.id)));
+      };
       if (!people.length) return;
-      const aliases = people.map((p) => foldPrincipalId(p.id));
-      const unknown = (
-        await q(
-          `SELECT s.a FROM unnest($1::text[]) AS s(a) WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = s.a)`,
-          [aliases],
-        )
-      ).map((r) => r.a as string);
-      if (unknown.length) await transaction((client) => ensureUsersIn(client, unknown));
-      await q(
-        `UPDATE users u SET
-           first_seen_at = coalesce(u.first_seen_at, ${ts("s.at")}),
-           source = CASE WHEN u.first_seen_at IS NULL THEN s.source ELSE u.source END,
-           display_name = coalesce(s.name, u.display_name)
-           FROM unnest($1::text[], $2::bigint[], $3::text[], $4::text[]) AS s(alias, at, source, name)
-           JOIN user_links l ON l.alias_id = s.alias
-          WHERE u.id = l.user_id`,
-        [
-          aliases,
-          people.map((p) => p.at),
-          people.map((p) => p.source),
-          people.map((p) => cleanDisplayName(p.name) ?? null),
-        ],
-      );
+      const unknown = await seen(people);
+      if (!unknown.length) return;
+      await transaction((client) => ensureUsersIn(client, [...new Set(unknown.map((p) => foldPrincipalId(p.id)))]));
+      await seen(unknown);
     },
     async linkAll(links) {
       return transaction(async (client) => {
