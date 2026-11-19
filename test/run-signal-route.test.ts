@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
@@ -1101,7 +1102,7 @@ test("web: Stop stops only the run's own conversation; tree:true stops its subag
   const childThread = "agent:main:subagent:stop-tree-child";
   const parent = await built.sessions.getOrCreateByThread(parentThread, "dm", scope, undefined, "web");
   const child = await built.sessions.getOrCreateByThread(childThread, "dm", scope, undefined, "web");
-  await built.sessions.setParentSession(child.id, parent.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, parent.id);
   const running = async (threadRef: string, text: string) => {
     const { run } = await built.runs.enqueue({
       sessionId: threadRef,

@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { testTenant } from "./support/test-tenant.ts";
+import { testTenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -1017,7 +1017,7 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
   const [parent] = await built.runs.list({ threadRef: "dm:U1:forget", limit: 1 });
   const own = (await built.sessions.getByThread("dm:U1:forget"))!;
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:forget", "dm", ALICE_SCOPE);
-  await built.sessions.setParentSession(child.id, own.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, own.id);
   const { actor, conversation } = parent!.request;
   await built.sessions.setSpawnMeta(child.id, { actor, conversation, surface: "test" });
   await built.sessions.addParticipant(child.id, "U1");

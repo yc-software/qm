@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,19 +20,19 @@ test("detaching a subagent session requires current channel membership", async (
   };
   const parent = await create("parent");
   const child = await create("child");
-  await built.sessions.setParentSession(child.id, parent.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, parent.id);
   await built.app.upsertChannels(channels, [], Date.now() + 1, ["C1"]);
-  assert.equal(await built.app.detachSession(child.id, "U1"), null);
+  assert.equal(await built.app.detachSession(ancestryTenant, child.id, "U1"), null);
   assert.equal((await built.sessions.get(child.id))?.parentSessionId, parent.id);
   await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }], Date.now() + 2, ["C1"]);
-  assert.deepEqual(await built.app.detachSession(child.id, "U1"), { detached: true });
+  assert.deepEqual(await built.app.detachSession(ancestryTenant, child.id, "U1"), { detached: true });
 });
 
 test("a replayed steer on a scheduled turn's subagent keeps where its answer goes", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-destination-")) }));
   const root = await built.sessions.getOrCreateByThread("web:U1:cron-root", "dm", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:cron-child", "dm", "personal:U1");
-  await built.sessions.setParentSession(child.id, root.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, root.id);
   const destination = { type: "principal", target: "U2", audienceScopeId: "personal:U2", onBehalfOf: "U1" };
   const { run } = await built.runs.enqueue({
     sessionId: child.threadRef,
@@ -130,7 +131,7 @@ test("a subagent message that missed its running turn replays as a turn from its
   const parent = await built.sessions.getOrCreateByThread("web:U1:parent", "dm", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-message", "dm", "personal:U1");
   for (const session of [parent, child]) await built.sessions.addParticipant(session.id, "U1");
-  await built.sessions.setParentSession(child.id, parent.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, parent.id);
   const actor = { id: "U1", type: "internal" as const };
   const conversation = { kind: "dm" as const, threadRef: child.threadRef, audience: [actor] };
   await built.sessions.setSpawnMeta(child.id, { surface: "web", actor, conversation });
@@ -160,4 +161,43 @@ test("a subagent message that missed its running turn replays as a turn from its
   assert.equal(replay?.request.text, stamped);
   assert.equal(replay?.request.sessionSenderId, parent.id);
   assert.deepEqual(await built.signals.pending(run.id), []);
+});
+
+test("parent inheritance refuses a foreign tenant's session even through the database owner", async () => {
+  const { twoTenants } = await import("./support/two-tenants.ts");
+  const { withTenant } = await import("../src/tenants/context.ts");
+  const { createPostgresSessionStore } = await import("../src/sessions/postgres-session-store.ts");
+  const db = await twoTenants();
+  try {
+    const sessions = createPostgresSessionStore(db.appDatabaseUrl);
+    const owner = createPostgresSessionStore(db.ownerDatabaseUrl);
+    const [a, b] = db.tenants,
+      scope = "personal:owner";
+    const parent = await withTenant(a, async () => {
+      const session = await sessions.getOrCreateByThread("private-parent", "dm", scope);
+      await sessions.markPersonalOnly(session.id, scope);
+      return session;
+    });
+    const childA = await withTenant(a, () => sessions.getOrCreateByThread("child", "dm", scope));
+    const childB = await withTenant(b, () => sessions.getOrCreateByThread("child", "dm", scope));
+    await withTenant(a, async (tenant) => {
+      await owner.setParentSession(tenant, childA.id, parent.id);
+      assert.equal((await sessions.get(childA.id))!.personalOnly, true);
+    });
+    await withTenant(b, async (tenant) => {
+      await assert.rejects(
+        owner.setParentSession(tenant, childB.id, parent.id),
+        /source conversation no longer exists/,
+      );
+      await assert.rejects(
+        owner.inheritContextFrom(tenant, childB.id, parent.id),
+        /source conversation no longer exists/,
+      );
+      const child = (await sessions.get(childB.id))!;
+      assert.equal(child.personalOnly, undefined);
+      assert.equal(child.parentSessionId, undefined);
+    });
+  } finally {
+    await db.close();
+  }
 });

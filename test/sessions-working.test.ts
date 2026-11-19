@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -78,7 +79,7 @@ test("listSessions flags a subagent whose latest turn failed, and only while it 
   const parent = await app.turn(dm("parent", "web:U1:parent"));
   const child = await app.turn(dm("child", "web:U1:child"));
   const loose = await app.turn(dm("loose", "web:U1:loose"));
-  await sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await sessions.setParentSession(ancestryTenant, child.sessionId!, parent.sessionId!);
 
   for (const thread of ["web:U1:child", "web:U1:loose"]) {
     const { run } = await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
@@ -147,7 +148,7 @@ test("a working subagent reports its current run start and latest purpose from t
   const { app, runs, sessions } = freshApp();
   const parent = await app.turn(dm("parent", "web:U1:p"));
   const child = await app.turn(dm("child", "web:U1:c"));
-  await sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await sessions.setParentSession(ancestryTenant, child.sessionId!, parent.sessionId!);
   const say = async (purpose: string, runId: string) => {
     await sessions.append(
       { sessionId: child.sessionId! },

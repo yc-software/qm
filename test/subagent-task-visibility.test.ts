@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -22,7 +23,11 @@ async function conversation(built: ReturnType<typeof buildApp>, threadRef: strin
   const session = (await built.sessions.getByThread(threadRef))!;
   const request = { ...run.request, runId: run.id };
   const bind = (extra: Partial<typeof request> = {}) =>
-    built.sessionSyscalls.forTurn({ session, scopeId: session.scopeId, request: { ...request, ...extra } });
+    built.sessionSyscalls.forTurn(ancestryTenant, {
+      session,
+      scopeId: session.scopeId,
+      request: { ...request, ...extra },
+    });
   return { run, session, bind, syscalls: bind() };
 }
 
@@ -151,7 +156,7 @@ for (const fork of [false, true]) {
       text: "start another task",
     });
     await built.config.setPersonalModelAuth("U1", true, "openai");
-    const out = await startSession(built.app, built.sessions, "U1", {
+    const out = await startSession(ancestryTenant, built.app, built.sessions, "U1", {
       scopeId: session.scopeId,
       ...(fork ? { forkOf: session.id } : {}),
       text: "work on the seed",

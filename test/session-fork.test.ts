@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -34,7 +35,7 @@ test("forking copies the transcript into a fresh independent web session", async
   const sid = r2.sessionId!;
   const source = (await app.getSession(sid))!;
 
-  const fork = await app.forkSession(sid, "U1");
+  const fork = await app.forkSession(ancestryTenant, sid, "U1");
   assert.ok(fork, "participant can fork");
   assert.notEqual(fork.session.id, sid);
   assert.ok(fork.session.threadRef.startsWith("web:U1:"), "fork lives on a fresh web thread");
@@ -72,7 +73,7 @@ test("upToSeq truncates the copy at the cut point", async () => {
   const sid = r2.sessionId!;
   const secondUser = (await app.getSession(sid))!.items.filter(isUserItem)[1]!;
 
-  const fork = await app.forkSession(sid, "U1", { upToSeq: secondUser.seq - 1 });
+  const fork = await app.forkSession(ancestryTenant, sid, "U1", { upToSeq: secondUser.seq - 1 });
   assert.ok(fork);
   assert.ok(fork.items.length > 0, "the first turn is kept");
   const copiedTexts = fork.items.filter(isUserItem).map((e) => e.text ?? "");
@@ -86,7 +87,7 @@ test("a single-entry fork (boundary seq 0) still records provenance", async () =
   const r = await app.turn(dm("Only the opening message survives the cut", "web:U1:seq0"));
   const sid = r.sessionId!;
   const first = (await app.getSession(sid))!.items[0]!;
-  const fork = await app.forkSession(sid, "U1", { upToSeq: first.seq });
+  const fork = await app.forkSession(ancestryTenant, sid, "U1", { upToSeq: first.seq });
   assert.ok(fork);
   assert.equal(fork.items.length, 1);
   assert.equal(fork.items[0]!.seq, 0, "entry seqs are 0-based");
@@ -100,7 +101,7 @@ test("a single-entry fork (boundary seq 0) still records provenance", async () =
 test("an empty fork has no provenance", async () => {
   const { app } = freshApp();
   const r = await app.turn(dm("Nothing before zero", "web:U1:empty"));
-  const fork = await app.forkSession(r.sessionId!, "U1", { upToSeq: -1 });
+  const fork = await app.forkSession(ancestryTenant, r.sessionId!, "U1", { upToSeq: -1 });
   assert.ok(fork);
   assert.equal(fork.items.length, 0);
   assert.equal(fork.session.forkedFrom, undefined);
@@ -113,7 +114,7 @@ test("the fork inherits a marked title and the original keeps its own history", 
   const sid = r.sessionId!;
   await app.updateSession(sid, { actorId: "U1" }, { title: "Migration plan" });
 
-  const fork = (await app.forkSession(sid, "U1"))!;
+  const fork = (await app.forkSession(ancestryTenant, sid, "U1"))!;
   const before = (await app.getSession(sid))!.items.length;
   await app.turn(dm("A follow-up only in the fork", fork.session.threadRef));
   assert.equal((await app.getSession(sid))!.items.length, before, "turns on the fork do not touch the source");
@@ -124,8 +125,8 @@ test("the fork inherits a marked title and the original keeps its own history", 
 test("a stranger cannot fork someone else's conversation", async () => {
   const { app } = freshApp();
   const r = await app.turn(dm("Private planning", "web:U1:f4"));
-  assert.equal(await app.forkSession(r.sessionId!, "intruder"), null);
-  assert.equal(await app.forkSession("does-not-exist", "U1"), null);
+  assert.equal(await app.forkSession(ancestryTenant, r.sessionId!, "intruder"), null);
+  assert.equal(await app.forkSession(ancestryTenant, "does-not-exist", "U1"), null);
 });
 
 test("side chats preserve their anchor, stay out of session pages, expand in place, and flag a running turn", async () => {
@@ -133,7 +134,7 @@ test("side chats preserve their anchor, stay out of session pages, expand in pla
   const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat"));
   const source = (await app.getSession(result.sessionId!))!;
   const entry = source.items[0]!;
-  const fork = await app.forkSession(source.session.id, "U1", {
+  const fork = await app.forkSession(ancestryTenant, source.session.id, "U1", {
     upToSeq: source.items.at(-1)!.seq,
     sideChat: { entrySeq: entry.seq, quote: "shared queues", occurrence: 0 },
   });
@@ -178,21 +179,21 @@ test("side chats reject missing anchors and anchors beyond the fork boundary", a
   const last = source.items.at(-1)!.seq;
   for (const occurrence of [undefined, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
     await assert.rejects(
-      app.forkSession(source.session.id, "U1", {
+      app.forkSession(ancestryTenant, source.session.id, "U1", {
         sideChat: { entrySeq: 0, quote: "shared queues", occurrence: occurrence as number },
       }),
       SideChatAnchorError,
     );
   }
   await assert.rejects(
-    app.forkSession(source.session.id, "U1", {
+    app.forkSession(ancestryTenant, source.session.id, "U1", {
       upToSeq: last,
       sideChat: { entrySeq: last + 1, quote: "not visible", occurrence: 0 },
     }),
     SideChatAnchorError,
   );
   await assert.rejects(
-    app.forkSession(source.session.id, "U1", {
+    app.forkSession(ancestryTenant, source.session.id, "U1", {
       upToSeq: last,
       sideChat: { entrySeq: 0, quote: " ", occurrence: 0 },
     }),
@@ -203,7 +204,7 @@ test("side chats reject missing anchors and anchors beyond the fork boundary", a
 test("side-chat reads bind the query principal to the authenticated portal identity", async () => {
   const { app } = freshApp();
   const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat-auth"));
-  const fork = await app.forkSession(result.sessionId!, "U1", {
+  const fork = await app.forkSession(ancestryTenant, result.sessionId!, "U1", {
     sideChat: { entrySeq: 0, quote: "shared queues", occurrence: 0 },
   });
   assert.ok(fork);

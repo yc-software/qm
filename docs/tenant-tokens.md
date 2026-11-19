@@ -38,3 +38,38 @@ Tenant separation is moving from an implicit binding to an explicit argument. Po
 10. Tables that are not per tenant (the tenant registry, migrations ledger, instance heartbeats and the other tables `test/tenant-tables.test.ts` lists as untenanted) move to an explicit untenanted handle, so the remaining implicit queries are all genuinely tenanted.
 11. Ambient reads and caches: replace the remaining `boundTenant` and `currentTenant` reads and the binding-keyed caches with token-keyed state.
 12. Remove the implicit path: `PgPool.q` and `PgPool.query` stop reading the binding, `withPgTransaction` loses its binding form, and `AsyncLocalStorage`, `boundTenant`, `currentTenant`, `ambientTenant` and `pinTenant` are deleted. `withTenant` remains only as the mint at boundaries, and the ratchet is retired once the query, read and cache counts reach zero; `mintSites` stays above zero by design.
+
+## Document-context inheritance slice
+
+Unreleased internal session APIs now carry the existing request/turn token:
+
+| Before                                                        | After                                                    |
+| ------------------------------------------------------------- | -------------------------------------------------------- |
+| `SessionStore.inheritContextFrom(sessionId, sourceSessionId)` | `inheritContextFrom(tenant, sessionId, sourceSessionId)` |
+| `SessionStore.setParentSession(sessionId, parentSessionId)`   | `setParentSession(tenant, sessionId, parentSessionId)`   |
+| `App.detachSession(sessionId, principalId)`                   | `detachSession(tenant, sessionId, principalId)`          |
+| `App.forkSession(sessionId, principalId, options?)`           | `forkSession(tenant, sessionId, principalId, options?)`  |
+| `startSession(app, sessions, actorId, input)`                 | `startSession(tenant, app, sessions, actorId, input)`    |
+| `SessionSyscallsFactory.forTurn(binding)`                     | `forTurn(tenant, binding)`                               |
+| `conversations.start(actorId, input)`                         | `start(tenant, actorId, input)`                          |
+
+All remaining arguments and return types are retained. The request route or turn
+supplies `Tenant`; it is separate from `SessionSyscallBinding` and saved requests.
+The source lookup and parent update carry explicit SQL tenant predicates. The
+provenance target writer is still part of the pending conversion; this slice does
+not claim complete session tenant isolation.
+
+`PgPool` additionally exposes its existing `ready(): Promise<void>` initializer.
+Its old methods retain their signatures and behavior. Transactional session batch
+reads await this initializer and continue reading through the supplied client,
+without retaining an unused raw query pool. `ready` checks only that pool's own
+migrations and closed-store state; it adds no tenant authorization or new state.
+
+No HTTP or stored JSON fields, tables, columns, keys, indexes, constraints,
+settings, providers, or backfills change. Internal source callers must supply the
+token in the same core build; existing HTTP clients remain compatible. The real
+Postgres foreign-parent regression exercises a database owner and verifies that a
+foreign source cannot set a parent or propagate private context. Ancestry/fork/
+syscall checks and the affected persistence initialization checks pass. Focused
+independent review accepted the implemented slice95/100; it excludes the pending
+provenance writer and transactional-reader authorization conversion.

@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -21,7 +22,7 @@ async function childrenQueries(children: number, busyTrees: number): Promise<num
   const session = async (threadRef: string, parent?: Session) => {
     const s = await built.sessions.getOrCreateByThread(threadRef, "dm", "personal:U1", undefined, "web");
     await built.sessions.addParticipant(s.id, "U1", threadRef);
-    if (parent) await built.sessions.setParentSession(s.id, parent.id);
+    if (parent) await built.sessions.setParentSession(ancestryTenant, s.id, parent.id);
     return s;
   };
   const busy = (s: Session) =>
@@ -82,7 +83,7 @@ test("a session's same-scope ancestors come back nearest first, skipping ancesto
   try {
     const session = async (threadRef: string, scope: string, parent?: Session) => {
       const s = await built.sessions.getOrCreateByThread(threadRef, "dm", scope, undefined, "web");
-      if (parent) await built.sessions.setParentSession(s.id, parent.id);
+      if (parent) await built.sessions.setParentSession(ancestryTenant, s.id, parent.id);
       return s;
     };
     const root = await session("web:U1:root", "personal:U1");

@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -65,7 +66,7 @@ test("a subagent of the owner's DM uses the owner's credential without a grant",
     threadRef: "dm:U1:parent",
     audience: [{ id: "U1", type: "internal" as const }],
   };
-  await built.sessions.setParentSession(child.id, parent.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, parent.id);
   await built.sessions.addParticipant(child.id, "U1");
   await built.sessions.setSpawnMeta(child.id, { surface: "web", actor: { id: "U1", type: "internal" }, conversation });
   const result = await built.app.turn({

@@ -2313,7 +2313,7 @@ export function buildApp(
     conversations: {
       search: (input) => app.searchConversations(input),
       list: (viewer) => app.listSessions(viewer),
-      start: (actorId, input) => startSession(app, sessions, actorId, input),
+      start: (tenant, actorId, input) => startSession(tenant, app, sessions, actorId, input),
     },
     async validateRuntime(input, scope) {
       const requested = {

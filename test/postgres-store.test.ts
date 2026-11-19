@@ -13,7 +13,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
+import { seedTestTenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -45,12 +45,12 @@ test("sessions inherit the origin of their nearest automated ancestor ", { skip 
     const child = await store.getOrCreateByThread(`subagent:${run}:1`, "channel", scope);
     const grandchild = await store.getOrCreateByThread(`subagent:${run}:2`, "channel", scope);
     const orphan = await store.getOrCreateByThread(`subagent:${run}:3`, "channel", scope);
-    await store.setParentSession(child.id, cron.id);
-    await store.setParentSession(grandchild.id, child.id);
+    await store.setParentSession(ancestryTenant, child.id, cron.id);
+    await store.setParentSession(ancestryTenant, grandchild.id, child.id);
     const removed = await store.getOrCreateByThread(`removed-${run}`, "channel", scope);
-    await store.setParentSession(orphan.id, removed.id);
+    await store.setParentSession(ancestryTenant, orphan.id, removed.id);
     await store.deleteSession(removed.id);
-    await assert.rejects(store.setParentSession(orphan.id, `missing-${run}`), /no longer exists/);
+    await assert.rejects(store.setParentSession(ancestryTenant, orphan.id, `missing-${run}`), /no longer exists/);
     const origin = async (id: string) => store.inheritedOrigin((await store.get(id))!);
     assert.equal(await origin(grandchild.id), "cron");
     assert.equal(await origin(cron.id), "cron");
@@ -163,7 +163,7 @@ test("pg saved spend refreshes changed days and preserves live attribution", { s
     await check();
     assert.equal((await read()).length, 2);
     const parent = await store.getOrCreateByThread(`cron:${randomUUID()}`, "dm", scope);
-    await store.setParentSession(session.id, parent.id);
+    await store.setParentSession(ancestryTenant, session.id, parent.id);
     await store.refreshSpendRollup!();
     await check();
     assert.ok((await read()).every((r) => r.origin === "cron"));
@@ -493,8 +493,8 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
   const parent = await store.getOrCreateByThread("cron:spend-ancestry", "dm", scope);
   const current = await store.getOrCreateByThread("spend-ancestry-current", "dm", scope);
   const historical = await store.getOrCreateByThread("spend-ancestry-historical", "dm", scope);
-  await store.setParentSession(current.id, parent.id);
-  await store.setParentSession(historical.id, parent.id);
+  await store.setParentSession(ancestryTenant, current.id, parent.id);
+  await store.setParentSession(ancestryTenant, historical.id, parent.id);
   await store.recordLlmRequest(current.id, {
     turnSeq: null,
     step: 0,
@@ -2048,7 +2048,7 @@ test("pg search: own chats and side chats only, no subagents or automations", { 
   };
   const chat = await write("own-chat", "ownchat harbor plans");
   const child = await write("own-child", "ownchat harbor from a subagent");
-  await s.setParentSession(child, chat);
+  await s.setParentSession(ancestryTenant, child, chat);
   await write("own-cron", "ownchat harbor from a cron", "cron");
   const side = await write("own-side", "ownchat harbor in a side chat");
   await s.updateForkProvenance(side, {
@@ -2323,7 +2323,7 @@ test("pg child parentage and spawn metadata survive reopening", { skip }, async 
     },
     readOnly: true,
   };
-  await first.setParentSession(child.id, parent.id);
+  await first.setParentSession(ancestryTenant, child.id, parent.id);
   await first.setSpawnMeta(child.id, meta);
   const reopened = createPostgresSessionStore(URL!);
   assert.equal((await reopened.get(child.id))?.parentSessionId, parent.id);
@@ -2332,7 +2332,7 @@ test("pg child parentage and spawn metadata survive reopening", { skip }, async 
     (await reopened.childrenOf(parent.id)).map((session) => session.id),
     [child.id],
   );
-  await reopened.setParentSession(child.id, null);
+  await reopened.setParentSession(ancestryTenant, child.id, null);
   assert.equal((await reopened.get(child.id))?.parentSessionId, undefined);
 });
 
@@ -2535,9 +2535,9 @@ test("pg session pages sort by the person's last message, which appends keep", {
   assert.deepEqual(await order(), [ids[0], ids[2], ids[1]], "a reply doesn't move a chat; the person's message does");
 
   const child = await s.getOrCreateByThread(`subagent:${me}:1`, "dm", personal, undefined, "web");
-  await s.setParentSession(child.id, ids[0]!);
+  await s.setParentSession(ancestryTenant, child.id, ids[0]!);
   const grandchild = await s.getOrCreateByThread(`subagent:${me}:2`, "dm", personal, undefined, "web");
-  await s.setParentSession(grandchild.id, child.id);
+  await s.setParentSession(ancestryTenant, grandchild.id, child.id);
   assert.deepEqual(
     (await s.descendantsOf([ids[0]!])).map((d) => [d.id, d.rootId]).sort(),
     [
@@ -2561,7 +2561,7 @@ test("pg session pages apply every filter whether or not a scope narrows them", 
   const beta = await chat("slack:b", channel, "slack", "Beta");
   const gamma = await chat("web:g", personal, "web", "Gamma");
   const child = await chat("subagent:c", personal, "web", "Child");
-  await s.setParentSession(child, alpha);
+  await s.setParentSession(ancestryTenant, child, alpha);
   await chat("cron:d", personal, "cron", "Nightly");
   const theirs = await s.getOrCreateByThread(`web:theirs:${me}`, "dm", personal, undefined, "web");
   await s.addParticipant(theirs.id, `${me}-other`, "Theirs");

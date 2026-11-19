@@ -117,7 +117,7 @@ async function detachSession(ctx: ApiCtx): Promise<void> {
   if (typeof principalId !== "string" || !principalId) {
     return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   }
-  const out = await app.detachSession(id, principalId);
+  const out = await app.detachSession(tenantOf(ctx), id, principalId);
   if (!out) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, out);
 }
@@ -199,7 +199,7 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   }
   let out: Awaited<ReturnType<typeof app.forkSession>>;
   try {
-    out = await app.forkSession(id, b.principalId, {
+    out = await app.forkSession(tenantOf(ctx), id, b.principalId, {
       ...(b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : {}),
       ...(sideChat ? { sideChat } : {}),
     });

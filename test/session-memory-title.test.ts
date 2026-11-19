@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -63,14 +64,14 @@ async function rig(): Promise<Rig> {
     signals,
     advisoryLock,
     room,
-    syscallsFor: (session) => factory.forTurn(binding(session)),
+    syscallsFor: (session) => factory.forTurn(ancestryTenant, binding(session)),
   };
 }
 
 test("participant can read child history and title across memory checkpoints", async () => {
   const r = await rig();
   const child = await r.sessions.getOrCreateByThread("subagent:synthetic", "dm", scope);
-  await r.sessions.setParentSession(child.id, r.room.id);
+  await r.sessions.setParentSession(ancestryTenant, child.id, r.room.id);
   await r.sessions.addParticipant(child.id, actor.id);
   await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
   const writer = { sessionId: child.id };
@@ -120,7 +121,7 @@ test("participant sees child title in session write response", async () => {
   const opened = await r.syscallsFor(r.room).open({ task: "task", name: "PRIVATE_SENTINEL" });
   assert.ok(opened.ok);
   const child = (await r.sessions.get(opened.sessionId))!;
-  await r.sessions.setParentSession(child.id, r.room.id);
+  await r.sessions.setParentSession(ancestryTenant, child.id, r.room.id);
   await r.sessions.addParticipant(child.id, actor.id);
   await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
   const writer = { sessionId: child.id };

@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
@@ -313,7 +314,7 @@ test("a sub-agent request shows in both sessions, and deciding anywhere syncs th
   const f = await fixture();
   const child = await f.sessions.getOrCreateByThread("agent:main:subagent:c1", "dm", "personal:alice@example.com");
   await f.sessions.addParticipant(child.id, "alice@example.com");
-  await f.sessions.setParentSession(child.id, f.session.id);
+  await f.sessions.setParentSession(ancestryTenant, child.id, f.session.id);
   const { ask } = await f.keychain.createAsk({
     credentialId: f.ask.credentialId,
     requesterId: "alice@example.com",

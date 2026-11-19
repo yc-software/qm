@@ -11,7 +11,7 @@ import { disclosedMemory } from "../src/memory/disclosure.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { resolveTurnContext } from "../src/resolution/turn-context.ts";
 import { DEFAULT_MEMORY_POLICY } from "../src/memory/policy.ts";
-import { testTenant } from "./support/test-tenant.ts";
+import { testTenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import type { Conversation } from "../src/types.ts";
 
 const surface = "https://sheets.example.test";
@@ -193,7 +193,7 @@ test("private capture restrictions survive storage, duplicate merges, edits, and
       { ...metadata, sessionId: undefined },
     );
     const child = await built.sessions.getOrCreateByThread("web:owner:private-child", "dm", "personal:owner");
-    await built.sessions.setParentSession(child.id, binding.conversation.sessionId);
+    await built.sessions.setParentSession(ancestryTenant, child.id, binding.conversation.sessionId);
     await memory.capture(
       "personal:owner",
       ["Private child convention"],

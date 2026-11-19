@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -119,8 +120,8 @@ describe("conversation pins self-API", async () => {
       "dm",
       scopeId("personal", "U1"),
     );
-    await built.sessions.setParentSession(child.id, sessionId);
-    await built.sessions.setParentSession(nested.id, child.id);
+    await built.sessions.setParentSession(ancestryTenant, child.id, sessionId);
+    await built.sessions.setParentSession(ancestryTenant, nested.id, child.id);
     const token = await capFor("U1", nested.threadRef);
     const added = await call("POST", "/v1/pins", { text: "delegated note" }, token);
     assert.equal(added.status, 200);

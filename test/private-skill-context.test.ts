@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { attachmentSnapshot, restoreAttachmentState } from "../src/core/orchestrator/attach-tool.ts";
 import { disclosedMemory } from "../src/memory/disclosure.ts";
@@ -378,7 +379,7 @@ test("private document capability and skill privacy survive memory opt-out and a
   assert.equal((await built.app.turn({ ...normal, text: "Copy archived source", skipMemory: true })).status, "ok");
   assert.equal((await built.skills.get(copiedId))?.personalOnly, true);
   await built.skills.archive(copiedId);
-  const forked = await built.app.forkSession(consumed.sessionId, actorId);
+  const forked = await built.app.forkSession(ancestryTenant, consumed.sessionId, actorId);
   assert.ok(forked);
   assert.equal(forked.session.personalOnly, true);
   assert.equal(
@@ -489,17 +490,20 @@ test("private document capability and skill privacy survive memory opt-out and a
     /Private files must remain/,
   );
   const child = await built.sessions.getOrCreateByThread("private-child", "dm", personal);
-  await built.sessions.setParentSession(child.id, forked.session.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, forked.session.id);
   assert.equal((await built.sessions.get(child.id))?.personalOnly, true);
   const sharedChild = await built.sessions.getOrCreateByThread("shared-child", "channel", "channel:C1");
-  await assert.rejects(built.sessions.setParentSession(sharedChild.id, forked.session.id), /owner does not match/);
+  await assert.rejects(
+    built.sessions.setParentSession(ancestryTenant, sharedChild.id, forked.session.id),
+    /owner does not match/,
+  );
   const legacyFork = await built.sessions.getOrCreateByThread("legacy-private-fork", "dm", personal);
   await built.sessions.updateForkProvenance(legacyFork.id, {
     forkedFrom: { sessionId: binding.conversation.sessionId },
     forkBoundarySeq: 0,
   });
   const legacyChild = await built.sessions.getOrCreateByThread("legacy-private-child", "dm", personal);
-  await built.sessions.setParentSession(legacyChild.id, legacyFork.id);
+  await built.sessions.setParentSession(ancestryTenant, legacyChild.id, legacyFork.id);
   const legacyIds = [binding.conversation.sessionId, legacyFork.id, legacyChild.id];
   const sql = new pg.Client({ connectionString: config.databaseUrl });
   await sql.connect();
@@ -516,7 +520,10 @@ test("private document capability and skill privacy survive memory opt-out and a
     (await built.sessions.getMany({ ids: legacyIds, threadRefs: [] })).every((session) => session.personalOnly),
   );
   assert.equal((await built.sessions.get(sharedChild.id))?.personalOnly, undefined);
-  await assert.rejects(built.sessions.inheritContextFrom(child.id, "missing-source"), /no longer exists/);
+  await assert.rejects(
+    built.sessions.inheritContextFrom(ancestryTenant, child.id, "missing-source"),
+    /no longer exists/,
+  );
   const legacyTurn = randomUUID();
   const createdId = fileArtifactId(legacyTurn + ":attach:0", "out", 0);
   const exportedId = "ordinary-reexport-" + randomUUID();

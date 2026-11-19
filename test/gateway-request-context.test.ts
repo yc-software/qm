@@ -20,7 +20,7 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
-import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testTenant as tenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 const gateway = {
   url: "https://gateway.test",
@@ -322,7 +322,7 @@ test("app turns and their helper calls tell the gateway which session they serve
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:context", "dm", session.scopeId);
   const conversation = { kind: "dm" as const, threadRef: child.threadRef };
   const actor = { id: "U1", type: "internal" as const };
-  await built.sessions.setParentSession(child.id, cron.id);
+  await built.sessions.setParentSession(ancestryTenant, child.id, cron.id);
   await built.sessions.addParticipant(child.id, "U1");
   await built.sessions.setSpawnMeta(child.id, {
     surface: "test",

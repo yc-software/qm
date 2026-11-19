@@ -1092,11 +1092,11 @@ export function createSessionMethods(
       return { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
     },
 
-    async detachSession(sessionId, principalId) {
+    async detachSession(tenant, sessionId, principalId) {
       const detach = async () => {
         const session = await sessionForViewer(sessionId, principalId);
         if (!session?.parentSessionId || !(await principalCanWriteScope(principalId, session.scopeId))) return null;
-        await deps.sessions.setParentSession(sessionId, null);
+        await deps.sessions.setParentSession(tenant, sessionId, null);
         return { detached: true as const };
       };
       return deps.advisoryLock.withLock("session-tree-admission", detach);
@@ -1151,7 +1151,7 @@ export function createSessionMethods(
       return deps.orchestrator.suggestNextPrompt(sessionId, principalId);
     },
 
-    async forkSession(sessionId, principalId, opts) {
+    async forkSession(tenant, sessionId, principalId, opts) {
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
       if (!source) return null;
@@ -1173,7 +1173,7 @@ export function createSessionMethods(
           source.channelName,
           "web",
         );
-        await deps.sessions.inheritContextFrom(forked.id, sessionId);
+        await deps.sessions.inheritContextFrom(tenant, forked.id, sessionId);
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
           copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),

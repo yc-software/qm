@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import type { Tenant } from "../tenants/context.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
@@ -73,9 +74,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     });
   };
 
-  async function inheritContextFrom(sessionId: string, sourceSessionId: string): Promise<void> {
+  async function inheritContextFrom(tenant: Tenant, sessionId: string, sourceSessionId: string): Promise<void> {
     const source = (
-      await q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE id = $1", [sourceSessionId])
+      await db
+        .forTenant(tenant)
+        .q("SELECT scope_id, personal_only, context_provenance FROM sessions WHERE tenant_id = $1 AND id = $2", [
+          tenant.id,
+          sourceSessionId,
+        ])
     )[0];
     if (!source) throw new Error("The source conversation no longer exists");
     if (source.personal_only || source.context_provenance)
@@ -94,7 +100,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     transaction?: PoolClient,
   ): Promise<Session[]> {
     if (!ids.length && !threadRefs.length) return [];
-    if (transaction) await pool();
+    if (transaction) await db.ready();
     const sql = "SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])";
     const rows = transaction ? (await transaction.query(sql, [ids, threadRefs])).rows : await q(sql, [ids, threadRefs]);
     return rows.map(rowToSession);
@@ -248,9 +254,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       );
     },
 
-    async setParentSession(sessionId, parentSessionId): Promise<void> {
-      if (parentSessionId) await inheritContextFrom(sessionId, parentSessionId);
-      await q("UPDATE sessions SET parent_session_id = $2 WHERE id = $1", [sessionId, parentSessionId]);
+    async setParentSession(tenant, sessionId, parentSessionId): Promise<void> {
+      if (parentSessionId) await inheritContextFrom(tenant, sessionId, parentSessionId);
+      await db
+        .forTenant(tenant)
+        .query("UPDATE sessions SET parent_session_id = $3 WHERE tenant_id = $1 AND id = $2", [
+          tenant.id,
+          sessionId,
+          parentSessionId,
+        ]);
     },
     markPersonalOnly,
     recordContextProvenance,

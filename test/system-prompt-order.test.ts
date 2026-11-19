@@ -54,7 +54,7 @@ import {
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
-import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testTenant as tenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -936,7 +936,7 @@ test("carried skill and steer screens tell the model gateway which session they 
   assert.equal(await steer(), "allow");
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), turnContext);
   const cron = await sessions.getOrCreateByThread("agent:main:cron:nightly", "channel", scopeId("channel", "C1"));
-  await sessions.setParentSession(result.sessionId!, cron.id);
+  await sessions.setParentSession(ancestryTenant, result.sessionId!, cron.id);
   assert.equal(await steer(), "allow");
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...turnContext, "x-qm-origin": "cron" });
   sessions.inheritedOrigin = () => Promise.reject(new Error("session store unavailable"));

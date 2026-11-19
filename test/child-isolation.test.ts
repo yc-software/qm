@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -50,7 +51,7 @@ async function syscallsRig() {
   });
   await sessions.addParticipant(room.id, actor.id);
   const syscallsFor = (session: Session) =>
-    factory.forTurn({ session, scopeId: scope, request: { surface: "web", conversation, actor } });
+    factory.forTurn(ancestryTenant, { session, scopeId: scope, request: { surface: "web", conversation, actor } });
   const child = async (id: string): Promise<Session> => {
     const session = await sessions.get(id);
     assert.ok(session);

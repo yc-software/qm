@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
@@ -85,7 +86,7 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
       text,
     });
   const first = await turn("web:U1:context-parent", "Explain queues");
-  const child = await app.forkSession(first.sessionId!, "U1", {
+  const child = await app.forkSession(ancestryTenant, first.sessionId!, "U1", {
     sideChat: { entrySeq: 0, quote: "queues", occurrence: 0 },
   });
   assert.ok(child);

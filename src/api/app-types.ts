@@ -460,7 +460,7 @@ export interface App {
     sessionId: string,
     principalId: string,
   ): Promise<{ enabled: boolean; suggestion: string | null } | null>;
-  detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
+  detachSession(tenant: Tenant, sessionId: string, principalId: string): Promise<{ detached: true } | null>;
   cancelSessionGoal(
     sessionId: string,
     principalId: string,
@@ -472,6 +472,7 @@ export interface App {
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(
+    tenant: Tenant,
     sessionId: string,
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },

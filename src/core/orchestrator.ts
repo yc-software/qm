@@ -1823,7 +1823,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
-        const turnSessionSyscalls = sessionSyscalls?.forTurn({
+        const turnSessionSyscalls = sessionSyscalls?.forTurn(tenant, {
           session,
           scopeId: scopeId as ScopeId,
           ...(audienceScopeId ? { audienceScopeId } : {}),

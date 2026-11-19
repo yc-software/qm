@@ -356,7 +356,7 @@ export interface SessionSyscalls {
 
 export interface SessionSyscallsFactory {
   rejectMessage?(sessionId: string, messageId: string): Promise<void>;
-  forTurn(binding: SessionSyscallBinding): SessionSyscalls;
+  forTurn(tenant: Tenant, binding: SessionSyscallBinding): SessionSyscalls;
 }
 
 export interface SessionSyscallDeps {
@@ -400,6 +400,7 @@ export interface SessionSyscallDeps {
     search?: CoreSearch["search"];
     list(viewer: { actorId: string; botActor?: boolean }): Promise<Session[]>;
     start(
+      tenant: Tenant,
       actorId: string,
       input: {
         scopeId: ScopeId;
@@ -720,7 +721,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
-    forTurn(binding) {
+    forTurn(tenant, binding) {
       const callerTitle = binding.session.title?.trim() || "Untitled";
 
       async function resolveTarget(ref: string, writing = false): Promise<Session | string> {
@@ -960,7 +961,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...(input.persistent ? { persistent: true } : {}),
               };
               if (!existing?.spawnMeta) {
-                await deps.sessions.setParentSession(child.id, binding.session.id);
+                await deps.sessions.setParentSession(tenant, child.id, binding.session.id);
                 await deps.sessions.setSpawnMeta(child.id, meta);
               }
               for (const id of new Set([
@@ -1361,7 +1362,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             return { ok: false, message: "new requires `text`: the new session's first message." };
           if (text && text.length > 16_000) return { ok: false, message: "text exceeds 16000 characters" };
           const out = await conversations
-            .start(binding.request.actor.id, {
+            .start(tenant, binding.request.actor.id, {
               scopeId: binding.scopeId,
               origin: binding.request.origin,
               sessionSenderId: binding.session.id,

@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -55,7 +56,7 @@ test("session search reuses indexed search with participant intersection and bou
       search: (input) => app.searchConversations(input),
     },
   });
-  const tools = factory.forTurn({
+  const tools = factory.forTurn(ancestryTenant, {
     session: current,
     scopeId: scope,
     request: {

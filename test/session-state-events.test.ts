@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -286,7 +287,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
     "both greeting turns settle before the delegation starts",
   );
   got.length = 0;
-  await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await built.sessions.setParentSession(ancestryTenant, child.sessionId!, parent.sessionId!);
   const { run: parentRun } = await built.runs.enqueue({
     sessionId: parentThread,
     request: resolvedDm("delegate", parentThread),
@@ -324,7 +325,7 @@ test("a parent parked on a blocking approval keeps awaiting while its subagent r
   const got = await record(built.sessionStateBus);
   const parent = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
   assert.equal(parent.status, "pending_approval");
-  await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await built.sessions.setParentSession(ancestryTenant, child.sessionId!, parent.sessionId!);
   const { run } = await built.runs.enqueue({
     sessionId: childThread,
     request: resolvedDm("work", childThread),
@@ -344,7 +345,7 @@ test("a parent whose own turn parks on an approval while its subagent runs settl
   const childThread = "web:U1:parks-mid-tree-child";
   const parent = await built.app.turn(dm("hello", parentThread));
   const child = await built.app.turn(dm("hello", childThread));
-  await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await built.sessions.setParentSession(ancestryTenant, child.sessionId!, parent.sessionId!);
   const { run } = await built.runs.enqueue({
     sessionId: childThread,
     request: resolvedDm("work", childThread),
@@ -373,8 +374,8 @@ test("a subagent idle between its own runs is not working while its own subagent
   const leaf = await built.app.turn(dm("hello", leafThread));
   assert.ok(await waitFor(() => [rootThread, midThread, leafThread].every((t) => statesFor(got, t).includes("idle"))));
   got.length = 0;
-  await built.sessions.setParentSession(mid.sessionId!, root.sessionId!);
-  await built.sessions.setParentSession(leaf.sessionId!, mid.sessionId!);
+  await built.sessions.setParentSession(ancestryTenant, mid.sessionId!, root.sessionId!);
+  await built.sessions.setParentSession(ancestryTenant, leaf.sessionId!, mid.sessionId!);
   const { run: midRun } = await built.runs.enqueue({
     sessionId: midThread,
     request: resolvedDm("delegate", midThread),

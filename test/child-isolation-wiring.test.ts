@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
@@ -13,7 +14,7 @@ test("a child's turn carries its placement note in the system prompt", async () 
   const built = buildApp(testConfig());
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
-  const syscalls = built.sessionSyscalls.forTurn({
+  const syscalls = built.sessionSyscalls.forTurn(ancestryTenant, {
     session: room,
     scopeId: scope,
     request: { surface: "web", conversation: { kind: "dm", threadRef: "web:room", audience: [actor] }, actor },

@@ -1,3 +1,4 @@
+import { testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
@@ -159,7 +160,7 @@ test("memory capture runs only for a person's own turn in a human conversation",
   const run = randomUUID();
   const parent = await sessions.getOrCreateByThread(`web:U1:parent:${run}`, "dm", personal);
   const child = await sessions.getOrCreateByThread(`agent:main:subagent:${run}`, "dm", personal);
-  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setParentSession(ancestryTenant, child.id, parent.id);
   await sessions.addParticipant(child.id, "U1");
   await sessions.setSpawnMeta(child.id, {
     surface: "web",

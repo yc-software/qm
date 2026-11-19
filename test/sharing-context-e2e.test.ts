@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
-import { testTenant } from "./support/test-tenant.ts";
+import { testTenant, testTenant as ancestryTenant } from "./support/test-tenant.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -218,7 +218,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     "channel",
     parentSession.scopeId,
   );
-  await b.sessions.setParentSession(child.id, parentSession.id);
+  await b.sessions.setParentSession(ancestryTenant, child.id, parentSession.id);
   await b.sessions.setSpawnMeta(child.id, {
     actor: parent.request.actor,
     conversation: parent.request.conversation,
@@ -303,8 +303,8 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   assert.match(await childTurn(read), /no file/);
   await childTurn(cred, "failed");
   await childTurn(own, "failed");
-  const fork = (await b.app.forkSession(child.id, "U1"))!.session;
-  for (const { id, threadRef } of [fork, (await b.app.forkSession(fork.id, "U1"))!.session]) {
+  const fork = (await b.app.forkSession(ancestryTenant, child.id, "U1"))!.session;
+  for (const { id, threadRef } of [fork, (await b.app.forkSession(ancestryTenant, fork.id, "U1"))!.session]) {
     assert.match(await childTurn(read, "ok", threadRef), /no file/);
     await childTurn(cred, "failed", threadRef);
     await childTurn(own, "failed", threadRef);

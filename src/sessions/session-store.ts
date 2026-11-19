@@ -406,7 +406,7 @@ export interface SessionStore {
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
-  inheritContextFrom(sessionId: string, sourceSessionId: string): Promise<void>;
+  inheritContextFrom(tenant: Tenant, sessionId: string, sourceSessionId: string): Promise<void>;
   markPersonalOnly(sessionId: string, ownerScopeId: ScopeId): Promise<void>;
   recordContextProvenance(
     sessionId: string,
@@ -422,7 +422,7 @@ export interface SessionStore {
   ): Promise<Array<{ sessionId: string; seq: number }>>;
 
   updateTitle(sessionId: string, title: string): Promise<void>;
-  setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
+  setParentSession(tenant: Tenant, sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
   setPersona(sessionId: string, personaId: string | null): Promise<void>;

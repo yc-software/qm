@@ -78,7 +78,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     maxAttempts: 1,
     conversations: {
       list: async () => sidebar,
-      start: async (_actorId, input) => {
+      start: async (_tenant, _actorId, input) => {
         const session = await sessions.getOrCreateByThread(`web:U1:started-${sidebar.length}`, "dm", input.scopeId);
         await sessions.addParticipant(session.id, actor.id);
         await sessions.setSpawnMeta(session.id, {
