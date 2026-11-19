@@ -17,7 +17,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
-import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
+import { ADMIN_SECTIONS, VIEW_TITLE, viewDescription, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -646,10 +646,6 @@ const settingsSection_ = (title: string, body: TemplateResult, card = true): Tem
 function generalPane(): TemplateResult {
   return html`
     <div class="settings-general">
-      <header class="settings-page-head">
-        <h2>General</h2>
-        <p>Your own preferences for how ${brandName()} looks and behaves. They don't change anything for your team.</p>
-      </header>
       ${settingsSection_("Account", html`${accountRow()} ${aiAccountsRow()}`)}
       ${settingsSection_("Appearance", themeRow())}
       ${settingsSection_("Chat", html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`)}
@@ -678,11 +674,20 @@ function generalPane(): TemplateResult {
 function settingsPane(): TemplateResult {
   const section = settingsSection();
   const general = section === "general";
+  const description = settingsRoute(SETTINGS_BASE).session ? undefined : viewDescription(section);
   return html`
     <h1 class="settings-page-title">Settings</h1>
     <div class="settings-layout with-nav">
       ${settingsNav(section)}
       <div class="settings-content" @click=${followSettingsLink}>
+        ${
+          description
+            ? html`<header class="settings-page-head">
+                <h2>${VIEW_TITLE[section]}</h2>
+                <p>${description}</p>
+              </header>`
+            : nothing
+        }
         ${general ? generalPane() : (adminHost ?? nothing)}
       </div>
     </div>

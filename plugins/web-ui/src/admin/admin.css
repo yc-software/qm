@@ -2695,16 +2695,6 @@ html.dark #app-view dialog.custom-provider-dialog::backdrop {
 }
 
 /* Credentials: page header — one title, one line, action on the same row */
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .cred-page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin: 0 0 28px;
-}
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .cred-page-head #sc-add {
-  flex: none;
-}
 
 /* Credential editor (dialog.cd). An 8pt rhythm, after Apple's HIG:
    24 outer padding · 28 between sections · 16 between fields · 6 label→control · 6 control→help.

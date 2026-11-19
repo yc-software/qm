@@ -381,7 +381,7 @@ async function remove(c: Data) {
       : "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
   status(message, "err");
 }
-const addCredential = () =>
+export const addCredential = () =>
   html`<button
     class="btn"
     type="button"
@@ -584,13 +584,6 @@ export function credentialsCard() {
     class=${classMap({ card: true, "sv-credentials": true, dirty: s.dirty })}
     id="card-service-credentials"
   >
-    <div class="cred-page-head">
-      <div class="settings-page-head">
-        <h2>Credentials</h2>
-        <p>Shared keys the agent uses on your team's behalf. Secrets stay in core and never reach a sandbox.</p>
-      </div>
-      ${addCredential()}
-    </div>
     <div class="body">
       <div id="sc-list" role="status" aria-live="polite" class=${credentialState.rows.length ? "" : "hint"}>
         ${credentialRows()}

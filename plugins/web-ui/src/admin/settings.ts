@@ -5,7 +5,13 @@ import type { AdminPage } from "./sections.ts";
 import { pageHeader } from "./shared.ts";
 import { saveButton, settingStatus, saveFooter, reviewChange } from "./setting-controls.ts";
 import { SettingState, putSetting } from "./setting-state.ts";
-import { credentialsCard, keychainCard, loadCredentials, credentialState } from "./settings-credentials.ts";
+import {
+  credentialsCard,
+  keychainCard,
+  loadCredentials,
+  addCredential,
+  credentialState,
+} from "./settings-credentials.ts";
 import { providersCard, useProviders, loadProviders } from "./settings-providers.ts";
 import { flagsCard, loadFlags } from "./settings-flags.ts";
 import { decisionsCard, loadDecisions } from "./settings-decisions.ts";
@@ -301,7 +307,7 @@ function template() {
       decisionsCard(),
     ],
   };
-  return html`${pageHeader({ actions: nothing })}
+  return html`${pageHeader({ actions: view === "credentials" ? addCredential() : nothing })}
     <div id="view-governance">
       <div class="governance-content">
         ${status ? html`<p class="hint" role="status">${status}</p>` : nothing}${cards[view]()}
