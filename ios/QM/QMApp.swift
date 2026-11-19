@@ -245,14 +245,9 @@ struct RootView: View {
   private func open(_ conversation: Conversation) {
     UIApplication.shared.sendAction(
       #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    // Mount the new conversation behind the open drawer first; building it inside the close
-    // animation drops its first frames.
-    withAnimation(nil) {
-      selectedConversation = conversation
-      homePath = []
-    } completion: {
-      showingConversations = false
-    }
+    selectedConversation = conversation
+    homePath = []
+    showingConversations = false
   }
 
   @ViewBuilder

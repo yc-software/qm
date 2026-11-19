@@ -518,6 +518,7 @@ struct ChatView: View {
         }
         if showsInitialHistoryPlaceholder {
           NativeChatHistoryPlaceholder()
+            .transition(.opacity)
         } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
           && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
           && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
@@ -564,6 +565,7 @@ struct ChatView: View {
           }
           .frame(maxWidth: .infinity, alignment: .leading)
           .id(section.id)
+          .transition(.opacity.combined(with: .offset(y: 16)))
         }
         if liveTimeline == nil, !model.displayedPartial.isEmpty {
           VStack(alignment: .leading, spacing: 8) {
@@ -578,6 +580,9 @@ struct ChatView: View {
     }
     .padding(.vertical, 20)
     .frame(maxWidth: .infinity, alignment: .leading)
+    // Arriving history fades and rises in place of the skeleton rather than popping in.
+    .animation(
+      reduceMotion ? nil : .smooth(duration: 0.45), value: showsInitialHistoryPlaceholder)
     .id("transcript")
   }
 
