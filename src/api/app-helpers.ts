@@ -481,10 +481,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
   };
 
-  async function isOrgAdmin(principalId: string): Promise<boolean> {
-    return (await deps.isOrgAdmin?.(principalId)) === true;
-  }
-
   function scopeRules(membership: ScopeMembershipDeps) {
     const canReadScope = createCanReadScope(membership);
     const canWriteScope = createCanWriteScope(membership);
@@ -750,8 +746,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...publishedApps.flatMap((d) => [d.ownerScopeId, ...(d.createdInScope ? [d.createdInScope] : [])]),
       ...grants.map((g) => g.granteeScopeId),
     ];
-    const rules = scopeRules(
-      await scopeMembershipSnapshot(
+    const admin = (await deps.isOrgAdmin?.(principalId)) === true;
+    const rules = scopeRules({
+      isOrgAdmin: async () => admin,
+      ...(await scopeMembershipSnapshot(
         {
           directory: deps.directory,
           ...(deps.identity ? { identity: deps.identity } : {}),
@@ -767,8 +765,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         },
         principalId,
         scopes,
-      ),
-    );
+      )),
+    });
     const byResource = Map.groupBy(grants, resourceKey);
     return Promise.all(
       publishedApps.map((d) =>
@@ -1028,7 +1026,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     membershipControlsScope,
     authorizesCapabilityScope,
     principalManagesArtifactHome,
-    isOrgAdmin,
     artifactAuthor,
     canManageSkill,
     manageableSkills,

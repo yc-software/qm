@@ -22,9 +22,8 @@ const app = {
   isCurrentSharedScopeMember: async () => false,
   artifactGrantPermission: async () => null,
   membershipControlsScope: async () => false,
-  managesScope: async () => false,
+  managesScope: createCanManageScope({ identity, isOrgAdmin }),
   samePerson: async (a: string, b: string) => a === b,
-  isOrgAdmin,
 };
 
 test("org admins administer anyone's crons and webhooks, and task edits keep the owner", async () => {

@@ -470,7 +470,6 @@ export interface App {
     loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
   ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
-  isOrgAdmin?(principalId: string): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;

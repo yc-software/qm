@@ -247,15 +247,18 @@ export function createMembershipControlsScope(deps: ScopeMembershipDeps) {
 export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope {
   return async function canManageScope(principalId: string, scope: ScopeId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
-    if (await orgAdmin(deps, principalId)) return true;
-    const { kind, ref } = parseScopeId(scope);
-    if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
-    if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
-    if (kind === "channel")
-      return (await channelPrivacy(deps, ref)) === true && currentSharedScopeMember(deps, kind, ref, principalId);
-    return false;
+    return (await managesAsMember(deps, principalId, scope)) || orgAdmin(deps, principalId);
   };
+}
+
+async function managesAsMember(deps: ScopeMembershipDeps, principalId: string, scope: ScopeId): Promise<boolean> {
+  const { kind, ref } = parseScopeId(scope);
+  if (kind === "personal") return samePerson(ref, principalId);
+  if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
+  if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
+  if (kind === "channel")
+    return (await channelPrivacy(deps, ref)) === true && currentSharedScopeMember(deps, kind, ref, principalId);
+  return false;
 }
 
 export type ManagesArtifactHome = (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;
@@ -266,7 +269,6 @@ export function createManagesArtifactHome(
 ): ManagesArtifactHome {
   return async function managesArtifactHome(homeScopeId, createdBy, principalId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
-    if (await orgAdmin(deps, principalId)) return true;
     if (await canManageScope(principalId, homeScopeId)) return true;
     const { kind, ref } = parseScopeId(homeScopeId);
     if (kind === "team") return teamMember(deps, principalId, ref);

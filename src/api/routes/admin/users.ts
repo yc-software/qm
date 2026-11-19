@@ -572,7 +572,7 @@ export async function createAdminKeychainGrant(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "scope required (no conversation to default to)" });
   const mode = body.mode === "once" ? "once" : "standing";
   const reason = typeof body.purpose === "string" ? body.purpose.trim() : "";
-  const credential = (await deps.keychain.listAllMetadata()).find((c) => c.id === body.credentialId);
+  const credential = await deps.keychain.getCredential(body.credentialId);
   if (!credential) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
   try {
     const grant = await deps.keychain.createGrant({

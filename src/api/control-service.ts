@@ -218,30 +218,29 @@ async function mayShare(
   return app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId);
 }
 
+function managesOwner(app: Pick<App, "managesScope">, owner: string, actorId: string): Promise<boolean> {
+  return app.managesScope(actorId, scopeId("personal", owner));
+}
+
 async function ownsCron(
-  app: Pick<
-    App,
-    "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope" | "isOrgAdmin"
-  >,
+  app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
   cron: Cron,
   actorId: string,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
-  if ((await app.isOrgAdmin?.(actorId)) === true) return true;
   if (actsAsScope(cron.owner, cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
-  if (!(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return false;
+  if (
+    !(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId))) &&
+    !(await managesOwner(app, cron.owner, actorId))
+  )
+    return false;
   return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
 }
 
 export async function canAdministerCron(
   app: Pick<
     App,
-    | "samePerson"
-    | "isCurrentSharedScopeMember"
-    | "artifactGrantPermission"
-    | "membershipControlsScope"
-    | "managesScope"
-    | "isOrgAdmin"
+    "samePerson" | "isCurrentSharedScopeMember" | "artifactGrantPermission" | "membershipControlsScope" | "managesScope"
   >,
   cron: Cron,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
@@ -256,10 +255,7 @@ export async function canAdministerCron(
 }
 
 export async function cronTaskRewrite(
-  app: Pick<
-    App,
-    "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope" | "isOrgAdmin"
-  >,
+  app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
   cron: Cron,
   editorId: string,
   atKeyboard: boolean,
@@ -283,24 +279,23 @@ export async function editWebhookTask(
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
   if (!(await canAdministerWebhook(app, webhook, { actorId: principalId })))
     return { ok: false, code: "forbidden", message: "not your webhook" };
-  if (!(await app.samePerson(webhook.owner, principalId)) && !((await app.isOrgAdmin?.(principalId)) === true))
+  if (!(await app.samePerson(webhook.owner, principalId)) && !(await managesOwner(app, webhook.owner, principalId)))
     return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
   const updated = await app.updateWebhook(id, { action });
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
 }
 
 export async function canAdministerWebhook(
-  app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson" | "isOrgAdmin">,
+  app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
   webhook: Pick<Webhook, "ownerScopeId" | "owner" | "botActor">,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   const owns = () => (isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actor.actorId));
   if (!(await personOrOwningBot(actor, owns, webhook))) return false;
-  if ((await app.isOrgAdmin?.(actor.actorId)) === true) return true;
   if (await app.membershipControlsScope(webhook.ownerScopeId))
     return app.managesScope(actor.actorId, webhook.ownerScopeId);
-  return owns();
+  return (await owns()) || managesOwner(app, webhook.owner, actor.actorId);
 }
 
 function withDefaultTimezone(schedule: CronSchedule, cap: CapabilityClaims): CronSchedule {
@@ -618,7 +613,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (req.script) {
         const script = cronScriptFrom(req.script, before, req);
         if (typeof script === "string") return { ok: false, code: "bad_request", message: script };
-        if (before.ownerScopeId !== capability.scopeId && !((await app.isOrgAdmin?.(capability.actorId)) === true))
+        if (before.ownerScopeId !== capability.scopeId && !(await managesOwner(app, before.owner, capability.actorId)))
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;

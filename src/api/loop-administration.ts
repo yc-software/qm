@@ -28,7 +28,6 @@ export async function loopAdministration(
 ) {
   if (!loops.length) return [];
   const { actorId } = actor;
-  if (actor.botActor !== true && (await deps.isOrgAdmin?.(actorId)) === true) return loops.map(() => true);
   const snapshot = await scopeMembershipSnapshot(
     {
       directory: deps.directory,
@@ -40,7 +39,8 @@ export async function loopAdministration(
     loops.map((loop) => loop.ownerScopeId),
     loops.map((loop) => loop.owner),
   );
-  const manages = createCanManageScope(snapshot);
+  const admin = actor.botActor !== true && (await deps.isOrgAdmin?.(actorId)) === true;
+  const manages = createCanManageScope({ ...snapshot, isOrgAdmin: async () => admin });
   const policy = {
     membershipControlsScope: createMembershipControlsScope(snapshot),
     managesScope: (_actor: string, scope: ScopeId) => manages(actorId, scope),

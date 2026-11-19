@@ -104,7 +104,6 @@ export function createSessionMethods(
   | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
-  | "isOrgAdmin"
   | "isOpenScopeMember"
   | "isCurrentSharedScopeMember"
   | "currentScopeMembers"
@@ -153,7 +152,6 @@ export function createSessionMethods(
     membershipControlsScope,
     authorizesCapabilityScope,
     principalManagesArtifactHome,
-    isOrgAdmin,
     artifactAuthor,
   } = h;
   const transcripts = createTranscriptSource(deps.sessions);
@@ -1003,10 +1001,6 @@ export function createSessionMethods(
 
     managesScope(principalId, scope) {
       return principalCanManageScope(principalId, scope);
-    },
-
-    isOrgAdmin(principalId) {
-      return isOrgAdmin(principalId);
     },
 
     currentScopeMembers: createCurrentScopeMembers(
