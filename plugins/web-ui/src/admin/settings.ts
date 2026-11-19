@@ -309,7 +309,7 @@ function template() {
   };
   return html`${pageHeader({ actions: view === "credentials" ? addCredential() : nothing })}
     <div id="view-governance">
-      <div class="governance-content">
+      <div class=${view === "credentials" ? "settings-sections" : "governance-content"}>
         ${status ? html`<p class="hint" role="status">${status}</p>` : nothing}${cards[view]()}
       </div>
     </div>`;

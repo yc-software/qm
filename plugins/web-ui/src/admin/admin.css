@@ -949,43 +949,6 @@
 #app-view .sc-form-head .hint {
   margin: 0;
 }
-#app-view .editor-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(250px, 34%);
-  gap: 18px;
-  align-items: start;
-}
-#app-view .editor-panel {
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--secondary);
-}
-#app-view .editor-panel h3 {
-  margin: 0 0 8px;
-  font-size: var(--font-12-5);
-  font-weight: 500;
-}
-#app-view .capability-summary {
-  display: grid;
-  gap: 9px;
-}
-#app-view .capability-summary div {
-  display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 8px;
-}
-#app-view .capability-summary dt {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 650;
-}
-#app-view .capability-summary dd {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: var(--font-12-5);
-}
 #app-view .identity-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1009,28 +972,6 @@
   color: var(--muted-foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-#app-view .sc-semantics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 10px 0 14px;
-}
-#app-view .sc-semantics div {
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--card);
-}
-#app-view .sc-semantics strong {
-  display: block;
-  margin-bottom: 2px;
-  font-size: 11px;
-}
-#app-view .sc-semantics span {
-  display: block;
-  color: var(--muted-foreground);
-  font-size: 11px;
 }
 #app-view .soul-meta {
   display: flex;
@@ -1409,11 +1350,6 @@
   padding: 13px 22px 18px;
   border-top: 1px solid var(--border);
 }
-@media (max-width: 900px) {
-  #app-view .editor-grid {
-    grid-template-columns: 1fr;
-  }
-}
 @media (max-width: 560px) {
   #app-view .pill {
     max-width: 30vw;
@@ -1433,7 +1369,6 @@
   #app-view .credential-actions {
     justify-content: flex-start;
   }
-  #app-view .sc-semantics,
   #app-view .soul-diff {
     grid-template-columns: 1fr;
   }
@@ -1863,27 +1798,14 @@
   background: color-mix(in srgb, var(--foreground) 2%, transparent);
 }
 #app-view[data-subview="credentials"] #view-governance .keychain-summary {
+  padding: 14px 18px;
   color: var(--muted-foreground);
+}
+#app-view[data-subview="credentials"] #view-governance #sc-list .settings-card {
+  overflow: hidden;
 }
 #app-view[data-subview="credentials"] #view-governance .keychain-summary strong {
   color: var(--foreground);
-}
-#app-view[data-subview="credentials"] #view-governance .editor-grid {
-  grid-template-columns: minmax(0, 1fr);
-}
-#app-view[data-subview="credentials"] #view-governance .editor-panel {
-  padding: 16px 0 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  background: transparent;
-}
-#app-view[data-subview="credentials"] #view-governance .sc-semantics strong,
-#app-view[data-subview="credentials"] #view-governance .sc-semantics span,
-#app-view[data-subview="credentials"] #view-governance .capability-summary dt,
-#app-view[data-subview="credentials"] #view-governance .capability-summary dd {
-  font-size: var(--font-13);
-  font-weight: 400;
 }
 #app-view[data-subview="credentials"] #view-governance input[type="checkbox"] {
   min-width: 18px;
@@ -2729,4 +2651,398 @@
 }
 #app-view .spend-column:hover {
   background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+
+/* Credentials: grouped list (Codex-style settings groups) */
+#app-view[data-subview="credentials"] #view-governance #sc-list {
+  display: grid;
+  gap: 28px;
+}
+#app-view .cred-group {
+  overflow: hidden;
+}
+#app-view .cred-row {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 13px 18px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+#app-view .cred-row + .cred-row {
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+#app-view button.cred-row:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+#app-view button.cred-row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+#app-view .cred-row.is-locked {
+  cursor: default;
+}
+#app-view .cred-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+#app-view .cred-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#app-view .cred-name .credential-slug {
+  margin-inline-start: 8px;
+  font-weight: 400;
+}
+#app-view .cred-meta {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5, 12.5px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#app-view .cred-flags {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+#app-view .cred-usage {
+  flex: none;
+  min-width: 72px;
+  text-align: right;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5, 12.5px);
+  font-variant-numeric: tabular-nums;
+}
+#app-view .cred-end {
+  flex: none;
+  width: 16px;
+  text-align: right;
+  color: var(--muted-foreground);
+  font-size: var(--font-18);
+  line-height: 1;
+}
+#app-view .cred-row.is-locked .cred-end {
+  width: auto;
+  font-size: var(--font-12-5, 12.5px);
+}
+@media (max-width: 650px) {
+  #app-view .cred-usage {
+    display: none;
+  }
+}
+
+/* Credential editor (dialog.cd). An 8pt rhythm, after Apple's HIG:
+   24 outer padding · 28 between sections · 16 between fields · 6 label→control · 6 control→help.
+   One primary action, trailing; Cancel beside it; destructive action leading and separated. */
+#app-view dialog.custom-provider-dialog.cd {
+  --cd-pad: 24px;
+  --cd-control-h: 36px;
+  --cd-radius: 8px;
+  --cd-hairline: color-mix(in srgb, var(--foreground) 10%, var(--background));
+  --cd-fill: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(760px, calc(100dvh - 48px));
+  padding: 0;
+  overflow: clip;
+  border-radius: 14px;
+  border: 1px solid var(--cd-hairline);
+  flex-direction: column;
+}
+#app-view dialog.custom-provider-dialog.cd[open] {
+  display: flex;
+}
+#app-view dialog.cd .cd-head {
+  padding: var(--cd-pad) var(--cd-pad) 20px;
+}
+#app-view dialog.cd .cd-head h2 {
+  margin: 0;
+  font-size: var(--font-20);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+#app-view dialog.cd .cd-head p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+  line-height: 1.45;
+}
+#app-view dialog.cd .cd-body {
+  /* Containing block for the visually hidden radio and switch inputs, so focusing one
+     scrolls this pane by at most a row instead of scrolling the whole dialog. */
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px var(--cd-pad) var(--cd-pad);
+  display: grid;
+  gap: 28px;
+  align-content: start;
+}
+#app-view dialog.cd .cd-section {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+#app-view dialog.cd .cd-section.hidden,
+#app-view .form-field.hidden,
+#app-view dialog.cd .cd-row.hidden {
+  display: none;
+}
+#app-view dialog.cd .cd-section > h3 {
+  margin: 0 0 -4px;
+  color: var(--foreground);
+  font-size: var(--font-15);
+  font-weight: 600;
+  line-height: 1.3;
+}
+#app-view .form-stack {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 16px;
+}
+#app-view .form-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+#app-view .form-label {
+  color: var(--foreground);
+  font-size: var(--font-13);
+  font-weight: 500;
+  line-height: 1.3;
+}
+#app-view .form-help {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  line-height: 1.45;
+}
+#app-view dialog.cd .cd-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+#app-view dialog.cd :is(input[type="text"], input[type="password"], select, textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--cd-control-h);
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--cd-hairline);
+  border-radius: var(--cd-radius);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--font-13);
+}
+/* Multi-line fields share the single-line inset: 20px line box + 8px top/bottom = 36px,
+   so the first line of a textarea sits exactly where text sits in an input. */
+#app-view .form-field textarea {
+  display: block;
+  min-height: calc(var(--cd-control-h) + 40px);
+  padding: 8px 12px;
+  line-height: 20px;
+  resize: vertical;
+}
+/* Focus is a darker border only: no ring or outline around the field. */
+#app-view dialog.cd :is(input, select, textarea):focus,
+#app-view dialog.cd :is(input, select, textarea):focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--foreground) 40%, var(--cd-hairline));
+}
+#app-view dialog.cd input:disabled {
+  background: var(--cd-fill);
+  color: var(--muted-foreground);
+  cursor: not-allowed;
+}
+#app-view dialog.cd ::placeholder {
+  color: color-mix(in srgb, var(--muted-foreground) 75%, transparent);
+}
+
+#app-view .settings-card:has(> .switch-row, > div) {
+  overflow: hidden;
+}
+#app-view .switch-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  padding: 10px 14px;
+  margin: 0;
+  cursor: pointer;
+}
+#app-view .switch-row + .switch-row {
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 10%, var(--background));
+}
+#app-view .switch-text {
+  display: grid;
+  gap: 2px;
+  font-size: var(--font-13);
+}
+#app-view .switch-text small {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+
+/* Segmented control for the two-way access choice. */
+#app-view dialog.cd .cd-segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 2px;
+  border-radius: var(--cd-radius);
+  background: color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+#app-view dialog.cd .cd-segmented label {
+  position: relative;
+  margin: 0;
+  cursor: pointer;
+}
+#app-view dialog.cd .cd-segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+#app-view dialog.cd .cd-segmented span {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+  font-weight: 500;
+}
+#app-view dialog.cd .cd-segmented input:checked + span {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.12),
+    0 0 0 0.5px rgb(0 0 0 / 0.06);
+}
+#app-view dialog.cd .cd-segmented input:focus-visible + span {
+  outline: 2px solid var(--ring);
+}
+
+/* Summary: key/value rows in a grouped list. */
+#app-view dialog.cd .cd-summary div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 14px;
+}
+#app-view dialog.cd .cd-summary div + div {
+  border-top: 1px solid var(--cd-hairline);
+}
+#app-view dialog.cd .cd-summary dt {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  font-weight: 500;
+  line-height: 1.45;
+}
+#app-view dialog.cd .cd-summary dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-13);
+  line-height: 1.45;
+}
+
+/* Footer: destructive leading, Cancel + primary trailing; buttons share one height. */
+#app-view dialog.cd .cd-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px var(--cd-pad);
+  border-top: 1px solid var(--cd-hairline);
+  background: var(--background);
+}
+#app-view dialog.cd .cd-spacer {
+  flex: 1;
+}
+#app-view dialog.cd .cd-foot .status {
+  margin: 0 8px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+#app-view dialog.cd .cd-foot .btn {
+  height: 32px;
+  min-width: 80px;
+  padding: 0 14px;
+  font-weight: 500;
+}
+#app-view dialog.cd .cd-foot .btn.danger {
+  min-width: 0;
+  margin-inline-start: -10px;
+  padding: 0 10px;
+  border-color: transparent;
+}
+#app-view dialog.cd .cd-foot .btn.danger:hover {
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+#app-view dialog.cd .cd-foot .btn.primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+@media (max-width: 520px) {
+  #app-view dialog.cd .cd-row {
+    grid-template-columns: 1fr;
+  }
+}
+#app-view dialog.cd select {
+  appearance: none;
+  padding-inline-end: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  cursor: pointer;
+}
+#app-view[data-subview="credentials"] #view-governance section#card-service-credentials {
+  padding: 0;
+}
+#app-view[data-subview="credentials"] #view-governance section#card-personal-keychains {
+  display: block;
+  margin: 28px 0 0;
+  padding: 0;
+  border: 0;
+}
+#app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .body {
+  margin: 0;
+  padding: 14px 18px;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .body {
+  margin: 0;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .foot {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .foot > :not(:empty) {
+  margin-top: 16px;
+}
+/* The editor's shadow and scrim always darken, never lighten: --foreground is near-white in dark
+   theme and would glow and wash the page out. */
+#app-view dialog.custom-provider-dialog.cd {
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.16);
+}
+html.dark #app-view dialog.custom-provider-dialog.cd {
+  box-shadow: none;
+}
+#app-view dialog.custom-provider-dialog.cd::backdrop {
+  background: color-mix(in srgb, var(--scrim, #0a0a0a) 36%, transparent);
+}
+html.dark #app-view dialog.custom-provider-dialog.cd::backdrop {
+  background: color-mix(in srgb, var(--scrim, #050a14) 64%, transparent);
 }
