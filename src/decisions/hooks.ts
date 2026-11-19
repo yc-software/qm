@@ -24,6 +24,7 @@ export function turnStartState(turn: {
   continueTurn?: boolean;
   scopeLabel: string;
   conversation?: string;
+  context?: string;
 }): string {
   const requested = turn.runtime?.modelId ? turn.runtime.modelId : "none (org default applies)";
   return [
@@ -36,6 +37,7 @@ export function turnStartState(turn: {
     `- model account: ${turn.runtimePinned ? "the user's own provider account, which serves only the requested runtime" : "company"}`,
     `- continued turn: ${turn.continueTurn ? "yes, resuming an interrupted turn" : "no"}`,
     "",
+    ...(turn.context ? ["Conversation so far:", turn.context, ""] : []),
     "Latest message:",
     turn.input,
   ].join("\n");

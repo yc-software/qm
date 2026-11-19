@@ -701,7 +701,13 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
     actor: { externalId: ALICE },
     conversation: { kind: "dm", threadRef: "dm:U_ALICE:plain" },
     text: "hi",
+    conversationHeader: "You are replying in a thread you started.",
+    priorTurns: [{ role: "assistant", text: "Nightly report from Ada" }],
   });
+  assert.match(
+    states[1]!,
+    /Conversation so far:\nYou are replying in a thread you started\.\n\n.*Nightly report from Ada/,
+  );
   assert.equal(plain.runtime?.modelId, "gpt-5.5");
   assert.equal((await built.sessions.get(plain.sessionId!))?.personaId, undefined);
   assert.equal(states.length, 2);
