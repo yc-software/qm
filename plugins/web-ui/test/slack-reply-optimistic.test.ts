@@ -32,13 +32,13 @@ test("Slack chats show the composer before the connection check returns", async 
     assert.equal(h.requests.filter((path) => path.endsWith("/slack/reply-status")).length, 1);
     assert.doesNotMatch(document.querySelector("qm-slack-reply")!.textContent!, /Checking your Slack connection/);
     assert.match(
-      document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder")!,
+      document.querySelector("qm-slack-reply .composer-input")!.getAttribute("aria-label")!,
       /Reply in Slack as yourself/,
     );
     answer(Response.json({ connected: true, user: "Alice" }));
     await until(() =>
       /Reply in Slack as Alice/.test(
-        document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder")!,
+        document.querySelector("qm-slack-reply .composer-input")!.getAttribute("aria-label")!,
       ),
     );
     assert.equal(document.querySelector("qm-slack-reply .welcome-slack"), null);

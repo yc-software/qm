@@ -73,7 +73,6 @@ import {
   X,
   type IconNode,
   ExternalLink,
-  Lock,
 } from "lucide";
 import {
   APPROVAL_GONE_MESSAGE,
@@ -411,7 +410,10 @@ export function createChatSurface(
     }
     const viewer = appState.me?.displayName?.trim().toLowerCase();
     chatState.labelSpeakers =
-      isSideChatSurface() || isReadOnlySlackView() || names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
+      isSideChatSurface() ||
+      isReadOnlySlackView() ||
+      names.size > 1 ||
+      (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
     chatState.assistantSpeakerLabel = chatState.labelSpeakers ? brandName() : "";
   }
 
@@ -440,7 +442,9 @@ export function createChatSurface(
 
   function slackRow(message: AgentMessage, index: number, body: TemplateResult): TemplateResult {
     const agent = (message as { role?: string }).role === "assistant";
-    const name = agent ? brandName() : speakerLabelFor(message) || appState.me?.displayName || "You";
+    const name = agent
+      ? chatState.assistantSpeakerLabel || brandName()
+      : speakerLabelFor(message) || appState.me?.displayName || "You";
     const member = agent ? undefined : speakerMember(message);
     const avatar = agent
       ? brandMark(slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl))
@@ -1392,7 +1396,7 @@ export function createChatSurface(
 
     resetBackgroundPanel();
     const host = document.createElement("div");
-    host.className = "custom-chat readonly-chat";
+    host.className = `custom-chat readonly-chat ${s.surface === "slack" ? "slack-thread-chat" : ""}`;
     const chatSurface = chatSurfaceOf(s);
     const priorReply = sameSession ? container.querySelector<SlackReply>("qm-slack-reply") : null;
     const slackReply = repliesAsViewer(s)
@@ -2325,14 +2329,7 @@ export function createChatSurface(
           index,
           html`${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-          ${
-            workView === nothing
-              ? nothing
-              : html`<div class="slack-work">
-                  <div class="slack-work-label">${icon(Lock, 10)}Only visible here</div>
-                  ${workView}
-                </div>`
-          }`,
+          ${workView === nothing ? nothing : html`<div class="slack-work">${workView}</div>`}`,
         );
       const via = (msg as AssistantWork).via;
       const labeled = chatState.labelSpeakers || Boolean(via);
@@ -2525,7 +2522,9 @@ export function createChatSurface(
     if (text.startsWith(REACTION_PREFIX)) {
       const said = text.slice(REACTION_PREFIX.length);
       const settled = said.lastIndexOf(" (it now has ");
-      return html`<div class="slack-reaction-line">${withEmoji(settled < 0 ? said : said.slice(0, settled), charForName)}</div>`;
+      return html`<div class="slack-reaction-line">
+        ${withEmoji(settled < 0 ? said : said.slice(0, settled), charForName)}
+      </div>`;
     }
     const at = text.indexOf(FORWARD_PREFIX);
     if (at < 0) return slackWireText(text);

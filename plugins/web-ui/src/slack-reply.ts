@@ -6,6 +6,8 @@ import { LitElement, html, nothing } from "lit";
 import { withBase } from "./core-bridge";
 import { reportHandledError } from "./browser-errors.ts";
 import "./slack-account";
+import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
+import { avatarTpl } from "./ui";
 import "./slack-reply.css";
 
 const FOCUS_REFRESH_MS = 60_000;
@@ -50,6 +52,7 @@ export class SlackReply extends LitElement {
   private label = "";
   private inputObserver: ResizeObserver | null = null;
   private observedInput: HTMLTextAreaElement | null = null;
+  private stopAvatars: (() => void) | null = null;
 
   protected createRenderRoot(): HTMLElement {
     return this;
@@ -57,11 +60,14 @@ export class SlackReply extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener("focus", this.refreshOnFocus);
+    this.stopAvatars = onSpeakerAvatars(() => this.requestUpdate());
     this.requestUpdate();
   }
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("focus", this.refreshOnFocus);
+    this.stopAvatars?.();
+    this.stopAvatars = null;
     this.inputObserver?.disconnect();
     this.inputObserver = null;
     this.observedInput = null;
@@ -157,10 +163,11 @@ export class SlackReply extends LitElement {
   }
   protected render() {
     if (this.connected !== false)
-      return html`<form class="composer-wrap" @submit=${(e: Event) => void this.send(e)}>
+      return html`<form class="composer-wrap slack-reply-pill" @submit=${(e: Event) => void this.send(e)}>
+        ${avatarTpl({ key: this.user, name: this.label || this.user, avatarUrl: speakerAvatar(this.user) })}
         ${composerInput({
           value: this.text,
-          placeholder: `Reply in Slack as ${this.label || "yourself"}`,
+          placeholder: "Reply in thread…",
           label: `Reply in Slack as ${this.label || "yourself"}`,
           disabled: this.sending,
           maxLength: 4000,
@@ -173,7 +180,6 @@ export class SlackReply extends LitElement {
           },
         })}
         <div class="composer-toolbar">
-          <div class="composer-left"></div>
           <div class="composer-right">
             <button
               class="send-btn"

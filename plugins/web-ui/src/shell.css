@@ -4604,10 +4604,24 @@ summary.stopped-head:focus-visible {
 .open-in-surface:hover {
   background: var(--secondary);
 }
-.readonly-chat .message-stack {
-  padding-top: 28px;
+.slack-thread-chat .chat-scroll {
+  padding: 0;
+  scrollbar-gutter: auto;
+}
+.slack-thread-chat .message-stack {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 744px;
+  margin: 0 auto;
+  padding: 28px 24px 8px;
+  gap: 0;
+}
+.slack-thread-chat .slack-m-body :is(.markdown-content, .markdown-content p) {
+  font-size: 14.5px;
+  line-height: 1.55;
 }
 .message-row.slack-m {
+  padding-bottom: 0;
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
   column-gap: 12px;
@@ -4669,13 +4683,6 @@ summary.stopped-head:focus-visible {
   border-left: 1px solid var(--border);
   color: var(--muted-foreground);
   font-size: 13px;
-}
-.slack-work-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted-foreground);
-  font-size: 11px;
 }
 .slack-reaction-line {
   overflow: hidden;

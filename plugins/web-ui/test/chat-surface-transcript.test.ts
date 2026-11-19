@@ -22,10 +22,6 @@ test("a generic-chat conversation opens as a transcript named for its surface, w
     h.releaseSessions();
     await h.boot();
     assert.equal(document.querySelector(".chat-subtitle")!.textContent, "Community chat");
-    assert.match(
-      document.querySelector(".readonly-banner")!.textContent!,
-      /read-only here\. Reply in Community chat\./,
-    );
     assert.equal(document.querySelector(".readonly-chat a[href='https://example.com']")?.textContent, "link");
     assert.equal(document.querySelector("qm-slack-reply"), null);
   } finally {

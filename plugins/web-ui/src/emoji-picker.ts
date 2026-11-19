@@ -40,6 +40,24 @@ export function filterEmoji(rows: readonly EmojiRow[], query: string): EmojiRow[
   return rows.filter((row) => matchesQuery(row, needle));
 }
 
+const searchIndex = EMOJI_ROWS.map((row) => ({ row, terms: [row.n, ...row.a].map(normalizeName) }));
+const searchCache = new Map<string, EmojiRow[]>();
+
+export function emojiMatches(query: string, limit: number): EmojiRow[] {
+  const key = normalizeName(query);
+  const cached = searchCache.get(key);
+  if (cached) return cached;
+  const exact = rowForName(key);
+  const found = exact ? [exact] : [];
+  for (const { row, terms } of searchIndex) {
+    if (found.length === limit) break;
+    if (row !== exact && terms.some((term) => term.includes(key))) found.push(row);
+  }
+  if (searchCache.size >= 256) searchCache.delete(searchCache.keys().next().value!);
+  searchCache.set(key, found);
+  return found;
+}
+
 export function charForName(name: string): string | null {
   return rowForName(name)?.c ?? null;
 }

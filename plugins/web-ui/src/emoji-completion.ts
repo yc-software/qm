@@ -1,12 +1,14 @@
 import { html, nothing, render } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
-import { EMOJI_ROWS, filterEmoji, rowForName, type EmojiRow } from "./emoji-picker";
+import { emojiMatches, rowForName, type EmojiRow } from "./emoji-picker";
 
 export function emojiToken(
   value: string,
   caret: number,
 ): { start: number; end: number; query: string; complete: boolean } | null {
+  if (value[caret - 1] === ":" && (caret === 1 || " \n\t([{\"'".includes(value[caret - 2]!)))
+    return { start: caret - 1, end: caret, query: "", complete: false };
   const complete = value[caret - 1] === ":";
   const end = complete ? caret - 1 : caret;
   let start = end;
@@ -75,11 +77,7 @@ class EmojiCompletion extends AsyncDirective {
       }
       return;
     }
-    if (this.token.query.length < 2) return;
-    const query = this.token.query;
-    this.matches = filterEmoji(EMOJI_ROWS, query).slice(0, 8);
-    const exact = rowForName(query);
-    if (exact) this.matches = [exact, ...this.matches.filter((row) => row !== exact)].slice(0, 8);
+    this.matches = emojiMatches(this.token.query, 8);
     this.active = 0;
     if (this.matches.length) this.draw();
   };

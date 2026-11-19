@@ -44,20 +44,20 @@ test("Slack conversations show directory Slack photos on messages and in the hea
   try {
     h.releaseSessions();
     await h.boot();
-    const srcs = () => [...document.querySelectorAll(".speaker-label img")].map((i) => i.getAttribute("src"));
+    const srcs = () => [...document.querySelectorAll(".slack-m-avatar img")].map((i) => i.getAttribute("src"));
     for (let i = 0; i < 100 && srcs().length < 3; i++) await new Promise((r) => setTimeout(r, 10));
     assert.deepEqual(srcs(), [photos["eve@example.com"], photos["regan@example.com"], photos["eve@example.com"]]);
     assert.deepEqual(
-      [...document.querySelectorAll(".chat-participants img")].map((i) => i.getAttribute("src")),
+      [...document.querySelectorAll(".slack-people img")].map((i) => i.getAttribute("src")),
       [photos["eve@example.com"], photos["regan@example.com"]],
     );
-    assert.deepEqual(lookups.sort(), ["eve@example.com", "regan@example.com"], "one lookup per person");
+    assert.deepEqual(lookups.sort(), ["eve@example.com", "regan@example.com", "tester"], "one lookup per person");
   } finally {
     await h.close();
   }
 });
 
-test("a Slack channel transcript sets other people apart, groups a speaker's run and shows the Slack app icon", async () => {
+test("a Slack channel transcript groups a speaker's run and shows the Slack app icon", async () => {
   const session = { ...SESSION, type: "channel" as const, createdAt: 1, surface: "slack", canContinue: false };
   const said = (kind: "UserMessage" | "SteeringMessage", seq: number, text: string, body: Record<string, unknown>) =>
     item(kind, { seq, createdAt: seq, turnId: "t", text, body });
@@ -85,27 +85,20 @@ test("a Slack channel transcript sets other people apart, groups a speaker's run
     const rows = [...document.querySelectorAll(".message-stack > .message-row")];
     assert.deepEqual(
       rows.map((row) => [
-        row.classList.contains("others-row"),
-        row.querySelector(".pin-content")?.textContent?.trim(),
-        row.querySelector(":scope > .speaker-label > .brand-mark > img")?.getAttribute("src"),
-        row.classList.contains("continued-row"),
+        Boolean(row.querySelector(".slack-m-head")),
+        row.querySelector(".slack-wire-text")?.textContent?.trim(),
+        row.querySelector(".slack-m-avatar > .brand-mark > img")?.getAttribute("src"),
+        row.classList.contains("slack-m-continued"),
       ]),
       [
         [true, "deploys broke", undefined, false],
-        [false, "@qm DM me", undefined, false],
+        [true, "@qm DM me", undefined, false],
         [false, "thanks!", undefined, true],
-        [false, undefined, "https://avatars.slack-edge.com/app_72.png", false],
-        [false, undefined, undefined, false],
+        [true, undefined, "https://avatars.slack-edge.com/app_72.png", false],
+        [true, undefined, undefined, false],
       ],
     );
-    assert.deepEqual(
-      rows.map((row) => Boolean(row.querySelector(":scope > .speaker-label"))),
-      [true, true, false, true, true],
-    );
-    assert.ok(
-      rows.at(-1)!.querySelector(":scope > .speaker-label > .brand-mark"),
-      "a persona's reply keeps the brand mark",
-    );
+    assert.ok(rows.at(-1)!.querySelector(".slack-m-avatar > .brand-mark"), "a persona's reply keeps the brand mark");
     assert.equal(rows.at(-2)!.querySelectorAll(".user-row").length, 0);
   } finally {
     await h.close();
