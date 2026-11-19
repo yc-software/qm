@@ -117,7 +117,9 @@ node "<skill dir>/scripts/watch-ci.mjs" --repo OWNER/REPO --pr NUMBER --head REV
 Capture the full head SHA from `gh pr view NUMBER --repo OWNER/REPO --json headRefOid`
 before review. Use that same SHA for the watcher and the final merge gate. Start the
 watcher with `execute` using the selected `sandbox_id` and `background:true`, then
-subscribe with `background` action `watch` and its returned `process_id`. Keep one
+subscribe with `background` action `watch` and its returned `process_id`, with no
+`pattern`: the helper prints only status records, and the final one may be any status
+below, so a pattern can hide the one that matters. Keep one
 watcher per PR. Set the process lifetime longer than the helper's 30-minute deadline;
 use `--timeout-ms` for a different bounded deadline. Use only credentials authorized
 for that background process; a live foreground grant does not authorize background work.
@@ -127,7 +129,11 @@ recognized transient transport/server errors with bounded backoff. Pending check
 remain pending. Real CI failures, authentication/authorization failures, changed heads,
 unknown errors, exhausted retries, and deadline expiry all stop with nonzero status.
 Explicit API rate limits stop as `rate_limited`, not authentication errors.
-Empty check sets, skipped checks, and cancelled checks are not successful evidence.
+Empty check sets, cancelled checks, and sets where every check was skipped stop as
+`blocked`. Skipped checks alongside passing ones count as success; the record lists them
+in `skipped` (gh's `skipping` bucket, which holds skipped and neutral conclusions) so you
+can confirm each was meant to skip, for example checks that only run in a merge queue or
+on the default branch.
 Do not interpret an exit code alone as "checks concluded": read the status record.
 Do not suppress a nonzero exit or print a success marker after it. Keep `set -e`.
 
