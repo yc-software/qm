@@ -35,7 +35,7 @@ import {
 } from "./artifact-share.ts";
 import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
-import { withSharing } from "./app-cron-share.ts";
+import { deliversToOwner, withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
@@ -887,7 +887,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
       const copyTo =
-        cron && toKind === "personal" && permission === "read" && !req.move ? parseScopeId(toScope).ref : undefined;
+        cron && deliversToOwner(cron) && toKind === "personal" && permission === "read" && !req.move
+          ? parseScopeId(toScope).ref
+          : undefined;
       if (!remove && permission === "write" && !shareOffers(req.type, home).manage)
         return {
           ok: false,
@@ -924,7 +926,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         if (copyTo && !remove) {
           if (await app.samePerson(copyTo, capability.actorId))
             return { ok: false, code: "bad_request", message: "that cron is already yours" };
-          const { copy, existed } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
+          const { copy, existed, note } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
           return {
             ok: true,
             verb: "share",
@@ -932,7 +934,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             id: home.id,
             target: { scope: toScope, label: target.label },
             permission,
-            copy: { id: copy.id, enabled: copy.enabled, existed },
+            copy: { id: copy.id, enabled: copy.enabled, existed, ...(note ? { note } : {}) },
           };
         }
         if (orgSkillCede) {

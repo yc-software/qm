@@ -213,28 +213,31 @@ for (const type of ["slack", "group", "principal"]) {
   });
 }
 
-for (const [label, sourceThreadRef, webUiPublicUrl, footer] of [
+for (const [label, destination, sourceThreadRef, webUiPublicUrl, footer] of [
   [
     "a persona post",
+    { persona: { id: "p 1", name: "Ada <&>" } },
     undefined,
     "https://agent.example/web-ui/",
-    "Persona: <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
+    "From <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
   ],
-  ["a persona post without a web UI", undefined, undefined, "Persona: Ada &lt;&amp;&gt;"],
   [
-    "a persona's cron post",
+    "a persona post without a web UI",
+    { persona: { id: "p 1", name: "Ada <&>" } },
+    undefined,
+    undefined,
+    "From Ada &lt;&amp;&gt;",
+  ],
+  [
+    "a persona's project cron post",
+    { persona: { id: "p 1", name: "Ada <&>" }, project: { id: "j1", name: "Launch" } },
     "cron:c1:fire:123",
     "https://agent.example",
-    "Persona: <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
+    "From <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> in <https://agent.example/contexts?scope=group%3Aweb-project-j1|Launch> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
   ],
 ] as const) {
-  test(`${label} names the persona in the footer`, async () => {
-    const { posts } = await deliver(
-      { persona: { id: "p 1", name: "Ada <&>" } },
-      sourceThreadRef,
-      webUiPublicUrl,
-      "Hello",
-    );
+  test(`${label} names where it came from in the footer`, async () => {
+    const { posts } = await deliver(destination, sourceThreadRef, webUiPublicUrl, "Hello");
     assert.deepEqual((posts[0]!.blocks as unknown[]).at(-1), {
       type: "context",
       elements: [{ type: "mrkdwn", text: footer, verbatim: true }],

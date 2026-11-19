@@ -67,6 +67,7 @@ export interface PersonaService {
   ): Promise<PersonaResult<(PersonaView & { sessionModelId?: string }) | null>>;
   startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
   adopt<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
+  pinnedIn(scope: ScopeId): Promise<string | null>;
   forTurn(
     personaId: string | undefined,
     actorId: string,
@@ -308,6 +309,7 @@ export function createPersonaService(deps: {
     },
     startOnDefaultModel,
     adopt,
+    pinnedIn: (scope) => store.pinnedIn(scope),
     async forTurn(personaId, actorId, contextScope) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;

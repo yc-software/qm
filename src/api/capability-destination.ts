@@ -19,6 +19,6 @@ export function resolveCapabilityDestination(
   const def = cap.destinations?.find((d) => d.key === cap.defaultDestinationKey);
   if (def) return { ok: true, destination: stripCandidate(def) };
   if (!cap.destination) return { ok: true, destination: undefined };
-  const { persona: _worn, ...stored } = cap.destination;
+  const { persona: _worn, project: _from, ...stored } = cap.destination;
   return { ok: true, destination: stored };
 }
