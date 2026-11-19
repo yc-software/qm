@@ -169,11 +169,19 @@ function commandResultFrom(value: unknown): E2bCommandResult | null {
 type E2bSdk = typeof import("e2b");
 
 const SANDBOX_TIMEOUT_MESSAGE = /sandbox timeout|end of life|not running anymore/i;
-const UNRESUMABLE_MEMORY_MESSAGE = /cannot be resumed with its memory/i;
+const UNRESUMABLE_MEMORY_MESSAGE = "cannot be resumed with its memory";
 
 function isSandboxGone(sdk: E2bSdk, err: unknown): boolean {
   if (err instanceof sdk.SandboxNotFoundError) return true;
   return err instanceof sdk.TimeoutError && SANDBOX_TIMEOUT_MESSAGE.test(err.message);
+}
+
+function isMemoryUnresumable(sdk: E2bSdk, err: unknown): boolean {
+  return err instanceof sdk.SandboxError && err.statusCode === 409 && err.message.includes(UNRESUMABLE_MEMORY_MESSAGE);
+}
+
+function asGone(sdk: E2bSdk, sandboxId: string, err: unknown): unknown {
+  return isSandboxGone(sdk, err) ? new E2bSandboxGoneError(sandboxId, String((err as Error).message)) : err;
 }
 
 export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
@@ -299,22 +307,16 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   const connectSdk = async (sandboxId: string, onResume: "restore" | "reboot"): Promise<E2bSession> => {
     const lib = await loadSdk();
     const open = (mode: "restore" | "reboot") =>
-      lib.Sandbox.connect(sandboxId, {
-        ...common,
-        timeoutMs: sandboxTtlMs,
-        ...(mode === "reboot" ? { onResume: mode } : {}),
-      });
+      lib.Sandbox.connect(sandboxId, { ...common, timeoutMs: sandboxTtlMs, onResume: mode });
     try {
       const sbx = await open(onResume).catch((err: unknown) => {
-        if (onResume === "restore" && UNRESUMABLE_MEMORY_MESSAGE.test(String((err as Error)?.message)))
-          return open("reboot");
+        if (onResume === "restore" && isMemoryUnresumable(lib, err)) return open("reboot");
         throw err;
       });
       if (network) await sbx.updateNetwork(network);
       return wrap(lib, sbx, sandboxTtlMs);
     } catch (err) {
-      if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
-      throw err;
+      throw asGone(lib, sandboxId, err);
     }
   };
 
@@ -332,8 +334,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           memoryMb: info.memoryMB,
         };
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
-        throw err;
+        throw asGone(lib, sandboxId, err);
       }
     },
     async create(createOpts): Promise<E2bSession> {
@@ -359,8 +360,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       try {
         await lib.Sandbox.pause(sandboxId, { ...common, keepMemory: false });
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
-        throw err;
+        throw asGone(lib, sandboxId, err);
       }
       return connectSdk(sandboxId, "reboot");
     },

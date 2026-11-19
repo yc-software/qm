@@ -108,7 +108,9 @@ let startError: Error | undefined;
 let onDispatch: ((command: string) => void) | undefined;
 let waitError: Error | undefined;
 let connectError: Error | undefined;
-class FakeSandboxError extends Error {}
+class FakeSandboxError extends Error {
+  statusCode?: number;
+}
 class FakeNotFoundError extends FakeSandboxError {}
 class FakeSandboxNotFoundError extends FakeNotFoundError {}
 class FakeFileNotFoundError extends FakeNotFoundError {}
@@ -493,10 +495,12 @@ test("E2B turns the egress proxy into host-level network rules on create and on 
 test("E2B cold-boots a sandbox whose memory snapshot cannot be resumed, and restart drops memory", async () => {
   const client = createSdkE2bClient({ apiKey: "test" });
   e2bCalls.length = 0;
-  connectError = new FakeSandboxError("409: Sandbox 'wedged' cannot be resumed with its memory");
+  connectError = Object.assign(new FakeSandboxError("409: Sandbox 'wedged' cannot be resumed with its memory"), {
+    statusCode: 409,
+  });
   await client.connect("wedged");
   assert.deepEqual(e2bCalls, [
-    ["connect", "wedged", undefined],
+    ["connect", "wedged", "restore"],
     ["connect", "wedged", "reboot"],
   ]);
   e2bCalls.length = 0;
