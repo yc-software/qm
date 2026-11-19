@@ -5,7 +5,7 @@ import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import { asOrgAdmin, personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import {
   cronFireReadsNotes,
   describeRunNowRefusal,
@@ -221,13 +221,6 @@ async function mayShare(
   );
 }
 
-export async function asOrgAdmin(
-  app: Pick<App, "isOrgAdmin">,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-): Promise<boolean> {
-  return !actor.botActor && app.isOrgAdmin(actor.actorId);
-}
-
 export async function administersCron(
   app: Parameters<typeof canAdministerCron>[0] & Pick<App, "isOrgAdmin">,
   cron: Cron,
@@ -283,7 +276,7 @@ export async function cronTaskRewrite(
 ): Promise<Pick<CronPatch, "owner" | "script" | "taskAuthor">> {
   const authored = reauthored(atKeyboard, cron);
   if (actsAsScope(cron.owner, cron.ownerScopeId) || (await ownsCron(app, cron, editorId))) return authored;
-  if (await app.isOrgAdmin(editorId)) return authored;
+  if (await asOrgAdmin(app, { actorId: editorId })) return authored;
   return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
@@ -301,7 +294,7 @@ export async function editWebhookTask(
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
   if (!(await administersWebhook(app, webhook, { actorId: principalId })))
     return { ok: false, code: "forbidden", message: "not your webhook" };
-  if (!(await app.samePerson(webhook.owner, principalId)) && !(await app.isOrgAdmin(principalId)))
+  if (!(await app.samePerson(webhook.owner, principalId)) && !(await asOrgAdmin(app, { actorId: principalId })))
     return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
   const updated = await app.updateWebhook(id, { action });
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };

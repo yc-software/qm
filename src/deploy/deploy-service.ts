@@ -12,7 +12,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { bytes, normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import { asOrgAdmin, personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
 import {
@@ -499,11 +499,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (grant.permission !== "write") continue;
       if (await canWriteScope(caller.actorId, grant.granteeScopeId, actingScopeId)) return true;
     }
-    return !caller.botActor && orgAdmin(caller.actorId);
-  }
-
-  async function orgAdmin(callerId: string): Promise<boolean> {
-    return (await deps.isOrgAdmin?.(callerId)) === true;
+    return asOrgAdmin(deps, caller);
   }
 
   return {
@@ -1095,7 +1091,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async transferAppOwner(idOrName, toScope, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
-      if (!(await managesHome(d, actor.callerId, actor.actingScopeId)) && !(await orgAdmin(actor.callerId))) {
+      if (
+        !(await managesHome(d, actor.callerId, actor.actingScopeId)) &&
+        !(await asOrgAdmin(deps, { actorId: actor.callerId }))
+      ) {
         throw new DeployAccessError("forbidden", `only the owner can transfer "${d.name ?? d.id}"`);
       }
       if (d.ownerScopeId === toScope) return d;
