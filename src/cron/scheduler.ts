@@ -295,8 +295,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
-      const { personaId, project } = (await deps.cronOrigin?.(cron)) ?? {};
-      const destination = cron.destination && project ? { ...cron.destination, project } : cron.destination;
+      const { personaId, project, persona } = (await deps.cronOrigin?.(cron)) ?? {};
+      const destination =
+        cron.destination && (project || persona)
+          ? { ...cron.destination, ...(project ? { project } : {}), ...(persona ? { persona } : {}) }
+          : cron.destination;
       const refusedDelivery =
         previous && cron.destination
           ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))

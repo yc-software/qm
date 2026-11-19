@@ -1152,6 +1152,10 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
   const edited = await control.patchCron(made.cron.id, { title: "t" }, claims("U1", scopeId("channel", "C9")));
   assert.ok(edited.ok, JSON.stringify(edited));
 
+  const note = await control.createCron({ schedule: cron.schedule, text: "hi", persona: personaId }, claims("U1"));
+  assert.ok(note.ok, JSON.stringify(note));
+  assert.equal((await built.app.cronOrigin(note.cron)).persona?.name, "Ada");
+
   const theirs = await control.createCron({ ...cron, persona: personaId }, claims("U2"));
   assert.equal(theirs.ok ? "created" : theirs.code, "forbidden");
 });

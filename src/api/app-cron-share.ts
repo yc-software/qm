@@ -126,7 +126,12 @@ export function createCronShareMethods(
   return {
     cronOrigin: async (cron) => {
       const source = (cron.sharedFrom ? await deps.crons.get(cron.sharedFrom) : null) ?? cron;
-      return originOf(source, cron.ownerScopeId, cron.sessionRef);
+      const origin = await originOf(source, cron.ownerScopeId, cron.sessionRef);
+      if (cron.message === undefined || !origin.personaId) return origin;
+      const held = await app.personas?.forTurn(origin.personaId, cron.owner, cron.ownerScopeId);
+      if (!held || typeof held === "string") return origin;
+      const { id, name, icon } = held.persona;
+      return { ...origin, persona: { id, name, ...(icon ? { icon } : {}) } };
     },
     cronCopies: async (id) => (await deps.crons.copiesOf(id)).map(asCopy),
     cronSharing: (cron) => sharingFor(deps.crons, cron),
