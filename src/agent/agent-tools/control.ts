@@ -333,6 +333,9 @@ export function controlPlaneTools(kit: ToolKit) {
   function sharingTool(type: "file" | "skill" | "deploy" | "cron"): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
+    if (type === "cron")
+      description =
+        "Share a cron you own. To a teammate (a name or personal:<id>) it becomes their own linked copy that runs as them and posts to their DM: an admin's share starts it; anyone else's waits paused until they turn it on (accept) or delete it (decline). Your later edits reach every copy its owner hasn't edited. permission=write, or any other scope, gets access to this cron itself instead.";
     if (type === "file")
       description =
         "Share a Files record by ID (upload a sandbox path with the helper from GET /v1/files/upload-client first).";
@@ -375,8 +378,8 @@ export function controlPlaneTools(kit: ToolKit) {
             }
           : {}),
         permission: Type.Optional(
-          Type.Union([Type.Literal("read"), Type.Literal("write")], {
-            description: "read (default) or write (manage).",
+          Type.Union([Type.Literal("read"), Type.Literal("write"), Type.Literal("none")], {
+            description: "read (default), write (manage), or none (remove their access).",
           }),
         ),
       }),
@@ -386,7 +389,7 @@ export function controlPlaneTools(kit: ToolKit) {
           toScope?: string;
           email?: string;
           public?: boolean;
-          permission?: "read" | "write";
+          permission?: "read" | "write" | "none";
           notify?: boolean;
         };
         const tc = ref.current;
@@ -442,11 +445,16 @@ export function controlPlaneTools(kit: ToolKit) {
         else if (r.invitation)
           invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
         if (r.invitation?.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
+        if (r.copy?.existed) invitationNote = ` They already have linked copy ${r.copy.id}.`;
+        else if (r.copy)
+          invitationNote = ` Their linked copy ${r.copy.id} ${r.copy.enabled ? "is on and runs as them" : "waits, paused, until they accept it"}; they were told in their DM.`;
         return recordResult(
           callId,
           { tool, action: "share", verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
           text(
-            `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
+            r.verb === "unshare"
+              ? `Removed ${r.target.label}'s access to ${r.type} ${r.id}.`
+              : `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
           ),
         );
       },

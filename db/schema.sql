@@ -261,6 +261,12 @@ CREATE FUNCTION public.claim_crons_tenants_by_ownerscopeid(value text) RETURNS T
     AS $$ SELECT DISTINCT tenant_id, 'crons'::text FROM crons
                 WHERE lower(json->>'ownerScopeId') = lower(value) AND tenant_id IN (SELECT qm_serving_tenants()) $$;
 
+CREATE FUNCTION public.claim_crons_tenants_by_sharedfrom(value text) RETURNS TABLE(tenant_id uuid, id text)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$ SELECT DISTINCT tenant_id, 'crons'::text FROM crons
+                WHERE lower(json->>'sharedFrom') = lower(value) AND tenant_id IN (SELECT qm_serving_tenants()) $$;
+
 CREATE FUNCTION public.claim_custom_model_providers() RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
@@ -3675,6 +3681,10 @@ CREATE INDEX crons_ownerscopeid_unicode ON public.crons USING btree (id) WHERE (
 
 CREATE INDEX crons_resource_search_gin ON public.crons USING gin (to_tsvector('simple'::regconfig, ((((COALESCE((json ->> 'title'::text), ''::text) || ' '::text) || COALESCE((json ->> 'action'::text), ''::text)) || ' '::text) || COALESCE((json ->> 'message'::text), ''::text))));
 
+CREATE INDEX crons_sharedfrom_fold ON public.crons USING hash (lower((json ->> 'sharedFrom'::text)));
+
+CREATE INDEX crons_sharedfrom_unicode ON public.crons USING btree (id) WHERE ((json ->> 'sharedFrom'::text) ~ '[^\x01-\x7f]'::text);
+
 CREATE INDEX decision_rules_hook ON public.decision_rules USING btree (hook) WHERE (mode <> 'off'::text);
 
 CREATE INDEX deployments_inbound_id ON public.deployments USING btree (id);
@@ -3900,6 +3910,8 @@ CREATE STATISTICS public.approval_grants_actorid_stats ON (json ->> 'actorId'::t
 CREATE STATISTICS public.approvals_sessionid_stats ON (json ->> 'sessionId'::text) FROM public.approvals;
 
 CREATE STATISTICS public.crons_ownerscopeid_stats ON (json ->> 'ownerScopeId'::text) FROM public.crons;
+
+CREATE STATISTICS public.crons_sharedfrom_stats ON (json ->> 'sharedFrom'::text) FROM public.crons;
 
 CREATE STATISTICS public.keychain_credentials_ownerid_stats ON (json ->> 'ownerId'::text) FROM public.keychain_credentials;
 
@@ -5068,4 +5080,4 @@ REVOKE ALL ON FUNCTION public.qm_self_serve_provisioned(tenant uuid, key text) F
 REVOKE ALL ON FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand text) FROM PUBLIC;
 
 INSERT INTO public.tenants DEFAULT VALUES;
-INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0000-baseline', 'a8771279834f7e5ad26a870a023e164cd52b2bba068515816c2e72e7300162d5');
+INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0000-baseline', '3cbea410b72a0197432376761d946b3666fabffb492fe331b868f95795560f43');

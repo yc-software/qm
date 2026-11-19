@@ -194,7 +194,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal(viaTool.ok || viaTool.code, "human_consent_required");
   assert.deepEqual(await h.app.appGrantees(h.d.id), unshared);
   for (const [path, body, claims] of [
-    [`/v1/apps/${h.d.id}/share`, { scope: "org" }, { triggered: true }],
+    [`/v1/shares/deploy/${h.d.id}`, { scope: "org" }, { triggered: true }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true }, { triggered: true }],
   ] as const) {

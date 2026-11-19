@@ -27,6 +27,7 @@ import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
+import { linkedChanges, withSharing } from "./app-cron-share.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 import { editableIn, SLACK } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
@@ -218,13 +219,14 @@ export function createMessagingMethods(
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
-      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c));
+      const sharing = withSharing(all);
+      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c)).map(sharing);
       const visible = all
         .filter((c) => !viewersOwn(c.owner))
         .filter(canSee)
         .map((c) => {
           const name = scopeNames.get(c.ownerScopeId);
-          return name ? { ...c, scopeName: name } : c;
+          return sharing(name ? { ...c, scopeName: name } : c);
         });
       return { owned, visible };
     },
@@ -234,7 +236,13 @@ export function createMessagingMethods(
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
-      const updated = await deps.crons.update(id, patch);
+      const linked = linkedChanges(before, patch);
+      const edited = Object.keys(linked).length > 0;
+      const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
+      const own = forks ? { ...patch, forkedAt: Date.now() } : patch;
+      const updated = edited
+        ? ((await deps.crons.updateLinked(id, own, linked))[0] ?? null)
+        : await deps.crons.update(id, own);
       auditCron("cron_update", before, by);
       return updated;
     },
