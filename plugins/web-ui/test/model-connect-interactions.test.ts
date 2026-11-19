@@ -361,7 +361,7 @@ test("AI account modal interactions", async (t) => {
     assert.equal(doc.querySelector("#mc-title")!.textContent?.trim(), "Connect Claude");
     assert.equal(doc.querySelector(".mc-providers"), null);
     assert.equal(doc.querySelector(".mc-method"), null);
-    button("Use API key").click();
+    button("Use an API key instead").click();
     const input = doc.querySelector<HTMLInputElement>("input")!;
     input.value = "test-only-key";
     input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));

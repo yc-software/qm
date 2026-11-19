@@ -519,6 +519,20 @@ function apikeySteps(p: ProviderMeta): TemplateResult {
 function connectBody(p: ProviderMeta): TemplateResult {
   let subscriptionSteps: TemplateResult | typeof nothing = nothing;
   if (s.method === "subscription") subscriptionSteps = p.key === "claude" ? claudeSteps() : chatgptSteps();
+  if (s.intent) {
+    return html`<div class="mc-simple-flow">
+      ${s.method === "apikey" ? apikeySteps(p) : subscriptionSteps}
+      ${s.busy ? html`<p class="mc-waiting">Connecting…</p>` : nothing}
+      ${!s.method ? html`<button class="btn primary" ?disabled=${s.saving} @click=${() => void pickSubscription(p)}>Sign in with ${p.name}</button>` : nothing}
+      <button
+        class="settings-theme-link"
+        ?disabled=${s.busy || s.saving}
+        @click=${() => (s.method === "apikey" ? void pickSubscription(p) : pickApiKey())}
+      >
+        ${s.method === "apikey" ? "Use my subscription instead" : "Use an API key instead"}
+      </button>
+    </div>`;
+  }
   return html`
     <div class="mc-connect">
       ${methodRow(
@@ -627,145 +641,7 @@ async function switchAccount(account: "personal" | "company", provider?: "anthro
   paint();
 }
 
-function sheetField(label: string, help: TemplateResult | string, control: TemplateResult): TemplateResult {
-  return html`<label class="mc-sheet-field">
-    <span class="mc-sheet-label">${label}</span>
-    ${control}
-    <span class="mc-sheet-help">${help}</span>
-  </label>`;
-}
-
-function sheetBody(p: ProviderMeta): TemplateResult {
-  if (s.connections[p.apiName]) return providerRow(p);
-  const flow = s.flow;
-  if (s.method === "apikey" && flow.kind === "apikey")
-    return sheetField(
-      "API key",
-      html`Create one at <a href=${p.keyConsoleUrl} target="_blank" rel="noopener">${p.keyConsole}</a>. Usage is billed
-        to the key.`,
-      html`<input
-        type="password"
-        ?disabled=${s.busy || s.saving}
-        .value=${flow.value}
-        placeholder=${p.keyPlaceholder}
-        autocomplete="off"
-        @input=${(e: Event) => {
-          flow.value = (e.target as HTMLInputElement).value;
-          paint();
-        }}
-        @keydown=${(e: KeyboardEvent) => e.key === "Enter" && saveKey(p)}
-      />`,
-    );
-  if (flow.kind === "claude")
-    return html`
-      <div class="mc-sheet-step">
-        <span class="mc-sheet-step-text"
-          ><strong>Sign in to Claude</strong><small>Approve access, then copy the code Claude shows.</small></span
-        >
-        <a class="btn" href=${flow.authorizeUrl} target="_blank" rel="noopener">Open Claude ↗</a>
-      </div>
-      ${sheetField(
-        "Authorization code",
-        "Paste the code here to finish connecting.",
-        html`<input
-          ?disabled=${s.busy || s.saving}
-          .value=${flow.code}
-          placeholder="Paste code"
-          autocomplete="off"
-          spellcheck="false"
-          @input=${(e: Event) => {
-            flow.code = (e.target as HTMLInputElement).value;
-            paint();
-          }}
-          @keydown=${(e: KeyboardEvent) => e.key === "Enter" && finishClaude()}
-        />`,
-      )}
-    `;
-  if (flow.kind === "chatgpt")
-    return html`<div class="mc-sheet-field">
-      <span class="mc-sheet-label">Code</span>
-      <button type="button" class="mc-sheet-code" @click=${() => copyCode(flow.device.userCode)}>
-        <span class="mc-code">${flow.device.userCode}</span>
-        <span class="mc-copy-hint">${s.copied ? "Copied" : "Copy"}</span>
-      </button>
-      <span class="mc-sheet-help">Open ChatGPT, sign in, and enter this code to approve access.</span>
-    </div>`;
-  return html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Preparing sign-in…</div>`;
-}
-
-function sheetFoot(p: ProviderMeta): TemplateResult {
-  const flow = s.flow;
-  const cancel = html`<button type="button" class="btn" ?disabled=${s.saving} @click=${closeManager}>Cancel</button>`;
-  if (s.connections[p.apiName])
-    return html`<span class="mc-sheet-spacer"></span
-      ><button type="button" class="btn primary" ?disabled=${s.saving} @click=${closeManager}>Done</button>`;
-  const apikey = s.method === "apikey";
-  const swap = html`<button
-    type="button"
-    class="btn mc-sheet-quiet"
-    ?disabled=${s.busy || s.saving}
-    @click=${() => (apikey ? void pickSubscription(p) : pickApiKey())}
-  >
-    ${apikey ? "Use subscription" : "Use API key"}
-  </button>`;
-  let status: TemplateResult | typeof nothing = nothing;
-  let primary: TemplateResult;
-  if (apikey && flow.kind === "apikey")
-    primary = html`<button class="btn primary" ?disabled=${!flow.value.trim() || s.busy} @click=${() => saveKey(p)}>
-      ${s.busy ? "Checking…" : "Connect"}
-    </button>`;
-  else if (flow.kind === "claude")
-    primary = html`<button class="btn primary" ?disabled=${!flow.code.trim() || s.busy} @click=${finishClaude}>
-      ${s.busy ? "Connecting…" : "Connect"}
-    </button>`;
-  else if (flow.kind === "chatgpt") {
-    status = html`<span class="mc-sheet-status" role="status"
-      ><span class="mc-spinner" aria-hidden="true"></span>Waiting for approval…</span
-    >`;
-    primary = html`<a class="btn primary" href=${flow.device.verificationUrl} target="_blank" rel="noopener"
-      >Open ChatGPT ↗</a
-    >`;
-  } else
-    primary = html`<button class="btn primary" ?disabled=${s.saving || s.busy} @click=${() => void pickSubscription(p)}>
-      Sign in
-    </button>`;
-  return html`${swap}<span class="mc-sheet-spacer"></span>${status}${cancel}${primary}`;
-}
-
-function sheetView(p: ProviderMeta): TemplateResult {
-  const sub =
-    s.method === "apikey"
-      ? "New chats will be billed to this API key."
-      : `Use your ${p.subscription} subscription for new chats.`;
-  return html`
-    <div class="signin mc-sheet-wrap">
-      <div
-        class="signin-panel mc-panel mc-sheet"
-        tabindex="-1"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="mc-title"
-        aria-describedby="mc-sub"
-      >
-        <header class="mc-sheet-head">
-          <h2 id="mc-title">Connect ${p.name}</h2>
-          <p id="mc-sub">${sub}</p>
-        </header>
-        <div class="mc-sheet-body">
-          ${s.error ? html`<div class="mc-error" role="alert">${s.error}</div>` : nothing}
-          ${s.saving || s.notice ? html`<p class="mc-notice" role="status">${s.saving ? "Saving changes…" : s.notice}</p>` : nothing}
-          ${s.loading ? html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Loading…</div>` : sheetBody(p)}
-        </div>
-        <footer class="mc-sheet-foot">
-          ${s.loading ? html`<span class="mc-sheet-spacer"></span>${html`<button type="button" class="btn" @click=${closeManager}>Cancel</button>`}` : sheetFoot(p)}
-        </footer>
-      </div>
-    </div>
-  `;
-}
-
 function view(): TemplateResult {
-  if (s.mode === "manager" && s.intent) return sheetView(s.intent);
   const anyConnected = PROVIDERS.some(
     (p) => s.connections[p.apiName] && (s.account === "personal" || s.account === p.apiName),
   );
@@ -780,6 +656,10 @@ function view(): TemplateResult {
   }
   let choices: TemplateResult;
   if (!s.loaded) choices = html`<button type="button" class="btn" @click=${() => void load()}>Retry</button>`;
+  else if (s.intent)
+    choices = html`<div class="mc-simple-connect">
+      ${s.connections[s.intent.apiName] ? providerRow(s.intent) : connectBody(s.intent)}
+    </div>`;
   else
     choices = html`<div class="mc-providers">
       ${methodRow(
@@ -795,16 +675,22 @@ function view(): TemplateResult {
       </p>
       ${PROVIDERS.map((p) => providerRow(p))}
     </div>`;
-  const title = s.mode === "gate" ? "Connect your AI account" : "AI accounts";
+  let title = s.mode === "gate" ? "Connect your AI account" : "AI accounts";
+  if (s.intent) title = `Connect ${s.intent.name}`;
   const body = s.loading
     ? html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Loading…</div>`
     : html`
         ${s.error ? html`<div class="mc-error" role="alert">${s.error}</div>` : nothing}
         ${s.saving || s.notice ? html`<p class="mc-notice" role="status">${s.saving ? "Saving changes…" : s.notice}</p>` : nothing}
-        ${choices} ${cta}
+        ${choices} ${s.intent ? nothing : cta}
       `;
-  const subCopy =
-    "Choose who provides access for your chats on the web and in Slack. Background tasks continue using company access.";
+  const personalCopy =
+    s.method === "apikey"
+      ? "New chats will be billed to this API key."
+      : `Use your ${s.intent?.subscription} subscription for new chats.`;
+  const subCopy = s.intent
+    ? personalCopy
+    : "Choose who provides access for your chats on the web and in Slack. Background tasks continue using company access.";
   return html`
     <div class="signin">
       <div
@@ -841,12 +727,8 @@ function paint(): void {
   if (!s.active || !el) return;
   const focused = document.activeElement;
   render(view(), el);
-  if (s.mode === "manager" && focused?.classList.contains("mc-sheet")) {
-    el.querySelector<HTMLElement>(".mc-sheet-body input")?.focus();
-  } else if (s.mode === "manager" && focused && !focused.isConnected) {
-    el.querySelector<HTMLElement>(
-      ".mc-sheet-body input, .mc-provider.open .mc-provider-actions button, .mc-close, .mc-sheet-foot .btn.primary",
-    )?.focus();
+  if (s.mode === "manager" && focused && !focused.isConnected) {
+    el.querySelector<HTMLElement>(".mc-provider.open .mc-provider-actions button, .mc-close")?.focus();
   }
 }
 
@@ -886,7 +768,7 @@ export function openModelConnectManager(provider?: "anthropic" | "openai"): void
   s = fresh("manager");
   s.intent = PROVIDERS.find((p) => p.apiName === provider) ?? null;
   paint();
-  overlay.querySelector<HTMLElement>(".mc-close, .mc-sheet")?.focus();
+  overlay.querySelector<HTMLElement>(".mc-close")?.focus();
   const state = s;
   void load().then(() => {
     if (current(state) && s.loaded && s.intent) {
