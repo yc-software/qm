@@ -638,7 +638,7 @@ function settingsNav(section: string): TemplateResult {
 
 const settingsSection_ = (title: string, body: TemplateResult, card = true): TemplateResult => html`
   <section class="settings-section">
-    <h3>${title}</h3>
+    <div class="settings-section-head"><h3>${title}</h3></div>
     ${card ? html`<div class="settings-card">${body}</div>` : body}
   </section>
 `;

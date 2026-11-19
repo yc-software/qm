@@ -1227,10 +1227,18 @@
   border-radius: 10px;
   background: var(--background);
   color: var(--foreground);
-  box-shadow: 0 20px 60px color-mix(in srgb, var(--foreground) 24%, transparent);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.16);
+}
+/* Shadow and scrim always darken, never lighten: --foreground is near-white in dark theme
+   and would glow and wash the page out. */
+html.dark #app-view dialog.custom-provider-dialog {
+  box-shadow: none;
 }
 #app-view dialog.custom-provider-dialog::backdrop {
-  background: color-mix(in srgb, var(--foreground) 28%, transparent);
+  background: color-mix(in srgb, var(--scrim, #0a0a0a) 36%, transparent);
+}
+html.dark #app-view dialog.custom-provider-dialog::backdrop {
+  background: color-mix(in srgb, var(--scrim, #050a14) 64%, transparent);
 }
 #app-view .project-dialog-head h2 {
   margin: 0;
@@ -2648,22 +2656,6 @@
   display: grid;
   gap: 28px;
 }
-#app-view .cred-section-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 0 0 10px;
-}
-#app-view .cred-section-head h3 {
-  margin: 0;
-  font-size: var(--font-14, 14px);
-  font-weight: 500;
-  color: var(--foreground);
-}
-#app-view .cred-section-head span {
-  color: var(--muted-foreground);
-  font-size: var(--font-12-5, 12.5px);
-}
 #app-view .cred-group {
   overflow: hidden;
 }
@@ -2747,33 +2739,15 @@
 }
 
 /* Credentials: page header — one title, one line, action on the same row */
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head {
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .cred-page-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
+  margin: 0 0 28px;
 }
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head h2 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head p {
-  max-width: none;
-  margin: 6px 0 0;
-  color: var(--muted-foreground);
-}
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head .viewlink {
-  margin-inline-start: 4px;
-  white-space: nowrap;
-}
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head #sc-add {
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .cred-page-head #sc-add {
   flex: none;
-}
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .body {
-  margin-top: 32px;
 }
 
 /* Credential editor (dialog.cd). An 8pt rhythm, after Apple's HIG:
@@ -2792,10 +2766,6 @@
   border-radius: 14px;
   border: 1px solid var(--cd-hairline);
   flex-direction: column;
-  box-shadow: 0 24px 64px rgb(0 0 0 / 0.16);
-}
-html.dark #app-view dialog.custom-provider-dialog.cd {
-  box-shadow: none;
 }
 #app-view dialog.custom-provider-dialog.cd[open] {
   display: flex;
@@ -2972,12 +2942,6 @@ html.dark #app-view dialog.cd .cd-group {
 #app-view dialog.cd .cd-segmented input:focus-visible + span {
   outline: 2px solid var(--ring, #3b82f6);
 }
-#app-view dialog.cd .identity-chips:empty {
-  display: none;
-}
-#app-view dialog.cd .sc-picker:not([style*="none"]) + .identity-chips {
-  margin-top: -8px;
-}
 
 /* Summary: key/value rows in a grouped list. */
 #app-view dialog.cd .cd-summary div {
@@ -3052,37 +3016,17 @@ html.dark #app-view dialog.cd .cd-group {
   background-position: right 12px center;
   cursor: pointer;
 }
-/* Scrim: always darken, never lighten. The shared dialog backdrop mixes --foreground,
-   which is near-white in dark theme and washes the page out. */
-#app-view dialog.custom-provider-dialog.cd::backdrop {
-  background: color-mix(in srgb, var(--scrim, #0a0a0a) 36%, transparent);
-}
-html.dark #app-view dialog.custom-provider-dialog.cd::backdrop {
-  background: color-mix(in srgb, var(--scrim, #050a14) 64%, transparent);
-}
 
 /* Credentials page structure matches General: title at the top edge, 28px between blocks,
    and Personal keychains as a titled section over a rounded card. */
 #app-view[data-subview="credentials"] #view-governance section#card-service-credentials {
   padding: 0;
 }
-#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head {
-  margin: 0 0 28px;
-}
 #app-view[data-subview="credentials"] #view-governance section#card-personal-keychains {
   display: block;
   margin: 28px 0 0;
   padding: 0;
   border: 0;
-}
-#app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .head {
-  margin: 0 0 10px;
-}
-#app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .head h2 {
-  margin: 0;
-  font-size: var(--font-14);
-  font-weight: 500;
-  color: var(--foreground);
 }
 #app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .body {
   margin: 0;

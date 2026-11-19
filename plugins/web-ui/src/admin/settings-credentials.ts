@@ -393,9 +393,7 @@ const addCredential = () =>
 export const keychainCard = () => {
   const ready = keychain && keychain.enabled !== false;
   return html`<section class="card sv-credentials" id="card-personal-keychains">
-    <div class="head">
-      <h2>Personal keychains</h2>
-    </div>
+    <div class="settings-section-head"><h3>Personal keychains</h3></div>
     <div class="body settings-card">
       <div class="keychain-summary">
         <strong id="keychain-user-count">${ready ? String(keychain!.users) : "—"}</strong> users with keychain entries ·
@@ -478,7 +476,7 @@ function credentialRows() {
     const rows = credentialState.rows.filter(test);
     return rows.length
       ? html`<div class="cred-section">
-          <div class="cred-section-head">
+          <div class="settings-section-head">
             <h3>${title}</h3>
             <span>${hint}</span>
           </div>
@@ -587,8 +585,8 @@ export function credentialsCard() {
     class=${classMap({ card: true, "sv-credentials": true, dirty: s.dirty })}
     id="card-service-credentials"
   >
-    <div class="head cred-page-head">
-      <div>
+    <div class="cred-page-head">
+      <div class="settings-page-head">
         <h2>Credentials</h2>
         <p>Shared keys the agent uses on your team's behalf. Secrets stay in core and never reach a sandbox.</p>
       </div>

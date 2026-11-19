@@ -14020,11 +14020,21 @@ html.app-share-embed body {
   color: var(--muted-foreground);
   font-size: var(--font-13);
 }
-.settings-section > h3 {
+.settings-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   margin: 0 0 10px;
+}
+.settings-section-head h3 {
+  margin: 0;
   font-size: var(--font-14);
   font-weight: 500;
   color: var(--foreground);
+}
+.settings-section-head span {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
 }
 .settings-card {
   border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
