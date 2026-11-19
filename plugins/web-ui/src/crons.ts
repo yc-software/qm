@@ -1,3 +1,4 @@
+import { switchTrack } from "./switch.ts";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { Archive, Ellipsis, Pause, Pencil, Play, Plus, RotateCcw, Sparkles, Trash2 } from "lucide";
 import { live } from "lit/directives/live.js";
@@ -607,7 +608,7 @@ function cronSwitch(c: CronView): TemplateResult {
     ${tip(c.enabled ? "Pause this cron" : "Turn this cron on")}
     @click=${() => void setCronEnabled(c.id, !c.enabled)}
   >
-    <span class="cron-switch-track"><span></span></span><span>${c.enabled ? "On" : "Off"}</span>
+    ${switchTrack(c.enabled)}<span>${c.enabled ? "On" : "Off"}</span>
   </button>`;
 }
 

@@ -32,6 +32,7 @@ test("a refreshed model catalog only reaches the view that asked for it", async 
           : {
               modelCatalogRefreshing: reads++ === 0,
               baseModelOptions: [{ id: "configured", name: "Configured" }],
+              modelCatalog: { configured: meta("configured") },
               webuiModels: [],
             },
       "/custom-providers": { providers: [] },
@@ -40,11 +41,12 @@ test("a refreshed model catalog only reaches the view that asked for it", async 
     if (stale) await visit(admin, "/settings/models?again=1");
     refresh.resolve({
       baseModelOptions: [{ id: "new", name: "New model" }],
+      modelCatalog: { new: meta("new") },
     });
     await admin.settle();
-    const offered = [...admin.document.querySelectorAll<HTMLOptionElement>("#webui-models-options option")].map(
-      (option) => option.value,
-    );
+    click(admin, "#webui-models-add .loadout-button");
+    await admin.settle();
+    const offered = [...admin.document.querySelectorAll("#webui-models-add .loadout-name")].map((n) => n.textContent);
     assert.equal(offered.includes("new"), !stale, stale ? "stale" : "current");
     assert.ok(offered.includes("configured"));
     admin.close();
@@ -58,14 +60,19 @@ test("enabled models and custom providers save their payloads", async () => {
     return { ok: true };
   };
   const admin = await mountPage("/settings/models", {
-    "/scopes/org:acme": { baseModelOptions: [{ id: "a", name: "Alpha" }, { id: "b" }], webuiModels: ["a"] },
+    "/scopes/org:acme": {
+      baseModelOptions: [{ id: "a", name: "Alpha" }, { id: "b" }],
+      modelCatalog: { a: meta("a"), b: meta("b") },
+      webuiModels: ["a"],
+    },
     "/custom-providers": { providers: [] },
     "PUT /scopes/org:acme/webui-models": record,
     "PUT /custom-providers/gw": record,
   });
   await admin.settle();
-  type(admin, "#webui-models-add", "b");
-  click(admin, "#webui-models-add-button");
+  click(admin, "#webui-models-add .loadout-button");
+  await admin.settle();
+  click(admin, "#webui-models-add .loadout-pick");
   click(admin, '[data-save="webui-models"]');
   await admin.settle();
   click(admin, "#add-custom-provider");
@@ -259,13 +266,13 @@ test("credential usage fills in when it arrives, survives failure, and ignores r
     });
     await admin.settle();
     const list = () => admin.document.getElementById("sc-list")?.textContent ?? "";
-    assert.match(list(), /Loading usage…/);
+    assert.doesNotMatch(list(), /\buses?\b|Usage unavailable/);
     if (outcome === "view") await visit(admin, "/settings/models");
     usage.resolve(
       outcome === "failed" ? { status: 500, body: {} } : { summaries: [{ slug: "example", usageCount: 7 }] },
     );
     await admin.settle();
-    if (outcome === "current") assert.match(list(), /7 successful uses/);
+    if (outcome === "current") assert.match(list(), /7 uses/);
     if (outcome === "failed") assert.match(list(), /Usage unavailable/);
     if (outcome === "view") assert.equal(list(), "");
     admin.close();
@@ -300,7 +307,8 @@ test("credentials save from the dialog and delete after review", async () => {
   await admin.settle();
   assert.equal(dialog.open, false);
   assert.match(admin.document.getElementById("sc-list")!.textContent!, /Service/);
-  click(admin, '#sc-list [aria-label="Delete Service"]');
+  click(admin, '#sc-list [aria-label="Edit Service"]');
+  click(admin, "#sc-delete");
   await admin.settle();
   assert.match(admin.document.getElementById("governance-review-title")!.textContent!, /Delete “Service”/);
   click(admin, "#governance-review-confirm");

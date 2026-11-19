@@ -1,3 +1,4 @@
+import { switchTrack } from "./switch.ts";
 import { LOOP_ICONS, loopIcon, readLoopIcon } from "./loop-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CheckCircle2, ChevronDown, ChevronRight, CornerUpLeft, Pause, Play, Zap } from "lucide";
@@ -512,7 +513,7 @@ function triageTpl(loop: LoopView, items: LoopItemView[]): TemplateResult {
               <span class="loop-autopilot-label">${copy.label}</span>
               <span class="loop-autopilot-sublabel">${copy.sublabel}</span>
             </span>
-            <span class="loop-autopilot-switch"><span></span></span>
+            ${switchTrack(enabled)}
           </button>
           ${
             enabled
@@ -833,7 +834,7 @@ function detailTpl(detail: LoopDetail): TemplateResult {
                 >${autopilot ? "Shipping without review" : "Ships outputs without review"}</span
               >
             </span>
-            <span class="loop-autopilot-switch"><span></span></span>
+            ${switchTrack(autopilot)}
           </button>`
         : nothing
     }

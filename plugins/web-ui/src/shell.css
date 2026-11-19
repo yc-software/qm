@@ -1183,16 +1183,20 @@ a.chat-row-open {
   gap: 28px;
   align-items: start;
 }
+/* Whole-pixel line boxes keep every row the same height: inherited 1.5x of
+   13.5px is 20.25px, which rounds to alternating 30/31px rows. 30px rows on a
+   32px pitch; group labels get 16px above and sit 6px over their first item. */
 .settings-nav {
   position: sticky;
   top: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 .settings-nav-label {
-  margin: 14px 8px 4px;
+  margin: 16px 8px 4px;
   font-size: var(--font-12-5);
+  line-height: 16px;
   color: var(--muted-foreground);
 }
 .settings-nav-item {
@@ -1200,6 +1204,7 @@ a.chat-row-open {
   border-radius: var(--radius-sm);
   color: var(--foreground);
   font-size: var(--font-13-5);
+  line-height: 20px;
   text-decoration: none;
 }
 .settings-nav-item:hover,
@@ -1212,11 +1217,14 @@ a.chat-row-open {
 .settings-content {
   min-width: 0;
 }
+/* A quiet footnote under the section list, not a banner above every page. */
 .settings-tip {
-  max-width: 1180px;
-  margin: 0 auto;
+  max-width: 200px;
+  margin: 24px 8px 0;
   color: var(--muted-foreground);
-  font-size: var(--font-13);
+  font-size: 12px;
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 .settings-page-title {
   position: absolute;
@@ -1227,9 +1235,6 @@ a.chat-row-open {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
-}
-.settings-content > .settings-group {
-  margin-top: 0;
 }
 @media (max-width: 720px) {
   .settings-layout.with-nav {
@@ -1247,13 +1252,6 @@ a.chat-row-open {
   .settings-nav-item {
     flex: none;
   }
-}
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-width: 960px;
-  margin: 12px auto 0;
 }
 .settings-row {
   display: flex;
@@ -5887,31 +5885,8 @@ a.connector-widget:focus-visible {
   font-size: var(--font-13);
   cursor: pointer;
 }
-.cron-switch-track {
-  width: 32px;
-  height: 18px;
-  padding: 2px;
-  border-radius: 999px;
-  box-sizing: border-box;
-  background: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
-  transition: background 120ms ease;
-}
-.cron-switch-track span {
-  display: block;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--background);
-  transition: transform 120ms ease;
-}
 .cron-switch.on {
   color: var(--foreground);
-}
-.cron-switch.on .cron-switch-track {
-  background: var(--success);
-}
-.cron-switch.on .cron-switch-track span {
-  transform: translateX(14px);
 }
 .cron-more .menu-option.danger {
   color: var(--destructive);
@@ -10693,29 +10668,6 @@ h3.ambient-field-label {
 .loop-autopilot.on .loop-autopilot-sublabel {
   color: inherit;
 }
-.loop-autopilot-switch {
-  width: 38px;
-  height: 22px;
-  flex: 0 0 auto;
-  padding: 2px;
-  border-radius: 999px;
-  box-sizing: border-box;
-  background: var(--muted-foreground);
-}
-.loop-autopilot-switch span {
-  display: block;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--background);
-  transition: transform 120ms ease;
-}
-.loop-autopilot.on .loop-autopilot-switch {
-  background: var(--destructive);
-}
-.loop-autopilot.on .loop-autopilot-switch span {
-  transform: translateX(16px);
-}
 .loop-section-title {
   font-size: var(--font-14);
   font-weight: 600;
@@ -10855,9 +10807,6 @@ h3.ambient-field-label {
 }
 .loop-triage .loop-autopilot.on .loop-autopilot-sublabel {
   color: var(--muted-foreground);
-}
-.loop-triage .loop-autopilot.on .loop-autopilot-switch {
-  background: var(--cta);
 }
 .loop-triage .loop-playbook-actions {
   justify-content: flex-end;
@@ -14006,4 +13955,188 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 html.app-share-embed,
 html.app-share-embed body {
   background: transparent;
+}
+
+/* General settings: page title, then titled sections of grouped rows (matches Credentials). */
+.settings-general {
+  display: grid;
+  gap: 28px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+#app-view #view-governance .governance-content > :nth-child(1 of section.card:not(.hidden)),
+#app-view #view-connectors :nth-child(1 of section.card:not(.hidden)) {
+  padding-top: 0;
+}
+.settings-page-head {
+  max-width: 960px;
+  margin: 0 auto 28px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.settings-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+.settings-section-head h3 {
+  margin: 0;
+  font-size: var(--font-14);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.settings-section-head span {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+.settings-card {
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+  border-radius: 14px;
+  background: var(--background);
+}
+html.dark .settings-card {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+.settings-card > .settings-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+.settings-card > .settings-row:last-child {
+  border-bottom: 0;
+}
+.settings-connections {
+  display: grid;
+  gap: 12px;
+}
+/* Connection cards span the column and share the settings-card surface. */
+.settings-connections .welcome-slack,
+.settings-connections .welcome-content {
+  max-width: none;
+}
+.settings-connections .welcome-content {
+  padding: 0;
+}
+.settings-connections .welcome-slack,
+.settings-connections .welcome-load,
+.settings-connections .connection-picker {
+  border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
+}
+html.dark .settings-connections .welcome-slack,
+html.dark .settings-connections .welcome-load,
+html.dark .settings-connections .connection-picker {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+
+/* The one switch (switch.ts): white knob on a quiet track, the accent colour when on. */
+.qm-switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  transition: background-color 160ms ease;
+}
+.qm-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.24),
+    0 0 0 0.5px rgb(0 0 0 / 0.06);
+  transition: transform 180ms cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+.qm-switch.on,
+input:checked + .qm-switch {
+  background: var(--cta);
+}
+.qm-switch.on::after,
+input:checked + .qm-switch::after {
+  transform: translateX(14px);
+}
+input:focus-visible + .qm-switch,
+button:focus-visible .qm-switch {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+input:disabled + .qm-switch,
+button:disabled .qm-switch {
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qm-switch,
+  .qm-switch::after {
+    transition: none;
+  }
+}
+.settings-section-head > .btn {
+  margin-left: auto;
+}
+.settings-stack {
+  display: grid;
+  gap: 28px;
+}
+.settings-stack[hidden] {
+  display: none;
+}
+.settings-save {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: -16px;
+}
+.settings-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-control {
+  flex: none;
+  width: 240px;
+}
+.settings-control .menu-control,
+.settings-control .loadout-button,
+.settings-control .field-select,
+.settings-control select {
+  width: 100%;
+}
+.settings-control .loadout-button {
+  justify-content: space-between;
+}
+.settings-number {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding-right: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
+.settings-number:focus-within {
+  border-color: var(--ring);
+}
+#app-view .settings-number input[type="number"] {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.settings-row-actions input {
+  flex: 1;
+  min-width: 0;
 }

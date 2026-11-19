@@ -3,14 +3,15 @@ import { classMap } from "lit/directives/class-map.js";
 import { createModelPicker, type ModelCatalog } from "../model-picker.ts";
 import { runtimeModelOptions, type EffortLevel, type ModelOption } from "../model-options.ts";
 import { fieldSelect } from "../ui.ts";
+import { settingsRow, settingsSection } from "../settings-layout.ts";
 import { loadoutActions, type LoadoutEntry } from "../composer-loadout.ts";
 import { BUDGET, COMPACTION, RECALL, runtimeCardKeys, states, type SettingsState } from "./settings.ts";
 
-const rows: [key: string, label: string, inherit?: string][] = [
-  ["runtime", "Conversation runtime"],
-  ["cron-runtime", "Cron runtime (more than daily)", "Job's scope default"],
-  ["subagent-runtime", "Subagent runtime", "Child's scope default"],
-  ["fallback-runtime", "Fallback runtime", "No fallback"],
+const rows: [key: string, label: string, note: string, inherit?: string][] = [
+  ["runtime", "Conversations", "The default model and effort for new conversations."],
+  ["cron-runtime", "Frequent crons", "Crons that run more than once a day.", "Job's scope default"],
+  ["subagent-runtime", "Subagents", "Work the agent hands off to a subagent.", "Child's scope default"],
+  ["fallback-runtime", "Fallback", "Takes over when the main model refuses or is unavailable.", "No fallback"],
 ];
 const COMPACTION_LABEL = "Compaction keeps";
 const BUDGET_LABEL = "History budget";
@@ -79,18 +80,57 @@ function picker(s: SettingsState, inheritLabel?: string) {
   return { control, state };
 }
 
-function runtimeRow(key: string, label: string, inheritLabel?: string) {
+const NO_ENTRY: LoadoutEntry = { value: "", effort: "auto", fast: false };
+const ADD_MODEL = "webui-models-add";
+function addPicker(s: SettingsState) {
+  const available = () => optionsFor(s.context).filter((option) => !(s.draft.ids || []).includes(option.value));
+  const state = { openMenu: null as string | null, menuQuery: "", effortLevel: "auto" as EffortLevel };
+  const catalog: ModelCatalog = { options: available, supportsFast: () => false, overridden: () => false };
+  const actions = loadoutActions(
+    available,
+    () => NO_ENTRY,
+    (option) => {
+      s.selected = option.model.id;
+      s.add();
+    },
+    catalog.supportsFast,
+  );
+  const control = createModelPicker<void>({
+    host: () => document.querySelector<HTMLElement>(`[data-runtime-row="${ADD_MODEL}"]`),
+    redraw: () => s.render(),
+    scopeKey: () => null,
+    state,
+    catalog,
+    activeEntry: () => NO_ENTRY,
+    ...actions,
+    effectiveFastMode: () => false,
+    changeDefault: async () => {},
+    showDefaultAction: false,
+    showInheritAction: false,
+    emptyLabel: "Choose a model",
+  });
+  return { control, state };
+}
+export function addModelPicker(s: SettingsState) {
+  const { control } = pickers.get(ADD_MODEL) ?? pickers.set(ADD_MODEL, addPicker(s)).get(ADD_MODEL)!;
+  return html`<span class="field-menu settings-control" id=${ADD_MODEL} data-runtime-row=${ADD_MODEL}
+    >${control.render(undefined, undefined, s.saving)}</span
+  >`;
+}
+function runtimeRow(key: string, label: string, note: string, inheritLabel?: string) {
   const s = states.get(key)!;
   if (!s.available) return nothing;
   const { control, state } = pickers.get(key) ?? pickers.set(key, picker(s, inheritLabel)).get(key)!;
   state.effortLevel = s.draft.effortLevel;
   const choice = s.draft.inherit ? undefined : optionsFor(s.context).find((option) => option.value === value(s));
-  return html`<div class="runtime-row" data-runtime-row=${key}>
-    <span class="runtime-label">${label}</span
-    ><span class="field-menu">${control.render(undefined, choice, s.saving)}</span>
-  </div>`;
+  return settingsRow(
+    label,
+    note,
+    html`<span class="field-menu settings-control" data-runtime-row=${key}
+      >${control.render(undefined, choice, s.saving)}</span
+    >`,
+  );
 }
-
 const source = (model: Embedding) => (model.provider === "qm:gateway" ? "Model gateway" : "OpenAI");
 
 function recallRow() {
@@ -99,38 +139,38 @@ function recallRow() {
   const models: Embedding[] = s.context.memoryEmbeddingOptions || [];
   const selected: string = s.draft.modelId || "";
   const missing = selected && !models.some((model) => model.id === selected);
-  return html`<div class="runtime-row" data-runtime-row=${RECALL}>
-      <span class="runtime-label">Recall runtime</span>
-      ${fieldSelect({
-        ariaLabel: "Recall runtime",
+  return settingsRow(
+    "Recall",
+    "Ranks remembered facts by relevance. Off, or if the model fails, the newest facts are used.",
+    html`<span class="settings-control" data-runtime-row=${RECALL}
+      >${fieldSelect({
+        ariaLabel: "Recall model",
         value: selected,
         disabled: s.saving,
         onChange: (value) => s.change("modelId", value),
-        options: html`<option value="" ?selected=${!selected}>Off — newest facts (recency)</option>
+        options: html`<option value="" ?selected=${!selected}>Off</option>
           ${models.map((model) => html`<option value=${model.id} ?selected=${model.id === selected}>${model.name} · ${source(model)}</option>`)}
           ${missing ? html`<option value=${selected} selected>${selected} (unavailable)</option>` : nothing}`,
-      })}
-    </div>
-    <p class="hint runtime-hint">
-      Recall uses the newest facts when no model is selected, the saved model is unavailable, or an embedding call
-      fails.
-    </p>`;
+      })}</span
+    >`,
+  );
 }
-
 function numberRow(
   key: string,
   label: string,
   field: string,
   unit: string,
   step: number,
-  hint: (fallback: string) => unknown,
+  note: (fallback: string) => string,
 ) {
   const s = states.get(key)!;
   if (!s.available) return nothing;
   const fallback = String(s.context[`${field}Default`] ?? "");
-  return html`<div class="runtime-row" data-runtime-row=${key}>
-      <span class="runtime-label">${label}</span>
-      <input
+  return settingsRow(
+    label,
+    note(Number(fallback).toLocaleString()),
+    html`<span class="settings-control settings-number" data-runtime-row=${key}
+      ><input
         type="number"
         step=${step}
         placeholder=${fallback}
@@ -138,11 +178,10 @@ function numberRow(
         .value=${s.draft.value}
         ?disabled=${s.saving}
         @input=${(e: Event) => s.change("value", (e.target as HTMLInputElement).value.trim())}
-      />
-    </div>
-    <p class="hint runtime-hint">${hint(fallback)}</p>`;
+      /><span>${unit === "percent" ? "%" : unit}</span></span
+    >`,
+  );
 }
-
 const compactionRow = () =>
   numberRow(
     COMPACTION,
@@ -151,9 +190,8 @@ const compactionRow = () =>
     "percent",
     1,
     (fallback) =>
-      `Percent of the history budget kept verbatim when a conversation compacts; empty uses the default of ${fallback}%. Lower keeps less recent history verbatim but compacts less often and costs less.`,
+      `Share of the history budget kept word for word when a conversation compacts. Lower compacts less often and costs less. Default ${fallback}%.`,
   );
-
 const budgetRow = () =>
   numberRow(
     BUDGET,
@@ -162,15 +200,15 @@ const budgetRow = () =>
     "tokens",
     1000,
     (fallback) =>
-      `Ceiling in tokens on the conversation history each model sees; empty uses the default of ${fallback}. The budget never exceeds half of a model's usable context window. Lower makes long conversations cheaper on per-token providers but the model remembers less verbatim. Applies to every model.`,
+      `Most history any model sees, never more than half its context window. Lower is cheaper but remembers less word for word. Applies to every model. Default ${fallback}.`,
   );
 
 export function runtimesCard() {
   const shown = runtimeCardKeys.map((key) => states.get(key)!).filter((s) => s.available);
   const dirty = shown.filter((s) => s.dirty);
   const labels = Object.fromEntries([
-    ...rows,
-    [RECALL, "Recall runtime"],
+    ...rows.map(([key, label]) => [key, label]),
+    [RECALL, "Recall"],
     [COMPACTION, COMPACTION_LABEL],
     [BUDGET, BUDGET_LABEL],
   ]);
@@ -178,23 +216,21 @@ export function runtimesCard() {
   const status = failed.length
     ? { tone: "err", message: failed.map((s) => `${labels[s.key]}: ${s.message}`).join(" · ") }
     : (shown.find((s) => s.saving) ?? shown.find((s) => s.message));
-  return html`<section
-    class=${classMap({ card: true, "sv-models": true, hidden: !shown.length, dirty: !!dirty.length })}
-    id="card-runtimes"
-  >
-    <div class="body runtime-rows">
-      ${rows.map(([key, label, inherit]) => runtimeRow(key, label, inherit))}${recallRow()}${compactionRow()}${budgetRow()}
-    </div>
-    <div class="foot">
-      <button
+  const context = [states.get(COMPACTION)!, states.get(BUDGET)!].some((s) => s.available);
+  return html`<div class="settings-stack" id="card-runtimes" ?hidden=${!shown.length}>
+    ${settingsSection("Runtimes", html`${rows.map(([key, label, note, inherit]) => runtimeRow(key, label, note, inherit))}${recallRow()}`)}
+    ${settingsSection("Context", html`${compactionRow()}${budgetRow()}`, { hidden: !context })}
+    <div class="settings-save">
+      <span class=${classMap({ status: true, [status?.tone || "idle"]: true })}>${status?.message ?? ""}</span
+      ><button
         type="button"
         id="runtimes-save"
         class=${classMap({ btn: true, primary: true, dirty: !!dirty.length })}
         ?disabled=${!dirty.length || shown.some((s) => s.saving)}
         @click=${() => Promise.all(dirty.map((s) => s.save()))}
       >
-        Save</button
-      ><span class=${classMap({ status: true, [status?.tone || "idle"]: true })}>${status?.message ?? ""}</span>
+        Save
+      </button>
     </div>
-  </section>`;
+  </div>`;
 }
