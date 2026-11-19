@@ -33,7 +33,7 @@ export function unavailableApprovalRefusal(
     reason: botRequester
       ? BOT_REQUESTER_REFUSAL
       : `This step needs approval (${reason}) and can't be approved in this run, so it did not run: ${command}.`,
-    refusalKind: "approval_denied",
+    ...(botRequester ? { refusalKind: "approval_denied" as const } : {}),
   };
 }
 
