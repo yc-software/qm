@@ -55,9 +55,11 @@ describe("tenant settings schema", () => {
 });
 
 describe("app host labels", () => {
-  it("split on the first hyphen, so handles with digits and app names with hyphens both survive", () => {
+  it("strip the resolved company's own handle, so hyphens in handles and app names both survive", () => {
     assert.equal(appHostLabel("nitroduck7", "sales-board-v2"), "nitroduck7-sales-board-v2");
     assert.equal(appNameFromLabel("nitroduck7-sales-board-v2", "nitroduck7"), "sales-board-v2");
+    assert.equal(appNameFromLabel("acme-labs-crm", "acme-labs"), "crm");
+    assert.equal(appNameFromLabel("acme-labs-crm", "acme"), "labs-crm");
     assert.equal(appNameFromLabel("nitroduck7-", "nitroduck7"), "nitroduck7-");
     assert.equal(appNameFromLabel("other-sales", "nitroduck7"), "other-sales");
     assert.equal(appNameFromLabel("sales-board", undefined), "sales-board");
@@ -231,9 +233,9 @@ describe("company app links", () => {
 
   it("refuses a handle that is malformed, reserved or already another company's, including its derived default", async () => {
     const [a, b] = db.tenants;
-    for (const bad of ["a", "has-hyphen", "UPPER", "x".repeat(62), "admin", "mt", "www"])
+    for (const bad of ["a", "-lead", "trail-", "UPPER", "x".repeat(62), "admin", "mt", "www"])
       assert.equal(tenantSettingsSchema.safeParse({ handle: bad }).success, false, bad);
-    for (const good of ["nitroduck2", "x".repeat(61)])
+    for (const good of ["nitroduck2", "acme-labs", "x".repeat(61)])
       assert.equal(tenantSettingsSchema.safeParse({ handle: good }).success, true, good);
     await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
     try {
@@ -249,11 +251,21 @@ describe("company app links", () => {
         withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('auth')`)),
         /invalid app handle/,
       );
-      await withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('beta7')`));
+      await assert.rejects(
+        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('-beta')`)),
+        /invalid app handle/,
+      );
+      await withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('beta-7')`));
       const rows = await db.owner.q(`SELECT settings->>'handle' AS handle FROM tenants WHERE id = $1`, [b]);
-      assert.equal(rows[0]?.handle, "beta7");
-      const found = await db.app.q(`SELECT qm_tenant_for_app_host('beta7-sales-dash')::text AS id`);
+      assert.equal(rows[0]?.handle, "beta-7");
+      await db.owner.q(
+        `INSERT INTO deployments(tenant_id, id, json) VALUES ($1, 'dash', '{"name":"sales-dash"}'), ($2, 'x', '{"name":"x"}')`,
+        [b, a],
+      );
+      const found = await db.app.q(`SELECT qm_tenant_for_app_host('beta-7-sales-dash')::text AS id`);
       assert.equal(found[0]?.id, b);
+      const unpublished = await db.app.q(`SELECT qm_tenant_for_app_host('beta-7-other')::text AS id`);
+      assert.equal(unpublished[0]?.id, null);
       const derived = await db.app.q(`SELECT qm_tenant_for_app_host('nitroduck-x')::text AS id`);
       assert.equal(derived[0]?.id, a);
       const longSlug = `nitro-${"duck".repeat(10)}`;
@@ -266,6 +278,7 @@ describe("company app links", () => {
       ]);
       assert.equal(longDerived[0]?.id, a);
     } finally {
+      await db.owner.q(`DELETE FROM deployments WHERE tenant_id = ANY($1)`, [[a, b]]);
       await db.owner.q(`UPDATE tenants SET settings = '{}' WHERE id = ANY($1)`, [[a, b]]);
     }
   });

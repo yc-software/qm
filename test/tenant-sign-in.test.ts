@@ -115,6 +115,7 @@ function start(
       tenantsForEmail: tenants,
       tenantsForPrincipal: (principal: string) => directory.tenantsForPrincipal!(principal),
       tenantForAppHandle: (handle: string) => directory.tenantForAppHandle!(handle),
+      tenantForAppHost: (label: string) => directory.tenantForAppHost!(label),
       trustedClientFor: (tenant: string) => directory.trustedClientFor!(tenant),
     } as unknown as DirectoryStore,
   });
@@ -315,8 +316,15 @@ test("a workspace handle names exactly one company and its own trusted client, a
     assert.equal((await srv.get("/v1/auth/broker/workspace")).status, 400);
     assert.deepEqual((await srv.get("/v1/auth/broker/host-tenant?host=beta.company.test")).body, { tenant: null });
     const appHost = async (host: string) => (await srv.get(`/v1/auth/broker/host-tenant?host=${host}`)).body;
+    await owner.q(`INSERT INTO deployments(tenant_id, id, json) VALUES ($1, 'dash', '{"name":"sales-dash"}')`, [beta]);
+    t.after(() => owner.q(`DELETE FROM deployments WHERE tenant_id = $1 AND id = 'dash'`, [beta]));
     assert.deepEqual(await appHost(`${handle}-sales-dash.apps.shared.test`), { tenant: beta, app: true });
-    for (const miss of [`${handle}.apps.shared.test`, `${handle}-.apps.shared.test`, `x.${handle}-a.apps.shared.test`])
+    for (const miss of [
+      `${handle}.apps.shared.test`,
+      `${handle}-.apps.shared.test`,
+      `${handle}-other.apps.shared.test`,
+      `x.${handle}-sales-dash.apps.shared.test`,
+    ])
       assert.deepEqual(await appHost(miss), { tenant: null }, miss);
   }));
 

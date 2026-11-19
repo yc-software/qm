@@ -10,7 +10,7 @@ import { inTenant } from "../../tenants/claim.ts";
 import { withTenant } from "../../tenants/context.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { bootTenant } from "../../tenants/boot.ts";
-import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
+import { labelOfAppHost } from "../../tenants/app-handle.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import { externalOrgSchema } from "../../tenants/self-serve.ts";
 
@@ -148,8 +148,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
 
 async function appHostTenant(ctx: ApiCtx, host: string): Promise<string | undefined> {
   const label = labelOfAppHost(host, ctx.deps.deployAppsDomain);
-  const split = label === undefined ? undefined : splitAppLabel(label);
-  return split && ctx.deps.directory?.tenantForAppHandle?.(split.handle);
+  return label && !label.includes(".") ? ctx.deps.directory?.tenantForAppHost?.(label) : undefined;
 }
 
 async function hostTenant(ctx: ApiCtx): Promise<void> {

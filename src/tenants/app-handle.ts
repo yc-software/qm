@@ -84,14 +84,102 @@ $f$$sql$, current_schema()); END $app_hosts$`,
   ],
 };
 
+export const TENANT_APP_HANDLE_HYPHENS: PgMigrationDefinition = {
+  id: "0000-tenancy/tenant-app-handle-hyphens",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE OR REPLACE FUNCTION qm_tenant_handle(settings jsonb) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
+      AS $qm_tenant_handle$
+      SELECT CASE WHEN h ~ '^[a-z0-9][a-z0-9-]{${APP_HANDLE_MIN - 2},${APP_HANDLE_MAX - 2}}[a-z0-9]$' AND h <> ALL (ARRAY[${reserved}]) THEN h END
+        FROM (SELECT coalesce(settings->>'handle',
+          regexp_replace(lower(coalesce(settings->>'orgSlug', '')), '[^a-z0-9]', '', 'g')) AS h) picked
+    $qm_tenant_handle$`,
+    `REINDEX INDEX tenants_app_handle`,
+  ],
+};
+
+const APP_HOSTS_TABLE = "app_hosts";
+export const APP_HOSTS_KEY = "app_hosts_pkey";
+
+const appHostDefiners = [
+  `CREATE OR REPLACE FUNCTION qm_sync_app_host() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  DECLARE handle text;
+  BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.json->>'name' IS NOT DISTINCT FROM NEW.json->>'name' THEN RETURN NULL; END IF;
+    DELETE FROM app_hosts h WHERE h.tenant = NEW.tenant_id AND h.deployment_id = NEW.id;
+    SELECT qm_tenant_handle(t.settings) INTO handle FROM tenants t WHERE t.id = NEW.tenant_id;
+    IF handle IS NOT NULL THEN
+      INSERT INTO app_hosts(label, tenant, deployment_id)
+        VALUES (handle || '-' || coalesce(NEW.json->>'name', NEW.id), NEW.tenant_id, NEW.id);
+    END IF;
+    RETURN NULL;
+  END $f$`,
+  `CREATE OR REPLACE FUNCTION qm_sync_tenant_app_hosts() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  DECLARE handle text := qm_tenant_handle(NEW.settings);
+  BEGIN
+    IF handle IS NOT DISTINCT FROM qm_tenant_handle(OLD.settings) THEN RETURN NULL; END IF;
+    DELETE FROM app_hosts h WHERE h.tenant = NEW.id;
+    IF handle IS NOT NULL THEN
+      INSERT INTO app_hosts(label, tenant, deployment_id)
+        SELECT handle || '-' || coalesce(d.json->>'name', d.id), d.tenant_id, d.id FROM deployments d
+         WHERE d.tenant_id = NEW.id;
+    END IF;
+    RETURN NULL;
+  END $f$`,
+  `CREATE OR REPLACE FUNCTION qm_tenant_for_app_label(label text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT h.tenant FROM app_hosts h WHERE h.label = lower($1)
+$f$`,
+  `CREATE OR REPLACE FUNCTION qm_tenant_for_app_host(label text) RETURNS uuid LANGUAGE plpgsql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  DECLARE found uuid := qm_tenant_for_app_label($1);
+  BEGIN
+    IF found IS NOT NULL THEN RETURN found; END IF;
+    RETURN qm_tenant_for_deployment($1);
+  END $f$`,
+  `CREATE OR REPLACE FUNCTION qm_app_address_taken(name text) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT h.label FROM tenants t JOIN app_hosts h ON h.label = qm_tenant_handle(t.settings) || '-' || $1
+   WHERE t.id = qm_bound_tenant() AND h.tenant <> t.id
+$f$`,
+];
+
+export const APP_HOSTS: PgMigrationDefinition = {
+  id: "durable-map/deployments/0050-app-hosts",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TABLE IF NOT EXISTS ${APP_HOSTS_TABLE}(
+      label TEXT NOT NULL,
+      tenant UUID NOT NULL,
+      deployment_id TEXT NOT NULL,
+      CONSTRAINT ${APP_HOSTS_KEY} PRIMARY KEY (label),
+      CONSTRAINT app_hosts_deployment UNIQUE (tenant, deployment_id),
+      CONSTRAINT app_hosts_deployment_fkey FOREIGN KEY (tenant, deployment_id)
+        REFERENCES deployments(tenant_id, id) ON DELETE CASCADE
+    )`,
+    `ALTER TABLE ${APP_HOSTS_TABLE} ENABLE ROW LEVEL SECURITY`,
+    ...appHostDefiners.map(
+      (definer) => `DO $app_hosts$ BEGIN EXECUTE format($sql$${definer}$sql$, current_schema()); END $app_hosts$`,
+    ),
+    `INSERT INTO ${APP_HOSTS_TABLE}(label, tenant, deployment_id)
+      SELECT qm_tenant_handle(t.settings) || '-' || coalesce(d.json->>'name', d.id), d.tenant_id, d.id
+        FROM deployments d JOIN tenants t ON t.id = d.tenant_id
+       WHERE qm_tenant_handle(t.settings) IS NOT NULL
+       ORDER BY d.id
+      ON CONFLICT DO NOTHING`,
+    `DROP TRIGGER IF EXISTS app_hosts_sync ON deployments`,
+    `CREATE TRIGGER app_hosts_sync AFTER INSERT OR UPDATE OF json ON deployments
+      FOR EACH ROW EXECUTE FUNCTION qm_sync_app_host()`,
+    `DROP TRIGGER IF EXISTS app_hosts_sync ON tenants`,
+    `CREATE TRIGGER app_hosts_sync AFTER UPDATE OF settings ON tenants
+      FOR EACH ROW EXECUTE FUNCTION qm_sync_tenant_app_hosts()`,
+  ],
+};
+
 export function appHostLabel(handle: string, name: string): string {
   return `${handle}-${name}`;
-}
-
-export function splitAppLabel(label: string): { handle: string; name: string } | undefined {
-  const dash = label.indexOf("-");
-  if (dash < 1 || dash === label.length - 1 || label.includes(".")) return undefined;
-  return { handle: label.slice(0, dash), name: label.slice(dash + 1) };
 }
 
 export function appLabelLimitError(handle: string | undefined, ref: string): string | undefined {
@@ -102,9 +190,12 @@ export function appLabelLimitError(handle: string | undefined, ref: string): str
 }
 
 export function appNameFromLabel(label: string, handle: string | undefined): string | undefined {
-  if (!handle) return label;
-  const split = splitAppLabel(label);
-  return split?.handle === handle ? split.name : label;
+  const prefix = handle ? `${handle}-` : undefined;
+  return prefix && label.startsWith(prefix) && label.length > prefix.length ? label.slice(prefix.length) : label;
+}
+
+export function appAddressTakenError(label: string): string {
+  return `the app address "${label}" is already taken by another workspace's app; choose a different app name`;
 }
 
 export function labelOfAppHost(host: string | undefined, appsDomain: string | undefined): string | undefined {

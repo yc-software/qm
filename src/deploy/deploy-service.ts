@@ -33,6 +33,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
+import { appAddressTakenError } from "../tenants/app-handle.ts";
 import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
@@ -501,6 +502,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return false;
   }
 
+  async function assertAddressFree(name: string): Promise<void> {
+    const taken = await deps.deployStore.addressTaken(name);
+    if (taken) throw new Error(appAddressTakenError(taken));
+  }
+
   return {
     appUrl: (d) => appUrlOf(d, { sharedWebUrl: deps.publicWebUrl, appsDomain: deps.deployAppsDomain }),
     providerProfile: deps.provider.profile,
@@ -513,6 +519,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       const id = randomUUID();
       if (input.name === undefined) assertAppLabelFits(id);
+      await assertAddressFree(input.name ?? id);
       assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
@@ -673,6 +680,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!d) throw new Error(`unknown app: ${id}`);
         const clash = await deps.deployStore.getByName(name);
         if (clash && clash.id !== id) throw new Error(`app name taken: ${name}`);
+        await assertAddressFree(name);
         await deps.deployStore.setName(id, name);
         recordAudit({
           at: Date.now(),
@@ -953,6 +961,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           throw new Error(`not authorized to manage app: ${input.renameFrom}`);
         const clash = await deps.deployStore.getByName(input.name);
         if (clash && clash.id !== existing.id) throw new Error(`app name taken: ${input.name}`);
+        await assertAddressFree(input.name);
         await deps.deployStore.setName(existing.id, input.name);
         recordAudit({
           at: Date.now(),

@@ -22,6 +22,7 @@ import {
 } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
+import { APP_HOSTS_KEY } from "../tenants/app-handle.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -397,12 +398,18 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
     },
 
+    async tenantForAppHost(label) {
+      const rows = await q("SELECT qm_tenant_for_app_label($1)::text AS id", [label]);
+      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+    },
+
     async setAppHandle(handle) {
       try {
         await q("SELECT qm_set_tenant_handle($1)", [handle]);
         return "ok";
       } catch (error) {
-        if ((error as { code?: string }).code === "23505") return "taken";
+        const { code, constraint } = error as { code?: string; constraint?: string };
+        if (code === "23505") return constraint === APP_HOSTS_KEY ? "app_taken" : "taken";
         throw error;
       }
     },
