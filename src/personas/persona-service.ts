@@ -334,7 +334,7 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn, shares
   ];
   if (pinned)
     lines.push(
-      `This channel or group pinned ${persona.name}${sharesNotebook ? ", so memory you save here goes to its notebook, which every conversation using it reads" : ""}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+      `This channel or group pinned ${persona.name}${sharesNotebook ? ", so memory you save here goes to its notebook, which every conversation using it reads. Use what that notebook holds here as well, even a fact that names another room" : ""}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
     );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
