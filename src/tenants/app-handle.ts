@@ -143,11 +143,6 @@ $f$`,
     IF found IS NOT NULL THEN RETURN found; END IF;
     RETURN qm_tenant_for_deployment($1);
   END $f$`,
-  `CREATE OR REPLACE FUNCTION qm_app_address_taken(name text) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = %1$I, pg_temp AS $f$
-  SELECT h.label FROM tenants t JOIN app_hosts h ON h.label = qm_app_host_label(t.settings, $1)
-   WHERE t.id = qm_bound_tenant() AND h.tenant <> t.id
-$f$`,
 ];
 
 export const APP_HOSTS: PgMigrationDefinition = {

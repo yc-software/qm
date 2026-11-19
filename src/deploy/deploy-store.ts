@@ -165,7 +165,6 @@ export interface DeployStore {
   addVersionFromCommit(id: string, commit: string): Promise<AppVersion | null>;
   get(id: string): Promise<PublishedApp | null>;
   getByName(name: string): Promise<PublishedApp | null>;
-  addressTaken(name: string): Promise<string | undefined>;
   list(): Promise<PublishedApp[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   setCurrentVersion(id: string, version: number): Promise<void>;
@@ -216,7 +215,6 @@ interface DeployAccess {
   readAll(): Promise<Map<string, number>>;
   write(id: string, at: number): Promise<boolean>;
   findByName?(name: string): Promise<PublishedApp | null>;
-  addressTaken(name: string): Promise<string | undefined>;
 }
 
 function createPgDeployAccess(pg: PgPool): DeployAccess {
@@ -258,12 +256,6 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       await ready();
       const rows = await pg.q("SELECT json FROM deployments WHERE json->>'name' = $1 ORDER BY id LIMIT 1", [name]);
       return rows.length ? (rows[0]!.json as PublishedApp) : null;
-    },
-    async addressTaken(name) {
-      await ready();
-      const rows = await pg.q("SELECT qm_app_address_taken($1) AS label", [name]);
-      const label = rows[0]?.label;
-      return typeof label === "string" ? label : undefined;
     },
   };
 }
@@ -408,9 +400,6 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         ? await access.findByName(name)
         : ((await backingMap.all()).find((x) => x.name === name) ?? null);
       return d ? withAccess(d, await access.readOne(d.id)) : null;
-    },
-    addressTaken(name) {
-      return access.addressTaken(name);
     },
     claimTenants() {
       return backingMap.claimTenants();

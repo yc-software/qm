@@ -209,7 +209,6 @@ test("app hosts resolve by their full label, so a hyphenated company handle work
     const taken = `the app address "${theirs}-crm" is already taken by another workspace's app; choose a different app name`;
     await assert.rejects(publish(`labs-${suffix}-crm`), { message: taken });
     await assert.rejects(app.renameApp(board.id, `labs-${suffix}-crm`), { message: taken });
-    await assert.rejects(deployStore.setName(board.id, `labs-${suffix}-crm`), { message: taken });
     assert.equal(await hostTenant(`${theirs}-crm`), other);
     assert.equal(await hostTenant(`${mine}-board`), TEST_TENANT);
     assert.equal(await hostTenant(`${mine}-crm`), null);
