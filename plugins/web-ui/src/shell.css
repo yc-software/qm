@@ -304,11 +304,22 @@ html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
   flex: 0 0 22px;
   overflow: hidden;
   border-radius: 5px;
-  background: var(--brand-accent) var(--brand-mark-image, url("./assets/brand-mark.svg")) center / cover no-repeat;
+  background: var(--brand-accent) var(--brand-mark-image, none) center / cover no-repeat;
   color: white;
   font-size: var(--font-16);
   font-weight: 500;
   line-height: 1;
+}
+:root:not([data-brand-mark]) .brand-mark:not(:has(> img)) {
+  display: none;
+}
+:root[data-brand-mark] :is(.brand-lockup, .signin-brand, .shared-brand) > .brand-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .brand-mark > img {
   position: absolute;
@@ -11707,7 +11718,7 @@ h3.ambient-field-label {
   .shared-brand {
     margin-right: 4px;
   }
-  .shared-brand > span:not(.brand-mark),
+  .shared-brand > .brand-name,
   .shared-view-badge,
   .share-access-label {
     display: none;
