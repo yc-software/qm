@@ -3148,3 +3148,48 @@ html.dark #app-view dialog.cd .cd-group {
 html.dark #app-view dialog.custom-provider-dialog.cd::backdrop {
   background: color-mix(in srgb, var(--scrim, #050a14) 64%, transparent);
 }
+
+/* Credentials page structure matches General: title at the top edge, 28px between blocks,
+   and Personal keychains as a titled section over a rounded card. */
+#app-view[data-subview="credentials"] #view-governance section#card-service-credentials {
+  padding: 0;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .head.cred-page-head {
+  margin: 0 0 28px;
+}
+#app-view[data-subview="credentials"] #view-governance section#card-personal-keychains {
+  display: block;
+  margin: 28px 0 0;
+  padding: 0;
+  border: 0;
+}
+#app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .head {
+  margin: 0 0 10px;
+}
+#app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .head h2 {
+  margin: 0;
+  font-size: var(--font-14);
+  font-weight: 500;
+  color: var(--foreground);
+}
+#app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .body {
+  margin: 0;
+  padding: 14px 18px;
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+  border-radius: 14px;
+  background: var(--background);
+}
+html.dark #app-view[data-subview="credentials"] #view-governance #card-personal-keychains > .body {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .body {
+  margin: 0;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .foot {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+#app-view[data-subview="credentials"] #view-governance #card-service-credentials > .foot > :not(:empty) {
+  margin-top: 16px;
+}
