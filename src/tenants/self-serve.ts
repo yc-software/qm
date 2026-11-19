@@ -122,13 +122,15 @@ export interface SelfServe {
     email: string | null,
     org: ExternalOrg,
   ): Promise<{ tenant: string; created: boolean }>;
+  chatAccountWorkspace(account: string, name: string | undefined): Promise<string | undefined>;
 }
 
 export function createSelfServe(
-  pg: Pick<PgPool, "q">,
+  pg: Pick<PgPool, "q" | "forTenant">,
   provision: (request: WorkspaceProvisionRequest) => Promise<ProvisionedWorkspace>,
   admin: Pick<AdminService, "provisionSelfServe">,
   auditLog: Pick<AuditLog, "record">,
+  trustedIssuer?: string,
 ): SelfServe {
   const enroll = async (bound: Tenant, issuer: string, people: readonly SelfServePerson[]) => {
     const { granted, removed } = await admin.provisionSelfServe(bound, issuer, people);
@@ -169,42 +171,70 @@ export function createSelfServe(
       if (removed.includes(person)) failed(index, new AdminError(403, "this person was removed from the workspace"));
   };
 
+  async function open<T>(
+    issuer: string,
+    org: ExternalOrg,
+    join: (bound: Tenant) => Promise<T>,
+  ): Promise<{ workspace: ExternalOrgTenant; joined?: T } | undefined> {
+    if (bootTenant() !== undefined) return undefined;
+    const workspace = await selfServeTenant(pg, issuer, org);
+    if (!workspace) return undefined;
+    if (workspace.provisioned && !workspace.serving) return { workspace };
+    const joined = await withTenant(workspace.tenant, async (bound) => {
+      if (workspace.created)
+        auditLog.record(bound, {
+          at: Date.now(),
+          principalId: `trusted-oidc-self-serve:${issuer}`,
+          scopeLabel: orgScope(),
+          action: "tenant.self_serve.create",
+          resource: workspace.tenant,
+        });
+      if (!workspace.provisioned) {
+        const request = {
+          tenant: workspace.tenant,
+          brandName: org.name,
+          issuer,
+          externalOrg: org,
+        };
+        const provisioned = await provision(request).catch((error: unknown) => {
+          reportFailure("self-serve workspace provisioning", error, workspace.tenant);
+          throw new AdminError(502, "the new workspace could not be set up; try signing in again", {
+            cause: error,
+          });
+        });
+        await enrollMembers(bound, issuer, provisioned.members);
+        await markSelfServeProvisioned(pg, workspace.tenant, provisioned.settings.modelGatewayKey);
+      }
+      return join(bound);
+    });
+    return { workspace: { ...workspace, serving: true }, joined };
+  }
+
   return {
     async workspace(issuer, subject, email, org) {
-      if (bootTenant() !== undefined) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
       trustedSubjectPrincipal(issuer, subject);
-      const workspace = await selfServeTenant(pg, issuer, org);
-      if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
-      if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
-      await withTenant(workspace.tenant, async (bound) => {
-        if (workspace.created)
-          auditLog.record(bound, {
-            at: Date.now(),
-            principalId: `trusted-oidc-self-serve:${issuer}`,
-            scopeLabel: orgScope(),
-            action: "tenant.self_serve.create",
-            resource: workspace.tenant,
-          });
-        if (!workspace.provisioned) {
-          const request = {
-            tenant: workspace.tenant,
-            brandName: org.name,
-            issuer,
-            externalOrg: org,
-          };
-          const provisioned = await provision(request).catch((error: unknown) => {
-            reportFailure("self-serve workspace provisioning", error, workspace.tenant);
-            throw new AdminError(502, "the new workspace could not be set up; try signing in again", {
-              cause: error,
-            });
-          });
-          await enrollMembers(bound, issuer, provisioned.members);
-          await markSelfServeProvisioned(pg, workspace.tenant, provisioned.settings.modelGatewayKey);
-        }
+      const opened = await open(issuer, org, async (bound) => {
         if ((await enroll(bound, issuer, [{ subject, email }])).length)
           throw new AdminError(403, "this person was removed from the workspace");
       });
-      return { tenant: workspace.tenant, created: workspace.created };
+      if (!opened) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
+      if (!opened.workspace.serving) throw new AdminError(503, "this workspace is switched off");
+      return { tenant: opened.workspace.tenant, created: opened.workspace.created };
+    },
+    async chatAccountWorkspace(account, name) {
+      if (!trustedIssuer) return undefined;
+      const opened = await open(trustedIssuer, { id: account, name: name ?? account }, async (bound) => {
+        const [row] = await pg
+          .forTenant(bound)
+          .q("SELECT qm_self_serve_chat_account($1, $2) AS account", [bound.id, account]);
+        return row?.account;
+      });
+      if (!opened?.workspace.serving) return undefined;
+      if (opened.joined === account) return opened.workspace.tenant;
+      console.warn(
+        `[self-serve] chat account ${account} is bound elsewhere, so workspace ${opened.workspace.tenant} is not`,
+      );
+      return undefined;
     },
   };
 }

@@ -4,7 +4,7 @@ import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reac
 import type { ActorAssertion, Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { inTenant } from "../../tenants/claim.ts";
-import { errMessage, reportFailureAs } from "../../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "../../util/errors.ts";
 import type { AddressFetch } from "../../util/network.ts";
 import { buildContextWindow, detectInputs } from "../context-window.ts";
 import { buildReactionTurnText, shouldSurfaceReaction } from "../reactions.ts";
@@ -52,6 +52,7 @@ export function createGenericChatInbound(deps: {
   turns: Pick<GenericChatTurns, "start">;
   onAction: (click: GenericChatActionClick) => Promise<void>;
   registerGroup: (groupId: string, principalIds: readonly string[]) => Promise<void>;
+  openAccount?: (account: string, name: string | undefined) => Promise<string | undefined>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -106,7 +107,13 @@ export function createGenericChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
-    const tenant = await deps.app.tenantFor("partner_chat", event.account);
+    let tenant = await deps.app.tenantFor("partner_chat", event.account);
+    try {
+      tenant ??= await deps.openAccount?.(event.account, event.account_name);
+    } catch (error) {
+      reportFailure("generic-chat account workspace", error, event.account);
+      return { status: 503, body: { error: "workspace_unavailable" } };
+    }
     if (!tenant) {
       console.log(`[generic-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };

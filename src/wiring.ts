@@ -1873,6 +1873,7 @@ export function buildApp(
         provisionWorkspace.bind(null, config.workspaceProvisionerUrl, provisionerSigningKey(config.signingSecret!)),
         admin,
         auditLog,
+        config.trustedOidcAdminIssuer,
       )
     : undefined;
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
@@ -2638,6 +2639,7 @@ export function buildApp(
           guestReply: genericChatNotices.guest,
           turns: genericChatTurns,
           registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, GENERIC_CHAT),
+          ...(selfServe ? { openAccount: selfServe.chatAccountWorkspace } : {}),
           onAction: createGenericChatApprovals({
             client: genericChatClient,
             app,

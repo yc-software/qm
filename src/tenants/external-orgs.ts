@@ -32,6 +32,18 @@ const provisionedDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_provisioned
     END IF;
   END $f$`;
 
+const chatAccountDefiner = `CREATE OR REPLACE FUNCTION qm_self_serve_chat_account(tenant uuid, account text)
+  RETURNS text LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  BEGIN
+    UPDATE tenants t SET settings = t.settings || jsonb_build_object('partnerChatAccount', $2)
+      WHERE t.id = $1
+        AND EXISTS (SELECT 1 FROM tenant_external_orgs o WHERE o.tenant = $1 AND o.org_id = $2)
+        AND NOT t.settings ? 'partnerChatAccount'
+        AND NOT EXISTS (SELECT 1 FROM tenants u WHERE u.settings->>'partnerChatAccount' = $2);
+    RETURN (SELECT t.settings->>'partnerChatAccount' FROM tenants t WHERE t.id = $1);
+  END $f$`;
+
 export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
   id: "0000-tenancy/external-orgs",
   statements: [
@@ -48,5 +60,13 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
     `DO $self_serve$ BEGIN EXECUTE format($sql$${definer}$sql$, current_schema()); END $self_serve$`,
     `DO $self_serve$ BEGIN EXECUTE format($sql$${provisionedDefiner}$sql$, current_schema()); END $self_serve$`,
     `REVOKE ALL ON FUNCTION qm_self_serve_tenant(text, text, text), qm_self_serve_provisioned(uuid, text) FROM PUBLIC`,
+  ],
+};
+
+export const TENANT_EXTERNAL_ORG_CHAT_ACCOUNTS: PgMigrationDefinition = {
+  id: "0000-tenancy/external-org-chat-accounts",
+  statements: [
+    `DO $self_serve$ BEGIN EXECUTE format($sql$${chatAccountDefiner}$sql$, current_schema()); END $self_serve$`,
+    `REVOKE ALL ON FUNCTION qm_self_serve_chat_account(uuid, text) FROM PUBLIC`,
   ],
 };

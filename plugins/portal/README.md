@@ -107,6 +107,15 @@ refuses to start with `WORKSPACE_PROVISIONER_URL` alongside deployment-wide mode
 credentials (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
 `CLAUDE_AUTH_CREDENTIAL`, `CODEX_AUTH_CREDENTIAL`).
 
+A chat partner's accounts can open workspaces the same way. The organization ids of
+core's `TRUSTED_OIDC_ADMIN_ISSUER` are taken to be the chat partner's account ids: when
+that issuer, the chat partner and the provisioner are all configured, a verified chat
+event for an account with no serving workspace opens (and provisions) that issuer's
+workspace for the account, named by the event's optional `account_name` (else the
+account id), binds the account to it unless another workspace holds it, and then
+handles the event. A failed provisioning answers 503 so the partner retries; an account
+whose workspace is switched off, or held elsewhere, still answers 404.
+
 When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a
 host-only, HttpOnly browser preference for one year. Ordinary

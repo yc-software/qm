@@ -30,6 +30,7 @@ const eventSchema = z.object({
   event_id: z.string().min(1),
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
+  account_name: z.string().trim().min(1).optional(),
   chat: z.object({ id, kind: z.enum(["group", "dm"]), name: z.string().optional(), members: z.array(user) }),
   thread_id: genericChatMessageIdSchema.nullish(),
   message: z.object({

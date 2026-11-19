@@ -20,7 +20,14 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
-import { provisionerSigningKey } from "../src/tenants/self-serve.ts";
+import { createSelfServe, provisionerSigningKey } from "../src/tenants/self-serve.ts";
+import type { App } from "../src/api/app-types.ts";
+import { createGenericChatInbound } from "../src/surfaces/generic-chat/inbound.ts";
+import { createGenericChatClient } from "../src/surfaces/generic-chat/client.ts";
+import { signGenericChat } from "../src/surfaces/generic-chat/protocol.ts";
+import { boundTenant } from "../src/tenants/context.ts";
+import { tenantLookup } from "../src/tenants/lookup.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { orgId } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
@@ -28,6 +35,7 @@ import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
+const chatSecret = "generic-chat-shared-secret-0123456789abcdef";
 
 function start(databaseUrl: string, workspaceProvisionerUrl?: string, enabled = true) {
   const built = buildApp(
@@ -366,4 +374,81 @@ test("the provisioner can name an organization's people, who are set up as if ea
   assert.equal(events.filter((e) => e.action === "grant.create").length, 3);
   assert.equal(await withoutTenant(() => selfServeWorkspace(s.config, { subject: "m2", email: null }, org)), tenant);
   assert.equal(provision.state.calls.length, 1);
+});
+
+test("a chat partner's first event for an unbound account opens that account's workspace once", async (t) => {
+  const { db, s } = await shared(t);
+  let failing = true;
+  const provisions: string[] = [];
+  const provision = async (request: { externalOrg: { id: string } }) => {
+    provisions.push(request.externalOrg.id);
+    if (failing) throw new Error("provisioner down");
+    return { settings: { modelGatewayKey: "chat-key" }, members: [] };
+  };
+  const handledIn: (string | undefined)[] = [];
+  const inboundFor = (chatIssuer?: string) =>
+    createGenericChatInbound({
+      secret: chatSecret,
+      client: createGenericChatClient({
+        url: "https://chat.example",
+        secret: chatSecret,
+        fetch: async () => Response.json({}),
+      }),
+      stageBlob: async () => ({ blobId: "" }),
+      app: {
+        tenantFor: (...key: Parameters<App["tenantFor"]>) => tenantLookup(db.app).tenantFor(...key),
+        ingestSurfaceEvents: async () => (handledIn.push(boundTenant()), { upserted: 1 }),
+        onContextRequestCreated: () => () => {},
+      } as unknown as App,
+      surfaceCache: { readMessages: async () => [] },
+      isInternalEmail: async () => true,
+      unansweredReply: async () => {},
+      guestReply: async () => {},
+      turns: { start: async () => {} },
+      onAction: async () => {},
+      registerGroup: async () => {},
+      openAccount: createSelfServe(
+        createPgPool(db.appDatabaseUrl),
+        provision,
+        s.built.admin,
+        s.built.auditLog,
+        chatIssuer,
+      ).chatAccountWorkspace,
+    });
+  const deliver = async (inbound: ReturnType<typeof inboundFor>, account: string) => {
+    const chat = { id: "88", kind: "group", members: [{ id: "5", email: "ada@x.test" }] };
+    const message = { id: "1001", user: { id: "5" }, body: "hello", created_at: "2026-11-02T20:00:00Z" };
+    const raw = JSON.stringify({
+      event_id: "e",
+      type: "message.created",
+      account,
+      account_name: "Chat Co",
+      chat,
+      message,
+    });
+    const ts = String(Math.floor(Date.now() / 1000));
+    return (await withoutTenant(() => inbound.handle(ts, signGenericChat(chatSecret, ts, raw), raw))).status;
+  };
+  assert.equal(await deliver(inboundFor(), "4242"), 404);
+  const inbound = inboundFor(issuer);
+  assert.equal(await deliver(inbound, "4242"), 503);
+  failing = false;
+  assert.deepEqual(await Promise.all([deliver(inbound, "4242"), deliver(inbound, "4242")]), [200, 200]);
+  const rows = await db.owner.q(
+    "SELECT o.tenant::text AS tenant, t.settings FROM tenant_external_orgs o JOIN tenants t ON t.id = o.tenant WHERE o.org_id = '4242'",
+  );
+  assert.equal(rows.length, 1);
+  const { tenant, settings } = rows[0]!;
+  assert.deepEqual(settings, {
+    brandName: "Chat Co",
+    modelGatewayKey: "chat-key",
+    serving: true,
+    deploymentModelKey: false,
+    partnerChatAccount: "4242",
+  });
+  assert.deepEqual(handledIn, [tenant, tenant]);
+  await db.owner.q(`UPDATE tenants SET settings = settings || '{"serving":false}' WHERE id = $1`, [tenant]);
+  const calls = provisions.length;
+  assert.equal(await deliver(inbound, "4242"), 404);
+  assert.equal(provisions.length, calls);
 });
