@@ -3,7 +3,8 @@ import { copyText, relTime } from "../ui.ts";
 import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
 import { pageHeader, table, card, badge, subline, matches } from "./shared.ts";
-import { keychain } from "./keychain.ts";
+import { keychain, userTabs } from "./keychain.ts";
+import { load } from "./activity.ts";
 import { detail, labelRole, userHref } from "./user-detail.ts";
 
 const failure = (r: any, fallback: string) =>
@@ -11,11 +12,11 @@ const failure = (r: any, fallback: string) =>
 
 export async function mount(page: AdminPage) {
   if (page.view === "user") return detail(page);
-  const r = await page.api("GET", page.view === "keychain" ? "/api/keychain" : "/api/users");
-  if (!page.current()) return;
-  if (!r.ok) return render(html`<p class="empty">${failure(r, "Failed to load")}</p>`, page.host);
-  if (page.view === "keychain") return keychain(page, r.data || {});
-  users(page, r.data || {});
+  const onKeychain = page.view === "keychain";
+  const data = await load(page, onKeychain ? "/api/keychain" : "/api/users", { tabs: userTabs(page) });
+  if (!data) return;
+  if (onKeychain) return keychain(page, data);
+  users(page, data);
 }
 
 function users(page: AdminPage, initial: any) {
@@ -109,10 +110,7 @@ function users(page: AdminPage, initial: any) {
                 ${showOffboarded ? "Hide offboarded" : `Show offboarded (${offboarded})`}
               </button>`
             : nothing,
-          tabs: [
-            { label: "Users", href: page.href("users"), active: true },
-            { label: "Keychain", href: page.href("keychain") },
-          ],
+          tabs: userTabs(page),
           search: {
             value: filter,
             placeholder: "sign-in, role, scope, or app",
