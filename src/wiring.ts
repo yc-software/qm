@@ -1915,8 +1915,20 @@ export function buildApp(
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
-  const isOrgAdmin = async (principalId: string) =>
-    (await admin.adminStatusOf(ambientTenant(), identity.classify(principalId))).isAdmin;
+  const adminChecks = new Map<string, Promise<boolean>>();
+  const isOrgAdmin = (principalId: string): Promise<boolean> => {
+    const tenant = ambientTenant();
+    const key = `${tenant.id}\0${principalId}`;
+    let check = adminChecks.get(key);
+    if (!check) {
+      check = admin
+        .adminStatusOf(tenant, identity.classify(principalId))
+        .then((status) => status.isAdmin)
+        .finally(() => adminChecks.delete(key));
+      adminChecks.set(key, check);
+    }
+    return check;
+  };
   const canManageScope = createCanManageScope({
     managedGroups: projects,
     directory,

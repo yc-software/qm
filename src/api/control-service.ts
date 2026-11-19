@@ -218,7 +218,13 @@ async function mayShare(
   return app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId);
 }
 
-function managesOwner(app: Pick<App, "managesScope">, owner: string, actorId: string): Promise<boolean> {
+async function controlsOwner(
+  app: Pick<App, "managesScope" | "samePerson">,
+  owner: string,
+  actorId: string,
+  isActor?: (id: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (await (isActor ? isActor(owner) : app.samePerson(owner, actorId))) return true;
   return app.managesScope(actorId, scopeId("personal", owner));
 }
 
@@ -229,11 +235,7 @@ async function ownsCron(
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (actsAsScope(cron.owner, cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
-  if (
-    !(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId))) &&
-    !(await managesOwner(app, cron.owner, actorId))
-  )
-    return false;
+  if (!(await controlsOwner(app, cron.owner, actorId, isActor))) return false;
   return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
 }
 
@@ -279,7 +281,7 @@ export async function editWebhookTask(
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
   if (!(await canAdministerWebhook(app, webhook, { actorId: principalId })))
     return { ok: false, code: "forbidden", message: "not your webhook" };
-  if (!(await app.samePerson(webhook.owner, principalId)) && !(await managesOwner(app, webhook.owner, principalId)))
+  if (!(await controlsOwner(app, webhook.owner, principalId)))
     return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
   const updated = await app.updateWebhook(id, { action });
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
@@ -295,7 +297,7 @@ export async function canAdministerWebhook(
   if (!(await personOrOwningBot(actor, owns, webhook))) return false;
   if (await app.membershipControlsScope(webhook.ownerScopeId))
     return app.managesScope(actor.actorId, webhook.ownerScopeId);
-  return (await owns()) || managesOwner(app, webhook.owner, actor.actorId);
+  return controlsOwner(app, webhook.owner, actor.actorId, isActor);
 }
 
 function withDefaultTimezone(schedule: CronSchedule, cap: CapabilityClaims): CronSchedule {
@@ -613,7 +615,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (req.script) {
         const script = cronScriptFrom(req.script, before, req);
         if (typeof script === "string") return { ok: false, code: "bad_request", message: script };
-        if (before.ownerScopeId !== capability.scopeId && !(await managesOwner(app, before.owner, capability.actorId)))
+        if (before.ownerScopeId !== capability.scopeId && !(await controlsOwner(app, before.owner, capability.actorId)))
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
