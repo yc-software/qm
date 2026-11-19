@@ -2714,6 +2714,9 @@
   gap: 6px;
   flex: none;
 }
+#app-view .cred-flags:empty {
+  display: none;
+}
 #app-view .cred-usage {
   flex: none;
   min-width: 72px;
