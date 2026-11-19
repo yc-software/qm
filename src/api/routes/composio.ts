@@ -386,7 +386,8 @@ async function connections(ctx: ApiCtx): Promise<void> {
       items,
       nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
     });
-  } catch {
+  } catch (error) {
+    reportFailure("composio: connections", error);
     return sendJson(ctx.res, 502, {
       error: "composio_unavailable",
       message: "Could not check connected apps. Please try again.",

@@ -832,7 +832,8 @@ export function createKeychain(deps: {
   }
 
   const refreshDue = (rec: KeychainCredential) =>
-    rec.check?.ok === false || (rec.expiresAt !== undefined && now() >= rec.expiresAt - oauthRefreshMargin);
+    (rec.check?.ok === false && !((rec.refresh?.refreshFailedAt ?? 0) >= rec.check.at)) ||
+    (rec.expiresAt !== undefined && now() >= rec.expiresAt - oauthRefreshMargin);
   const accessTokenOf = (rec: KeychainCredential) => tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
   const unexpiredAccessToken = (rec: KeychainCredential) =>
     oauthExpired(rec, now(), oauthSkew) ? null : accessTokenOf(rec);
@@ -1748,7 +1749,7 @@ export function storedCredentialError(e: unknown): string {
 
 export const credentialLineText = (line: CredentialLine): string => {
   if (line.failedCheck)
-    return `${line.label}; ${line.use}; last check failed${line.failedCheck.detail ? ` (${line.failedCheck.detail.slice(0, 80)})` : ""}`;
+    return `${line.label}; ${line.use}; last check failed${line.failedCheck.detail ? ` (${line.failedCheck.detail})` : ""}`;
   if (!line.expired) return `${line.label}; ${line.use}`;
   return `${line.label}; expired${line.refreshError ? ` (refresh failed: ${line.refreshError})` : ""}`;
 };

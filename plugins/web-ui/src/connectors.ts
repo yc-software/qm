@@ -152,7 +152,7 @@ function credentialCard(c: KeychainCredential): TemplateResult {
           <div class="kc-resource-title-row">
             <h3>${c.service}</h3>
             ${expired ? html`<span class="kc-state warning">Expired</span>` : ""}
-            ${!expired && c.check ? html`<span class="kc-state ${failing ? "warning" : "ok"}">${failing ? "Sign in again" : "Working"}</span>` : ""}
+            ${!expired && c.check ? html`<span class="kc-state ${failing ? "warning" : "ok"}">${failing ? "Check failed" : "Working"}</span>` : ""}
           </div>
           ${subtitle ? html`<div class="kc-resource-meta">${subtitle}</div>` : ""}
           ${c.check ? html`<div class="kc-resource-meta">Checked ${fmtDateTime(c.check.at)}</div>` : ""}
