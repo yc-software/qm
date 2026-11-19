@@ -95,7 +95,7 @@ export function createSlackDeliverer(deps: {
   const { inFlightRuns } = flow;
 
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
-    core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
+    core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
     const base = trimTrailingSlashes(deps.webUiPublicUrl?.trim() ?? "");
@@ -266,7 +266,7 @@ export function createSlackDeliverer(deps: {
                   data: { error: "edit_target_not_found" },
                 });
               });
-            return undefined;
+            return { messageTs: d.destination.edit.messageTs };
           }
           let editRef = d.destination.editRef;
           if (!editRef && runId) {
@@ -334,7 +334,7 @@ export function createSlackDeliverer(deps: {
               });
               if (threadTs) threads.mark(channel, threadTs, true);
               if (!alreadyDelivered) await replayAttachments(threadTs);
-              return undefined;
+              return { messageTs: editRef };
             } catch (e) {
               throwIfRateLimited(e);
               swallow("slack: finalize recovered reply in place", e);
@@ -355,7 +355,7 @@ export function createSlackDeliverer(deps: {
           const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
           if (root) threads.mark(channel, root, true);
           if (!res.reused) await replayAttachments(root);
-          return undefined;
+          return res.ts === undefined ? undefined : { messageTs: String(res.ts) };
         } finally {
           slackApiMs = Math.round(performance.now() - tPost);
         }

@@ -281,6 +281,7 @@ export interface Delivery {
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
+  messageTs?: string;
 }
 
 export interface EgressPolicy {

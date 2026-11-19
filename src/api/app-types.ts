@@ -583,7 +583,7 @@ export interface App {
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
-  ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  ackDelivery(id: string, slackApiMs?: number, messageTs?: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;

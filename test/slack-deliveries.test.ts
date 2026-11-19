@@ -51,13 +51,15 @@ async function deliver(
       messages: history,
     };
   };
+  const ackBodies: Array<Record<string, unknown>> = [];
   const core = {
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
     failDelivery: async (id: string, code: string) => void failures.push([id, code]),
-    ackDelivery: async (id: string) => {
+    ackDelivery: async (id: string, body?: Record<string, unknown>) => {
       if (row.loseAck) throw new Error("acknowledgement lost");
       acknowledgements.push(id);
+      ackBodies.push({ id, ...body });
     },
   };
   const client = {
@@ -103,7 +105,7 @@ async function deliver(
   });
 
   await deliverer.deliver(client, delivery as never);
-  return { acknowledgements, uploads, posts, updates, failures, marks, probes, conversationsOpened };
+  return { acknowledgements, ackBodies, uploads, posts, updates, failures, marks, probes, conversationsOpened };
 }
 
 for (const type of ["slack", "group", "principal"]) {
@@ -523,4 +525,16 @@ test("a reply revised by the reply check carries a plain-text edit note footer",
     type: "context",
     elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
   });
+});
+
+test("a posted delivery acks with the Slack ts of the message it created", async () => {
+  const { ackBodies } = await deliver();
+  assert.equal(ackBodies.length, 1);
+  assert.equal(ackBodies[0]!.messageTs, "separate-message", "the ack carries the new message's ts");
+});
+
+test("an edited delivery acks with the ts it rewrote", async () => {
+  const { ackBodies, updates } = await deliver({ edit: { messageTs: "77.88" } }, undefined, undefined, "revised");
+  assert.equal(updates.length, 1);
+  assert.equal(ackBodies[0]!.messageTs, "77.88", "the ack echoes the edited message's ts");
 });
