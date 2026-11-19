@@ -523,3 +523,50 @@ test("ordinary schedule history cannot expose a fire that acquired private conte
   const unverifiable = await f.control.getCronRuns(cron.id, {}, caller);
   assert.equal(unverifiable.ok, false, JSON.stringify(unverifiable));
 });
+
+for (const scenario of ["refusal", "queued", "owner"] as const) {
+  test(`late private execution protects the ${scenario} failure notice`, async () => {
+    const f = await fixture();
+    const execution = await f.built.sessions.getOrCreateByThread(`late-private-notice-${scenario}`, "dm", ownerScope);
+    let executed = false;
+    const work = runTrigger(
+      {
+        identity: f.built.identity,
+        deliveries: f.built.deliveries,
+        sessions: f.built.sessions,
+        idempotency: createIdempotencyStore(testMap()),
+        run: async () => {
+          executed = true;
+          await f.built.sessions.recordContextProvenance(execution.id, ownerScope, {
+            ...provenance,
+            personalOnly: true,
+          });
+          return scenario === "queued"
+            ? { status: "queued" as const, runId: "queued-private-run" }
+            : { status: "refused" as const, reason: "PrivateFailureSpruce7301", sessionId: execution.id };
+        },
+      },
+      {
+        owner: "U1",
+        ownerScopeId: ownerScope,
+        surface: "cron",
+        input: "Ordinary template",
+        fireKey: `late-private-notice-${scenario}`,
+        threadRef: execution.threadRef,
+        destination: principalDestination(scenario === "owner" ? "U1" : "U2", "U1"),
+        errorNotice: (reason) => `Failed: ${reason}`,
+      },
+    );
+    if (scenario === "owner") {
+      assert.equal((await work).status, "refused");
+      const [notice] = await f.built.deliveries.pending("principal");
+      assert.equal(notice?.destination.target, "U1");
+      assert.equal(notice?.provenance?.contextProvenance?.personalOnly, true);
+      assert.ok(notice?.text.includes("PrivateFailureSpruce7301"));
+    } else {
+      await assert.rejects(work, /Private scheduled output cannot use this scope or destination/);
+      assert.deepEqual(await f.built.deliveries.pending("principal"), []);
+    }
+    assert.equal(executed, true);
+  });
+}

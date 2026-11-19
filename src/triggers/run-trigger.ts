@@ -205,7 +205,11 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
   const threadRef = spec.threadRef ?? spec.fireKey;
   const enqueue = async (input: Parameters<typeof reachEnqueue>[0], result?: TurnResult) => {
-    const source = result?.sessionId && deps.sessions ? await deps.sessions.get(result.sessionId) : undefined;
+    let source;
+    if (result && deps.sessions)
+      source = result.sessionId
+        ? await deps.sessions.get(result.sessionId)
+        : await deps.sessions.getByThread(threadRef);
     const inherited = mergeProvenance(
       [
         artifactProvenance(spec.ownerScopeId, spec.sourceProvenance, spec.personalOnly),
@@ -290,16 +294,20 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let heldForApproval = false;
   let runDelivers = false;
   let scriptVerdict: string | undefined;
+  let executionResult: TurnResult | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
     if (!spec.errorNotice || !spec.destination || !deliverable) return;
-    await enqueue({
-      deliveries: deps.deliveries,
-      destination: spec.destination,
-      text: spec.errorNotice(reason),
-      idempotencyKey: `${spec.fireKey}:err`,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
+    await enqueue(
+      {
+        deliveries: deps.deliveries,
+        destination: spec.destination,
+        text: spec.errorNotice(reason),
+        idempotencyKey: `${spec.fireKey}:err`,
+        provenance: deliveryProvenance(spec, threadRef, executionResult),
+        ...(spec.shadow ? { shadow: true } : {}),
+      },
+      executionResult,
+    );
   };
   const ran = await deps.idempotency.once(spec.fireKey, async () => {
     await spec.onClaimed?.();
@@ -373,6 +381,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
+    executionResult = res;
     if (res.status === "queued") {
       if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
       throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
