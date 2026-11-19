@@ -228,8 +228,11 @@ function shortCron(expression: string): string {
   const pattern = new CronPattern(expression);
   const [minute, ...moreMinutes] = setIndexes(pattern.minute);
   const weekdays = setIndexes(pattern.dayOfWeek);
+  const hours = setIndexes(pattern.hour);
+  const listedHours = expression.trim().split(" ")[1]?.split(",").length;
   const plain =
     minute !== undefined &&
+    hours.length === listedHours &&
     !moreMinutes.length &&
     setIndexes(pattern.second).join() === "0" &&
     pattern.starDOM &&
@@ -240,9 +243,7 @@ function shortCron(expression: string): string {
     weekdays.every((day) => pattern.dayOfWeek[day] === EVERY_WEEKDAY_OCCURRENCE);
   if (!plain) return cronstrue.toString(expression.replaceAll("#L", "L"));
   const days = pattern.starDOW ? "daily" : weekdays.map((day) => WEEKDAYS[day]).join("/");
-  return `${setIndexes(pattern.hour)
-    .map((hour) => clockTime(hour, minute))
-    .join(", ")} ${days}`;
+  return `${hours.map((hour) => clockTime(hour, minute)).join(", ")} ${days}`;
 }
 
 function shortInterval(everyMs: number): string {
