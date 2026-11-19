@@ -193,7 +193,8 @@ same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
 withdrawn before that version runs. Moving the app out of the publisher's own library, to
-a teammate or a shared home, withdraws it as the app moves. While the app borrows
+a teammate or a shared home, withdraws it as the app moves, and an app outside that library
+can't borrow again until it moves back; `[]` still withdraws. While the app borrows
 connectors, only the publisher can share it with anyone else. The token comes from the
 publisher's personal connection, else their default, else their company one.
 
