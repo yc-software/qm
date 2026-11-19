@@ -15,7 +15,6 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -537,17 +536,11 @@ async function withPgSession(
     toolOutput: ToolOutputStore;
   }) => Promise<void>,
 ): Promise<void> {
-  const { randomUUID } = await import("node:crypto");
   const { createPostgresSessionStore } = await import("../src/sessions/postgres-session-store.ts");
   const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: PG_URL });
-  const schema = `replay_pg_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(PG_URL!);
-  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-  await seedTestTenant(url.toString());
-  const store = createPostgresSessionStore(url.toString());
-  const raw = new pg.Pool({ connectionString: url.toString() });
+  const url = testDatabaseUrl();
+  const store = createPostgresSessionStore(url);
+  const raw = new pg.Pool({ connectionString: url });
   try {
     const session = await store.getOrCreateByThread("web:replay", "dm", "personal:tester" as ScopeId);
     const writer = { sessionId: session.id };
@@ -562,8 +555,6 @@ async function withPgSession(
     });
   } finally {
     await raw.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
   }
 }
 

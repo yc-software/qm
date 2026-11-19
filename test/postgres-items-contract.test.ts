@@ -16,7 +16,7 @@ import {
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
@@ -33,19 +33,13 @@ async function withSchema(
   }) => Promise<void>,
 ): Promise<void> {
   const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: URL });
-  const schema = `${prefix}_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(URL!);
-  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-  await seedTestTenant(url.toString());
+  const url = new globalThis.URL(testDatabaseUrl());
+  url.searchParams.set("application_name", `${prefix}_${randomUUID().replaceAll("-", "")}`);
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });
   } finally {
     await raw.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
   }
 }
 

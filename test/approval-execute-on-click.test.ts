@@ -13,7 +13,7 @@ import { DuplicateCallError } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId, TurnRequest } from "../src/types.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, createTestMapTables } from "./support/test-database.ts";
 
 type Sink = Item[];
 type ProviderMessage = { role: string; content: Array<Record<string, unknown>> | string };
@@ -310,6 +310,7 @@ test(
         call: { tool: "example_send", input: {} },
         request: { actor: { id: "internal:U1", externalId: "U1" } },
       } as unknown as PendingApprovalRecord;
+      await createTestMapTables(process.env.DATABASE_URL!, { withdraw_race_approvals: ["sessionId"] });
       const pending = createPostgresMap<PendingApprovalRecord>(withdrawCore, "withdraw_race_approvals", ["sessionId"]);
       const clicked = createPostgresMap<PendingApprovalRecord>(clickCore, "withdraw_race_approvals", ["sessionId"]);
       await pending.put("r1", record);

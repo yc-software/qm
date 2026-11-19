@@ -1,5 +1,4 @@
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
-import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Session, SessionType, ScopeId } from "../types.ts";
@@ -13,7 +12,7 @@ import type {
   SessionStore,
   StoreOptions,
 } from "./session-store.ts";
-import { ancestry, SESSION_MIGRATIONS } from "./session-schema.ts";
+import { ancestry } from "./session-schema.ts";
 import { createSessionSpend } from "./session-spend.ts";
 import { createLlmCaptures } from "./llm-captures.ts";
 import { createSessionSearch } from "./session-search.ts";
@@ -23,14 +22,7 @@ import { createSessionParticipants, participantSessionsSql } from "./session-par
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { authoredUserTurn, TENANT } from "./items.ts";
-import {
-  GENERIC_CHAT_TENANT,
-  SERVING_SLACK_TENANTS,
-  SLACK_TENANTS,
-  SLACK_BRIDGE_TENANT,
-  TENANT_LOOKUPS,
-  tenantLookup,
-} from "../tenants/lookup.ts";
+import { tenantLookup } from "../tenants/lookup.ts";
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
@@ -63,15 +55,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     return rows.map((r) => ({ id: r.id as string, rootId: r.root_id as string, threadRef: r.thread_ref as string }));
   };
 
-  const db = createPgPool(connectionString, [
-    ...DIRECTORY_MIGRATIONS,
-    ...SESSION_MIGRATIONS,
-    TENANT_LOOKUPS,
-    SLACK_TENANTS,
-    SLACK_BRIDGE_TENANT,
-    GENERIC_CHAT_TENANT,
-    SERVING_SLACK_TENANTS,
-  ]);
+  const db = createPgPool(connectionString);
   const { pool, q } = db;
 
   return {

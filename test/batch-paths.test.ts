@@ -5,7 +5,7 @@ import pg from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap, createTestMapTables } from "./support/test-database.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   const skip = backend === "postgres" && !process.env.DATABASE_URL;
@@ -14,7 +14,9 @@ for (const backend of ["memory", "postgres"] as const) {
     { skip },
     async () => {
       const factory = backend === "postgres" ? createPostgresMapFactory(process.env.DATABASE_URL!) : null;
-      const map = factory?.map<{ n: number }>(`batch_${randomUUID().replaceAll("-", "")}`) ?? testMap<{ n: number }>();
+      const table = `batch_${randomUUID().replaceAll("-", "")}`;
+      if (factory) await createTestMapTables(process.env.DATABASE_URL!, { [table]: [] });
+      const map = factory?.map<{ n: number }>(table) ?? testMap<{ n: number }>();
       try {
         const increment = (value: { n: number } | null) => ({ n: (value?.n ?? 0) + 1 });
         assert.deepEqual(

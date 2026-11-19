@@ -120,6 +120,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   transformed, or dropped; explain migration, backfill, rollout, and compatibility
   effects. Distinguish approved design, implemented code, and live schema. A migration
   diff alone is not enough. If configuration or schema is unchanged, say so explicitly.
+  Schema changes are new files in `db/migrations/` plus a regenerated `db/schema.sql`; see `db/README.md`.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several

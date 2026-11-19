@@ -2,16 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import {
-  createPgPool,
-  assertOneStatement,
-  concurrentIndexName,
-  definePgMigration,
-  pgMigrationChecksum,
-} from "../src/persistence/pg-pool.ts";
+import { createPgPool, concurrentIndexName, pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
-  const pg = createPgPool("postgres://does-not-exist:0/none", [{ id: "test/lazy/0001", statements: ["SELECT 1"] }]);
+  const pg = createPgPool("postgres://does-not-exist:0/none");
   await assert.doesNotReject(pg.close());
 });
 
@@ -41,62 +35,9 @@ test("importing pg-pool does NOT pull `pg` into the runtime import graph (zero-d
   assert.match(out, /OK/);
 });
 
-test("assertOneStatement: a lone statement (with or without a trailing ;) is accepted", () => {
-  assert.doesNotThrow(() => assertOneStatement("CREATE TABLE IF NOT EXISTS t(id TEXT)"));
-  assert.doesNotThrow(() => assertOneStatement("SELECT 1;"));
-});
-
-test("assertOneStatement: two statements jammed into one element are rejected", () => {
-  assert.throws(
-    () =>
-      assertOneStatement("ALTER TABLE t ADD COLUMN IF NOT EXISTS a INT; ALTER TABLE t ADD COLUMN IF NOT EXISTS b INT"),
-    /single statement/,
-  );
-});
-
-test("assertOneStatement: a dollar-quoted DO block with inner semicolons is one statement", () => {
-  assert.doesNotThrow(() =>
-    assertOneStatement(`DO $$
-    BEGIN
-      ALTER TABLE t ADD COLUMN IF NOT EXISTS a INT;
-      ALTER TABLE t ADD COLUMN IF NOT EXISTS b INT;
-    END $$`),
-  );
-});
-
-test("assertOneStatement: a single-quoted literal or line comment containing ';' is not a split", () => {
-  assert.doesNotThrow(() => assertOneStatement("INSERT INTO t(x) VALUES ('a;b')"));
-  assert.doesNotThrow(() => assertOneStatement("CREATE INDEX i ON t(x) -- one; statement\n"));
-});
-
-test("assertOneStatement: an apostrophe in a line comment can't hide a following statement's ';'", () => {
-  assert.throws(() => assertOneStatement("SELECT 1 -- don't\n; SELECT 'x'"), /single statement/);
-});
-
 test("migration checksums are stable and sensitive to statement changes", () => {
   assert.equal(pgMigrationChecksum([" SELECT 1 ", "SELECT 2;"]), pgMigrationChecksum(["SELECT 1", "SELECT 2;"]));
   assert.notEqual(pgMigrationChecksum(["SELECT 1"]), pgMigrationChecksum(["SELECT 2"]));
-});
-
-test("released migrations can pin their source checksum", () => {
-  const migration = definePgMigration({ id: "test/pinned/0001", statements: ["SELECT 1"] });
-  assert.equal(
-    definePgMigration({ id: "test/pinned/0001", statements: ["SELECT 1"], expectedChecksum: migration.checksum })
-      .checksum,
-    migration.checksum,
-  );
-  assert.throws(
-    () => definePgMigration({ id: "test/pinned/0001", statements: ["SELECT 2"], expectedChecksum: migration.checksum }),
-    /source checksum mismatch/,
-  );
-});
-
-test("migration definitions reject invalid ids and multi-statement elements", () => {
-  assert.throws(() => definePgMigration({ id: "../bad", statements: ["SELECT 1"] }), /migration id/);
-  assert.throws(
-    () => definePgMigration({ id: "test/good/0001", statements: ["SELECT 1; SELECT 2"] }),
-    /single statement/,
-  );
 });
 
 test("concurrentIndexName recognizes retryable concurrent index creation", () => {

@@ -67,11 +67,9 @@ import { configRouteOptions, createModelRoutes, type ModelRoutes } from "./model
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
-import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
+import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
 import {
-  CLEAR_BOT_SET_DEFAULTS_MIGRATION,
   createSandboxResources,
-  MARK_ADMIN_CREATED_COMPUTERS_MIGRATION,
   type SandboxResource,
   type SandboxDefault,
   type SandboxResources,
@@ -114,14 +112,7 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import {
-  createPostgresMap,
-  createPostgresMapFactory,
-  type DurableMap,
-  processLevelMap,
-  durableMapMigrations,
-  processMapMigrations,
-} from "./persistence/durable-map.ts";
+import { createPostgresMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
@@ -142,17 +133,10 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
+import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
-import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
-import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
-import {
-  BACKFILL_BOT_MARKER_MIGRATION,
-  DROP_RECIPIENT_CONSENT_MIGRATION,
-  MARK_BOT_EDITED_CRONS_MIGRATION,
-} from "./triggers/trigger-store.ts";
+import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
+import { createCronStore, type CronStore } from "./cron/cron-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
@@ -184,13 +168,7 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import {
-  createDeployStore,
-  deployTouchDebounceMs,
-  WITHDRAW_LOANS_MIGRATION,
-  type PublishedApp,
-  type AppDraft,
-} from "./deploy/deploy-store.ts";
+import { createDeployStore, deployTouchDebounceMs, type PublishedApp, type AppDraft } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
@@ -357,7 +335,6 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
 import { expireStaleApprovals } from "./core/approval-requester.ts";
-import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -365,7 +342,6 @@ import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS } from "./runs/w
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
-  INSTANCE_HEARTBEAT_MIGRATIONS,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type BackgroundServices, type DrainController } from "./runs/drain.ts";
@@ -387,12 +363,7 @@ import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
-import {
-  createSwarmStore,
-  MARK_SWARM_FORUMS_PERSON_USED_MIGRATION,
-  STAMP_SWARM_COMPUTERS_MIGRATION,
-  type SwarmStorage,
-} from "./swarms/swarm-store.ts";
+import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
@@ -590,19 +561,6 @@ export interface BuiltApp {
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
-const CONFIGURED_MAPS = [
-  "sprites_initialization",
-  "sandbox_resource_rollout",
-  "sandbox_routing",
-  "render_deploy_credentials",
-  "render_app_storage",
-  "aws_deploy_bodies",
-  "fly_deploy_configs",
-  "porter_deploy_bodies",
-];
-
-const CONFIGURED_PROCESS_MAPS = ["render_sandbox_bases", "fly_peer_claims", "fly_deploy_ports"];
-
 export function buildApp(
   config: Config,
   overrides: {
@@ -658,17 +616,7 @@ export function buildApp(
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
   const processMap = <T>(table: string): DurableMap<T> =>
-    createPostgresMap<T>(pgArtifactMap.pool, table, [], [], [processLevelMap(table)]);
-  const inboundMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-    pgArtifactMap.map<T>(table, indexedFields, inboundTenancy(table));
-  for (const migration of [
-    ...FILE_UPLOAD_MIGRATIONS,
-    ...BUDGET_MIGRATIONS,
-    ...INSTANCE_HEARTBEAT_MIGRATIONS,
-    ...CONFIGURED_MAPS.flatMap(durableMapMigrations),
-    ...CONFIGURED_PROCESS_MAPS.flatMap(processMapMigrations),
-  ])
-    pgArtifactMap.pool.registerMigration(migration);
+    createPostgresMap<T>(pgArtifactMap.pool, table, [], { tenanted: false });
   setProviderBaseUrls(config.providerBaseUrls);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter(
     (id) => !resolveDeploymentModel(id),
@@ -1318,22 +1266,6 @@ export function buildApp(
     ...deriveConnectorKey(keychainKeyMaterial ?? randomBytes(32), "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS keychain_credentials (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS keychain_grants (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture')`,
-      `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/keychain_credentials/0003-delete-kernel-writer-markers",
-    statements: [
-      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active')`,
-      `DELETE FROM keychain_credentials WHERE json ->> 'service' = 'kernel-active'`,
-    ],
-  });
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
     grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
@@ -1390,9 +1322,9 @@ export function buildApp(
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap<SecretDropRecord>("secret_drops"));
+  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
+  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
+  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
@@ -1745,7 +1677,7 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: pgArtifactMap.map<PublishedApp>("deployments", undefined, APP_TABLES),
+    deployments: artifactMap<PublishedApp>("deployments"),
     drafts: artifactMap<AppDraft>("deployment_drafts"),
     pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
@@ -2060,82 +1992,10 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
-  pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_UPGRADE);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
-  pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
-  pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
-  pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
-  pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
-  pgArtifactMap.pool.registerMigration(CLEAR_BOT_SET_DEFAULTS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(WITHDRAW_LOANS_MIGRATION);
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/crons/0002-drop-fire-log",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "UPDATE crons SET json = json - 'fireLog' WHERE json ? 'fireLog'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/sandbox_resources/0001-drop-machine-id",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS sandbox_resources (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "UPDATE sandbox_resources SET json = json - 'machineId' WHERE json ? 'machineId'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration(MARK_ADMIN_CREATED_COMPUTERS_MIGRATION);
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/retired-tables/0001-drop",
-    statements: [
-      "turn_wall_clock_configs",
-      "connector_status",
-      "pinned_skills",
-      "internal_member_overrides",
-      "brain_clients",
-      "break_glass_grants",
-      "browse_provider_configs",
-      "device_flow_cutover",
-      "device_flow_cutover_resets",
-      "inbox_state",
-      "provider_request_capture_flag",
-      "run_state_retention_configs",
-      "slack_agent_requests",
-    ].flatMap((table) => [`DROP TABLE IF EXISTS ${table}`, `DELETE FROM durable_map_versions WHERE tbl = '${table}'`]),
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "runtime/0002-drop-harness-choice",
-    statements: [
-      "DROP TABLE IF EXISTS approved_harness_configs",
-      "DELETE FROM durable_map_versions WHERE tbl = 'approved_harness_configs'",
-      `DO $$ BEGIN IF to_regclass('base_model_configs') IS NOT NULL THEN UPDATE base_model_configs SET json = (CASE WHEN json ? 'harnessId' AND NOT json ? 'orgRevision' THEN json || '{"orgRevision":0}'::jsonb ELSE json END) - 'harnessId' #- '{cronRuntime,harnessId}' #- '{subagentRuntime,harnessId}' #- '{fallbackRuntime,harnessId}' WHERE json ? 'harnessId' OR (json -> 'cronRuntime') ? 'harnessId' OR (json -> 'subagentRuntime') ? 'harnessId' OR (json -> 'fallbackRuntime') ? 'harnessId'; END IF; END $$`,
-      `DO $$ BEGIN IF to_regclass('auto_flagger_configs') IS NOT NULL THEN UPDATE auto_flagger_configs SET json = json - 'harnessId' WHERE json ? 'harnessId'; END IF; END $$`,
-      `DO $$ BEGIN IF to_regclass('crons') IS NOT NULL THEN UPDATE crons SET json = json #- '{runtime,harnessId}' WHERE (json -> 'runtime') ? 'harnessId'; END IF; END $$`,
-      `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS suggested_activity_profiles (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `UPDATE crons c SET json = jsonb_set(c.json, '{schedule,cron}', to_jsonb(get_byte(sha256(convert_to(p.id, 'UTF8')), 0) % 60 || ' 2 * * *')) FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND c.json -> 'schedule' = p.json -> 'managedSchedule'`,
-      `UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean`,
-    ],
-  });
   const webhooks = createWebhookStore(
-    inboundMap<Webhook>("webhooks", ["ownerScopeId"]),
+    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
   );
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
-    legacyId: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
-    ],
-  });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
     slack: slackApprovalCardRoute,
     [GENERIC_CHAT]: genericChatApprovalCardRoute,
@@ -2833,7 +2693,7 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: inboundMap<LoopIngress>("loop_ingress", ["loopId"]),
+    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
     deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
     loops: loopStore,
     items: loopItems,
@@ -3340,7 +3200,7 @@ export function buildApp(
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
-    sessionShares: inboundMap<SessionShare>("session_shares"),
+    sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
         ? createS3DurableByteStore({

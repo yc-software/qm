@@ -1,10 +1,8 @@
 import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
-import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { foldPrincipalId } from "../directory/person.ts";
-import { ensureUserIn, USER_SCHEMA_MIGRATIONS } from "../identity/user-store.ts";
-import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
+import { ensureUserIn } from "../identity/user-store.ts";
 import type { ScopeId } from "../types.ts";
 import type { ProjectIcon } from "../projects/project-store.ts";
 import type { PersonaRole } from "./persona-schema.ts";
@@ -141,11 +139,7 @@ export class PersonaOwnerRequired extends Error {
 }
 
 export function createPostgresPersonaStore(connectionString: string, opts: { id?: () => string } = {}): PersonaStore {
-  const { q, pool } = createPgPool(connectionString, [
-    ...DIRECTORY_MIGRATIONS,
-    ...SESSION_MIGRATIONS,
-    ...USER_SCHEMA_MIGRATIONS,
-  ]);
+  const { q, pool } = createPgPool(connectionString);
   const nextId = opts.id ?? randomUUID;
   return {
     claimTenants: () => claimRows({ q }, "claim_persona_tenants"),

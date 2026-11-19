@@ -22,7 +22,6 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createDeployStore, type PublishedApp, type AppDraft } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
-import { APP_TABLES } from "../src/deploy/page-views.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -35,6 +34,7 @@ import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts";
+import { createTestMapTables } from "./support/test-database.ts";
 
 type Pair = [string, string];
 const sorted = (rows: Pair[]): Pair[] => [...rows].sort(([l], [r]) => l.localeCompare(r));
@@ -190,8 +190,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
   });
 
   it("job computers are swept each under the tenant that owns the computer record", async () => {
-    for (const table of ["t_tenant_job_computers", "t_tenant_job_defaults"])
-      await createPostgresMap(db.owner, table).claimIds();
+    await createTestMapTables(db.ownerDatabaseUrl, { t_tenant_job_computers: [], t_tenant_job_defaults: [] });
     const records = createPostgresMap<SandboxResource>(db.app, "t_tenant_job_computers");
     const destroyed: Pair[] = [];
     const backend = {
@@ -312,7 +311,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
   it("app keep-warm and idle reaping act on each tenant's apps under that tenant", async () => {
     const maps = createPostgresMapFactory(db.appDatabaseUrl);
     const deployStore = createDeployStore({
-      deployments: maps.map<PublishedApp>("deployments", undefined, APP_TABLES),
+      deployments: maps.map<PublishedApp>("deployments"),
       drafts: maps.map<AppDraft>("deployment_drafts"),
       pg: maps.pool,
     });
@@ -347,7 +346,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
     const fake = installFakeModal();
     const stopSettingsLoad = onTenantLoad(() => loadTenantSettings(db.app));
     try {
-      await createPostgresMap(db.owner, "t_tenant_modal").claimIds();
+      await createTestMapTables(db.ownerDatabaseUrl, { t_tenant_modal: [] });
       const store = createPostgresMap<StoredModalSandbox>(db.app, "t_tenant_modal");
       const modal = createModalSandbox({
         snapshots: createMemorySnapshotStore(),

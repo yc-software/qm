@@ -13,7 +13,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
 import type { SlackPluginConfig } from "./slack/config.ts";
 import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { migrateDatabase } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
 import { loadTenant, perTenant } from "./tenants/cache.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
@@ -58,7 +58,7 @@ export async function startQm(
   { env = {}, ...overrides }: Parameters<typeof buildApp>[1] & { env?: NodeJS.ProcessEnv } = {},
 ) {
   const built = buildApp(config, overrides);
-  await migrateRegisteredPgSchemas(config.databaseUrl);
+  if (config.databaseUrl) await migrateDatabase(config.databaseUrl);
   if (config.databaseUrl)
     await installCronQueue(config.databaseUrl).catch((error: unknown) => {
       if (!cronQueueMisconfigured(error)) throw error;

@@ -104,8 +104,7 @@ function runFile(file, env) {
 async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
-    await admin.query(`CREATE DATABASE ${name}`);
-    await seedTestTenant(databaseUrl(name));
+    await admin.query(`CREATE DATABASE ${name} TEMPLATE ${templateName}`);
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, { DATABASE_URL: boundUrl(databaseUrl(name)), QM_TEST_TEMPLATE_DATABASE: templateName });
   } finally {
@@ -115,34 +114,10 @@ async function runIsolated(file, index) {
 
 const templateName = `${runId}_template`;
 
-function migrateTemplate() {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [new URL("../test/support/test-template.ts", import.meta.url).pathname, databaseUrl(templateName)],
-      { stdio: ["ignore", "ignore", "inherit"] },
-    );
-    child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`Migrating ${templateName} exited ${code}`)),
-    );
-  });
-}
-
 const started = Date.now();
 await admin.query(`CREATE DATABASE ${templateName}`);
-await seedTestTenant(databaseUrl(templateName));
-await migrateTemplate().catch(async (error) => {
-  try {
-    await dropDatabase(templateName);
-    await endPool();
-  } catch (cleanupError) {
-    throw new AggregateError([error, cleanupError], `Migrating ${templateName} failed and cleanup failed`, {
-      cause: cleanupError,
-    });
-  }
-  throw error;
-});
+const vector = (await admin.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rows.length > 0;
+await seedTestTenant(databaseUrl(templateName), { vector });
 await admin.query(`ALTER DATABASE ${templateName} WITH ALLOW_CONNECTIONS false`);
 await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [templateName]);
 const results = [];

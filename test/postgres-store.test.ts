@@ -1,5 +1,5 @@
 import "./run-availability.ts";
-import { test, before } from "node:test";
+import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
@@ -13,20 +13,10 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP SCHEMA public CASCADE");
-  await p.query("CREATE SCHEMA public");
-  await p.end();
-  await seedTestTenant(URL);
-});
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string): OrchestratorInput => ({
@@ -275,12 +265,7 @@ test(
   { skip },
   async (t) => {
     const pg = (await import("pg")).default;
-    const admin = new pg.Pool({ connectionString: URL });
-    const schema = `spend_order_${randomUUID().replaceAll("-", "")}`;
-    await admin.query(`CREATE SCHEMA ${schema}`);
-    const url = new globalThis.URL(URL!);
-    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-    await seedTestTenant(url.toString());
+    const url = testDatabaseUrl();
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -340,8 +325,6 @@ test(
       assert.deepEqual(await pending(), [1]);
     } finally {
       await raw.end();
-      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.end();
     }
   },
 );

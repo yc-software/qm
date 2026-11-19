@@ -3,7 +3,6 @@ import type { ScopeId } from "../types.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { likeContains } from "../persistence/like.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 function rowToEvent(r: Record<string, unknown>): AuditEvent {
   return {
@@ -21,54 +20,7 @@ const COLS = "at, principal_id, action, resource, scope_label, status, detail";
 const MAX = 50000;
 
 export function createPostgresAuditLog(connectionString: string): AuditLog {
-  const pg = createPgPool(connectionString, [
-    {
-      id: "admin/audit-log/0001",
-      expectedChecksum: "542f2a64d2814b329f2c1ad2eb8ed2728e8044b78efa6343eafb5598bc83cb1d",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS audit_log(
-        id BIGSERIAL PRIMARY KEY,
-        at BIGINT NOT NULL,
-        principal_id TEXT NOT NULL,
-        action TEXT NOT NULL,
-        resource TEXT NOT NULL,
-        scope_label TEXT NOT NULL,
-        status TEXT,
-        detail TEXT
-      )`,
-        `ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS idempotency_key TEXT`,
-        `CREATE INDEX IF NOT EXISTS audit_log_by_at ON audit_log(at DESC)`,
-        `CREATE INDEX IF NOT EXISTS audit_log_by_scope_at ON audit_log(scope_label, at DESC)`,
-        `CREATE UNIQUE INDEX IF NOT EXISTS audit_log_by_idempotency_key ON audit_log(idempotency_key) WHERE idempotency_key IS NOT NULL`,
-        `DO $$
-      BEGIN
-        PERFORM pg_advisory_xact_lock(hashtext('agent-platform:audit-log-migrate'));
-        IF to_regclass('public.audit_events') IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM audit_log LIMIT 1) THEN
-          INSERT INTO audit_log (at, principal_id, action, resource, scope_label, status, detail)
-          SELECT (json->>'at')::bigint, json->>'principalId', json->>'action', json->>'resource',
-                 json->>'scopeLabel', json->>'status', json->>'detail'
-          FROM audit_events
-          WHERE json ? 'at'
-          ORDER BY (json->>'at')::bigint ASC;
-        END IF;
-      END $$`,
-      ],
-    },
-    {
-      id: "admin/audit-log/0002",
-      statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
-    },
-    ...tenantTables("admin/audit-log/0003-tenants", [
-      {
-        table: "audit_log",
-        primaryKey: "id",
-        unique: [
-          { name: "audit_log_by_idempotency_key", columns: "idempotency_key", where: "idempotency_key IS NOT NULL" },
-        ],
-      },
-    ]),
-  ]);
+  const pg = createPgPool(connectionString);
 
   const pendingWrites = new Set<Promise<void>>();
   const log: AuditLog = {

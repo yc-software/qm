@@ -16,12 +16,6 @@ export function createPostgresErrorLog(connectionString: string): ErrorLog {
     table: "error_events",
     columns: COLUMNS,
 
-    schema: { expectedChecksum: "d5bab01c9f83042aace325e98636b614bcb8a6d77fedaed373f02efde282f5b8" },
-    extraSchemaStatements: [
-      "CREATE INDEX IF NOT EXISTS error_events_by_ts ON error_events(ts DESC)",
-      "CREATE INDEX IF NOT EXISTS error_events_by_scope_ts ON error_events(scope_label, ts DESC)",
-      "CREATE INDEX IF NOT EXISTS error_events_by_session_ts ON error_events(session_id, ts DESC)",
-    ],
     defaultLimit: 200,
     equalityFilters: { scopeId: "scope_label", sessionId: "session_id" },
     persistErrorMessage: "[errors] failed to persist error event:",

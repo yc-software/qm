@@ -5,7 +5,6 @@ import {
   type CredentialUsageSample,
   type CredentialUsageSink,
 } from "./credential-usage-sink.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 const COLUMNS: readonly EventColumn<keyof CredentialUsageSample & string>[] = [
   ["ts", "ts", "BIGINT", "number", true],
@@ -23,26 +22,6 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
     table: "credential_usage",
     columns: COLUMNS,
 
-    schema: {
-      expectedChecksum: "42188c2f50734398496ddd5a47a9ec3c15a507059c713a4a6ced0b0b81d908eb",
-      followUps: [
-        {
-          id: "admin/scoped-events/credential_usage/0002",
-          statements: [
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS credential_usage_by_slug_ts_id ON credential_usage(slug, ts DESC, id DESC)",
-          ],
-        },
-        {
-          id: "admin/scoped-events/credential_usage/0003",
-          statements: [
-            "CREATE TABLE IF NOT EXISTS credential_daily_calls(slug TEXT NOT NULL, day BIGINT NOT NULL, sent INT NOT NULL, PRIMARY KEY (slug, day))",
-          ],
-        },
-        ...tenantTables("admin/scoped-events/credential_usage/0004-daily-calls-tenants", [
-          { table: "credential_daily_calls", primaryKey: "slug, day" },
-        ]),
-      ],
-    },
     defaultLimit: CREDENTIAL_USAGE_WINDOW,
     equalityFilters: { scopeId: "scope_label", slug: "slug" },
     persistErrorMessage: "[credential-usage] failed to persist broker call:",

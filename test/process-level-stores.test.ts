@@ -2,14 +2,13 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { claimFlyPeer, type FlyPeerClaim } from "../src/deploy/fly-peer-claims.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createPostgresMap, processLevelMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import type { PgPool } from "../src/persistence/pg-pool.ts";
 import { createConfigEpochResolver, type StoredConfigEpoch } from "../src/sandbox/superserve-sandbox.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
-const processStore = <T>(pg: PgPool, table: string) =>
-  createPostgresMap<T>(pg, table, [], [], [processLevelMap(table)]);
+const processStore = <T>(pg: PgPool, table: string) => createPostgresMap<T>(pg, table, [], { tenanted: false });
 
 withoutTenant(() =>
   describe("installation-wide stores are shared by every tenant", () => {
