@@ -8,7 +8,7 @@ import { bootTenant } from "./boot.ts";
 import { AdminError, trustedSubjectPrincipal, type AdminService } from "../admin/admin-service.ts";
 import { reportFailure } from "../util/errors.ts";
 import { orgScope } from "../config.ts";
-import { withTenant } from "./context.ts";
+import { withTenant, type Tenant } from "./context.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { validEmail } from "../identity/external-members.ts";
 
@@ -125,25 +125,24 @@ export function createSelfServe(
   admin: Pick<AdminService, "provisionSelfServe" | "users">,
   auditLog: Pick<AuditLog, "record">,
 ): SelfServe {
-  const enroll = (tenant: string, issuer: string, subject: string, email: string | null, name?: string) =>
-    withTenant(tenant, async (bound) => {
-      const { grant, granted } = await admin.provisionSelfServe(bound, issuer, subject, email);
-      if (name) await admin.users.setDisplayName(grant.principalId, name);
-      if (granted)
-        auditLog.record(bound, {
-          at: Date.now(),
-          principalId: grant.grantedBy!,
-          scopeLabel: grant.scopeId,
-          action: "grant.create",
-          resource: `${grant.principalId}/org_admin`,
-        });
-    });
+  const enroll = async (bound: Tenant, issuer: string, subject: string, email: string | null, name?: string) => {
+    const { grant, granted } = await admin.provisionSelfServe(bound, issuer, subject, email);
+    if (name) await admin.users.setDisplayName(grant.principalId, name);
+    if (granted)
+      auditLog.record(bound, {
+        at: Date.now(),
+        principalId: grant.grantedBy!,
+        scopeLabel: grant.scopeId,
+        action: "grant.create",
+        resource: `${grant.principalId}/org_admin`,
+      });
+  };
 
-  const enrollMember = async (tenant: string, issuer: string, raw: unknown) => {
+  const enrollMember = async (bound: Tenant, issuer: string, raw: unknown) => {
     const member = provisionedMember.safeParse(raw);
     if (!member.success) throw new Error(`invalid member: ${z.prettifyError(member.error)}`);
     const { subject, email, name } = member.data;
-    await enroll(tenant, issuer, subject, email ?? null, name);
+    await enroll(bound, issuer, subject, email ?? null, name);
   };
 
   return {
@@ -153,34 +152,36 @@ export function createSelfServe(
       const workspace = await selfServeTenant(pg, issuer, org);
       if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
       if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
-      if (workspace.created)
-        await withTenant(workspace.tenant, async (bound) =>
+      await withTenant(workspace.tenant, async (bound) => {
+        if (workspace.created)
           auditLog.record(bound, {
             at: Date.now(),
             principalId: `trusted-oidc-self-serve:${issuer}`,
             scopeLabel: orgScope(),
             action: "tenant.self_serve.create",
             resource: workspace.tenant,
-          }),
-        );
-      if (!workspace.provisioned) {
-        const request = {
-          tenant: workspace.tenant,
-          brandName: org.name,
-          issuer,
-          externalOrg: org,
-        };
-        const provisioned = await provision(request).catch((error: unknown) => {
-          reportFailure("self-serve workspace provisioning", error, workspace.tenant);
-          throw new AdminError(502, "the new workspace could not be set up; try signing in again", { cause: error });
-        });
-        for (const [index, member] of provisioned.members.entries())
-          await enrollMember(workspace.tenant, issuer, member).catch((error: unknown) =>
-            reportFailure("self-serve member setup", error, `${workspace.tenant} member ${index}`),
-          );
-        await markSelfServeProvisioned(pg, workspace.tenant, provisioned.settings.modelGatewayKey);
-      }
-      await enroll(workspace.tenant, issuer, subject, email);
+          });
+        if (!workspace.provisioned) {
+          const request = {
+            tenant: workspace.tenant,
+            brandName: org.name,
+            issuer,
+            externalOrg: org,
+          };
+          const provisioned = await provision(request).catch((error: unknown) => {
+            reportFailure("self-serve workspace provisioning", error, workspace.tenant);
+            throw new AdminError(502, "the new workspace could not be set up; try signing in again", {
+              cause: error,
+            });
+          });
+          for (const [index, member] of provisioned.members.entries())
+            await enrollMember(bound, issuer, member).catch((error: unknown) =>
+              reportFailure("self-serve member setup", error, `${workspace.tenant} member ${index}`),
+            );
+          await markSelfServeProvisioned(pg, workspace.tenant, provisioned.settings.modelGatewayKey);
+        }
+        await enroll(bound, issuer, subject, email);
+      });
       return { tenant: workspace.tenant, created: workspace.created };
     },
   };
