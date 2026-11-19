@@ -17,10 +17,12 @@ import { friendlyPrincipal } from "./app-view";
 import { errMessage } from "../../chassis/src/errors";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { appState } from "./shell-state";
+import { COPY_STATUS } from "./cron-delivery";
 
 interface Grant {
   scope: string;
   permission: "read" | "write";
+  status?: "on" | "paused" | "edited";
 }
 
 const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
@@ -338,7 +340,7 @@ export async function openShare(
               >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${grant.status ? html`<span class="badge">${COPY_STATUS[grant.status].label}</span>` : nothing}${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
         ${
           offers.org

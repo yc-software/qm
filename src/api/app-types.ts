@@ -201,7 +201,14 @@ export type ReachNowResult =
       candidates?: Array<Record<string, string>>;
     };
 
-export type VisibleCron = Cron & { scopeName?: string };
+export interface CronCopy {
+  id: string;
+  owner: string;
+  status: "on" | "paused" | "edited";
+  deliversTo?: string;
+}
+
+export type VisibleCron = Cron & { scopeName?: string; copies?: CronCopy[]; sharedBy?: string };
 
 export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
 
@@ -512,7 +519,11 @@ export interface App {
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
-  listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
+  listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
+  shareCron(tenant: Tenant, id: string, recipient: string, by: string): Promise<{ copy: Cron; existed: boolean }>;
+  cronCopies(id: string): Promise<CronCopy[]>;
+  cronSharing(cron: VisibleCron): Promise<VisibleCron>;
+  unshareCron(id: string, recipient: string): Promise<void>;
   updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;

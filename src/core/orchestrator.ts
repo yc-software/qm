@@ -77,7 +77,7 @@ import { appEditTurnPolicy } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import { askResolutionEvents } from "../credentials/keychain.ts";
+import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
@@ -175,7 +175,6 @@ import {
   environmentNote,
   renderGatewayContext,
   renderSandboxProviders,
-  previousRoster,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
   webSurfaceLabel,
@@ -197,14 +196,7 @@ import { appSourceShown } from "./orchestrator/app-source.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
 import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
-import {
-  addConversationBlocks,
-  appendTurnGuidance,
-  conversationRoster,
-  finishSystemPrompt,
-  loadConversationKeychain,
-  shownNames,
-} from "./orchestrator/turn-prompt.ts";
+import { addConversationBlocks, appendTurnGuidance, finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
@@ -678,28 +670,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
-      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
-      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
-      const hasRoster = !external && conversation.kind !== "dm";
-      const storedWindow = hasRoster && storedSession ? deps.sessions.getContextWindow(storedSession.id) : undefined;
-      const [rosterMembers, previous, conversationKeychain] = await Promise.all([
-        hasRoster
-          ? conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
-              swallowAs("orchestrator: conversation roster", undefined),
-            )
-          : undefined,
-        storedWindow?.then((window) => previousRoster(window.items)),
-        loadConversationKeychain({ deps, actor, conversation, scopeId, external, strictReadOnly }),
-      ]);
-      const peopleNames = shownNames(actor, rosterMembers, previous, conversationKeychain);
-      const shownPeople = [...peopleNames].filter(([key]) => key !== personKey(actor.id)).map(([, name]) => name);
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        canonicalJson(
-          screenedFields(approvalRecord.request, approvalRecord.homeChannel, approvalRecord.people ?? []),
-        ) === canonicalJson(screenedFields(input, homeChannel?.channelName, shownPeople));
+        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
+          canonicalJson(screenedFields(input, homeChannel?.channelName));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
@@ -737,7 +713,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor,
         conversation,
         homeChannelName: homeChannel?.channelName,
-        shownPeople,
         scopeId,
         resolution,
         screenInbound,
@@ -780,7 +755,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               command: "security-screen",
               reason: heldReason,
               homeChannel: homeChannel?.channelName,
-              people: shownPeople,
               blocksInput: true,
               kind: "input",
               classifiedAttachments: flaggedScreenedInput.classifiedAttachments,
@@ -794,6 +768,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
       }
+      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
+      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const notebookOnly =
         input.memoryNotebookOnly === true ||
         delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
@@ -948,7 +924,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       if (persona?.routedBy) turnEvents.push(personaRoutedNote(persona.persona.name, persona.routedBy));
-      const nameOf = (id: string): string | undefined => peopleNames.get(personKey(id));
+      let rosterMembers: DirectoryMember[] | undefined;
+      let scopeAskList: KeychainAsk[] = [];
+      const nameOf = (id: string): string | undefined =>
+        conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
+        rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
       if (input.privateSessionMessage)
         turnEvents.push(
           "This is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.",
@@ -1398,8 +1378,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const contextWindow =
-          storedWindow && storedSession?.id === session.id ? storedWindow : deps.sessions.getContextWindow(session.id);
+        const contextWindow = deps.sessions.getContextWindow(session.id);
         const snapshot = context.memorySnapshot();
         const recallOutcomes: MemoryProviderOutcome[] = [];
         const loadedFacts = snapshot.then((view) => view.loaded);
@@ -1477,7 +1456,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           automatedTurn,
           childWake,
         });
-        const scopeAskList = await addConversationBlocks({
+        ({ rosterMembers, scopeAskList } = await addConversationBlocks({
           deps,
           actor,
           conversation,
@@ -1488,10 +1467,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           credentialDescriptions,
           openSpeakerKeychain,
           scopeKeychainGrants,
+          directoryIndexFor: (directory) => directoryIndexFor(tenant, directory),
           rosterMembers,
-          peopleNames,
-          keychain: conversationKeychain,
-        });
+          scopeAskList,
+        }));
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
           deps,
@@ -2229,7 +2208,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             context,
             recallOutcomes,
             rosterMembers,
-            peopleNames,
             rawEntries,
             session,
             deps,

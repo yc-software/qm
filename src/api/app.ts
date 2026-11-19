@@ -9,6 +9,7 @@ import { createMessagingMethods } from "./app-messaging.ts";
 import { createAppMethods } from "./app-published-apps.ts";
 import { createSkillMethods } from "./app-skills.ts";
 import { createSearchMethods } from "./app-search.ts";
+import { createCronShareMethods } from "./app-cron-share.ts";
 
 export type { App, AppDeps, ContextSummary, ProjectView, VisibleCron } from "./app-types.ts";
 export { appView, STALE_LEASE_GRACE_MS } from "./app-types.ts";
@@ -40,5 +41,10 @@ export function createApp(deps: AppDeps): App {
     }
   };
   Object.assign(app, methods);
-  return Object.assign(app, createSearchMethods(deps, app, helpers), createResourceSearchMethods(deps, app, helpers));
+  return Object.assign(
+    app,
+    createSearchMethods(deps, app, helpers),
+    createResourceSearchMethods(deps, app, helpers),
+    createCronShareMethods(deps, app),
+  );
 }
