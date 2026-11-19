@@ -3,6 +3,7 @@ import { createPgPool, type PgMigrationDefinition, withPgTransaction } from "../
 import type { ScopeId } from "../types.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { claimFunction, claimRows, servingTenant, type ClaimedRow } from "../tenants/claim.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
 
@@ -25,8 +26,12 @@ export interface FileUpload {
 
 export interface FileUploadStore {
   insert(upload: FileUpload): Promise<void>;
-  addContext(id: string, sessionId: string): Promise<boolean>;
-  complete<T>(id: string, publish: (upload: FileUpload, transaction: PoolClient) => Promise<T>): Promise<T>;
+  addContext(tenant: Tenant, id: string, sessionId: string): Promise<boolean>;
+  complete<T>(
+    tenant: Tenant,
+    id: string,
+    publish: (upload: FileUpload, transaction: PoolClient) => Promise<T>,
+  ): Promise<T>;
   get(id: string): Promise<FileUpload | null>;
   transition(id: string, from: FileUploadState[], to: FileUploadState): Promise<boolean>;
   touch(id: string, at: number): Promise<boolean>;
@@ -149,25 +154,28 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
           .rowCount === 1
       );
     },
-    async complete(id, publish) {
-      return withPgTransaction(await db.pool(), async (client) => {
-        const result = await client.query("SELECT data,state FROM file_uploads WHERE id=$1 FOR UPDATE", [id]);
+    async complete(tenant, id, publish) {
+      return db.forTenant(tenant).transaction(async (client) => {
+        const result = await client.query(
+          "SELECT data,state FROM file_uploads WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+          [tenant.id, id],
+        );
         const row = result.rows[0] ? decode(result.rows[0]) : null;
         if (!row || !["completing", "complete"].includes(row.state))
           throw new FileUploadError("upload cannot be published", 409);
         const artifact = await publish(row, client);
-        await client.query("UPDATE file_uploads SET state='complete' WHERE id=$1", [id]);
+        await client.query("UPDATE file_uploads SET state='complete' WHERE tenant_id=$1 AND id=$2", [tenant.id, id]);
         return artifact;
       });
     },
-    async addContext(id, sessionId) {
+    async addContext(tenant, id, sessionId) {
       return (
         (
-          await db.query(
+          await db.forTenant(tenant).query(
             `UPDATE file_uploads SET data=jsonb_set(data,'{contextSessionIds}',
-        to_jsonb(ARRAY(SELECT DISTINCT value FROM jsonb_array_elements_text(COALESCE(data->'contextSessionIds','[]'::jsonb) || jsonb_build_array($2::text)))))
-        WHERE id=$1 AND state IN ('pending','completing')`,
-            [id, sessionId],
+        to_jsonb(ARRAY(SELECT DISTINCT value FROM jsonb_array_elements_text(COALESCE(data->'contextSessionIds','[]'::jsonb) || jsonb_build_array($3::text)))))
+        WHERE tenant_id=$1 AND id=$2 AND state IN ('pending','completing')`,
+            [tenant.id, id, sessionId],
           )
         ).rowCount === 1
       );

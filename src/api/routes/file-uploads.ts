@@ -3,7 +3,7 @@ import { sendJson } from "../http.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import { FileUploadError } from "../../files/file-upload-store.ts";
 import { isObj, audit } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { withActor, tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 type Uploads = NonNullable<ApiCtx["deps"]["fileUploads"]>;
 type Upload = NonNullable<Awaited<ReturnType<Uploads["get"]>>>;
@@ -104,7 +104,7 @@ const signPart = ownedUpload(async ({ res, params }, uploads, upload) =>
 );
 
 const completeUpload = ownedUpload(async ({ res, deps, tenant, capability }, uploads, upload, actorId) => {
-  const file = await uploads.complete(upload.id, capability?.sessionId);
+  const file = await uploads.complete(tenantOf({ tenant }), upload.id, capability?.sessionId);
   audit(
     { deps, tenant },
     { principalId: actorId, action: "file.upload", resource: file.path, scopeLabel: upload.scopeId },
