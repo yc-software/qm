@@ -639,7 +639,7 @@ function generalPane(): TemplateResult {
   const card = (rows: TemplateResult) => html`<div class="settings-card">${rows}</div>`;
   return html`
     <div class="settings-general">
-      ${titledSection("AI", card(aiAccountsRow()))} ${titledSection("Appearance", card(themeRow()))}
+      ${titledSection("Plan", card(aiAccountsRow()))} ${titledSection("Appearance", card(themeRow()))}
       ${titledSection("Chat", card(html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`))}
       ${titledSection("Sidebar", card(html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`))}
       ${titledSection("Desktop", card(desktopRow()))}
