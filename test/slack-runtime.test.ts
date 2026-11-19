@@ -313,3 +313,29 @@ test("a controlled inactive Slack runtime cannot open a socket through configura
   await runtime.reconcile();
   assert.equal(starts, 1);
 });
+
+test("a Slack configuration that keeps failing to start backs off instead of retrying every tick", async () => {
+  let clock = 0;
+  const attempts: number[] = [];
+  let broken = true;
+  const runtime = createSlackRuntimeReconciler({
+    load: async () => ({ version: "1", config: "first" }),
+    startPlugin: async () => {
+      attempts.push(clock);
+      if (broken) throw new Error("rate limited");
+      return { stop: async () => {} };
+    },
+    now: () => clock,
+    random: () => 1,
+  });
+  for (; clock <= 60 * 60_000; clock += 5_000) {
+    if (clock === 40 * 60_000) broken = false;
+    await runtime.reconcile().catch(() => {});
+  }
+  assert.deepEqual(
+    attempts.map((at) => at / 1000),
+    [0, 30, 90, 210, 450, 930, 1530, 2130, 2730],
+    "attempts wait 30 s, doubling to a 10 min cap, and a recovered workspace starts at its next attempt",
+  );
+  await runtime.stop();
+});
