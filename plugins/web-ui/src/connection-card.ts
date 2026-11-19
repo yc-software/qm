@@ -4,8 +4,10 @@ import { connectorLogo } from "./connector-logo";
 import { icon } from "./icons";
 import type { ConnectionService } from "./connection-picker";
 
+export type ConnectionOutcome = "" | "checking" | "success" | "cancelled" | "failed" | "expired";
+
 export interface ConnectionStanding {
-  outcome: "" | "checking" | "success" | "cancelled" | "failed" | "expired";
+  outcome: ConnectionOutcome;
   notice: string;
   checked: boolean;
   connected: boolean;
@@ -13,6 +15,7 @@ export interface ConnectionStanding {
   working: string;
   problem: string;
   connect: () => void;
+  reconnect?: () => void;
   disconnect?: () => void;
   fix?: { label: string; name: string; run: () => void };
 }
@@ -59,9 +62,11 @@ export function connectionCard(
       >
     </span>
     <span class="connection-card-actions"
-      >${settled && at.disconnect ? button("Disconnect", `Disconnect ${service.name}`, at.disconnect, "kc-text-action danger") : nothing}${
-        at?.fix ? button(at.fix.label, at.fix.name, at.fix.run) : nothing
-      }${next}</span
+      >${settled && at.reconnect ? button("Reconnect", `Reconnect ${service.name}`, at.reconnect, "kc-text-action") : nothing}${
+        settled && at.disconnect
+          ? button("Disconnect", `Disconnect ${service.name}`, at.disconnect, "kc-text-action danger")
+          : nothing
+      }${at?.fix ? button(at.fix.label, at.fix.name, at.fix.run) : nothing}${next}</span
     >
   </div>`;
 }

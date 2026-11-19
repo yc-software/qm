@@ -269,40 +269,53 @@ export async function activeOwnedAccount(
   return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
-const scopeCache = new LRUCache<string, string[]>({ ttl: 5 * 60_000, ttlAutopurge: true });
+type Scopes = { scopes: string[]; updatedAt: number };
+const NO_SCOPES: Scopes = { scopes: [], updatedAt: Number.NaN };
+const scopeCache = new LRUCache<string, Promise<Scopes>>({ ttl: 5 * 60_000, ttlAutopurge: true });
 
-async function scopesOf(
+function scopesOf(
   ctx: ApiCtx,
   key: string,
   path: "auth_configs" | "connected_accounts",
   id: string,
   listed: (body: Record<string, unknown>) => unknown,
-): Promise<string[]> {
+): Promise<Scopes> {
   const cacheKey = JSON.stringify([tenantOf(ctx).id, id]);
   const cached = scopeCache.get(cacheKey);
   if (cached) return cached;
-  try {
-    const scopes = listed(await request(ctx, key, `/${path}/${encodeURIComponent(id)}`));
-    const found = Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(cacheKey, found);
-    return found;
-  } catch (error) {
-    const mask = createExactSecretValueMasker([key]);
-    reportFailure(`composio: ${path} scopes`, new Error(mask(redactSecrets(errMessage(error)))), id);
-    return [];
-  }
+  const found = request(ctx, key, `/${path}/${encodeURIComponent(id)}`)
+    .then((body) => {
+      const scopes = listed(body);
+      return {
+        scopes: Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [],
+        updatedAt: Date.parse(String(body.last_updated_at)),
+      };
+    })
+    .catch((error: unknown) => {
+      scopeCache.delete(cacheKey);
+      const mask = createExactSecretValueMasker([key]);
+      reportFailure(`composio: ${path} scopes`, new Error(mask(redactSecrets(errMessage(error)))), id);
+      return NO_SCOPES;
+    });
+  scopeCache.set(cacheKey, found);
+  return found;
 }
 
 function scopeName(scope: string): string {
   return scope.slice(scope.lastIndexOf("/") + 1) || scope;
 }
 
-async function missingScopes(ctx: ApiCtx, key: string, accountId: string, configured: string[]): Promise<string[]> {
-  if (!configured.length) return [];
-  const asked = await scopesOf(ctx, key, "connected_accounts", accountId, (body) => body.requested_scopes);
-  if (!asked.length) return [];
-  const names = new Set(asked.map(scopeName));
-  return configured.filter((scope) => !names.has(scopeName(scope)));
+async function missingScopes(
+  ctx: ApiCtx,
+  key: string,
+  account: { id: string; created_at?: unknown },
+  config: Scopes,
+): Promise<string[]> {
+  if (!config.scopes.length || config.updatedAt <= Date.parse(String(account.created_at))) return [];
+  const asked = await scopesOf(ctx, key, "connected_accounts", account.id, (body) => body.requested_scopes);
+  if (!asked.scopes.length) return [];
+  const names = new Set(asked.scopes.map(scopeName));
+  return config.scopes.filter((scope) => !names.has(scopeName(scope)));
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {
@@ -352,7 +365,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
           id: item.id,
           toolkit: item.toolkit.slug,
           userId: item.user_id,
-          missingScopes: await missingScopes(ctx, access.key!, item.id, configs.get(item.auth_config?.id) ?? []),
+          missingScopes: await missingScopes(ctx, access.key!, item, configs.get(item.auth_config?.id) ?? NO_SCOPES),
         })),
       )),
       ...external

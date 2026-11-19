@@ -234,6 +234,9 @@ qm-onboarding-welcome {
   max-width: min(100%, 480px);
   margin: 0;
 }
+.connection-card:not(.compact) .connector-widget-text {
+  max-width: calc(100% - 52px);
+}
 .connector-widget.connection-card.compact {
   gap: 8px;
   min-width: 0;

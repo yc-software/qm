@@ -329,30 +329,41 @@ test("connections return only this actor's active accounts and strip credentials
 test("connections report the scopes an app's configuration asks for that the connection was never asked for", async () => {
   const f = fixture();
   await f.own();
-  const account = (id: string, config = "ac_x") => ({
+  const account = (id: string, created: string, config = "ac_x") => ({
     id,
     user_id: composioUserId(orgId(), "alice"),
     status: "ACTIVE",
     toolkit: { slug: "twitter" },
     auth_config: { id: config },
+    created_at: created,
     state: { authScheme: "OAUTH2", val: { scope: "tweet.read", access_token: "secret-token" } },
   });
-  const asked = ["tweet.read", "users.read", "https://graph.microsoft.com/offline.access"];
-  const accounts = [
-    account("ca_old"),
-    account("ca_new"),
-    account("ca_unrecorded"),
-    account("ca_unreadable", "ac_gone"),
-  ];
-  f.replies.push(
-    { items: accounts },
-    { credentials: { scopes: ["tweet.read", "users.read", "offline.access", "dm.read"], client_secret: "s3" } },
-    new Response("missing", { status: 404 }),
-    { requested_scopes: asked, state: { val: { access_token: "secret-token" } } },
-    { requested_scopes: [...asked, "dm.read"] },
-    {},
-  );
-  const r = await f.invoke("/v1/composio/connections");
+  const bodies: Record<string, unknown> = {
+    connected_accounts: {
+      items: [
+        account("ca_old", "2026-01-01T00:00:00Z"),
+        account("ca_new", "2026-03-01T00:00:00Z"),
+        account("ca_unrecorded", "2026-01-01T00:00:00Z"),
+        account("ca_unreadable", "2026-01-01T00:00:00Z", "ac_gone"),
+      ],
+    },
+    ac_x: {
+      last_updated_at: "2026-02-01T00:00:00Z",
+      credentials: { scopes: ["tweet.read", "users.read", "offline.access", "dm.read"], client_secret: "s3" },
+    },
+    ca_old: {
+      requested_scopes: ["tweet.read", "users.read", "https://graph.microsoft.com/offline.access"],
+      state: { val: { access_token: "secret-token" } },
+    },
+    ca_unrecorded: {},
+  };
+  const reads = (id: string) => f.calls.filter((call) => new URL(call.url).pathname.endsWith(`/${id}`)).length;
+  f.deps.composioFetch = (async (input) => {
+    f.calls.push({ url: String(input) });
+    const body = bodies[new URL(String(input)).pathname.split("/").at(-1)!];
+    return body ? Response.json(body) : new Response("missing", { status: 404 });
+  }) as typeof fetch;
+  const [r, same] = await Promise.all([f.invoke("/v1/composio/connections"), f.invoke("/v1/composio/connections")]);
   assert.equal(r.status, 200);
   assert.deepEqual(
     r.data.items.map((item: { id: string; missingScopes: string[] }) => [item.id, item.missingScopes]),
@@ -363,24 +374,13 @@ test("connections report the scopes an app's configuration asks for that the con
       ["ca_unreadable", []],
     ],
   );
-  assert.deepEqual(
-    f.calls.slice(1).map((call) => new URL(call.url).pathname),
-    [
-      "/api/v3.1/auth_configs/ac_x",
-      "/api/v3.1/auth_configs/ac_gone",
-      "/api/v3.1/connected_accounts/ca_old",
-      "/api/v3.1/connected_accounts/ca_new",
-      "/api/v3.1/connected_accounts/ca_unrecorded",
-    ],
-  );
+  assert.deepEqual(same.data, r.data);
   assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
-  f.replies.push({ items: accounts }, {});
+  const failed = reads("ac_gone");
   const again = await f.invoke("/v1/composio/connections");
-  assert.deepEqual(again.data.items[0].missingScopes, ["dm.read"]);
-  assert.deepEqual(
-    f.calls.slice(6).map((call) => new URL(call.url).pathname),
-    ["/api/v3.1/connected_accounts", "/api/v3.1/auth_configs/ac_gone"],
-  );
+  assert.deepEqual(again.data, r.data);
+  assert.deepEqual(["ac_x", "ca_old", "ca_unrecorded", "ca_new", "ca_unreadable"].map(reads), [1, 1, 1, 0, 0]);
+  assert.equal(reads("ac_gone"), failed + 1);
 });
 
 test("people can disconnect only their own connections, on a turn they started", async () => {

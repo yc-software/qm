@@ -42,6 +42,10 @@ test("a card for one app shows only that app and continues the chat after a veri
     assert.deepEqual(connected, ["Gmail"]);
     assert.equal(scoped.querySelector(".connection-card strong")?.textContent, "Gmail");
     assert.equal(scoped.querySelector(".connection-card-status")?.textContent?.trim(), "Connected");
+    assert.deepEqual(
+      [...scoped.querySelectorAll(".connection-card button")].map((button) => button.getAttribute("aria-label")),
+      ["Reconnect Gmail", "Disconnect Gmail"],
+    );
     assert.equal(scoped.querySelector('input[type="search"]'), null);
     assert.equal(scoped.querySelector(".connection-picker"), null);
     assert.ok(other.querySelector(".connection-picker"), "an app the catalog does not have falls back to the picker");
