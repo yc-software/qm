@@ -274,9 +274,9 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
       r.state = "running";
       return session(r);
     },
-    async restart(sandboxId): Promise<E2bSession> {
+    async restart(sandboxId): Promise<void> {
       killOwned(`${root}/${sandboxId}`);
-      return fake.client.connect(sandboxId);
+      await fake.client.connect(sandboxId);
     },
     async list(metadata): Promise<Array<{ sandboxId: string; state: string; metadata?: Record<string, string> }>> {
       return [...records.values()]
