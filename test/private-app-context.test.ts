@@ -835,3 +835,31 @@ test("creation refuses an automatic audience before granting or running restrict
   const { allGrants } = await import("./support/acl-grants.ts");
   assert.deepEqual(await allGrants(f.databaseUrl), []);
 });
+
+test("a private app cannot be released through a grant to its owner", async () => {
+  const f = await fixture();
+  await f.sessions.recordContextProvenance(f.session.id, f.ownerScopeId, {
+    sensitivity: "ordinary",
+    sources: [f.ownerScopeId],
+    sourceUnknown: false,
+    personalOnly: true,
+  });
+  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const home = (await f.app.getArtifactHome("deploy", app.id))!;
+  await assert.rejects(
+    f.service().releasePrivateApp(
+      {
+        ownerScopeId: f.ownerScopeId,
+        ref: home.grantRef,
+        granteeScopeId: f.ownerScopeId,
+        permission: "read",
+        grantedBy: "alice",
+      },
+      home.privateRevision!,
+      f.context(),
+    ),
+    /already personal/,
+  );
+  assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
+  assert.deepEqual(await f.service().appGrantees(app.id), []);
+});

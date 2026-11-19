@@ -313,3 +313,5 @@ Independent checkpoint reviews accepted authorization95 and transaction/durabili
 Native real-model document-surface QA produced a concrete once-only card, created exactly one Team read grant and allowed a second user's authenticated200 download of all53 original bytes. Blob, hash and other metadata stayed unchanged; the private conversation and other app/schedule stayed private; no access notifications were sent; test identities/preferences were restored. Images and private fixture identifiers remain outside the public checkout.
 
 Skill and schedule release, the complete resource/unknown-source audit, full-head reviews/CI and final rollout/dependency verification remain outstanding. No production merge or deployment.
+
+The owner self-share rule is also exercised through the existing app release API: all21 app cases pass, while the same new case fails on22efcad because the release incorrectly succeeds. Existing20 cases pass on that baseline. This confirms the common guard protects both release paths.
