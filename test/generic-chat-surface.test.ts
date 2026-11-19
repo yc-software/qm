@@ -19,6 +19,7 @@ import {
   type GenericChatMessages,
 } from "../src/surfaces/generic-chat/messages.ts";
 import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
+import { NON_WEB_PATHS } from "../src/surfaces/contract.ts";
 import { createGenericChatApprovals, genericChatCard } from "../src/surfaces/generic-chat/approvals.ts";
 import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
 import { setGenericChatReaction } from "../src/surfaces/generic-chat/reactions.ts";
@@ -444,6 +445,7 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
   const { deliveries, mirrored, settled } = outboundFor(`${genericChat.url}/`);
   try {
     const surface = createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
+    assert.ok(surface.promptHints.linkSyntax.includes(NON_WEB_PATHS));
     await surface.post(
       { surface: "partner-chat", account: "7001", kind: "group", container: "88", thread: "1009" },
       { text: "scheduled hello", provenance: PROVENANCE },
