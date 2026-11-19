@@ -498,7 +498,7 @@ test("E2B cold-boots a sandbox whose memory snapshot cannot be resumed, and rest
   connectError = Object.assign(new FakeSandboxError("409: Sandbox 'wedged' cannot be resumed with its memory"), {
     statusCode: 409,
   });
-  await client.connect("wedged");
+  assert.equal((await client.connect("wedged")).memoryDiscarded, true);
   assert.deepEqual(e2bCalls, [
     ["connect", "wedged", "restore"],
     ["connect", "wedged", "reboot"],
