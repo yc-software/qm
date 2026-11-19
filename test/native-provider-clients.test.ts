@@ -107,6 +107,7 @@ let pauseError: Error | undefined;
 let startError: Error | undefined;
 let onDispatch: ((command: string) => void) | undefined;
 let waitError: Error | undefined;
+let connectError: Error | undefined;
 class FakeSandboxError extends Error {}
 class FakeNotFoundError extends FakeSandboxError {}
 class FakeSandboxNotFoundError extends FakeNotFoundError {}
@@ -192,8 +193,11 @@ mock.module("e2b", {
         e2bCalls.push(["create", template, options]);
         return fakeE2bSandbox("e2b-native");
       }
-      static async connect(sandboxId: string, options: unknown) {
-        e2bCalls.push(["connect", sandboxId, options]);
+      static async connect(sandboxId: string, options: { onResume?: string }) {
+        e2bCalls.push(["connect", sandboxId, options.onResume]);
+        const failure = connectError;
+        connectError = undefined;
+        if (failure) throw failure;
         return fakeE2bSandbox(sandboxId);
       }
       static async getInfo() {
@@ -205,6 +209,10 @@ mock.module("e2b", {
           cpuCount: 2,
           memoryMB: 512,
         };
+      }
+      static async pause(sandboxId: string, options: { keepMemory?: boolean }) {
+        e2bCalls.push(["pause", sandboxId, options.keepMemory]);
+        return true;
       }
       static async deleteSnapshot(snapshotId: string) {
         e2bCalls.push(["deleteSnapshot", snapshotId]);
@@ -480,6 +488,23 @@ test("E2B turns the egress proxy into host-level network rules on create and on 
   assert.deepEqual(e2bEgressNetwork("http://egress.example.com"), rules);
   assert.throws(() => e2bEgressNetwork("http://proxy.internal:3128"), /ports 80 and 443/);
   assert.throws(() => e2bEgressNetwork("https://egress.example.com:8443"), /ports 80 and 443/);
+});
+
+test("E2B cold-boots a sandbox whose memory snapshot cannot be resumed, and restart drops memory", async () => {
+  const client = createSdkE2bClient({ apiKey: "test" });
+  e2bCalls.length = 0;
+  connectError = new FakeSandboxError("409: Sandbox 'wedged' cannot be resumed with its memory");
+  await client.connect("wedged");
+  assert.deepEqual(e2bCalls, [
+    ["connect", "wedged", undefined],
+    ["connect", "wedged", "reboot"],
+  ]);
+  e2bCalls.length = 0;
+  await client.restart("wedged");
+  assert.deepEqual(e2bCalls, [
+    ["pause", "wedged", false],
+    ["connect", "wedged", "reboot"],
+  ]);
 });
 
 test("E2B persistent snapshots and metrics map onto the client contract", async () => {
