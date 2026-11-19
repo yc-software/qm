@@ -948,6 +948,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         turnEvents.push(
           `The decision rule ${persona.routedBy} routed this conversation to the persona ${persona.persona.name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`,
         );
+      else if (routed)
+        turnEvents.push(
+          `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but the sender can't use it here, so the conversation's persona is unchanged. A persona owner can share it with them, or an org admin can change ${routed.ruleId} in Settings → Decision rules.`,
+        );
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>

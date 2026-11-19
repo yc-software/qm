@@ -669,4 +669,5 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
   const bob = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:routed" });
   assert.equal(bob.reply.includes("## Persona:"), false);
   assert.equal((await built.sessions.get(bob.sessionId))?.personaId, undefined);
+  assert.match(bob.reply, /route-ada picked the persona .* can.t use it here/);
 });
