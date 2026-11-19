@@ -3162,3 +3162,11 @@ html.dark #app-view dialog.cd .cd-group {
   background-position: right 12px center;
   cursor: pointer;
 }
+/* Scrim: always darken, never lighten. The shared dialog backdrop mixes --foreground,
+   which is near-white in dark theme and washes the page out. */
+#app-view dialog.custom-provider-dialog.cd::backdrop {
+  background: color-mix(in srgb, var(--scrim, #0a0a0a) 36%, transparent);
+}
+html.dark #app-view dialog.custom-provider-dialog.cd::backdrop {
+  background: color-mix(in srgb, var(--scrim, #050a14) 64%, transparent);
+}
