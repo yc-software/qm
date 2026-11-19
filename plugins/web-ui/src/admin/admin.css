@@ -2966,10 +2966,13 @@ html.dark #app-view dialog.custom-provider-dialog.cd {
   font: inherit;
   font-size: var(--font-13);
 }
-#app-view dialog.cd textarea {
-  min-height: 84px;
-  padding: 9px 12px;
-  line-height: 1.45;
+/* Multi-line fields share the single-line inset: 20px line box + 8px top/bottom = 36px,
+   so the first line of a textarea sits exactly where text sits in an input. */
+#app-view dialog.cd .cd-field textarea {
+  display: block;
+  min-height: calc(var(--cd-control-h) + 40px);
+  padding: 8px 12px;
+  line-height: 20px;
   resize: vertical;
 }
 #app-view dialog.cd :is(input, select, textarea):focus-visible {
