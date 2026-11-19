@@ -180,6 +180,34 @@ test("catalog preserves provider usage order, pagination, and strips raw fields"
   assert.equal(url.searchParams.get("cursor"), "page+1");
 });
 
+test("the catalog can be asked for one app, which costs one small request", async () => {
+  const f = fixture();
+  await f.own();
+  f.deps.mcpServers = {
+    list: async () => [
+      { id: "host", enabled: true, apps: [{ toolkit: "granola", name: "Granola", connectUrl: "https://host.example/x" }] },
+    ],
+  } as unknown as ServerDeps["mcpServers"];
+  f.replies.push({ slug: "dropbox", name: "Dropbox", meta: { description: "Files" }, auth_config_details: ["raw"] });
+  const one = await f.invoke("/v1/composio/toolkits?toolkit=dropbox");
+  assert.deepEqual(one.data, {
+    items: [{ id: "dropbox", logoUrl: "https://logos.composio.dev/api/dropbox", name: "Dropbox", description: "Files" }],
+    nextCursor: null,
+  });
+  assert.equal(new URL(f.calls[0]!.url).pathname, "/api/v3.1/toolkits/dropbox");
+  f.replies.push(new Response("no such app", { status: 404 }));
+  assert.deepEqual((await f.invoke("/v1/composio/toolkits?toolkit=nope")).data.items, []);
+  f.replies.push(new Response("no such app", { status: 404 }));
+  assert.deepEqual(
+    (await f.invoke("/v1/composio/toolkits?toolkit=granola")).data.items.map((x: { id: string }) => x.id),
+    ["granola"],
+  );
+  f.replies.push(new Response("down", { status: 500 }));
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=dropbox")).status, 502);
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=../auth_configs")).status, 400);
+  assert.equal(f.calls.length, 4);
+});
+
 test("ambiguous personal keys fail closed rather than switching to the company key", async () => {
   const f = fixture();
   await f.own();
@@ -287,33 +315,35 @@ test("connections return only this actor's active accounts and strip credentials
   assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
 });
 
-test("connections report scopes the app's configuration grants that an older connection lacks", async () => {
+test("connections report the scopes an app's configuration started asking for after they were authorized", async () => {
   const f = fixture();
   await f.own();
-  const account = (id: string, scope: string | undefined, config = "ac_x") => ({
+  const account = (id: string, created: string, config = "ac_x") => ({
     id,
     user_id: composioUserId(orgId(), "alice"),
     status: "ACTIVE",
     toolkit: { slug: "twitter" },
     auth_config: { id: config },
-    state: { authScheme: "OAUTH2", val: { scope, access_token: "secret-token" } },
+    created_at: created,
+    state: { authScheme: "OAUTH2", val: { scope: "tweet.read users.read", access_token: "secret-token" } },
   });
+  const asked = ["tweet.read", "users.read", "offline.access"];
   f.replies.push(
     {
       items: [
-        account("ca_old", "tweet.read users.read offline.access"),
-        account("ca_new", "tweet.read users.read offline.access dm.read dm.write"),
-        account("ca_unknown", undefined),
-        account("ca_unreadable", "tweet.read", "ac_gone"),
+        account("ca_old", "2026-01-01T00:00:00Z"),
+        account("ca_new", "2026-03-01T00:00:00Z"),
+        account("ca_unrecorded", "2026-01-01T00:00:00Z"),
+        account("ca_unreadable", "2026-01-01T00:00:00Z", "ac_gone"),
       ],
     },
     {
-      credentials: {
-        scopes: ["tweet.read", "users.read", "offline.access", "dm.read", "dm.write"],
-        client_secret: "s3",
-      },
+      last_updated_at: "2026-02-01T00:00:00Z",
+      credentials: { scopes: [...asked, "dm.read", "dm.write"], client_secret: "s3" },
     },
     new Response("missing", { status: 404 }),
+    { requested_scopes: asked, state: { val: { access_token: "secret-token" } } },
+    { requested_scopes: [] },
   );
   const r = await f.invoke("/v1/composio/connections");
   assert.equal(r.status, 200);
@@ -322,24 +352,64 @@ test("connections report scopes the app's configuration grants that an older con
     [
       ["ca_old", ["dm.read", "dm.write"]],
       ["ca_new", []],
-      ["ca_unknown", []],
+      ["ca_unrecorded", ["offline.access", "dm.read", "dm.write"]],
       ["ca_unreadable", []],
     ],
   );
   assert.deepEqual(
     f.calls.slice(1).map((call) => new URL(call.url).pathname),
-    ["/api/v3.1/auth_configs/ac_x", "/api/v3.1/auth_configs/ac_gone"],
+    [
+      "/api/v3.1/auth_configs/ac_x",
+      "/api/v3.1/auth_configs/ac_gone",
+      "/api/v3.1/connected_accounts/ca_old",
+      "/api/v3.1/connected_accounts/ca_unrecorded",
+    ],
   );
   assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
-  f.replies.push({ items: [account("ca_old", "tweet.read"), account("ca_unreadable", "tweet.read", "ac_gone")] }, {});
+  f.replies.push({ items: [account("ca_new", "2026-03-01T00:00:00Z"), account("ca_x", "2026-01-01T00:00:00Z", "ac_gone")] }, {});
   await f.invoke("/v1/composio/connections");
   assert.deepEqual(
-    f.calls.slice(3).map((call) => new URL(call.url).pathname),
+    f.calls.slice(5).map((call) => new URL(call.url).pathname),
     ["/api/v3.1/connected_accounts", "/api/v3.1/auth_configs/ac_gone"],
   );
 });
 
-test("scopes granted in URL form match their short configured names", async () => {
+test("a connection made under the current configuration never needs new permissions", async () => {
+  const f = fixture();
+  await f.own();
+  // What Microsoft and Dropbox return for a fresh connection: neither echoes every scope it was asked for.
+  const account = (id: string, toolkit: string, scope: string) => ({
+    id,
+    user_id: composioUserId(orgId(), "alice"),
+    status: "ACTIVE",
+    toolkit: { slug: toolkit },
+    auth_config: { id: `ac_fresh_${toolkit}` },
+    created_at: "2026-11-18T23:32:13.483Z",
+    state: { val: { scope, refresh_token: "secret-token" } },
+  });
+  const config = (scopes: string[]) => ({ last_updated_at: "2026-11-18T23:31:48.314Z", credentials: { scopes } });
+  f.replies.push(
+    {
+      items: [
+        account("ca_outlook", "outlook", "Mail.Read Mail.Send User.Read profile openid email"),
+        account("ca_dropbox", "dropbox", "account_info.read files.content.read files.content.write sharing.read"),
+      ],
+    },
+    config(["Mail.Read", "Mail.Send", "offline_access", "User.Read"]),
+    config(["email", "profile", "openid", "account_info.read", "files.content.read", "files.metadata.write"]),
+  );
+  const r = await f.invoke("/v1/composio/connections");
+  assert.deepEqual(
+    r.data.items.map((item: { id: string; missingScopes: string[] }) => [item.id, item.missingScopes]),
+    [
+      ["ca_outlook", []],
+      ["ca_dropbox", []],
+    ],
+  );
+  assert.equal(f.calls.length, 3);
+});
+
+test("granted scopes in URL form match their short configured names", async () => {
   const f = fixture();
   await f.own();
   f.replies.push(
@@ -351,11 +421,16 @@ test("scopes granted in URL form match their short configured names", async () =
           status: "ACTIVE",
           toolkit: { slug: "outlook" },
           auth_config: { id: "ac_outlook" },
+          created_at: "2026-01-01T00:00:00Z",
           state: { val: { scope: "https://graph.microsoft.com/Mail.Read offline_access https://mail.google.com/" } },
         },
       ],
     },
-    { credentials: { scopes: ["Mail.Read", "offline_access", "https://mail.google.com/", "Mail.Send"] } },
+    {
+      last_updated_at: "2026-02-01T00:00:00Z",
+      credentials: { scopes: ["Mail.Read", "offline_access", "https://mail.google.com/", "Mail.Send"] },
+    },
+    new Response("unavailable", { status: 500 }),
   );
   const r = await f.invoke("/v1/composio/connections");
   assert.deepEqual(r.data.items[0].missingScopes, ["Mail.Send"]);

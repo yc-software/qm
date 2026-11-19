@@ -208,10 +208,14 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   if (!access.key && !apps.length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
+  const only = ctx.url.searchParams.get("toolkit");
+  if (only !== null && !isToolkitId(only)) return sendJson(ctx.res, 400, { error: "bad_toolkit" });
   const query = new URLSearchParams({ sort_by: "usage", limit: "1000" });
   if (cursor) query.set("cursor", cursor);
   try {
-    const data = access.key ? await request(ctx, access.key, `/toolkits?${query}`) : NO_COMPOSIO;
+    let data = NO_COMPOSIO;
+    if (access.key && only) data = { items: [await toolkit(ctx, access.key, only)] };
+    else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
       if (
@@ -231,11 +235,21 @@ async function catalog(ctx: ApiCtx): Promise<void> {
       ];
     });
     return sendJson(ctx.res, 200, {
-      items: withConnectorApps(items, apps, !cursor),
+      items: withConnectorApps(items, only ? apps.filter((app) => app.toolkit === only) : apps, !cursor),
       nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
     });
   } catch {
     return sendJson(ctx.res, 502, { error: "composio_unavailable", message: "Could not load apps. Please try again." });
+  }
+}
+
+/** One app's catalog entry, or null when Composio has no such app. */
+async function toolkit(ctx: ApiCtx, key: string, slug: string): Promise<Record<string, unknown> | null> {
+  try {
+    return await request(ctx, key, `/toolkits/${slug}`);
+  } catch (error) {
+    if (error instanceof ComposioHttpError && error.status === 404) return null;
+    throw error;
   }
 }
 
@@ -265,34 +279,64 @@ export async function activeOwnedAccount(
 }
 
 const SCOPES_TTL_MS = 5 * 60_000;
-const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
+type AuthConfig = { scopes: string[]; updatedAt: number };
+const NO_CONFIG: AuthConfig = { scopes: [], updatedAt: Number.NaN };
+const configCache = new Map<string, AuthConfig & { expiresAt: number }>();
 
-async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
+async function authConfig(ctx: ApiCtx, key: string, authConfigId: string): Promise<AuthConfig> {
   const cacheKey = JSON.stringify([tenantOf(ctx).id, authConfigId]);
-  const cached = scopeCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.scopes;
+  const cached = configCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached;
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
     const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
     const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(cacheKey, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
-    return scopes;
+    const found = { scopes, updatedAt: Date.parse(String(config.last_updated_at)) };
+    configCache.set(cacheKey, { ...found, expiresAt: Date.now() + SCOPES_TTL_MS });
+    return found;
   } catch (error) {
-    const mask = createExactSecretValueMasker([key]);
-    reportFailure("composio: auth config scopes", new Error(mask(redactSecrets(errMessage(error)))), authConfigId);
-    return [];
+    reportComposioFailure("composio: auth config scopes", key, error, authConfigId);
+    return NO_CONFIG;
   }
+}
+
+function reportComposioFailure(what: string, key: string, error: unknown, id: string): void {
+  const mask = createExactSecretValueMasker([key]);
+  reportFailure(what, new Error(mask(redactSecrets(errMessage(error)))), id);
 }
 
 function scopeName(scope: string): string {
   return scope.slice(scope.lastIndexOf("/") + 1) || scope;
 }
 
-function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
+type ScopedAccount = { id: string; created_at?: unknown; state?: { val?: { scope?: unknown } } };
+
+/** The scopes Composio asked the provider for when this connection was authorized; null when it kept no record. */
+async function requestedScopes(ctx: ApiCtx, key: string, accountId: string): Promise<string[] | null> {
+  try {
+    const { requested_scopes: asked } = await request(ctx, key, `/connected_accounts/${encodeURIComponent(accountId)}`);
+    return Array.isArray(asked) && asked.length ? asked.filter((scope) => typeof scope === "string") : null;
+  } catch (error) {
+    reportComposioFailure("composio: requested scopes", key, error, accountId);
+    return null;
+  }
+}
+
+/**
+ * The scopes a connection would gain by reconnecting: those its app's configuration started asking for after the
+ * person authorized it. A connection made under the current configuration has none, whatever the provider reports
+ * as granted: providers leave scopes out of that report (Microsoft omits offline_access, Dropbox its sign-in
+ * scopes and any its app was never approved for), and asking again returns the same answer.
+ */
+async function missingScopes(ctx: ApiCtx, key: string, account: ScopedAccount, config: AuthConfig): Promise<string[]> {
+  if (!(config.updatedAt > Date.parse(String(account.created_at)))) return [];
   const granted = account.state?.val?.scope;
-  if (typeof granted !== "string" || !granted.trim()) return [];
-  const held = new Set(granted.split(/[\s,]+/).map(scopeName));
-  return configured.filter((scope) => !held.has(scopeName(scope)));
+  const held =
+    (await requestedScopes(ctx, key, account.id)) ??
+    (typeof granted === "string" && granted.trim() ? granted.split(/[\s,]+/) : null);
+  if (!held) return [];
+  const names = new Set(held.map(scopeName));
+  return config.scopes.filter((scope) => !names.has(scopeName(scope)));
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {
@@ -319,16 +363,18 @@ async function connections(ctx: ApiCtx): Promise<void> {
           .filter((id): id is string => typeof id === "string" && /^ac_[a-zA-Z0-9_-]+$/.test(id)),
       ),
     ];
-    const scopes = new Map(
-      await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key!, id)] as const)),
+    const configs = new Map(
+      await Promise.all(configIds.map(async (id) => [id, await authConfig(ctx, access.key!, id)] as const)),
     );
     const items = [
-      ...accounts.map((item) => ({
-        id: item.id,
-        toolkit: item.toolkit.slug,
-        userId: item.user_id,
-        missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
-      })),
+      ...(await Promise.all(
+        accounts.map(async (item) => ({
+          id: item.id,
+          toolkit: item.toolkit.slug,
+          userId: item.user_id,
+          missingScopes: await missingScopes(ctx, access.key!, item, configs.get(item.auth_config?.id) ?? NO_CONFIG),
+        })),
+      )),
       ...external
         .filter((app) => app.connected)
         .map((app) => ({ id: "", toolkit: app.toolkit, connector: app.connector, missingScopes: [] })),
