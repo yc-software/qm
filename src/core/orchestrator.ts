@@ -875,9 +875,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botActor: input.botActor === true,
         ownScopeBotWork,
         notebookOnly,
-        ...(persona?.pinned && deps.identity.audienceIsAllInternal(conversation.audience)
-          ? { sharedNotebook: persona.scope }
-          : {}),
+        ...(persona?.pinned && allInternal ? { sharedNotebook: persona.scope } : {}),
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -2627,7 +2625,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input,
           actor,
           session,
-          scopeId,
+          scopeId: memoryAccess?.conversationScopeId ?? scopeId,
           memoryScopeId: notebookScopeId,
           audienceScopeId,
           memoryPolicy,

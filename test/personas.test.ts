@@ -564,7 +564,13 @@ test("rooms that pin a persona share its notebook, read by every conversation th
   const pin = (id: string) => ({ scopeId: scopeId("channel", id), role: "read" as const, pinned: true });
   const owner = { scopeId: scopeId("personal", ALICE), role: "owner" as const };
   ok(await personas.setAccess(ALICE, ada.id, [owner, pin("C_ONE"), pin("C_TWO")]));
-  const room = (id: string) => ({ kind: "channel" as const, channelRef: id, threadRef: `channel:${id}:t1` });
+  const publishMembers = [ALICE, BOB].map((externalId) => ({ externalId }));
+  const room = (id: string) => ({
+    kind: "channel" as const,
+    channelRef: id,
+    threadRef: `channel:${id}:t1`,
+    publishMembers,
+  });
   const dm = (who: string) => ({ kind: "dm" as const, threadRef: `dm:${who}:notes` });
 
   await built.memory.capture(scopeId("channel", "C_ONE"), ["The room met on Mondays."], Date.now());

@@ -60,9 +60,9 @@ the sources. Ordinary does not mean public. Unknown provenance stays within the
 notebook's existing narrow audience. Lookups fail closed, and authorization results
 are not cached between reads.
 
-A fact saved to a persona's notebook by a room that pins the persona
-([personas.md](./personas.md)) records the persona as its source in place of that room, so
-it is shown wherever the persona is used. Every other source it carries is checked as usual.
+A room that pins a persona ([personas.md](./personas.md)) saves under the persona's scope:
+a fact it saves records the persona as its source in place of the room, so it is shown
+wherever the persona is used. Every other source it carries is checked as usual.
 
 A partially visible notebook cannot be rewritten. Structured edits require a
 revision check. Historical reads apply a conservative restriction floor from newer
