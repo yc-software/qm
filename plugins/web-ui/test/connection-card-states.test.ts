@@ -35,9 +35,10 @@ test("a card says in one line why an app isn't connected and what to do next", a
 
     h.setConnections([], 502);
     window.dispatchEvent(new Event("focus"));
-    await settle(() => /Could not check connected apps/.test(status() ?? ""));
+    await settle(() => status() === "Could not check connected apps. Please try again.");
     const retry = widget.querySelector<HTMLButtonElement>(".connection-card .btn:not(.primary)")!;
     assert.equal(retry.getAttribute("aria-label"), "Check again Gmail");
+    assert.equal(primary(), undefined);
     h.setConnections([{ id: "ca_test", toolkit: "gmail", missingScopes: [] }]);
     retry.click();
     await settle(() => status() === "Connected");

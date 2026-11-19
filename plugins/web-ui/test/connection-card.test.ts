@@ -51,7 +51,9 @@ test("a card for one app asks for that app alone and never shows the person's ot
     assert.equal(widget.querySelector(".connection-card strong")?.textContent, "Gmail");
     assert.equal(widget.querySelector(".connection-card .btn.primary")?.getAttribute("aria-label"), "Connect Gmail");
     assert.equal(widget.querySelector(".connection-card .btn:not(.primary)"), null);
-    assert.doesNotMatch(widget.textContent ?? "", /teams|share_point|permissions|Loading/i);
+    assert.equal(widget.querySelectorAll(".connection-card button").length, 1);
+    assert.equal(widget.querySelector(".connection-picker"), null);
+    assert.equal(widget.querySelector(".connection-connected"), null);
     assert.deepEqual(asked, ["gmail"]);
   } finally {
     await h.close();

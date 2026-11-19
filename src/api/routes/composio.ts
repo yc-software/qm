@@ -243,7 +243,6 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   }
 }
 
-/** One app's catalog entry, or null when Composio has no such app. */
 async function toolkit(ctx: ApiCtx, key: string, slug: string): Promise<Record<string, unknown> | null> {
   try {
     return await request(ctx, key, `/toolkits/${slug}`);
@@ -311,7 +310,6 @@ function scopeName(scope: string): string {
 
 type ScopedAccount = { id: string; created_at?: unknown; state?: { val?: { scope?: unknown } } };
 
-/** The scopes Composio asked the provider for when this connection was authorized; null when it kept no record. */
 async function requestedScopes(ctx: ApiCtx, key: string, accountId: string): Promise<string[] | null> {
   try {
     const { requested_scopes: asked } = await request(ctx, key, `/connected_accounts/${encodeURIComponent(accountId)}`);
@@ -322,12 +320,6 @@ async function requestedScopes(ctx: ApiCtx, key: string, accountId: string): Pro
   }
 }
 
-/**
- * The scopes a connection would gain by reconnecting: those its app's configuration started asking for after the
- * person authorized it. A connection made under the current configuration has none, whatever the provider reports
- * as granted: providers leave scopes out of that report (Microsoft omits offline_access, Dropbox its sign-in
- * scopes and any its app was never approved for), and asking again returns the same answer.
- */
 async function missingScopes(ctx: ApiCtx, key: string, account: ScopedAccount, config: AuthConfig): Promise<string[]> {
   if (!(config.updatedAt > Date.parse(String(account.created_at)))) return [];
   const granted = account.state?.val?.scope;

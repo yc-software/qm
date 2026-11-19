@@ -12,7 +12,7 @@ import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
-import { connectionCard, type ConnectionCardView } from "./connection-card";
+import { connectionCard } from "./connection-card";
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
 
@@ -310,63 +310,30 @@ export class OnboardingWelcome extends LitElement {
     if (!window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`)) return;
     for (const account of accounts) if (!(await this.disconnect(account, name))) return;
   }
-  /** The card for the one app this widget was asked to connect; undefined when it shows the whole picker. */
   private card(): TemplateResult | undefined {
     if (this.widget !== "apps" || !this.toolkit || this.error) return undefined;
     const service = this.services.find((item) => item.id === this.toolkit);
-    if (!service)
-      return this.loading
-        ? connectionCard({ id: this.toolkit, logoUrl: `https://logos.composio.dev/api/${this.toolkit}` })
-        : undefined;
+    if (!service) return this.loading ? connectionCard({ id: this.toolkit }) : undefined;
     const accounts = this.preview
       ? previewConnections(this.previewUser())
           .filter((toolkit) => toolkit === service.id)
           .map((toolkit) => ({ id: "", toolkit }))
       : this.connections.filter((account) => account.toolkit === service.id);
-    const act = (label: string, run: () => void) => ({ label, name: `${label} ${service.name}`, run });
-    const connect = (label: string) => act(label, () => void this.authorize(service, this.staleAccount(service.id)));
-    const view: ConnectionCardView = {
-      status: "Not connected",
-      tone: "muted",
-      mark: "idle",
-      primary: connect("Connect"),
-    };
-    if (this.connectionOutcome === "checking")
-      Object.assign(view, { status: "Confirming access…", mark: "spinner", primary: undefined });
-    else if (!this.preview && !this.connectionsChecked) Object.assign(view, { status: "", primary: undefined });
-    else if (accounts.length && !this.staleToolkits().has(service.id))
-      Object.assign(view, {
-        status: "Connected",
-        tone: "success",
-        mark: "check",
-        fresh: this.connectionOutcome === "success",
-        primary: undefined,
-      });
-    else if (accounts.length)
-      Object.assign(view, {
-        status: "Needs new permissions",
-        tone: "warning",
-        mark: "alert",
-        primary: connect("Reconnect"),
-      });
-    else if (this.connectionOutcome === "cancelled") view.status = "Sign-in cancelled";
-    else if (this.connectionOutcome === "expired") view.status = "That sign-in expired";
-    if (this.connectionOutcome === "failed" && view.primary)
-      Object.assign(view, {
-        status: "Couldn’t confirm the connection",
-        tone: "error",
-        mark: "error",
-        primary: connect("Try again"),
-      });
-    const problem = this.connectionError || this.authorizationError;
-    if (problem && view.status) Object.assign(view, { status: problem, tone: "error", mark: "error", fresh: false });
     const removable = accounts.filter((account) => account.id);
-    if (removable.length) view.quiet = act("Disconnect", () => void this.confirmDisconnect(removable, service.name));
-    else if (this.connectionError && !accounts.length)
-      view.quiet = act("Check again", () => void this.loadConnections());
-    const working = this.authorizing ? `Opening ${service.name}…` : this.disconnecting ? "Disconnecting…" : "";
-    if (working) Object.assign(view, { status: working, tone: "muted", mark: "spinner", fresh: false, busy: true });
-    return connectionCard(service, view);
+    let working = "";
+    if (this.authorizing) working = `Opening ${service.name}…`;
+    else if (this.disconnecting) working = "Disconnecting…";
+    return connectionCard(service, {
+      outcome: this.connectionOutcome,
+      checked: this.preview || this.connectionsChecked,
+      connected: accounts.length > 0,
+      stale: this.staleToolkits().has(service.id),
+      working,
+      problem: this.connectionError || this.authorizationError,
+      connect: () => void this.authorize(service, this.staleAccount(service.id)),
+      disconnect: removable.length ? () => void this.confirmDisconnect(removable, service.name) : undefined,
+      recheck: () => void this.loadConnections(),
+    });
   }
   private async loadConnections(): Promise<void> {
     this.connectionsController?.abort();
@@ -431,7 +398,6 @@ export class OnboardingWelcome extends LitElement {
     const controller = (this.controller = new AbortController());
     this.loading = true;
     this.error = "";
-    // A card for one app asks for that app alone: the whole catalog is thousands of apps over several requests.
     const load = async (toolkit: string): Promise<ConnectionService[]> => {
       const services: ConnectionService[] = [];
       const cursors = new Set<string>();
@@ -643,7 +609,6 @@ export class OnboardingWelcome extends LitElement {
       ? previewConnections(this.previewUser())
       : this.connections.map((account) => account.toolkit);
     const card = this.card();
-    // Connected apps are listed by name, so not before the catalog that holds the names has arrived.
     const listed = this.preview
       ? connected.map((toolkit) => ({ id: "", toolkit }) as ConnectedAccount)
       : this.connections;

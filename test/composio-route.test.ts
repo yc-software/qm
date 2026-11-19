@@ -185,13 +185,19 @@ test("the catalog can be asked for one app, which costs one small request", asyn
   await f.own();
   f.deps.mcpServers = {
     list: async () => [
-      { id: "host", enabled: true, apps: [{ toolkit: "granola", name: "Granola", connectUrl: "https://host.example/x" }] },
+      {
+        id: "host",
+        enabled: true,
+        apps: [{ toolkit: "granola", name: "Granola", connectUrl: "https://host.example/x" }],
+      },
     ],
   } as unknown as ServerDeps["mcpServers"];
   f.replies.push({ slug: "dropbox", name: "Dropbox", meta: { description: "Files" }, auth_config_details: ["raw"] });
   const one = await f.invoke("/v1/composio/toolkits?toolkit=dropbox");
   assert.deepEqual(one.data, {
-    items: [{ id: "dropbox", logoUrl: "https://logos.composio.dev/api/dropbox", name: "Dropbox", description: "Files" }],
+    items: [
+      { id: "dropbox", logoUrl: "https://logos.composio.dev/api/dropbox", name: "Dropbox", description: "Files" },
+    ],
     nextCursor: null,
   });
   assert.equal(new URL(f.calls[0]!.url).pathname, "/api/v3.1/toolkits/dropbox");
@@ -366,7 +372,10 @@ test("connections report the scopes an app's configuration started asking for af
     ],
   );
   assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
-  f.replies.push({ items: [account("ca_new", "2026-03-01T00:00:00Z"), account("ca_x", "2026-01-01T00:00:00Z", "ac_gone")] }, {});
+  f.replies.push(
+    { items: [account("ca_new", "2026-03-01T00:00:00Z"), account("ca_x", "2026-01-01T00:00:00Z", "ac_gone")] },
+    {},
+  );
   await f.invoke("/v1/composio/connections");
   assert.deepEqual(
     f.calls.slice(5).map((call) => new URL(call.url).pathname),
@@ -377,7 +386,6 @@ test("connections report the scopes an app's configuration started asking for af
 test("a connection made under the current configuration never needs new permissions", async () => {
   const f = fixture();
   await f.own();
-  // What Microsoft and Dropbox return for a fresh connection: neither echoes every scope it was asked for.
   const account = (id: string, toolkit: string, scope: string) => ({
     id,
     user_id: composioUserId(orgId(), "alice"),
