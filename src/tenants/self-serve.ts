@@ -174,14 +174,11 @@ export function createSelfServe(
           reportFailure("self-serve workspace provisioning", error, workspace.tenant);
           throw new AdminError(502, "the new workspace could not be set up; try signing in again", { cause: error });
         });
+        for (const member of provisioned.members)
+          await enrollMember(workspace.tenant, issuer, member).catch((error: unknown) =>
+            reportFailure("self-serve member setup", error, workspace.tenant),
+          );
         await markSelfServeProvisioned(pg, workspace.tenant, provisioned.settings.modelGatewayKey);
-        await Promise.all(
-          provisioned.members.map((member) =>
-            enrollMember(workspace.tenant, issuer, member).catch((error: unknown) =>
-              reportFailure("self-serve member setup", error, workspace.tenant),
-            ),
-          ),
-        );
       }
       await enroll(workspace.tenant, issuer, subject, email);
       return { tenant: workspace.tenant, created: workspace.created };
