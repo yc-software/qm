@@ -52,6 +52,7 @@ interface FakeOpts {
   add?: { ok?: boolean; error?: string };
   addStatus?: number;
   addBodyIsJson?: boolean;
+  pageStatus?: number;
 }
 
 function fakeFetch(opts: FakeOpts = {}) {
@@ -70,7 +71,7 @@ function fakeFetch(opts: FakeOpts = {}) {
       opts.token === null
         ? "<html>signed out</html>"
         : `<script>window.boot={"api_token":"${opts.token ?? TOKEN}"}</script>`;
-    return new Response(html, { status: 200 });
+    return new Response(html, { status: opts.pageStatus ?? 200 });
   }) as unknown as typeof fetch;
   return { impl, calls };
 }
@@ -163,6 +164,15 @@ test("successful upload: mints a token from the cookie, POSTs emoji.add with mod
     const img = add.body!.get("image") as File;
     assert.equal(img.name, "partyparrot.png");
     assert.equal(img.type, "image/png");
+  });
+});
+
+test("a signed-in page served with a 403 still yields its token", async () => {
+  await withFallback(undefined, async () => {
+    const store = await sessionStoreWith(ACTOR);
+    const fake = fakeFetch({ pageStatus: 403 });
+    const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
+    assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: WORKSPACE });
   });
 });
 
