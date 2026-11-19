@@ -166,7 +166,6 @@ import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
 import {
   FORWARD_PREFIX,
-  REACTION_PREFIX,
   slackPreviewText,
   slackWireToPlain,
   splitOnce,
@@ -174,7 +173,7 @@ import {
   stripSlackDirectives,
   withEmoji,
 } from "./slack-text";
-import { continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
+import { collectReactions, continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
 import { slackMark } from "./slack-mark";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
@@ -245,6 +244,7 @@ import { sessionPersonaChip } from "./personas";
 import { base64ToBytes } from "./paste-text";
 import { pageAnchor, storeTranscript } from "./transcript-cache";
 import { tip } from "./tooltip";
+import { projectIconTpl } from "./project-icon";
 import { goalWorked, workSeconds, workedLabel } from "./work-duration";
 import { liveWorkDuration } from "./live-work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
@@ -365,6 +365,7 @@ export function createChatSurface(
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
   let continuedSpeakerRows = new Set<AgentMessage>();
+  let slackReactions = collectReactions([], messageText);
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
@@ -394,7 +395,12 @@ export function createChatSurface(
       }
     }
     updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
-    continuedSpeakerRows = continuedSpeakers(messages.filter((m) => !hiddenMessage(m) && !rendersInsideWork(m)));
+    slackReactions = collectReactions(isReadOnlySlackView() ? messages : [], (message) =>
+      message.role === "assistant" ? assistantDisplayText(messageText(message)) : messageText(message),
+    );
+    continuedSpeakerRows = continuedSpeakers(
+      messages.filter((m) => !hiddenMessage(m) && !rendersInsideWork(m) && !slackReactions.reactionRows.has(m)),
+    );
   }
 
   function isSideChatSurface(): boolean {
@@ -470,8 +476,21 @@ export function createChatSurface(
               </div>`
         }
         <div class="slack-m-body">${body}</div>
+        ${reactionChips(slackReactions.onMessage.get(message))}
       </div>
     </article>`;
+  }
+
+  function reactionChips(tally: Map<string, string[]> | undefined): TemplateResult | typeof nothing {
+    if (!tally?.size) return nothing;
+    return html`<div class="slack-reactions">
+      ${[...tally].map(
+        ([emoji, people]) =>
+          html`<span class="slack-reaction" ${tip(`${people.join(", ")} reacted with :${emoji}:`)}
+            >${charForName(emoji) ?? projectIconTpl({ kind: "custom", name: emoji }, 16)}<b>${people.length}</b></span
+          >`,
+      )}
+    </div>`;
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
@@ -2138,7 +2157,7 @@ export function createChatSurface(
     isStreaming = false,
     inline = false,
   ): TemplateResult | typeof nothing {
-    if (hiddenMessage(message)) return nothing;
+    if (hiddenMessage(message) || slackReactions.reactionRows.has(message)) return nothing;
     const role = (message as { role?: string }).role;
     if (!inline && rendersInsideWork(message)) return nothing;
     if (role === "user" || role === "user-with-attachments") {
@@ -2519,13 +2538,6 @@ export function createChatSurface(
   }
 
   function slackWireBubble(text: string): TemplateResult {
-    if (text.startsWith(REACTION_PREFIX)) {
-      const said = text.slice(REACTION_PREFIX.length);
-      const settled = said.lastIndexOf(" (it now has ");
-      return html`<div class="slack-reaction-line">
-        ${withEmoji(settled < 0 ? said : said.slice(0, settled), charForName)}
-      </div>`;
-    }
     const at = text.indexOf(FORWARD_PREFIX);
     if (at < 0) return slackWireText(text);
     const rest = text.slice(at + FORWARD_PREFIX.length);

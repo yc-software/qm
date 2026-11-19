@@ -4684,12 +4684,27 @@ summary.stopped-head:focus-visible {
   color: var(--muted-foreground);
   font-size: 13px;
 }
-.slack-reaction-line {
-  overflow: hidden;
+.slack-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.slack-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--secondary) 40%, transparent);
+  font-size: 14px;
+}
+.slack-reaction b {
   color: var(--muted-foreground);
-  font-size: 13px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  font-size: 11.5px;
+  font-weight: 600;
 }
 .slack-forward {
   max-width: 620px;

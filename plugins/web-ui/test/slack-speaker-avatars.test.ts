@@ -77,6 +77,12 @@ test("a Slack channel transcript groups a speaker's run and shows the Slack app 
       said("SteeringMessage", 5, "thanks!", { name: "T", speakerId: "tester" }),
       item("AgentMessage", { seq: 6, turnId: "t", body: { workStartedAt: 1, workFinishedAt: 6 } }),
       item("AgentMessage", { seq: 7, turnId: "u", text: "as Ada", body: { personaId: "ada", workFinishedAt: 7 } }),
+      item("UserMessage", {
+        seq: 8,
+        turnId: "v",
+        text: '[Slack reaction] Pete reacted with :eyes: on your message: "as Ada" (it now has :eyes:).',
+        body: { name: "Pete", overheard: true },
+      }),
     ],
   });
   try {
@@ -98,6 +104,7 @@ test("a Slack channel transcript groups a speaker's run and shows the Slack app 
         [true, undefined, undefined, false],
       ],
     );
+    assert.equal(rows.at(-1)!.querySelector(".slack-reaction")!.textContent!.replaceAll(/\s/g, ""), "👀1");
     assert.ok(rows.at(-1)!.querySelector(".slack-m-avatar > .brand-mark"), "a persona's reply keeps the brand mark");
     assert.equal(rows.at(-2)!.querySelectorAll(".user-row").length, 0);
   } finally {
