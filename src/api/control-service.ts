@@ -222,6 +222,14 @@ export function listingView<A extends Pick<App, "managesScope" | "managesScopeAs
   return { ...app, managesScope: app.managesScopeAsMember };
 }
 
+async function adminOverOwner(
+  app: Pick<App, "managesScope" | "samePerson">,
+  owner: string,
+  actorId: string,
+): Promise<boolean> {
+  return !(await app.samePerson(owner, actorId)) && app.managesScope(actorId, scopeId("personal", owner));
+}
+
 async function controlsOwner(
   app: Pick<App, "managesScope" | "samePerson">,
   owner: string,
@@ -620,7 +628,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (req.script) {
         const script = cronScriptFrom(req.script, before, req);
         if (typeof script === "string") return { ok: false, code: "bad_request", message: script };
-        if (before.ownerScopeId !== capability.scopeId && !(await controlsOwner(app, before.owner, capability.actorId)))
+        if (
+          before.ownerScopeId !== capability.scopeId &&
+          !(await adminOverOwner(app, before.owner, capability.actorId))
+        )
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
