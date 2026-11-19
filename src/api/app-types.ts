@@ -72,7 +72,7 @@ import type {
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type { Delivery, Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, TriggerBase, Webhook } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin, TriggerBase, Webhook } from "../triggers/types.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -520,7 +520,13 @@ export interface App {
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
-  shareCron(tenant: Tenant, id: string, recipient: string, by: string): Promise<{ copy: Cron; existed: boolean }>;
+  shareCron(
+    tenant: Tenant,
+    id: string,
+    recipient: string,
+    by: string,
+  ): Promise<{ copy: Cron; existed: boolean; note?: string }>;
+  cronOrigin(cron: Cron): Promise<CronOrigin>;
   cronCopies(id: string): Promise<CronCopy[]>;
   cronSharing(cron: VisibleCron): Promise<VisibleCron>;
   unshareCron(id: string, recipient: string): Promise<void>;

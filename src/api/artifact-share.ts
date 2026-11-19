@@ -148,7 +148,7 @@ export type ShareArtifactResult =
       target: { scope: ScopeId; label: string };
       permission: Permission;
       invitation?: AppInvitation;
-      copy?: { id: string; enabled: boolean; existed: boolean };
+      copy?: { id: string; enabled: boolean; existed: boolean; note?: string };
     }
   | {
       ok: false;
