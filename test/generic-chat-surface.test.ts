@@ -18,7 +18,7 @@ import {
   setGenericChatTyping,
   type GenericChatMessages,
 } from "../src/surfaces/generic-chat/messages.ts";
-import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
+import { genericChatSender, stripWebDirectives } from "../src/surfaces/generic-chat/outbound.ts";
 import { createGenericChatApprovals, genericChatCard } from "../src/surfaces/generic-chat/approvals.ts";
 import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
 import { setGenericChatReaction } from "../src/surfaces/generic-chat/reactions.ts";
@@ -439,11 +439,14 @@ async function relayUntil(
   }
 }
 
-test("generic-chat deliveries are signed posts mirrored as the agent's own", async () => {
+test("generic-chat deliveries are signed posts mirrored as the agent's own, without web widget directives", async () => {
   const genericChat = await fakeGenericChat();
   const { deliveries, mirrored, settled } = outboundFor(`${genericChat.url}/`);
   try {
     const surface = createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
+    assert.match(surface.promptHints.linkSyntax, /web widgets and `::name\{\}` directives do not render here/);
+    for (const kept of ["`::a{}` inline", "```\n::a{}\n```", "see ::a{} here"])
+      assert.equal(stripWebDirectives(kept), kept);
     await surface.post(
       { surface: "partner-chat", account: "7001", kind: "group", container: "88", thread: "1009" },
       { text: "scheduled hello", provenance: PROVENANCE },
@@ -451,7 +454,7 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
     );
     await deliveries.enqueue({
       destination: { type: "partner-chat", target: CONTAINER },
-      text: "Here is the full answer",
+      text: 'Here is the full answer\n\n  ::connect-apps{toolkit="notion"}\n\n::add-to-slack{}',
       attachments: [{ name: "chart.png", mimeType: "image/png", blob: { kind: "inline", data: "" } }] as never,
       idempotencyKey: "run:00000000-0000-4000-8000-000000000001",
     });
