@@ -688,7 +688,7 @@ export function credentialsCard() {
                     >
                   </div>
                 </div>
-                <div class="sc-picker" style=${s.draft.org ? "display: none" : ""} id="sc-picker">
+                ${s.draft.org ? null : html`<div class="sc-picker" id="sc-picker">
                   <input
                     type="text"
                     id="sc-picker-search"
@@ -712,10 +712,12 @@ export function credentialsCard() {
                     spellcheck="false"
                   />
                   <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
-                </div>
-                <div class="identity-chips" id="sc-people-chips">
-                  ${s.draft.org ? null : s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
                 </div>`}
+                ${!s.draft.org && s.grantees().length
+                  ? html`<div class="identity-chips" id="sc-people-chips">
+                      ${s.grantees().map((id) => html`<span class="identity-chip">${label(id)}${grantTag(id)}</span>`)}
+                    </div>`
+                  : null}`}
         </section>
         <section class="cd-section" aria-live="polite">
           <h3>Summary</h3>
