@@ -2096,6 +2096,14 @@ export function buildApp(
     ].flatMap((table) => [`DROP TABLE IF EXISTS ${table}`, `DELETE FROM durable_map_versions WHERE tbl = '${table}'`]),
   });
   pgArtifactMap.pool.registerMigration({
+    id: "durable-map/retired-tables/0002-drop-browser-sessions",
+    statements: [
+      "DROP TABLE IF EXISTS browser_sessions",
+      "DELETE FROM durable_map_versions WHERE tbl = 'browser_sessions'",
+      "DROP FUNCTION IF EXISTS claim_browser_sessions(), claim_browser_sessions_tenants()",
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
     statements: [
       "DROP TABLE IF EXISTS approved_harness_configs",
