@@ -47,6 +47,7 @@ final class NativeChatMessageTests: XCTestCase {
     window.makeKeyAndVisible()
     defer {
       window.isHidden = true
+      window.rootViewController = nil
       previous?.makeKey()
     }
     func textView(in view: UIView) -> UITextView? {
