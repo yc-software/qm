@@ -611,6 +611,18 @@ test("post replies remain visible in new and continuing conversations", async (t
       });
       return { promise, release };
     }
+    await t.test("a turn finished elsewhere appears after a stream reconnect or window focus", async () => {
+      for (const wake of [
+        () => delivery.emit("session_state_resync", {}),
+        () => window.dispatchEvent(new Event("focus")),
+      ]) {
+        await mount();
+        items = completed;
+        wake();
+        await settle();
+        assert.ok(shownAnswer());
+      }
+    });
     await t.test("a late transcript cannot replace a newer successful refresh", async () => {
       await mount();
       const pending = deferredTranscript([user]);
@@ -775,7 +787,7 @@ test("post replies remain visible in new and continuing conversations", async (t
             }
           };
           const before = FakeEventSource.instances.length;
-          conv!.resumeIfIdle();
+          conv!.catchUp();
           await until(() => FakeEventSource.instances.length > before);
           const turn = agent.waitForIdle();
           const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;

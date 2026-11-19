@@ -128,7 +128,7 @@ export function ensureDeliveryStream(): void {
         void refreshSessions({ silent: true });
         refreshTreesFor(event.threadRef);
       }
-      if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
+      if (event.state === "working") for (const conv of live) conv.catchUp();
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => {
@@ -137,12 +137,17 @@ export function ensureDeliveryStream(): void {
       void refreshSessions({ silent: true });
       refreshOpenTrees();
       resyncUiCanvas(openIds);
+      catchUpAll();
     },
     (event) => inboxItemHandler?.(event),
     () => inboxResyncHandler?.(),
   );
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") return;
-    for (const conv of live) conv.resumeIfIdle();
+    if (document.visibilityState === "visible") catchUpAll();
   });
+  window.addEventListener("focus", catchUpAll);
+}
+
+function catchUpAll(): void {
+  for (const conv of live) conv.catchUp();
 }

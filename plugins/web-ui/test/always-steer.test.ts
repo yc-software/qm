@@ -121,7 +121,7 @@ test("a mid-run send with the steer preference asks core to steer and queues onl
           return { ok: true };
         },
         drawActiveChat: draw,
-        resumeIfIdle() {},
+        catchUp() {},
       },
     } as unknown as ConvCtx;
     composer = createComposerSurface(ctx);

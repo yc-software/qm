@@ -85,7 +85,7 @@ test("a steered queued message shows in the transcript as waiting until model in
           return { ok: true };
         },
         drawActiveChat: draw,
-        resumeIfIdle() {},
+        catchUp() {},
       },
     } as unknown as ConvCtx;
     composer = createComposerSurface(ctx);

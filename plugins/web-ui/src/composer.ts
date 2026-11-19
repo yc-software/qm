@@ -1588,7 +1588,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     if (agent !== ctx.chat.state.agent || threadRef !== ctx.chat.state.threadRef) return;
     ctx.chat.drawActiveChat(agent);
-    ctx.chat.resumeIfIdle();
+    ctx.chat.catchUp();
   }
 
   let pendingSubmissions = 0;

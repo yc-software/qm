@@ -1762,9 +1762,19 @@ export function subscribeDeliveries(
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
   let everOpened = false;
+  let silence: ReturnType<typeof setTimeout> | undefined;
+  const watchSilence = (): void => {
+    clearTimeout(silence);
+    silence = setTimeout(() => {
+      es.close();
+      es = connect();
+    }, SSE_SILENCE_MS);
+  };
   const connect = (): EventSource => {
     const es = new EventSource(withBase("/api/deliveries/events"));
+    es.addEventListener("ping", watchSilence);
     es.onopen = (): void => {
+      watchSilence();
       if (everOpened) {
         onResync?.();
         onInboxResync?.();
@@ -1801,7 +1811,9 @@ export function subscribeDeliveries(
   };
   let es = connect();
   const suspend = (event: PageTransitionEvent): void => {
-    if (event.persisted) es.close();
+    if (!event.persisted) return;
+    clearTimeout(silence);
+    es.close();
   };
   const resume = (event: PageTransitionEvent): void => {
     if (event.persisted) es = connect();
@@ -1811,6 +1823,7 @@ export function subscribeDeliveries(
   return () => {
     window.removeEventListener("pagehide", suspend);
     window.removeEventListener("pageshow", resume);
+    clearTimeout(silence);
     es.close();
   };
 }

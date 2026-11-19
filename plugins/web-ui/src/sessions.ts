@@ -2205,7 +2205,10 @@ export async function openSessionInto(
     }
     return true;
   }
-  if (s.id === conv.state.sessionId && !transcriptPrefetch) return true;
+  if (s.id === conv.state.sessionId && !transcriptPrefetch) {
+    conv.catchUp();
+    return true;
+  }
   const started = Date.now();
 
   refreshSessionsOnOpen();
