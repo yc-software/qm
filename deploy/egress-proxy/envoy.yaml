@@ -39,6 +39,7 @@ static_resources:
                         text_format_source:
                           inline_string: "[envoy] %REQ(:METHOD)% %REQ(:AUTHORITY):256% %RESPONSE_CODE% flags=%RESPONSE_FLAGS% detail=%RESPONSE_CODE_DETAILS% upstream=%UPSTREAM_HOST% dur=%DURATION%\n"
                 http_protocol_options:
+                  accept_http_10: true
                   allow_absolute_url: true
                 upgrade_configs:
                   - upgrade_type: CONNECT
