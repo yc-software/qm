@@ -680,3 +680,15 @@ disposable computers. The affected lifecycle, disposable execution, turn-pool,
 and HTTP computer-privacy suites pass; old-release upgrade fixtures pass after
 the migration ordering correction. Independent focused lifecycle review accepted
 95/100. These checks do not qualify the remaining full-suite failures.
+
+The repaired adapter also passed a fresh native document-host turn on an existing
+private computer: one execute call returned the expected synthetic marker, the
+conversation remained private, and workbook cells were unchanged.
+
+Queued memory extraction restores model-request telemetry from durable capture
+metadata and canonical session ancestry before calling the model. This uses the
+existing actor, session, conversation scope and origin fields; it adds no
+persisted or API payload fields. The surface-to-project admin configuration route
+uses the existing self-only browser identity policy, matching its explicit
+impersonation refusal. Focused independent review accepted both corrections
+95/100. Existing gateway-context and admin-browser regressions pass.

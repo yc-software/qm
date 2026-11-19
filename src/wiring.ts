@@ -1947,6 +1947,7 @@ export function buildApp(
   const managedGroups = createDocumentGroups(documentConversations, projects);
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     databaseUrl,
+    sessions,
     agent,
     memory: createDocumentMemory(baseMemory, documentConversations, auditLog, sessions),
     captureQuietMs: config.memoryCaptureQuietMs,

@@ -11,6 +11,8 @@ import {
   DEFAULT_CAPTURE_MAX_TURNS,
 } from "./strategies/per-turn.ts";
 import { createAgentOnlyStrategy } from "./strategies/agent-only.ts";
+import { withModelRequestContext } from "../model/request-context.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 
 export interface MemoryStrategy {
   onTurnEnd?(ctx: MemoryCaptureTurn): Promise<void>;
@@ -33,6 +35,7 @@ export interface MemoryStrategyDeps {
   databaseUrl?: string;
   agent: ModelUtilities;
   memory: MemoryService;
+  sessions?: Pick<SessionStore, "get" | "inheritedOrigin">;
   captureQuietMs?: number;
   captureMaxTurns?: number;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
@@ -54,7 +57,17 @@ export function createMemoryStrategy(
     maxTurns: deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,
     capture: async (turns, id, signal) => {
       try {
-        await captureMemoryTurns({ agent: deps.agent, memory }, turns, id, signal);
+        const first = turns[0]!;
+        const session = first.sessionId ? await deps.sessions?.get(first.sessionId) : undefined;
+        await withModelRequestContext(
+          {
+            sessionId: first.sessionId,
+            actorId: first.actorId,
+            scopeId: first.conversationScopeId ?? first.scopeId,
+            origin: session ? await deps.sessions!.inheritedOrigin(session) : undefined,
+          },
+          () => captureMemoryTurns({ agent: deps.agent, memory }, turns, id, signal),
+        );
       } catch (error) {
         if (!signal.aborted) deps.onCaptureError?.(error, turns[0]!.scopeId);
         throw error;

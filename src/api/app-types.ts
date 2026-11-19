@@ -1,3 +1,4 @@
+import type { DeployGitContext } from "../deploy/access-token.ts";
 import type { PrivateContext } from "../sessions/private-context.ts";
 import type { ManagedGroupDirectory } from "../resolution/scope-membership.ts";
 import type { PersonaHandover } from "../personas/persona-handover.ts";
@@ -778,7 +779,7 @@ export interface App {
     id: string,
     principalId: string,
     permission: "read" | "write",
-    context?: import("../deploy/access-token.ts").DeployGitContext,
+    context?: DeployGitContext,
   ): Promise<boolean>;
   reapIdleApps(ttlMs: number, now?: number): Promise<number>;
   listEnvironments(): Promise<{ environment: Environment; attachments: EnvironmentAttachment[] }[]>;

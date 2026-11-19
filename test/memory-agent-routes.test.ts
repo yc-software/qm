@@ -113,11 +113,12 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
 
   it("derives capture provenance from the capability rather than request metadata", async () => {
     const source = scopeId("personal", "provenance-user");
+    const session = await built.sessions.getOrCreateByThread("trusted-session", "dm", source);
     const cap = await mintCapabilityToken(
       {
         actorId: "provenance-user",
         scopeId: source,
-        sessionId: "trusted-session",
+        sessionId: session.id,
         exp: Date.now() + CAPABILITY_TTL_MS,
         memory: { write: source, orgWrite: ORG, read: [source, ORG] },
       },
@@ -144,7 +145,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       );
       assert.equal(res.status, 200);
       assert.equal(context?.conversationScopeId, source);
-      assert.equal(context?.sessionId, "trusted-session");
+      assert.equal(context?.sessionId, session.id);
       assert.equal(context?.sensitivity, undefined);
       assert.equal(context?.inheritedFacts, undefined);
     } finally {

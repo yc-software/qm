@@ -38,7 +38,7 @@ export const MEMORY_EXTRACTION_PROMPT = [
   "Prepend exactly SENSITIVITY: <label> on its own first line, classifying the entire extracted list.",
 ].join("\n");
 
-export const DOCUMENT_MEMORY_EXTRACTION_PROMPT = [
+const DOCUMENT_MEMORY_EXTRACTION_PROMPT = [
   MEMORY_EXTRACTION_RULES,
   "This conversation concerns one document in a shared team workspace. Retain useful procedures and standing assumptions, not current cell values, query results, temporary calculations, or facts that can be read live.",
   "Assign each fact an applicability: team for clearly reusable team procedures or conventions; document for document-specific layout, assumptions, or uncertain applicability; discard for transient data.",
@@ -46,7 +46,7 @@ export const DOCUMENT_MEMORY_EXTRACTION_PROMPT = [
   'Output ONLY JSON: {"sensitivity":"ordinary|unknown|sensitive|restricted","facts":[{"text":"...","applicability":"team|document|discard"}]}. Use an empty facts list when nothing is durable.',
 ].join("\n");
 
-export function parseDocumentFacts(out: string): {
+function parseDocumentFacts(out: string): {
   sensitivity: NonNullable<MemoryCaptureMetadata["sensitivity"]>;
   facts: Array<{ text: string; applicability: "team" | "document" | "discard" }>;
 } {

@@ -726,6 +726,8 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       )
     ).json()) as any;
     const id = created.cron.id;
+    await built.sessions.getOrCreateByThread("t1", "dm", "personal:U1");
+    await built.sessions.getOrCreateByThread("t2", "dm", "personal:U1");
     await built.crons.recordFire(id, {
       fireKey: "k1",
       threadRef: "t1",

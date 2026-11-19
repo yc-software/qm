@@ -10,11 +10,15 @@ test("startup adopts a cold environment target even when it has no session", asy
     const scope = "personal:existing-environment";
     await built.app.createEnvironment({ scopeId: scope, name: "existing", actorId: "existing-environment" });
     await built.sandboxResources.initialize();
-    const resource = await built.sandboxResources.resolve(scope);
+    assert.equal(await built.sandboxResources.resolve(scope), null);
+    const resources = await built.sandboxResources.list("existing-environment", scope);
+    assert.equal(resources.defaultSandboxId, null);
+    const resource = resources.sandboxes.find((item) => item.backingScopeId === scope);
     assert.ok(resource?.legacy);
     assert.equal(resource.backingScopeId, scope);
     assert.equal(resource.ownerScopeId, scope);
     assert.equal(resource.state, "unverified");
+    assert.equal(resource.personalOnly, true);
     assert.deepEqual(fakeSprites.names(), []);
   } finally {
     await built.runtime.stop();

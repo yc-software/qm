@@ -152,7 +152,10 @@ export async function assertSpendRollupParity(
   clock.at = BASE;
   const child = async (name: string, parentId: string) => {
     const session = await record(`agent:main:subagent:${prefix}-${name}`, "dm", alice, 0.01, `${prefix}-${name}`);
-    await store.setParentSession(session.id, parentId);
+    const parent = await store.get(parentId);
+    const temporary = parent ?? (await store.getOrCreateByThread(parentId, "dm", alice));
+    await store.setParentSession(session.id, temporary.id);
+    if (!parent) await store.deleteSession(temporary.id);
     return session;
   };
   const parents = {

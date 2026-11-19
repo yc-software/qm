@@ -9,14 +9,14 @@ import { createPgPool, queryPoolSize, withPgTransaction } from "../persistence/p
 import { ambientTenant, withoutTenant } from "../tenants/context.ts";
 import { reportFailure, swallowAs } from "../util/errors.ts";
 
-export const MEMORY_CAPTURE_QUEUE = "memory-capture";
+const MEMORY_CAPTURE_QUEUE = "memory-capture";
 
 export interface MemoryCaptureBatch {
   tenantId: string;
   turns: MemoryCaptureTurn[];
 }
 
-export function memoryCaptureKey(tenantId: string, turn: MemoryCaptureTurn): string {
+function memoryCaptureKey(tenantId: string, turn: MemoryCaptureTurn): string {
   return createHash("sha256")
     .update(JSON.stringify([tenantId, memoryCaptureGroup(turn)]))
     .digest("hex");

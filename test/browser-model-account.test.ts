@@ -60,6 +60,7 @@ async function browserEndpoint(
     globalThis.fetch = realFetch;
   });
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
+  const session = await built.sessions.getOrCreateByThread("browser-session", "dm", "personal:U1");
   const post = async (claims: Partial<CapabilityClaims>, body: Record<string, unknown>) =>
     realFetch(url, {
       method: "POST",
@@ -70,7 +71,7 @@ async function browserEndpoint(
             actorId: "U1",
             scopeId: "personal:U1",
             aud: BROWSER_MODEL_AUD,
-            sessionId: "browser-session",
+            sessionId: session.id,
             exp: Date.now() + 60_000,
             ...claims,
           },

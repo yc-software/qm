@@ -20,6 +20,7 @@ const ADMIN_PAGES = [
   "PUT /v1/admin/crons/:id/runtime",
   "GET /v1/admin/custom-providers",
   "PUT /v1/admin/custom-providers/:provider",
+  "PUT /v1/admin/documents/surface",
   "DELETE /v1/admin/custom-providers/:provider",
   "GET /v1/admin/apps",
   "GET /v1/admin/directory",

@@ -356,11 +356,12 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
     "x-qm-purpose": "memory_classification",
   });
 
+  const session = await built.sessions.getOrCreateByThread("session-agent", "dm", "personal:U1");
   const capability = await mintCapabilityToken(
     {
       actorId: "U1",
       scopeId: "personal:U1",
-      sessionId: "session-agent",
+      sessionId: session.id,
       origin: "webhook",
       memory: { write: "personal:U1", read: ["personal:U1"] },
       exp: Date.now() + 60_000,
@@ -373,8 +374,8 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
     body: JSON.stringify({ facts: ["Prefers metric units"] }),
   });
   assert.equal(captured.status, 200, await captured.text());
-  assert.deepEqual(sent("memory_classification", "session-agent"), {
-    "x-qm-session-id": "session-agent",
+  assert.deepEqual(sent("memory_classification", session.id), {
+    "x-qm-session-id": session.id,
     "x-qm-actor": pseudonym("U1"),
     "x-qm-scope": `personal:${pseudonym("U1")}`,
     "x-qm-origin": "webhook",

@@ -47,7 +47,10 @@ test("sessions inherit the origin of their nearest automated ancestor ", { skip 
     const orphan = await store.getOrCreateByThread(`subagent:${run}:3`, "channel", scope);
     await store.setParentSession(child.id, cron.id);
     await store.setParentSession(grandchild.id, child.id);
-    await store.setParentSession(orphan.id, `missing-${run}`);
+    const removed = await store.getOrCreateByThread(`removed-${run}`, "channel", scope);
+    await store.setParentSession(orphan.id, removed.id);
+    await store.deleteSession(removed.id);
+    await assert.rejects(store.setParentSession(orphan.id, `missing-${run}`), /no longer exists/);
     const origin = async (id: string) => store.inheritedOrigin((await store.get(id))!);
     assert.equal(await origin(grandchild.id), "cron");
     assert.equal(await origin(cron.id), "cron");

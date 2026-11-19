@@ -115,7 +115,7 @@ export const documentConversationRoutes: readonly Route<ApiCtx>[] = [
     method: "PUT",
     path: "/v1/admin/documents/surface",
     actor: "person",
-    browser: true,
+    browser: "self",
     auth: "source",
     admin: {},
     handle: configure,

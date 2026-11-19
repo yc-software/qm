@@ -10,9 +10,9 @@ import {
   type ImpersonationClaims,
 } from "./session.ts";
 
-export const DEVELOPMENT_IMPERSONATION_PATH = "/api/development/impersonation";
-export const DEVELOPMENT_VIEW = "development_view";
-export const DEVELOPMENT_IMPERSONATING = "development_impersonating";
+const DEVELOPMENT_IMPERSONATION_PATH = "/api/development/impersonation";
+const DEVELOPMENT_VIEW = "development_view";
+const DEVELOPMENT_IMPERSONATING = "development_impersonating";
 const verifiedIdentity = Symbol("developmentIdentity");
 type DevelopmentRequest = IncomingMessage & { [verifiedIdentity]?: ImpersonationClaims };
 

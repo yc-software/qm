@@ -32,9 +32,7 @@ function homeSessions(
     get: async () => {
       throw new Error("Unexpected session content read");
     },
-    getByThread: async () => {
-      throw new Error("Unexpected session content read");
-    },
+    getByThread: async () => null,
     recordContextProvenance: async () => {
       throw new Error("Unexpected session provenance write");
     },
