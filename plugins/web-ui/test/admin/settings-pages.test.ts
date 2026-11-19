@@ -262,10 +262,18 @@ test("credential usage fills in when it arrives, survives failure, and ignores r
     assert.doesNotMatch(list(), /\buses?\b|Usage unavailable/);
     if (outcome === "view") await visit(admin, "/settings/models");
     usage.resolve(
-      outcome === "failed" ? { status: 500, body: {} } : { summaries: [{ slug: "example", usageCount: 7 }] },
+      outcome === "failed"
+        ? { status: 500, body: {} }
+        : { summaries: [{ slug: "example", usageCount: 7, usageSince: Date.UTC(2026, 10, 12, 12) }] },
     );
     await admin.settle();
-    if (outcome === "current") assert.match(list(), /7 uses/);
+    if (outcome === "current") {
+      assert.match(list(), /7 uses since Nov 12/);
+      const links = [...admin.document.querySelectorAll<HTMLAnchorElement>("#app-view a.viewlink")].map(
+        (a) => a.textContent,
+      );
+      assert.deepEqual(links, ["View usage ›", "View users ›"]);
+    }
     if (outcome === "failed") assert.match(list(), /Usage unavailable/);
     if (outcome === "view") assert.equal(list(), "");
     admin.close();

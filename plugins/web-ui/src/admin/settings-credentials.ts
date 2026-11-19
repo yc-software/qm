@@ -382,16 +382,17 @@ async function remove(c: Data) {
       : "Credential changed, but the latest state could not be loaded. Refresh the page before deleting.";
   status(message, "err");
 }
-export const addCredential = () =>
-  html`<button
-    class="btn primary"
-    type="button"
-    id="sc-add"
-    ?disabled=${!!credentialState.listMessage}
-    @click=${() => openEditor(null)}
-  >
-    + Add credential
-  </button>`;
+export const credentialActions = () =>
+  html`<a class="viewlink" href=${page.href("audit")}>View usage ›</a
+    ><button
+      class="btn primary"
+      type="button"
+      id="sc-add"
+      ?disabled=${!!credentialState.listMessage}
+      @click=${() => openEditor(null)}
+    >
+      + Add credential
+    </button>`;
 export const keychainCard = () => {
   const ready = keychain && keychain.enabled !== false;
   return settingsSection(
@@ -400,7 +401,7 @@ export const keychainCard = () => {
       <strong id="keychain-user-count">${ready ? String(keychain!.users) : "—"}</strong> users with keychain entries ·
       <strong id="keychain-standing-count">${ready ? String(keychain!.standing) : "—"}</strong> standing grants
     </div>`,
-    { id: "card-personal-keychains" },
+    { id: "card-personal-keychains", action: html`<a class="viewlink" href=${page.href("users")}>View users ›</a>` },
   );
 };
 const plural = (n: number, label: string) => n + " " + label + (n === 1 ? "" : "s");
@@ -417,7 +418,13 @@ function credentialUsage(c: Data): { short: string; full: string } {
   if (c.usageCount == null) return { short: "", full: "Loading usage…" };
   const n: number = c.usageCount;
   return {
-    short: fmt(n) + (c.usageTruncated ? "+" : "") + (n === 1 ? " use" : " uses"),
+    short:
+      fmt(n) +
+      (c.usageTruncated ? "+" : "") +
+      (n === 1 ? " use" : " uses") +
+      (n && c.usageSince
+        ? " since " + new Date(c.usageSince).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+        : ""),
     full:
       (c.usageTruncated ? "at least " : "") +
       plural(n, "successful use") +
@@ -439,7 +446,7 @@ function credentialRow(c: Data) {
       : [
           c.host,
           c.allowedMethods?.length ? c.allowedMethods.join(", ") : "GET",
-          c.maxRequestsPerDay ? fmt(c.maxRequestsPerDay) + " per day" : "",
+          c.maxRequestsPerDay ? fmt(c.maxRequestsPerDay) + " requests per UTC day" : "",
         ]
           .filter(Boolean)
           .join(" · ");
@@ -667,7 +674,7 @@ export function credentialsCard() {
                           value="people"
                           .checked=${!s.draft.org}
                           @change=${() => s.change("org", false)}
-                        /><span>Specific people</span></label
+                        /><span>Specific people or channels</span></label
                       >
                     </div>
                   </div>

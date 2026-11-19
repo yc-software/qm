@@ -14044,6 +14044,9 @@ html.app-share-embed body {
   color: var(--muted-foreground);
   font-size: var(--font-12-5);
 }
+.settings-section-head > a {
+  margin-left: auto;
+}
 .settings-card {
   border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
   border-radius: 14px;

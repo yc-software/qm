@@ -2735,8 +2735,22 @@
   font-size: var(--font-12-5, 12.5px);
 }
 @media (max-width: 650px) {
+  #app-view .cred-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  #app-view .cred-text {
+    flex: 1 1 calc(100% - 30px);
+  }
+  #app-view .cred-meta {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  #app-view .cred-flags,
   #app-view .cred-usage {
-    display: none;
+    order: 1;
+    min-width: 0;
+    text-align: left;
   }
 }
 
