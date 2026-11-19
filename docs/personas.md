@@ -91,7 +91,7 @@ allows one enforcing rule per action. The state the rules see includes the conve
 rule's question and options. Ambient turns are not routed. When the enforcing rule picks a
 persona the conversation isn't already wearing and the sender holds a role on it, the
 conversation adopts it and that turn's context names the rule and how to switch; otherwise the
-persona is unchanged and the context says which rule picked what.
+persona is unchanged, and the rule's pick is in the audit log as its `decision.classify` record.
 
 A cron set up in a conversation with a persona fires as that persona: when it fires, the
 scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
