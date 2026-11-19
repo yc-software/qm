@@ -60,11 +60,9 @@ the sources. Ordinary does not mean public. Unknown provenance stays within the
 notebook's existing narrow audience. Lookups fail closed, and authorization results
 are not cached between reads.
 
-A persona's notebook is shared by the channels and groups that pin the persona
-([personas.md](./personas.md)). A fact there is shown in every conversation that uses the
-persona, whichever of those rooms it was saved from: the reader needs a role on the persona,
-not access to the room, and no Open policy at either end. Every other source a fact carries
-is checked as usual.
+A fact saved to a persona's notebook by a room that pins the persona
+([personas.md](./personas.md)) records the persona as its source in place of that room, so
+it is shown wherever the persona is used. Every other source it carries is checked as usual.
 
 A partially visible notebook cannot be rewritten. Structured edits require a
 revision check. Historical reads apply a conservative restriction floor from newer

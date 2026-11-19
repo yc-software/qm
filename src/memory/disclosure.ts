@@ -1,5 +1,5 @@
 import type { Principal, ScopeId } from "../types.ts";
-import { isSharedScope, parseScopeId, personalScope } from "../types.ts";
+import { parseScopeId, personalScope } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { CurrentScopeMembers, IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
@@ -93,9 +93,7 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
         const homeAllowed = async () => (await narrow(home)) || (await sourceAllowed(home, "unknown"));
         if ((sourceUnknown || sensitivity === "unknown") && !(await homeAllowed())) return false;
         if (!sources.length) return sourceUnknown && (await homeAllowed());
-        const pooled = parseScopeId(home).kind === "persona" && (await narrow(home));
-        const checked = sources.filter((source) => !(pooled && isSharedScope(source)));
-        return (await Promise.all(checked.map((source) => sourceAllowed(source, sensitivity)))).every(Boolean);
+        return (await Promise.all(sources.map((source) => sourceAllowed(source, sensitivity)))).every(Boolean);
       });
     },
   };

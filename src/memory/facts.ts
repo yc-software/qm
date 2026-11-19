@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ScopeId } from "../types.ts";
+import { parseScopeId, type ScopeId } from "../types.ts";
 import { dateStr } from "./notebook.ts";
 
 export type MemorySensitivity = "ordinary" | "unknown" | "sensitive" | "restricted";
@@ -61,10 +61,13 @@ export function mergeProvenance(
 
 export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
   const merged = mergeProvenance(context?.inheritedFacts ?? [], context?.sensitivity ?? "unknown");
-  const source = context?.conversationScopeId ?? scope;
+  const room = context?.conversationScopeId ?? scope;
+  const pooled = parseScopeId(scope).kind === "persona";
+  const source = pooled ? scope : room;
+  const inherited = pooled ? merged.sources.filter((from) => from !== room) : merged.sources;
   return {
     sensitivity: merged.sensitivity,
-    sources: merged.sources.includes(source) ? merged.sources : [...merged.sources, source],
+    sources: inherited.includes(source) ? inherited : [...inherited, source],
     sourceUnknown: merged.sourceUnknown || context?.inheritedFacts === undefined,
   };
 }
