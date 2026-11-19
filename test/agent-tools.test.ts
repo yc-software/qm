@@ -5196,6 +5196,10 @@ test("private app sharing requires once-only approval bound to the exact revisio
   assert.equal(requests.length, 0);
   const approval = ref.pendingApprovals!.at(-1)!;
   assert.deepEqual(approval.call, { tool: "apps", input: args });
+  assert.ok(approval.reason?.includes(args.id));
+  assert.ok(approval.reason?.includes(args.privateRevision));
+  assert.ok(approval.reason?.includes(args.toScope));
+  assert.match(approval.reason!, /No notifications or invitations/);
   assert.deepEqual(approval.grantModes, { session: false, always: false });
   ref.toolApprovalGate = (_, key) => key === approval.approvalKey;
   ref.pausedOnApproval = false;

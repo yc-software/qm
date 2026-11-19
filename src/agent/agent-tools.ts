@@ -187,8 +187,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
       needsApproval: (params: unknown) =>
         isObj(params) && params.action === "share" && params.privateRevision !== undefined,
-      approvalReason:
-        "Share this selected private app, including its stored data and history, with the specified audience; its private conversation and other outputs remain private",
+      approvalReason: (params: unknown) => {
+        const selected = isObj(params) ? params : {};
+        return `Share app ${String(selected.id)} at private revision ${String(selected.privateRevision)} with ${String(selected.toScope)} (${selected.permission === "write" ? "manage" : "read"} access). This includes its stored data and history; the private conversation and other outputs remain private.${selected.notify === false ? " No notifications or invitations." : ""}`;
+      },
     },
     ...(ref.current?.appFiles ? [resourceTool("app_files", appFileTools(kit))] : []),
     memory,

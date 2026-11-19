@@ -81,13 +81,16 @@ const APPROVAL_ARGS_MAX_CHARS = 16_000;
 
 interface ToolApprovalDeclaration {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
-  approvalReason?: string;
+  approvalReason?: string | ((params: unknown) => string);
 }
 
 async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
   const needed =
     typeof tool.needsApproval === "function" ? await tool.needsApproval(params) : tool.needsApproval === true;
-  return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
+  if (!needed) return undefined;
+  return typeof tool.approvalReason === "function"
+    ? tool.approvalReason(params)
+    : (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON);
 }
 
 function keyedApprovalBlockedText(reason: string, callKey: string): string {

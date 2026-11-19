@@ -633,10 +633,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { spendLimit, refusal: spendRefusal } = await checkSpendLimit(tenant, spendLimits, deps, scopeId, audit);
       if (spendRefusal) return spendRefusal;
       const botRequester = input.botActor === true;
+      const approvalTurnId = input.runId ?? input.idempotencyKey ?? randomUUID();
       const issueApproval = async (
-        requestId: string,
+        commandId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
       ): Promise<PendingApproval> => {
+        const requestId = hashId([commandId, approvalTurnId]);
         const { grantModes, ...rest } = fields;
         const record: PendingApprovalRecord = {
           ...(Object.fromEntries(
