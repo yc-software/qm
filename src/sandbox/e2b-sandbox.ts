@@ -400,7 +400,13 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
         if (!stored) throw new Error("e2b restart: no sandbox provisioned yet");
         sessionByName.delete(name);
         pauseFailed.delete(name);
-        const session = await client.restart(stored.sandboxId);
+        let session: E2bSession;
+        try {
+          session = await client.restart(stored.sandboxId);
+        } catch (err) {
+          if (err instanceof E2bSandboxGoneError) return;
+          throw err;
+        }
         sessionByName.set(name, session);
         await store.merge(scopeId, { preservationState: "running", preservationError: undefined });
       });
