@@ -104,7 +104,6 @@ export function createSessionMethods(
   | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
-  | "managesScopeAsMember"
   | "isOpenScopeMember"
   | "isCurrentSharedScopeMember"
   | "currentScopeMembers"
@@ -150,7 +149,6 @@ export function createSessionMethods(
     canContinueOnWeb,
     appPermissions,
     principalCanManageScope,
-    principalCanManageScopeAsMember,
     membershipControlsScope,
     authorizesCapabilityScope,
     principalManagesArtifactHome,
@@ -1003,10 +1001,6 @@ export function createSessionMethods(
 
     managesScope(principalId, scope) {
       return principalCanManageScope(principalId, scope);
-    },
-
-    managesScopeAsMember(principalId, scope) {
-      return principalCanManageScopeAsMember(principalId, scope);
     },
 
     currentScopeMembers: createCurrentScopeMembers(

@@ -1,11 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createCanManageScope,
-  createCanManageScopeAsMember,
-  createManagesArtifactHome,
-} from "../src/resolution/scope-membership.ts";
-import { canAdministerCron, canAdministerWebhook, cronTaskRewrite, listingView } from "../src/api/control-service.ts";
+import { createCanManageScope, createManagesArtifactHome } from "../src/resolution/scope-membership.ts";
+import { canAdministerCron, canAdministerWebhook, cronTaskRewrite, relatesTo } from "../src/api/control-service.ts";
 import type { Cron, Webhook } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -27,7 +23,7 @@ const app = {
   artifactGrantPermission: async () => null,
   membershipControlsScope: async () => false,
   managesScope: createCanManageScope({ identity, isOrgAdmin }),
-  managesScopeAsMember: createCanManageScopeAsMember({ identity, isOrgAdmin }),
+  belongsToScope: async (actor: string, scope: string) => scope === `personal:${actor}`,
   samePerson: async (a: string, b: string) => a === b,
 };
 
@@ -41,7 +37,7 @@ test("org admins administer anyone's crons and webhooks, and task edits keep the
   assert.equal(await canAdministerCron(app, cron, { actorId: "admin@x.com" }), true);
   assert.equal(await canAdministerCron(app, cron, { actorId: "carol@x.com" }), false);
   assert.equal(await canAdministerCron(app, cron, { actorId: "admin@x.com", botActor: true }), false);
-  assert.equal(await canAdministerCron(listingView(app), cron, { actorId: "admin@x.com" }), false, "lists stay own");
+  assert.equal(await relatesTo(app, "admin@x.com", cron), false, "an admin's lists still show only their own");
   assert.equal((await cronTaskRewrite(app, cron, "admin@x.com", true)).owner, undefined);
   const hook = { owner: "bob@x.com", ownerScopeId: scopeId("personal", "bob@x.com") } as Webhook;
   assert.equal(await canAdministerWebhook(app, hook, { actorId: "admin@x.com" }), true);

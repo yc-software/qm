@@ -3,7 +3,7 @@ import { visibleSkillRows } from "../skills/skill-store.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { cronVisibility } from "./app-messaging.ts";
-import { canAdministerWebhook, listingView } from "./control-service.ts";
+import { canAdministerWebhook, relatesTo } from "./control-service.ts";
 import {
   resourceHit,
   type ResourceCandidate,
@@ -38,7 +38,10 @@ export function createResourceSearchMethods(
             return (await crons).canSee(row);
           case "webhooks":
             person ??= app.personMatcher(principalId);
-            return canAdministerWebhook(listingView(app), row, { actorId: principalId }, await person);
+            return (
+              (await relatesTo(app, principalId, row, await person)) &&
+              canAdministerWebhook(app, row, { actorId: principalId }, await person)
+            );
         }
       };
       const kinds: ResourceKind[] = ["skills", "crons", "apps", "webhooks"];

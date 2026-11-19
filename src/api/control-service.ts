@@ -218,8 +218,14 @@ async function mayShare(
   return app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId);
 }
 
-export function listingView<A extends Pick<App, "managesScope" | "managesScopeAsMember">>(app: A): A {
-  return { ...app, managesScope: app.managesScopeAsMember };
+export async function relatesTo(
+  app: Pick<App, "samePerson" | "belongsToScope">,
+  actorId: string,
+  item: { owner: string; ownerScopeId: ScopeId },
+  isActor?: (id: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (await (isActor ? isActor(item.owner) : app.samePerson(item.owner, actorId))) return true;
+  return app.belongsToScope(actorId, item.ownerScopeId);
 }
 
 async function adminOverOwner(
@@ -585,11 +591,17 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async listCrons(capability) {
-      const { visible } = await app.listCronsForViewer(capability.actorId);
+      const { owned, visible } = await app.listCronsForViewer(capability.actorId);
+      const seen = new Set([...owned, ...visible].map((c) => c.id));
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
-      const lister = listingView(app);
-      const admits = await Promise.all(all.map((c) => canAdministerCron(lister, c, capability, isActor)));
+      const admits = await Promise.all(
+        all.map(
+          async (c) =>
+            (seen.has(c.id) || (await relatesTo(app, capability.actorId, c, isActor))) &&
+            canAdministerCron(app, c, capability, isActor),
+        ),
+      );
       const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
@@ -826,9 +838,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async listWebhooks(capability) {
       const all = await app.listWebhooks();
       const isActor = await app.personMatcher(capability.actorId);
-      const lister = listingView(app);
       const allowed = await Promise.all(
-        all.map((webhook) => canAdministerWebhook(lister, webhook, capability, isActor)),
+        all.map(
+          async (webhook) =>
+            (await relatesTo(app, capability.actorId, webhook, isActor)) &&
+            canAdministerWebhook(app, webhook, capability, isActor),
+        ),
       );
       return all.filter((_webhook, index) => allowed[index]);
     },

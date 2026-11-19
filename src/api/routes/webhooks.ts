@@ -3,7 +3,7 @@ import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
-import { canAdministerWebhook, editWebhookTask, listingView } from "../control-service.ts";
+import { canAdministerWebhook, editWebhookTask, relatesTo } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import { bearerToken } from "../request-tenant.ts";
 import { isObj } from "./shared.ts";
@@ -161,7 +161,11 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const isViewer = await app.personMatcher(viewer);
   const allowed = await Promise.all(
-    all.map((webhook) => canAdministerWebhook(listingView(app), webhook, capability ?? { actorId: viewer }, isViewer)),
+    all.map(
+      async (webhook) =>
+        (await relatesTo(app, viewer, webhook, isViewer)) &&
+        canAdministerWebhook(app, webhook, capability ?? { actorId: viewer }, isViewer),
+    ),
   );
   const visible = all.filter((_webhook, index) => allowed[index]);
   return sendJson(res, 200, {

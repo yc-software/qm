@@ -7,7 +7,7 @@ import { canonicalPerson } from "../../directory/person.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { createSweeper } from "../../util/sweeper.ts";
 import { canAdministerLoop } from "../loop-administration.ts";
-import { listingView } from "../control-service.ts";
+import { relatesTo } from "../control-service.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendJson } from "../http.ts";
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
@@ -27,7 +27,7 @@ type HubApp = Pick<
   | "subscribeLedgerEvents"
   | "membershipControlsScope"
   | "managesScope"
-  | "managesScopeAsMember"
+  | "belongsToScope"
   | "samePerson"
 >;
 
@@ -117,7 +117,8 @@ export function createWebEvents(
       candidates.map(
         async (id) =>
           (!identity || identity.classify(id).type === "internal") &&
-          canAdministerLoop(listingView(app), loop, { actorId: id }),
+          (await relatesTo(app, id, loop)) &&
+          canAdministerLoop(app, loop, { actorId: id }),
       ),
     );
     return candidates.filter((_, i) => allowed[i]);

@@ -230,7 +230,7 @@ function fakeHub(t: TestContext, pending: Delivery[] = []) {
     },
     membershipControlsScope: async (scope: string) => scope.startsWith("group:"),
     managesScope: async (who: string, scope: string) => scope === "group:core" && managers.has(who),
-    managesScopeAsMember: async (who: string, scope: string) => scope === "group:core" && managers.has(who),
+    belongsToScope: async (who: string, scope: string) => scope === "group:core" && managers.has(who),
     samePerson: async (a: string, b: string) => a === b,
   };
   const deps = {
