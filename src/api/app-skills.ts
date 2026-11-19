@@ -291,7 +291,7 @@ export function createSkillMethods(
     canManageSkill(skill, principalId, botWork) {
       return canManageSkill(skill, principalId, botWork);
     },
-    async updateOwnedSkill(id, principalId, patch, opts) {
+    async updateOwnedSkill(tenant, id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
       if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
       if (!skillAllowedInContext(skill, principalId, opts?.contextScopeId)) return null;
@@ -311,7 +311,7 @@ export function createSkillMethods(
         if (provenance) {
           const audiences = new Set([
             current.scopeId,
-            ...(await deps.acl.grantsFor(ambientTenant(), current.scopeId, `skill:${current.id}`)).map(
+            ...(await deps.acl.grantsFor(tenant, current.scopeId, `skill:${current.id}`)).map(
               (grant) => grant.granteeScopeId,
             ),
           ]);

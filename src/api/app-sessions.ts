@@ -1464,7 +1464,7 @@ export function createSessionMethods(
         : null;
     },
 
-    async moveArtifactHome(type, id, toScope, movedBy) {
+    async moveArtifactHome(tenant, type, id, toScope, movedBy) {
       if (type === "deploy") {
         await deps.deploy.transferAppOwner(id, toScope, { callerId: movedBy });
         return;
@@ -1476,7 +1476,7 @@ export function createSessionMethods(
       if (selected?.sourceProvenance && toScope !== selected.scopeId) {
         const audiences = new Set([
           toScope,
-          ...(await deps.acl.grantsFor(ambientTenant(), toScope, `skill:${id}`)).map((grant) => grant.granteeScopeId),
+          ...(await deps.acl.grantsFor(tenant, toScope, `skill:${id}`)).map((grant) => grant.granteeScopeId),
         ]);
         audiences.delete(scopeId("personal", movedBy));
         for (const audience of audiences) {

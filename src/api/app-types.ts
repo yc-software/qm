@@ -534,7 +534,7 @@ export interface App {
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
-  moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
+  moveArtifactHome(tenant: Tenant, type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
   getSoul(
     scopeId: ScopeId,
     reader: { actorId: string; ownScopeBotWork: boolean },
@@ -676,6 +676,7 @@ export interface App {
   ): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   updateOwnedSkill(
+    tenant: Tenant,
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },

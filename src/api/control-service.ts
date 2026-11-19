@@ -1110,7 +1110,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
-          await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId);
+          await app.moveArtifactHome(tenant, req.type, home.id, toScope, capability.actorId);
           return { ok: true, verb: "move", ...shared };
         }
 

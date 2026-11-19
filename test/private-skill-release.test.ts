@@ -140,6 +140,7 @@ test("a private edit waiting on the name lock cannot modify a skill after releas
     return lock(scope, name, fn);
   };
   const editing = f.built.app.updateOwnedSkill(
+    testTenant,
     f.skill.id,
     "alice",
     { body: "New private material" },
@@ -221,6 +222,7 @@ for (const late of [false, true])
       };
     else await restrict();
     const editing = f.built.app.updateOwnedSkill(
+      testTenant,
       f.skill.id,
       "alice",
       { body: "Restricted new material" },
@@ -282,7 +284,10 @@ test("released skill restrictions survive moves, org promotion and shared copies
     ).ok,
     true,
   );
-  await assert.rejects(f.built.app.moveArtifactHome("skill", selected.id, targetScope, "alice"), /source restrictions/);
+  await assert.rejects(
+    f.built.app.moveArtifactHome(testTenant, "skill", selected.id, targetScope, "alice"),
+    /source restrictions/,
+  );
   await assert.rejects(
     f.built.app.promoteSkill(selected.id, f.orgScope, "alice", true),
     /source restrictions|audience could not be verified/,
@@ -326,7 +331,7 @@ for (const operation of ["move", "promote"] as const)
     };
     const publishing =
       operation === "move"
-        ? f.built.app.moveArtifactHome("skill", f.skill.id, projectScopeId(target.id), "alice")
+        ? f.built.app.moveArtifactHome(testTenant, "skill", f.skill.id, projectScopeId(target.id), "alice")
         : f.built.app.promoteSkill(f.skill.id, f.orgScope, "alice", true);
     await waiting;
     await f.built.skills.update(f.skill.id, { ...f.skill.manifest, body: "Changed after policy validation" });
@@ -385,6 +390,7 @@ for (const operation of ["grant", "replace"] as const)
     };
     const editing = f.built.app
       .updateOwnedSkill(
+        testTenant,
         f.skill.id,
         "alice",
         { body: "Restricted after audience check" },
@@ -458,6 +464,7 @@ test("a move after edit validation cannot change the edit's publication scope", 
     return update(...args);
   };
   const editing = f.built.app.updateOwnedSkill(
+    testTenant,
     f.skill.id,
     "alice",
     { body: "Restricted pending edit" },
@@ -470,7 +477,7 @@ test("a move after edit validation cannot change the edit's publication scope", 
   await waiting;
   try {
     await assert.rejects(
-      f.built.app.moveArtifactHome("skill", f.skill.id, projectScopeId(target.id), "alice"),
+      f.built.app.moveArtifactHome(testTenant, "skill", f.skill.id, projectScopeId(target.id), "alice"),
       /being changed/,
     );
   } finally {
@@ -492,7 +499,7 @@ test("moving a skill back cannot reactivate readers excluded from its new source
   const project = await f.built.projects.create({ name: "Restricted working home", ownerId: "alice" });
   const { projectScopeId } = await import("../src/projects/project-store.ts");
   const home = projectScopeId(project.id);
-  await f.built.app.moveArtifactHome("skill", f.skill.id, home, "alice");
+  await f.built.app.moveArtifactHome(testTenant, "skill", f.skill.id, home, "alice");
   const session = await f.built.sessions.getOrCreateByThread("restricted-moved-skill", "dm", home);
   await f.built.sessions.recordContextProvenance(session.id, home, {
     sensitivity: "restricted",
@@ -500,12 +507,13 @@ test("moving a skill back cannot reactivate readers excluded from its new source
     sourceUnknown: false,
   });
   await f.built.app.updateOwnedSkill(
+    testTenant,
     f.skill.id,
     "alice",
     { body: "Restricted working material" },
     { liveActor: true, contextScopeId: home, context: { actorId: "alice", scopeId: home, sessionId: session.id } },
   );
-  await assert.rejects(f.built.app.moveArtifactHome("skill", f.skill.id, f.skill.scopeId, "alice"));
+  await assert.rejects(f.built.app.moveArtifactHome(testTenant, "skill", f.skill.id, f.skill.scopeId, "alice"));
   assert.equal((await f.built.skills.get(f.skill.id))!.scopeId, home);
   assert.equal(
     (await f.built.app.listVisibleSkills("bob", false, "personal:bob")).some((row) => row.skill?.id === f.skill.id),

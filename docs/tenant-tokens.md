@@ -73,3 +73,15 @@ foreign source cannot set a parent or propagate private context. Ancestry/fork/
 syscall checks and the affected persistence initialization checks pass. Focused
 independent review accepted the implemented slice95/100; it excludes the pending
 provenance writer and transactional-reader authorization conversion.
+
+The related skill-audience entry points also retain all old arguments and gain
+leading `Tenant`: `App.moveArtifactHome(type, id, toScope, movedBy)` becomes
+`moveArtifactHome(tenant, type, id, toScope, movedBy)`, and
+`App.updateOwnedSkill(id, principalId, patch, options?)` becomes
+`updateOwnedSkill(tenant, id, principalId, patch, options?)`. The HTTP skill editor
+supplies its request token; the move controller reuses its existing token. Their
+ACL audience queries use that token without another ambient read. Return types,
+patch/options fields, authorization, locks, revisions, and stored/HTTP JSON remain
+unchanged. Existing deployment/provenance operations called by these methods are
+still legacy paths. Five affected authorization/release/control files pass;
+focused independent review accepted this slice96/100.

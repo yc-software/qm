@@ -1091,7 +1091,7 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     if (blocked.has(id)) return sendJson(res, 404, { error: "not_found" });
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+  const updated = await app.updateOwnedSkill(tenantOf(ctx), id, principalId, patch, {
     context: requestPrivateContext(ctx, principalId),
     liveActor,
     botActor: capability?.botActor === true,
