@@ -227,7 +227,7 @@ async function adminOverOwner(
   owner: string,
   actorId: string,
 ): Promise<boolean> {
-  return !(await app.samePerson(owner, actorId)) && app.managesScope(actorId, scopeId("personal", owner));
+  return !(await app.samePerson(owner, actorId)) && controlsOwner(app, owner, actorId);
 }
 
 async function controlsOwner(

@@ -7,6 +7,7 @@ import { canonicalPerson } from "../../directory/person.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { createSweeper } from "../../util/sweeper.ts";
 import { canAdministerLoop } from "../loop-administration.ts";
+import { listingView } from "../control-service.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendJson } from "../http.ts";
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
@@ -25,6 +26,7 @@ type HubApp = Pick<
   | "subscribeSessionStates"
   | "subscribeLedgerEvents"
   | "membershipControlsScope"
+  | "managesScope"
   | "managesScopeAsMember"
   | "samePerson"
 >;
@@ -115,15 +117,7 @@ export function createWebEvents(
       candidates.map(
         async (id) =>
           (!identity || identity.classify(id).type === "internal") &&
-          canAdministerLoop(
-            {
-              membershipControlsScope: (scope) => app.membershipControlsScope(scope),
-              samePerson: (a, b) => app.samePerson(a, b),
-              managesScope: (actor, scope) => app.managesScopeAsMember(actor, scope),
-            },
-            loop,
-            { actorId: id },
-          ),
+          canAdministerLoop(listingView(app), loop, { actorId: id }),
       ),
     );
     return candidates.filter((_, i) => allowed[i]);
