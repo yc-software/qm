@@ -38,6 +38,6 @@ private struct NativeSelectableText: UIViewRepresentable {
   }
 
   func updateUIView(_ view: UITextView, context: Context) {
-    view.text = text
+    if view.text != text { view.text = text }
   }
 }
