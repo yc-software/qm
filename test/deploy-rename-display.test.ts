@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -39,7 +40,7 @@ const make = (deploy: ReturnType<typeof svc>["deploy"], name: string) =>
 test("renameApp moves the URL slug by id, keeping the immutable id", async () => {
   const s = svc();
   const d = await make(s.deploy, "old-slug");
-  const r = await s.deploy.renameApp(d.id, "new-slug");
+  const r = await s.deploy.renameApp(appWriteTenant, d.id, "new-slug");
   assert.equal(r.id, d.id, "same app");
   assert.equal(r.name, "new-slug");
   assert.equal(await s.deployStore.getByName("old-slug"), null, "old slug no longer resolves");
@@ -50,18 +51,18 @@ test("renameApp rejects a taken slug, an invalid slug, and an unknown id", async
   const s = svc();
   const a = await make(s.deploy, "alpha");
   await make(s.deploy, "beta");
-  await assert.rejects(() => s.deploy.renameApp(a.id, "beta"), /name taken/);
-  await assert.rejects(() => s.deploy.renameApp(a.id, "Bad_Slug"), /invalid app name/);
-  await assert.rejects(() => s.deploy.renameApp("nope", "ok-slug"), /unknown app/);
+  await assert.rejects(() => s.deploy.renameApp(appWriteTenant, a.id, "beta"), /name taken/);
+  await assert.rejects(() => s.deploy.renameApp(appWriteTenant, a.id, "Bad_Slug"), /invalid app name/);
+  await assert.rejects(() => s.deploy.renameApp(appWriteTenant, "nope", "ok-slug"), /unknown app/);
 });
 
 test("setAppDisplayName sets the label, then clears it (independent of the slug)", async () => {
   const s = svc();
   const d = await make(s.deploy, "my-app");
-  const set = await s.deploy.setAppDisplayName(d.id, "My Cool App");
+  const set = await s.deploy.setAppDisplayName(appWriteTenant, d.id, "My Cool App");
   assert.equal(set.displayName, "My Cool App");
   assert.equal(set.name, "my-app", "the URL slug is untouched");
-  const cleared = await s.deploy.setAppDisplayName(d.id, "");
+  const cleared = await s.deploy.setAppDisplayName(appWriteTenant, d.id, "");
   assert.equal(cleared.displayName, undefined, "empty clears the label (falls back to name/id)");
   assert.equal(cleared.name, "my-app");
 });
@@ -105,7 +106,7 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
 test("setAppDisplayName rejects an over-long or control-char label, and an unknown id", async () => {
   const s = svc();
   const d = await make(s.deploy, "app");
-  await assert.rejects(() => s.deploy.setAppDisplayName(d.id, "x".repeat(61)), /too long/);
-  await assert.rejects(() => s.deploy.setAppDisplayName(d.id, "badname"), /control characters/);
-  await assert.rejects(() => s.deploy.setAppDisplayName("nope", "label"), /unknown app/);
+  await assert.rejects(() => s.deploy.setAppDisplayName(appWriteTenant, d.id, "x".repeat(61)), /too long/);
+  await assert.rejects(() => s.deploy.setAppDisplayName(appWriteTenant, d.id, "badname"), /control characters/);
+  await assert.rejects(() => s.deploy.setAppDisplayName(appWriteTenant, "nope", "label"), /unknown app/);
 });

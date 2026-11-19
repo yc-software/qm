@@ -135,3 +135,39 @@ The orchestrator supplies its existing turn token for the publication audit.
 All input fields, publication checks, return types and stored/HTTP/tool payloads
 are unchanged. No configuration, schema, migration or backfill changes. Automatic
 memory capture remains a separate legacy tenant path.
+
+## Deployment write token forwarding
+
+Each listed internal signature gains a leading `tenant: Tenant`; all previous
+arguments and return types remain unchanged:
+
+| Owner              | Before                                               | After                                                        |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------ |
+| DeployService, App | `redeploy(id, input)`                                | `redeploy(tenant, id, input)`                                |
+| DeployService      | `rollbackApp(id, version, options?)`                 | `rollbackApp(tenant, id, version, options?)`                 |
+| App                | `rollbackApp(id, version, actor?)`                   | `rollbackApp(tenant, id, version, actor?)`                   |
+| DeployService, App | `archiveApp(id, context?)`                           | `archiveApp(tenant, id, context?)`                           |
+| DeployService, App | `restoreApp(id, actorId?, context?)`                 | `restoreApp(tenant, id, actorId?, context?)`                 |
+| DeployService, App | `renameApp(id, name, context?)`                      | `renameApp(tenant, id, name, context?)`                      |
+| DeployService, App | `setAppDisplayName(id, displayName, context?)`       | `setAppDisplayName(tenant, id, displayName, context?)`       |
+| DeployService, App | `setAppAlwaysOn(id, alwaysOn, context?)`             | `setAppAlwaysOn(tenant, id, alwaysOn, context?)`             |
+| DeployService, App | `setAppEmbedAncestors(id, embedAncestors, context?)` | `setAppEmbedAncestors(tenant, id, embedAncestors, context?)` |
+| DeployService, App | `setAppConnectors(idOrName, connectors, actor)`      | `setAppConnectors(tenant, idOrName, connectors, actor)`      |
+| DeployService      | `pushGit(id, runReceivePack, actor?)`                | `pushGit(tenant, id, runReceivePack, actor?)`                |
+| App                | `runAppGitPush(id, actor, runReceivePack)`           | `runAppGitPush(tenant, id, actor, runReceivePack)`           |
+| DeployService      | `editSource(idOrName, actor, edit)`                  | `editSource(tenant, idOrName, actor, edit)`                  |
+| DeployService      | `deployOrUpdate(input)`                              | `deployOrUpdate(tenant, input)`                              |
+| Function           | `createAppFiles(deps)`                               | `createAppFiles(tenant, deps)`                               |
+
+Request routes supply `tenantOf(ctx)` and turn tools supply their existing
+`deps.tenant`. `createAppFiles` retains that token in the per-turn file helper;
+it is not a globally shared service. Deployment methods forward it through the
+existing locked output-context checks and internal deployment calls. The two
+ACL audience queries use it without a new ambient bridge. No token enters
+private context, Git claims, deployment inputs or saved files. Existing locks,
+source checks, approvals, revisions, provider operations and return values remain.
+Other deployment authorization/store operations still use legacy tenant APIs.
+
+No table, column, key, index, constraint, stored JSON, HTTP/tool/job payload,
+setting, provider, migration or backfill changes. Core source callers update
+together; HTTP clients remain compatible.

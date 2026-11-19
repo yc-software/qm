@@ -88,8 +88,8 @@ export function createAppMethods(
     deploy(input) {
       return deps.deploy.deploy(input);
     },
-    redeploy(id, input) {
-      return deps.deploy.redeploy(id, input);
+    redeploy(tenant, id, input) {
+      return deps.deploy.redeploy(tenant, id, input);
     },
     listApps() {
       return deps.deploy.listApps();
@@ -171,35 +171,35 @@ export function createAppMethods(
     appGitPermissionsFor(tenant, publishedApps, viewer) {
       return callerGitPermissions(tenant, publishedApps, viewer);
     },
-    rollbackApp(id, version, actor) {
-      return deps.deploy.rollbackApp(id, version, actor ? { actor } : undefined);
+    rollbackApp(tenant, id, version, actor) {
+      return deps.deploy.rollbackApp(tenant, id, version, actor ? { actor } : undefined);
     },
     canManageApp(idOrName, caller, actingScopeId) {
       return deps.deploy.canManageApp(idOrName, caller, actingScopeId);
     },
-    archiveApp(id, context) {
-      return deps.deploy.archiveApp(id, context);
+    archiveApp(tenant, id, context) {
+      return deps.deploy.archiveApp(tenant, id, context);
     },
-    restoreApp(id, actorId, context) {
-      return deps.deploy.restoreApp(id, actorId, context);
+    restoreApp(tenant, id, actorId, context) {
+      return deps.deploy.restoreApp(tenant, id, actorId, context);
     },
-    renameApp(id, name, context) {
-      return deps.deploy.renameApp(id, name, context);
+    renameApp(tenant, id, name, context) {
+      return deps.deploy.renameApp(tenant, id, name, context);
     },
-    setAppDisplayName(id, displayName, context) {
-      return deps.deploy.setAppDisplayName(id, displayName, context);
+    setAppDisplayName(tenant, id, displayName, context) {
+      return deps.deploy.setAppDisplayName(tenant, id, displayName, context);
     },
-    setAppAlwaysOn(id, alwaysOn, context) {
-      return deps.deploy.setAppAlwaysOn(id, alwaysOn, context);
+    setAppAlwaysOn(tenant, id, alwaysOn, context) {
+      return deps.deploy.setAppAlwaysOn(tenant, id, alwaysOn, context);
     },
-    setAppEmbedAncestors(id, embedAncestors, context) {
-      return deps.deploy.setAppEmbedAncestors(id, embedAncestors, context);
+    setAppEmbedAncestors(tenant, id, embedAncestors, context) {
+      return deps.deploy.setAppEmbedAncestors(tenant, id, embedAncestors, context);
     },
     setAppPublic(idOrName, isPublic, actor) {
       return deps.deploy.setAppPublic(idOrName, isPublic, actor);
     },
-    setAppConnectors(idOrName, connectors, actor) {
-      return deps.deploy.setAppConnectors(idOrName, connectors, actor);
+    setAppConnectors(tenant, idOrName, connectors, actor) {
+      return deps.deploy.setAppConnectors(tenant, idOrName, connectors, actor);
     },
     maintainApps() {
       return deps.deploy.maintainApps();
@@ -243,8 +243,8 @@ export function createAppMethods(
         return runUploadPack();
       });
     },
-    runAppGitPush(id, actor, runReceivePack) {
-      return deps.deploy.pushGit(id, runReceivePack, actor);
+    runAppGitPush(tenant, id, actor, runReceivePack) {
+      return deps.deploy.pushGit(tenant, id, runReceivePack, actor);
     },
     async appGitUrlFor(idOrName, caller, opts) {
       const d = await deps.deploy.getApp(idOrName);

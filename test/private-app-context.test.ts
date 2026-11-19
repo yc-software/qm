@@ -112,7 +112,7 @@ async function fixture(
 test("private app creation persists provenance and cannot widen its audience", async () => {
   const f = await fixture();
   await f.protect();
-  const app = await f.service().deployOrUpdate({ ...f.input, name: "private-app", context: f.context() });
+  const app = await f.service().deployOrUpdate(testTenant, { ...f.input, name: "private-app", context: f.context() });
   const recovered = (await f.service().getApp(app.id))!;
   assert.equal(recovered.personalOnly, true);
   assert.deepEqual(recovered.sourceProvenance, {
@@ -136,18 +136,25 @@ test("private app creation persists provenance and cannot widen its audience", a
     f.service().deploy({ ...f.input, createdInScope: "channel:team", context: f.context() }),
     /personal scope/,
   );
-  await f
-    .service()
-    .redeploy(app.id, { ...f.input, context: f.context(), files: [{ path: "server.js", data: "personal revision" }] });
+  await f.service().redeploy(testTenant, app.id, {
+    ...f.input,
+    context: f.context(),
+    files: [{ path: "server.js", data: "personal revision" }],
+  });
   assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
   assert.equal(
     Buffer.from((await f.service().source(app.id, ["server.js"]))!.files[0]!.data).toString(),
     "personal revision",
   );
+  await f.service().deployOrUpdate(testTenant, {
+    ...f.input,
+    name: "private-renamed",
+    renameFrom: "private-app",
+    context: f.context(),
+  });
   await f
     .service()
-    .deployOrUpdate({ ...f.input, name: "private-renamed", renameFrom: "private-app", context: f.context() });
-  await f.service().deployOrUpdate({ ...f.input, name: "private-renamed", rollbackTo: 1, context: f.context() });
+    .deployOrUpdate(testTenant, { ...f.input, name: "private-renamed", rollbackTo: 1, context: f.context() });
   assert.equal((await f.service().getApp(app.id))!.personalOnly, true);
   assert.equal(f.applied(), 4);
 });
@@ -155,10 +162,10 @@ test("private app creation persists provenance and cannot widen its audience", a
 test("a late private read cannot overwrite an app already shared with another person", async () => {
   const f = await fixture();
   const service = f.service();
-  const app = await service.deployOrUpdate({ ...f.input, name: "shared-app" });
+  const app = await service.deployOrUpdate(testTenant, { ...f.input, name: "shared-app" });
   await service.shareApp(app.id, "personal:bob", "read", { createdBy: "alice" }, { notify: false });
   const context = f.context();
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: service,
     app: app.id,
     actorId: "alice",
@@ -167,7 +174,7 @@ test("a late private read cannot overwrite an app already shared with another pe
   });
   await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
   await assert.rejects(
-    service.deployOrUpdate({
+    service.deployOrUpdate(testTenant, {
       ...f.input,
       name: "shared-app",
       context,
@@ -192,7 +199,10 @@ test("revoking an automatic grant does not remove the app's implicit creation-sc
   await service.shareApp(app.id, "channel:team", null, { createdBy: "alice" }, { notify: false });
   assert.deepEqual(await service.appGrantees(app.id), []);
   await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
-  await assert.rejects(service.redeploy(app.id, { ...f.input, context: f.context() }), /cannot update a shared app/);
+  await assert.rejects(
+    service.redeploy(testTenant, app.id, { ...f.input, context: f.context() }),
+    /cannot update a shared app/,
+  );
   assert.equal(f.applied(), 1);
 });
 
@@ -204,10 +214,10 @@ test("source edits recheck privacy after preparation and private publish cannot 
     sources: [f.ownerScopeId],
     sourceUnknown: false,
   });
-  const app = await service.deployOrUpdate({ ...f.input, name: "callback-app", context: f.context() });
+  const app = await service.deployOrUpdate(testTenant, { ...f.input, name: "callback-app", context: f.context() });
   await service.shareApp(app.id, "personal:bob", "read", { createdBy: "alice" }, { notify: false });
   await assert.rejects(
-    createAppFiles({
+    createAppFiles(testTenant, {
       deploy: service,
       app: app.id,
       actorId: "alice",
@@ -220,7 +230,7 @@ test("source edits recheck privacy after preparation and private publish cannot 
     /cannot update a shared app/,
   );
   await assert.rejects(
-    service.deployOrUpdate({ ...f.input, name: "callback-app", rollbackTo: 1, context: f.context() }),
+    service.deployOrUpdate(testTenant, { ...f.input, name: "callback-app", rollbackTo: 1, context: f.context() }),
     /cannot update a shared app/,
   );
   assert.equal(Buffer.from((await service.source(app.id, ["server.js"]))!.files[0]!.data).toString(), "original");
@@ -242,7 +252,7 @@ test("an owner's shared conversation cannot list, fetch, log or clone their priv
   assert.equal((await f.app.reachApp(d.id, caller)).status, "denied");
   assert.equal((await f.app.reachApp(d.id, caller, { bypassAcl: true })).status, "denied");
   assert.equal((await f.app.appLogsFor(d.id, caller, { tailLines: 10 })).status, "denied");
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: f.service(),
     app: d.id,
     actorId: "alice",
@@ -269,7 +279,7 @@ test("reading a private app in another personal conversation persists its privac
   assert.ok(persisted.sourceProvenance?.sources.includes("group:restricted"));
   assert.equal(persisted.sourceProvenance?.sourceUnknown, true);
   assert.equal(persisted.sourceProvenance?.sensitivity, "restricted");
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: f.service(),
     app: d.id,
     actorId: "alice",
@@ -288,7 +298,7 @@ test("Git credentials recheck a conversation's audience after a previously ordin
   const secret = "git-private-context-test-secret-0123456789";
   const link = await f.app.appGitUrlFor(d.id, context, { secret, baseUrl: "http://core.test" });
   assert.ok(link);
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: f.service(),
     app: d.id,
     actorId: "alice",
@@ -313,7 +323,7 @@ test("Git credentials recheck a conversation's audience after a previously ordin
   try {
     assert.equal((await request(token)).status, 200);
     await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
-    await f.service().redeploy(d.id, {
+    await f.service().redeploy(testTenant, d.id, {
       ...f.input,
       context: f.context(),
       files: [{ path: "server.js", data: "private Git content" }],
@@ -347,7 +357,7 @@ test("a Git push cannot use stale personal context to change an app already shar
   await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
   let accepted = false;
   await assert.rejects(
-    f.app.runAppGitPush(d.id, context, async () => {
+    f.app.runAppGitPush(testTenant, d.id, context, async () => {
       accepted = true;
       return { result: "pushed", ok: true };
     }),
@@ -366,6 +376,7 @@ test("a failed source-edit callback inherits the private app before any source i
     f
       .service()
       .editSource(
+        testTenant,
         d.id,
         { privateRead: true, actorId: "alice", scopeId: f.ownerScopeId, sessionId: reader.id },
         async (read) => {
@@ -406,14 +417,14 @@ test("log retrieval excludes a concurrent private redeploy until its authorized 
   await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
   try {
     await f.lock.tryWithLock(`deploy:${d.id}`, async () => {
-      await service.redeploy(d.id, { ...f.input, context: f.context() });
+      await service.redeploy(testTenant, d.id, { ...f.input, context: f.context() });
       output = "private log";
     });
   } finally {
     release.resolve();
   }
   assert.deepEqual(await reading, { status: "ok", logs: "ordinary log" });
-  await service.redeploy(d.id, { ...f.input, context: f.context() });
+  await service.redeploy(testTenant, d.id, { ...f.input, context: f.context() });
   assert.equal(
     (
       await f.app.appLogsFor(
@@ -470,8 +481,8 @@ test("an agent preview withholds content when the app becomes private while the 
       }),
     ]);
     await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
-    await f.service().redeploy(d.id, { ...f.input, context: f.context() });
-    await f.service().renameApp(d.id, "private-preview-renamed", f.context());
+    await f.service().redeploy(testTenant, d.id, { ...f.input, context: f.context() });
+    await f.service().renameApp(testTenant, d.id, "private-preview-renamed", f.context());
     await f.service().deploy({ ...f.input, name: "preview-alias" });
     release.resolve();
     const result = await response;
@@ -516,7 +527,10 @@ test("private management responses taint a fresh personal session before a subse
     assert.equal(persisted.personalOnly, true);
     assert.equal(persisted.sourceProvenance?.sensitivity, "restricted");
     assert.ok(persisted.sourceProvenance?.sources.includes("group:restricted"));
-    await assert.rejects(f.service().redeploy(shared.id, { ...f.input, context }), /cannot update a shared app/);
+    await assert.rejects(
+      f.service().redeploy(testTenant, shared.id, { ...f.input, context }),
+      /cannot update a shared app/,
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -525,7 +539,7 @@ test("private management responses taint a fresh personal session before a subse
 test("selected private app sharing preserves the app and private conversation while granting only the approved audience", async () => {
   const f = await fixture();
   await f.protect([f.ownerScopeId], "ordinary", false);
-  const original = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const original = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
   const { createControlService } = await import("../src/api/control-service.ts");
   const control = createControlService(f.app, {} as Parameters<typeof createControlService>[1]);
   const claims = { ...f.context(), threadRef: f.session.threadRef, liveActor: true, exp: Date.now() + 60_000 };
@@ -562,7 +576,7 @@ test("selected private app sharing preserves the app and private conversation wh
 test("private app release refuses stale revisions, shared conversation and restricted sources without granting access", async () => {
   const f = await fixture();
   await f.protect(["group:restricted"], "restricted", false);
-  const original = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const original = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
   const { createControlService } = await import("../src/api/control-service.ts");
   const control = createControlService(f.app, {} as Parameters<typeof createControlService>[1]);
   const claims = { ...f.context(), threadRef: f.session.threadRef, liveActor: true, exp: Date.now() + 60_000 };
@@ -591,7 +605,7 @@ test("private app release refuses stale revisions, shared conversation and restr
     ).ok,
     false,
   );
-  await f.service().setAppDisplayName(original.id, "Changed after approval", f.context());
+  await f.service().setAppDisplayName(testTenant, original.id, "Changed after approval", f.context());
   const stale = await control.shareArtifact(request, claims);
   assert.equal(stale.ok, false);
   assert.match(!stale.ok ? stale.message : "", /changed/);
@@ -602,9 +616,9 @@ test("private app release refuses stale revisions, shared conversation and restr
 test("a live private edit invalidates the selected sharing revision without publishing a new version", async () => {
   const f = await fixture({ liveEdit: true });
   await f.protect([f.ownerScopeId], "ordinary", false);
-  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const app = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
   const selected = (await f.app.getArtifactHome("deploy", app.id))!;
-  const edit = await f.service().editSource(app.id, f.context(), async () => ({
+  const edit = await f.service().editSource(testTenant, app.id, f.context(), async () => ({
     files: [{ path: "server.js", data: "changed private source" }],
     deletedPaths: [],
   }));
@@ -634,7 +648,7 @@ test("a live private edit invalidates the selected sharing revision without publ
 test("a failed private release cannot expose a later edit to a stranded earlier grantee", async () => {
   const f = await fixture();
   await f.protect([f.ownerScopeId], "ordinary", false);
-  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const app = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
   const releaseContext = f.deployStore.releaseContext;
   f.deployStore.releaseContext = async () => {
     throw new Error("injected release write failure");
@@ -652,7 +666,7 @@ test("a failed private release cannot expose a later edit to a stranded earlier 
     /injected release write failure/,
   );
   f.deployStore.releaseContext = releaseContext;
-  await f.service().editSource(app.id, "alice", async () => ({
+  await f.service().editSource(testTenant, app.id, "alice", async () => ({
     files: [{ path: "server.js", data: "later private edit" }],
     deletedPaths: [],
   }));
@@ -683,7 +697,7 @@ test("released app source restrictions still constrain later grants, public acce
   ]);
   await f.directory.upsertGroup("restricted", ["alice", "bob"], "web");
   await f.protect(["group:restricted"], "restricted", false);
-  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const app = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
   const home = (await f.app.getArtifactHome("deploy", app.id))!;
   const grant = {
     ownerScopeId: f.ownerScopeId,
@@ -726,7 +740,7 @@ test("private release respects a foreign source's sharing posture even for an en
     ]);
     await f.directory.upsertGroup("foreign", ["alice", "bob"], "web");
     await f.protect(["group:foreign"], "restricted", false);
-    const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+    const app = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
     const home = (await f.app.getArtifactHome("deploy", app.id))!;
     const release = () =>
       f.service().releasePrivateApp(
@@ -756,7 +770,7 @@ test("private release respects a foreign source's sharing posture even for an en
 test("new restricted context cannot update an app already released to an unentitled recipient", async () => {
   const f = await fixture();
   await f.protect([f.ownerScopeId], "ordinary", false);
-  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const app = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
   const home = (await f.app.getArtifactHome("deploy", app.id))!;
   await f.service().releasePrivateApp(
     testTenant,
@@ -782,6 +796,7 @@ test("new restricted context cannot update an app already released to an unentit
     f
       .service()
       .editSource(
+        testTenant,
         app.id,
         { privateRead: true, actorId: "alice", scopeId: f.ownerScopeId, sessionId: session.id },
         async () => {
@@ -806,7 +821,7 @@ test("creation refuses an automatic audience before granting or running restrict
     sourceUnknown: false,
   });
   await assert.rejects(
-    f.service().deployOrUpdate({ ...f.input, createdInScope: "channel:elsewhere", context: f.context() }),
+    f.service().deployOrUpdate(testTenant, { ...f.input, createdInScope: "channel:elsewhere", context: f.context() }),
     /audience could not be verified|source restrictions/,
   );
   assert.deepEqual(await f.service().listApps(), []);
@@ -818,7 +833,7 @@ test("creation refuses an automatic audience before granting or running restrict
 test("a private app cannot be released through a grant to its owner", async () => {
   const f = await fixture();
   await f.protect([f.ownerScopeId], "ordinary", false);
-  const app = await f.service().deployOrUpdate({ ...f.input, context: f.context() });
+  const app = await f.service().deployOrUpdate(testTenant, { ...f.input, context: f.context() });
   const home = (await f.app.getArtifactHome("deploy", app.id))!;
   await assert.rejects(
     f.service().releasePrivateApp(
@@ -849,7 +864,7 @@ test("an ordinary app's existing human Git credential cannot gain private access
   assert.ok(oldAccess);
   assert.equal(await f.app.authorizesAppGitAccess(app.id, "alice", "read", oldAccess.context), true);
   await f.sessions.markPersonalOnly(f.session.id, f.ownerScopeId);
-  await f.service().redeploy(app.id, {
+  await f.service().redeploy(testTenant, app.id, {
     ...f.input,
     context: f.context(),
     files: [{ path: "server.js", data: "private source after update" }],

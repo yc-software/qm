@@ -1263,6 +1263,7 @@ async function serveAppGit(ctx: BaseCtx): Promise<void> {
       });
     const result = isPush
       ? await ctx.app.runAppGitPush(
+          tenantOf(ctx),
           parts.id,
           access?.principalId ? { ...access.context, actorId: access.principalId } : undefined,
           async () => {
@@ -1496,7 +1497,7 @@ async function rollbackApp(ctx: ApiCtx): Promise<void> {
   if (typeof b.version !== "number")
     return sendJson(res, 400, { error: "bad_request", message: "version (number) required" });
   try {
-    await app.rollbackApp(id, b.version, ctx.capability?.actorId ?? ctx.actor?.p);
+    await app.rollbackApp(tenantOf(ctx), id, b.version, ctx.capability?.actorId ?? ctx.actor?.p);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "rollback_failed", message: errMessage(e) });
@@ -1518,7 +1519,7 @@ async function redeployApp(ctx: ApiCtx): Promise<void> {
   try {
     const actor = ctx.capability?.actorId ?? ctx.actor?.p;
     const input = actor ? { ...body, actor } : body;
-    return sendJson(res, 200, { app: appView(await app.redeploy(id, input)) });
+    return sendJson(res, 200, { app: appView(await app.redeploy(tenantOf(ctx), id, input)) });
   } catch (e) {
     return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
   }
@@ -1543,7 +1544,7 @@ export async function archiveApp(ctx: ApiCtx): Promise<void> {
   if (!(await callerMayManageApp(ctx, id)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can archive it" });
   try {
-    await app.archiveApp(id, appContext(ctx));
+    await app.archiveApp(tenantOf(ctx), id, appContext(ctx));
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "archive_failed", message: errMessage(e) });
@@ -1559,7 +1560,7 @@ export async function restoreApp(ctx: ApiCtx): Promise<void> {
   try {
     return sendJson(res, 200, {
       app: {
-        ...appView(await app.restoreApp(id, capability?.actorId ?? ctx.actor?.p, appContext(ctx))),
+        ...appView(await app.restoreApp(tenantOf(ctx), id, capability?.actorId ?? ctx.actor?.p, appContext(ctx))),
         permission: "write",
       },
     });
@@ -1578,7 +1579,7 @@ export async function renameApp(ctx: ApiCtx): Promise<void> {
   if (typeof b.name !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
   try {
-    return sendJson(res, 200, { app: await app.renameApp(id, b.name, appContext(ctx)) });
+    return sendJson(res, 200, { app: await app.renameApp(tenantOf(ctx), id, b.name, appContext(ctx)) });
   } catch (e) {
     return sendJson(res, 400, { error: "rename_failed", message: errMessage(e) });
   }
@@ -1594,7 +1595,7 @@ export async function setAppDisplayName(ctx: ApiCtx): Promise<void> {
   if (typeof b.displayName !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "displayName (string) required" });
   try {
-    return sendJson(res, 200, { app: await app.setAppDisplayName(id, b.displayName, appContext(ctx)) });
+    return sendJson(res, 200, { app: await app.setAppDisplayName(tenantOf(ctx), id, b.displayName, appContext(ctx)) });
   } catch (e) {
     return sendJson(res, 400, { error: "display_name_failed", message: errMessage(e) });
   }
@@ -1610,7 +1611,9 @@ async function setAppEmbedAncestors(ctx: ApiCtx): Promise<void> {
   if (!ancestors)
     return sendJson(res, 400, { error: "bad_request", message: `embedAncestors (${EMBED_ANCESTORS_HINT}) required` });
   try {
-    return sendJson(res, 200, { app: appView(await app.setAppEmbedAncestors(id, ancestors, appContext(ctx))) });
+    return sendJson(res, 200, {
+      app: appView(await app.setAppEmbedAncestors(tenantOf(ctx), id, ancestors, appContext(ctx))),
+    });
   } catch (e) {
     return sendJson(res, 400, { error: "embed_ancestors_failed", message: errMessage(e) });
   }
@@ -1626,7 +1629,9 @@ async function setAppAlwaysOn(ctx: ApiCtx): Promise<void> {
   if (typeof b.alwaysOn !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "alwaysOn (boolean) required" });
   try {
-    return sendJson(res, 200, { app: appView(await app.setAppAlwaysOn(id, b.alwaysOn, appContext(ctx))) });
+    return sendJson(res, 200, {
+      app: appView(await app.setAppAlwaysOn(tenantOf(ctx), id, b.alwaysOn, appContext(ctx))),
+    });
   } catch (e) {
     return sendJson(res, 400, { error: "always_on_failed", message: errMessage(e) });
   }

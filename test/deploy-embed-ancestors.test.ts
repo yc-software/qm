@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -34,7 +35,7 @@ const ancestors = ["https://internal.example.com", "https://mail.example.com"];
 
 test("publish sets embed ancestors, a republish that omits them keeps them, and [] clears them", async () => {
   const { deploy } = svc();
-  const created = await deploy.deployOrUpdate({
+  const created = await deploy.deployOrUpdate(appWriteTenant, {
     ...owner,
     name: "panel",
     entrypoint: "node server.js",
@@ -43,20 +44,25 @@ test("publish sets embed ancestors, a republish that omits them keeps them, and 
   });
   assert.deepEqual(created.embedAncestors, ancestors);
 
-  const kept = await deploy.deployOrUpdate({ ...owner, name: "panel", files });
+  const kept = await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "panel", files });
   assert.deepEqual(kept.embedAncestors, ancestors, "a republish without the field leaves the setting alone");
   assert.equal(kept.currentVersion, 2);
 
-  const cleared = await deploy.deployOrUpdate({ ...owner, name: "panel", files, embedAncestors: [] });
+  const cleared = await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "panel", files, embedAncestors: [] });
   assert.deepEqual(cleared.embedAncestors, []);
 });
 
 test("embed ancestors can be changed without a new version, through rename and rollback too", async () => {
   const { deploy } = svc();
-  const first = await deploy.deployOrUpdate({ ...owner, name: "panel", entrypoint: "node server.js", files });
-  await deploy.deployOrUpdate({ ...owner, name: "panel", files });
+  const first = await deploy.deployOrUpdate(appWriteTenant, {
+    ...owner,
+    name: "panel",
+    entrypoint: "node server.js",
+    files,
+  });
+  await deploy.deployOrUpdate(appWriteTenant, { ...owner, name: "panel", files });
 
-  const renamed = await deploy.deployOrUpdate({
+  const renamed = await deploy.deployOrUpdate(appWriteTenant, {
     ...owner,
     name: "panel2",
     renameFrom: "panel",
@@ -66,14 +72,19 @@ test("embed ancestors can be changed without a new version, through rename and r
   assert.deepEqual(renamed.embedAncestors, ancestors);
   assert.equal(renamed.currentVersion, 2, "setting the list is not a redeploy");
 
-  const rolled = await deploy.deployOrUpdate({ ...owner, name: "panel2", rollbackTo: 1, embedAncestors: [] });
+  const rolled = await deploy.deployOrUpdate(appWriteTenant, {
+    ...owner,
+    name: "panel2",
+    rollbackTo: 1,
+    embedAncestors: [],
+  });
   assert.deepEqual(rolled.embedAncestors, []);
 });
 
 test("an invalid embed ancestor is refused before anything is published", async () => {
   const { deploy, deployStore } = svc();
   await assert.rejects(
-    deploy.deployOrUpdate({
+    deploy.deployOrUpdate(appWriteTenant, {
       ...owner,
       name: "panel",
       entrypoint: "node server.js",
@@ -85,6 +96,6 @@ test("an invalid embed ancestor is refused before anything is published", async 
   assert.equal(await deployStore.getByName("panel"), null);
 
   const d = await deploy.deploy({ ...owner, entrypoint: "node server.js", files });
-  await assert.rejects(deploy.setAppEmbedAncestors(d.id, ["*"]), /embedAncestors must be an/);
+  await assert.rejects(deploy.setAppEmbedAncestors(appWriteTenant, d.id, ["*"]), /embedAncestors must be an/);
   assert.equal((await deployStore.get(d.id))!.embedAncestors, undefined);
 });

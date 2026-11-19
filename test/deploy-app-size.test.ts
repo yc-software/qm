@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -52,7 +53,10 @@ test("a provider's app size cap rejects oversized publishes and redeploys before
   const d = await deploy.deploy({ ...owner, files: [{ path: "a.txt", data: "0123456789" }] });
   assert.equal(applies(), 1);
   await assert.rejects(
-    deploy.redeploy(d.id, { entrypoint: "node server.js", files: [{ path: "a.txt", data: "0123456789!" }] }),
+    deploy.redeploy(appWriteTenant, d.id, {
+      entrypoint: "node server.js",
+      files: [{ path: "a.txt", data: "0123456789!" }],
+    }),
     /too large to publish: 11 bytes/,
   );
   assert.equal(applies(), 1);
@@ -66,7 +70,7 @@ test("the cap also blocks an oversized version pushed to the app's git repo", as
   writeFileSync(join(work, "a.txt"), "0123456789!");
   execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-aqm", "big"], { cwd: work });
   execFileSync("git", ["push", "--quiet", (await deploy.gitRepoPath(d.id))!, "HEAD:current"], { cwd: work });
-  await deploy.pushGit(d.id, async () => ({ result: true, ok: true }));
+  await deploy.pushGit(appWriteTenant, d.id, async () => ({ result: true, ok: true }));
   assert.equal(applies(), 1);
   const after = (await store.get(d.id))!;
   assert.equal(after.currentVersion, 1);

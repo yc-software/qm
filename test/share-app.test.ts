@@ -211,7 +211,7 @@ test("restore endpoint is manage-gated and reactivates the archived current vers
     files: [],
     name: "restore-me",
   });
-  await app.archiveApp(d.id);
+  await app.archiveApp(tenant, d.id);
 
   assert.equal((await callManage(restoreApp, app, cap("U2"), d.id, {})).status, 403);
   const restored = await callManage(restoreApp, app, cap("U1"), d.id, {});
@@ -223,7 +223,7 @@ test("restore endpoint is manage-gated and reactivates the archived current vers
   assert.equal(restored.body.app.publicUrl, undefined);
   assert.equal(restored.body.app.versions[0].snapshotDir, undefined);
 
-  await app.archiveApp(d.id);
+  await app.archiveApp(tenant, d.id);
   const restoredBySlug = await callManage(restoreApp, app, cap("U1"), "restore-me", {});
   assert.equal(restoredBySlug.status, 200);
   assert.equal(restoredBySlug.body.app.id, d.id);
@@ -478,18 +478,18 @@ test("a manage grantee may redeploy but cannot make the owner's app public", asy
 test("republish, rename and rollback never change visibility; only the separate public toggle does", async () => {
   const { deploy } = makeDeploy();
   const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [] };
-  const d = await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  const d = await deploy.deployOrUpdate(tenant, { ...owner, name: "vis" });
   assert.equal(d.public, undefined, "first publish is private by default");
-  await deploy.deployOrUpdate({ ...owner, name: "vis" });
+  await deploy.deployOrUpdate(tenant, { ...owner, name: "vis" });
   const after = await deploy.getApp(d.id);
   assert.equal(after?.public, undefined);
   assert.equal(after?.name, "vis");
   assert.equal((await deploy.reachApp("vis", "U2")).status, "denied");
   await deploy.setAppPublic(d.id, true, { createdBy: "U1", personAtKeyboard: true });
   assert.equal((await deploy.getApp(d.id))?.public, true);
-  await deploy.deployOrUpdate({ ...owner, name: "vis" });
-  await deploy.deployOrUpdate({ ...owner, name: "vis2", renameFrom: "vis" });
-  await deploy.deployOrUpdate({ ...owner, name: "vis2", rollbackTo: 1 });
+  await deploy.deployOrUpdate(tenant, { ...owner, name: "vis" });
+  await deploy.deployOrUpdate(tenant, { ...owner, name: "vis2", renameFrom: "vis" });
+  await deploy.deployOrUpdate(tenant, { ...owner, name: "vis2", rollbackTo: 1 });
   assert.equal((await deploy.getApp(d.id))?.public, true, "republish, rename and rollback keep the setting");
 });
 
@@ -796,9 +796,9 @@ test("exact email read grants admit app-only login and guest reach without membe
   assert.equal(await app.directoryMember(email), null);
   assert.equal(identity.externalMember(email), undefined);
   assert.equal(identity.classify(email).type, "guest");
-  await app.archiveApp(d.id);
+  await app.archiveApp(tenant, d.id);
   assert.deepEqual(await allowed(email), { allowed: false });
-  await app.restoreApp(d.id, "U1");
+  await app.restoreApp(tenant, d.id, "U1");
   await identity.deactivate(email);
   assert.deepEqual(await allowed(email), { allowed: false });
   assert.equal(await app.effectiveAppPermission(d, email), null);
@@ -870,7 +870,7 @@ companyTest("new email grants send an app-specific invitation once; re-adds and 
     files: [],
     name: "status-page",
   });
-  await app.setAppDisplayName(d.id, "Status <page>");
+  await app.setAppDisplayName(tenant, d.id, "Status <page>");
   const added = await callShare(app, cap("U1"), d.id, { email: "  Invitee@Example.com " });
   assert.equal(added.status, 200);
   assert.deepEqual(added.body.invitation, { emailSent: true, appUrl: "https://acme1-status-page.apps.example.com/" });

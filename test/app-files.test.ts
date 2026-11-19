@@ -273,7 +273,7 @@ for (const [where, liveEdits] of [
     const h = harness({ liveEdits });
     const d = await h.publish("notes");
     await h.deploy.shareApp(d.id, scopeId("personal", "U2"), "write", { createdBy: OWNER }, { notify: false });
-    if (liveEdits) await h.deploy.archiveApp(d.id);
+    if (liveEdits) await h.deploy.archiveApp(testTenant, d.id);
     const chat = h.chat("notes", "U2");
 
     const out = await chat.call({
@@ -438,7 +438,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
 test("a later turn includes changed files, and resends everything once the first showing left the context", async () => {
   const h = harness();
   await h.publish("notes");
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: h.deploy,
     app: "notes",
     actorId: OWNER,
@@ -473,7 +473,7 @@ test("app source budgets file headings, fences and skipped paths along with cont
   const { commitTreeOf } = h.deployStore;
   h.deployStore.getByName = (...args) => (appReads++, getByName(...args));
   h.deployStore.commitTreeOf = (...args) => (treeReads++, commitTreeOf(...args));
-  const files = createAppFiles({
+  const files = createAppFiles(testTenant, {
     deploy: h.deploy,
     app: "notes",
     actorId: OWNER,

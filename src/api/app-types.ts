@@ -682,7 +682,7 @@ export interface App {
   reachNow(input: ReachNowInput): Promise<ReachNowResult>;
   resolveReachTarget(target: ReachTarget, authorityId: string, opts?: ReachOpts): Promise<ReachResolution>;
   deploy(input: DeployInput): Promise<PublishedApp>;
-  redeploy(id: string, input: RedeployInput): Promise<PublishedApp>;
+  redeploy(tenant: Tenant, id: string, input: RedeployInput): Promise<PublishedApp>;
   listApps(): Promise<PublishedApp[]>;
   getApp(idOrName: string): Promise<PublishedApp | null>;
   listAppsForViewer(tenant: Tenant, viewer: PrivateContext): Promise<ViewerApp[]>;
@@ -747,20 +747,26 @@ export interface App {
     contextScopeId?: ScopeId;
     personalOnly?: true;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
-  rollbackApp(id: string, version: number, actor?: string): Promise<void>;
-  archiveApp(id: string, context?: PrivateContext): Promise<void>;
-  restoreApp(id: string, actorId?: string, context?: PrivateContext): Promise<PublishedApp>;
+  rollbackApp(tenant: Tenant, id: string, version: number, actor?: string): Promise<void>;
+  archiveApp(tenant: Tenant, id: string, context?: PrivateContext): Promise<void>;
+  restoreApp(tenant: Tenant, id: string, actorId?: string, context?: PrivateContext): Promise<PublishedApp>;
   canManageApp(idOrName: string, caller: PrivateContext, actingScopeId?: ScopeId): Promise<boolean>;
-  renameApp(id: string, name: string, context?: PrivateContext): Promise<PublishedApp>;
-  setAppDisplayName(id: string, displayName: string, context?: PrivateContext): Promise<PublishedApp>;
-  setAppAlwaysOn(id: string, alwaysOn: boolean, context?: PrivateContext): Promise<PublishedApp>;
-  setAppEmbedAncestors(id: string, embedAncestors: string[], context?: PrivateContext): Promise<PublishedApp>;
+  renameApp(tenant: Tenant, id: string, name: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppDisplayName(tenant: Tenant, id: string, displayName: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppAlwaysOn(tenant: Tenant, id: string, alwaysOn: boolean, context?: PrivateContext): Promise<PublishedApp>;
+  setAppEmbedAncestors(
+    tenant: Tenant,
+    id: string,
+    embedAncestors: string[],
+    context?: PrivateContext,
+  ): Promise<PublishedApp>;
   setAppPublic(
     idOrName: string,
     isPublic: boolean,
     actor: AppActor & { personAtKeyboard: boolean },
   ): Promise<PublishedApp>;
   setAppConnectors(
+    tenant: Tenant,
     idOrName: string,
     connectors: string[],
     actor: { createdBy: string; context?: PrivateContext },
@@ -795,6 +801,7 @@ export interface App {
   appGitRepoPath(id: string): Promise<string | null>;
   runAppGitRead<T>(id: string, runUploadPack: () => Promise<T>): Promise<T>;
   runAppGitPush<T>(
+    tenant: Tenant,
     id: string,
     actor: string | PrivateContext | undefined,
     runReceivePack: () => Promise<{ result: T; ok: boolean }>,

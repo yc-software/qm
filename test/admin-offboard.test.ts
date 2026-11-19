@@ -1,3 +1,4 @@
+import type { Tenant } from "../src/tenants/context.ts";
 import "./support/auto-fake-sprites.ts";
 import { testTenant } from "./support/test-tenant.ts";
 
@@ -39,7 +40,7 @@ async function start() {
   const app = {
     ...built.app,
     listApps: async () => publishedApps,
-    archiveApp: async (id: string) => {
+    archiveApp: async (_tenant: Tenant, id: string) => {
       if (id === "app-broken") throw new Error("runtime destroy failed");
       archivedApps.push(id);
       publishedApps.find((d) => d.id === id)!.status = "archived";

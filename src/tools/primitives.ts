@@ -781,7 +781,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.editingApp
       ? {
-          appFiles: createAppFiles({
+          appFiles: createAppFiles(deps.tenant, {
             deploy: deps.deploy,
             app: deps.editingApp,
             actorId: deps.createdBy,
@@ -1127,7 +1127,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           )
         : {};
 
-      const d = await deps.deploy.deployOrUpdate({
+      const d = await deps.deploy.deployOrUpdate(deps.tenant, {
         context: outputContext(),
         ownerScopeId: owner,
         createdBy: deps.createdBy,

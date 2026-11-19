@@ -56,7 +56,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
         }
       : {}),
   });
-  const d = await deploy.deployOrUpdate({
+  const d = await deploy.deployOrUpdate(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node server.js",
@@ -69,7 +69,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
 
 test("canManage: a channel-creation member may manage from a DM/other context", async () => {
   const { deploy, d } = await setup();
-  const renamed = await deploy.deployOrUpdate({
+  const renamed = await deploy.deployOrUpdate(tenant, {
     ownerScopeId: scopeId("personal", "U2"),
     createdBy: "U2",
     renameFrom: d.name ?? d.id,
@@ -89,7 +89,7 @@ test("canManage: a member of a shared-into channel still cannot manage from any 
     grantedBy: "U1",
   });
   await assert.rejects(
-    deploy.deployOrUpdate({
+    deploy.deployOrUpdate(tenant, {
       ownerScopeId: scopeId("personal", "U3"),
       createdBy: "U3",
       renameFrom: d.name ?? d.id,
@@ -103,7 +103,7 @@ test("canManage: a member of a shared-into channel still cannot manage from any 
 test("canManage: without the resolver, a channel member from a DM context is denied (fallback)", async () => {
   const { deploy, d } = await setup({ withResolver: false });
   await assert.rejects(
-    deploy.deployOrUpdate({
+    deploy.deployOrUpdate(tenant, {
       ownerScopeId: scopeId("personal", "U2"),
       createdBy: "U2",
       renameFrom: d.name ?? d.id,
@@ -116,7 +116,7 @@ test("canManage: without the resolver, a channel member from a DM context is den
 
 test("canManage: the creator may still manage from a DM context", async () => {
   const { deploy, d } = await setup();
-  const renamed = await deploy.deployOrUpdate({
+  const renamed = await deploy.deployOrUpdate(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     renameFrom: d.name ?? d.id,
@@ -163,11 +163,11 @@ test("DM apps stay private when republished or renamed in a channel", async () =
     files: [],
     name: "dm-app",
   };
-  const d = await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("personal", "U1") });
+  const d = await deploy.deployOrUpdate(tenant, { ...input, createdInScope: scopeId("personal", "U1") });
   assert.deepEqual(await deploy.appGrantees(d.id), []);
   assert.equal((await deploy.reachApp(d.id, "U2")).status, "denied");
-  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH) });
-  await deploy.deployOrUpdate({
+  await deploy.deployOrUpdate(tenant, { ...input, createdInScope: scopeId("channel", CH) });
+  await deploy.deployOrUpdate(tenant, {
     ...input,
     name: "renamed-dm-app",
     renameFrom: "dm-app",
@@ -180,11 +180,11 @@ test("DM apps stay private when republished or renamed in a channel", async () =
 test("republishing channel apps neither widens their audience nor restores revoked grants", async () => {
   const { deploy, acl, d } = await setup();
   const input = { ownerScopeId: d.ownerScopeId, createdBy: "U1", name: d.name!, entrypoint: "x", files: [] };
-  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH_OTHER) });
+  await deploy.deployOrUpdate(tenant, { ...input, createdInScope: scopeId("channel", CH_OTHER) });
   assert.deepEqual(await deploy.appGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
   assert.equal((await deploy.reachApp(d.id, "U3")).status, "denied");
   await acl.revoke(tenant, d.ownerScopeId, `deployment:${d.id}`, scopeId("channel", CH), "U1");
-  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH) });
+  await deploy.deployOrUpdate(tenant, { ...input, createdInScope: scopeId("channel", CH) });
   assert.deepEqual(await deploy.appGrantees(d.id), []);
   assert.equal((await deploy.reachApp(d.id, "U2")).status, "denied");
 });
@@ -214,10 +214,10 @@ test("failed default grant leaves the app name free for a complete retry", async
   const grant = mock.method(acl, "grant", async () => {
     throw failure;
   });
-  await assert.rejects(deploy.deployOrUpdate(input), (error) => error === failure);
+  await assert.rejects(deploy.deployOrUpdate(tenant, input), (error) => error === failure);
   assert.equal(await deploy.getApp(input.name), null);
   grant.mock.restore();
-  const d = await deploy.deployOrUpdate(input);
+  const d = await deploy.deployOrUpdate(tenant, input);
   assert.deepEqual(await deploy.appGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
   assert.equal((await deploy.reachApp(d.id, "U2")).status, "ok");
 });

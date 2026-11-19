@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -62,7 +63,7 @@ test("redeploy builds a new image and records it; each version keeps its own ref
     entrypoint: "node s.js",
     files: [{ path: "s.js", data: "v1" }],
   });
-  await deploy.redeploy(d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] });
+  await deploy.redeploy(appWriteTenant, d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] });
   assert.equal((await deployStore.versionOf(d.id, 1))!.image, "registry.fly.io/app:v1");
   assert.equal((await deployStore.versionOf(d.id, 2))!.image, "registry.fly.io/app:v2");
 });
@@ -75,10 +76,10 @@ test("rollback reuses the stored image — the provider gets the recorded ref, n
     entrypoint: "node s.js",
     files: [{ path: "s.js", data: "v1" }],
   });
-  await deploy.redeploy(d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] });
+  await deploy.redeploy(appWriteTenant, d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] });
   probe.appliedImages.length = 0;
 
-  await deploy.rollbackApp(d.id, 1);
+  await deploy.rollbackApp(appWriteTenant, d.id, 1);
   assert.deepEqual(
     probe.appliedImages,
     ["registry.fly.io/app:v1"],
@@ -146,7 +147,7 @@ test("a reconcile-capable provider receives each version's git bundle and marks 
       { path: "data.json", data: "1" },
     ],
   });
-  await deploy.redeploy(d.id, {
+  await deploy.redeploy(appWriteTenant, d.id, {
     entrypoint: "node s.js",
     files: [
       { path: "s.js", data: "v1" },
@@ -231,7 +232,7 @@ test("a failed redeploy does not move the hosted git current ref", async () => {
   assert.equal(await deployStore.refOf(d.id, "refs/heads/current"), v1.commit);
 
   await assert.rejects(
-    () => deploy.redeploy(d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] }),
+    () => deploy.redeploy(appWriteTenant, d.id, { entrypoint: "node s.js", files: [{ path: "s.js", data: "v2" }] }),
     /apply failed/,
   );
   const after = (await deployStore.get(d.id))!;

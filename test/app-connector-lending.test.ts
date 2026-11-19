@@ -225,15 +225,15 @@ test("public apps cannot borrow connectors", async (t) => {
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {
   const h = await agent(t);
   await h.lend(PUBLISHER, ["slack.com"]);
-  await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: PUBLISHER });
+  await h.app.redeploy(testTenant, h.d.id, { entrypoint: "x", files: [], actor: PUBLISHER });
   assert.equal((await h.broker(get("slack.com"))).status, 200, "the publisher's own publish keeps it");
 
-  await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: CO_MANAGER });
+  await h.app.redeploy(testTenant, h.d.id, { entrypoint: "x", files: [], actor: CO_MANAGER });
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");
   assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.principalId === CO_MANAGER));
 
   await h.lend(PUBLISHER, ["slack.com"]);
-  await h.app.rollbackApp(h.d.id, 1, CO_MANAGER);
+  await h.app.rollbackApp(testTenant, h.d.id, 1, CO_MANAGER);
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "a rollback counts too");
 });
 
@@ -253,7 +253,8 @@ test("while the app borrows connectors, only the publisher can share it", async 
     entrypoint: "x",
     files: [],
   });
-  const lend = (connectors: string[]) => h.deploy.setAppConnectors(d.id, connectors, { createdBy: PUBLISHER });
+  const lend = (connectors: string[]) =>
+    h.deploy.setAppConnectors(testTenant, d.id, connectors, { createdBy: PUBLISHER });
   const share = (grantedBy: string) =>
     h.app.grant(
       testTenant,

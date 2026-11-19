@@ -1,3 +1,4 @@
+import type { Tenant } from "../src/tenants/context.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -68,7 +69,7 @@ function agent(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDe
     acl: {} as never,
     deploy: {
       getApp: async () => ({ entrypoint: "node server.js" }),
-      deployOrUpdate: async (input: Record<string, unknown>) => {
+      deployOrUpdate: async (_tenant: Tenant, input: Record<string, unknown>) => {
         deployed.push(input);
         return { id: "d1", name: "site", currentVersion: 2, createdInScope: input.createdInScope };
       },

@@ -1,3 +1,4 @@
+import { testTenant as appWriteTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -81,7 +82,7 @@ test("unmanaged provider: an always-on app is never reaped", async () => {
     entrypoint: "x",
     files: [],
   });
-  await deploy.setAppAlwaysOn(d.id, true);
+  await deploy.setAppAlwaysOn(appWriteTenant, d.id, true);
 
   const stopped = await deploy.reapIdleApps(60_000, future);
   assert.equal(stopped, 0);

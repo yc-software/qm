@@ -127,27 +127,34 @@ export interface ReachOptions {
 export interface DeployService {
   readonly providerProfile: DeployProfile;
   deploy(input: DeployInput): Promise<PublishedApp>;
-  redeploy(id: string, input: RedeployInput): Promise<PublishedAppWithLiveEdit>;
+  redeploy(tenant: Tenant, id: string, input: RedeployInput): Promise<PublishedAppWithLiveEdit>;
   getApp(idOrName: string): Promise<PublishedApp | null>;
   appUrl?(d: PublishedApp): string | undefined;
   listApps(): Promise<PublishedApp[]>;
   rollbackApp(
+    tenant: Tenant,
     id: string,
     version: number,
     options?: { alwaysOn?: boolean; actor?: string; context?: PrivateContext },
   ): Promise<void>;
-  archiveApp(id: string, context?: PrivateContext): Promise<void>;
-  restoreApp(id: string, actorId?: string, context?: PrivateContext): Promise<PublishedApp>;
-  renameApp(id: string, name: string, context?: PrivateContext): Promise<PublishedApp>;
-  setAppDisplayName(id: string, displayName: string, context?: PrivateContext): Promise<PublishedApp>;
-  setAppAlwaysOn(id: string, alwaysOn: boolean, context?: PrivateContext): Promise<PublishedApp>;
-  setAppEmbedAncestors(id: string, embedAncestors: string[], context?: PrivateContext): Promise<PublishedApp>;
+  archiveApp(tenant: Tenant, id: string, context?: PrivateContext): Promise<void>;
+  restoreApp(tenant: Tenant, id: string, actorId?: string, context?: PrivateContext): Promise<PublishedApp>;
+  renameApp(tenant: Tenant, id: string, name: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppDisplayName(tenant: Tenant, id: string, displayName: string, context?: PrivateContext): Promise<PublishedApp>;
+  setAppAlwaysOn(tenant: Tenant, id: string, alwaysOn: boolean, context?: PrivateContext): Promise<PublishedApp>;
+  setAppEmbedAncestors(
+    tenant: Tenant,
+    id: string,
+    embedAncestors: string[],
+    context?: PrivateContext,
+  ): Promise<PublishedApp>;
   setAppPublic(
     idOrName: string,
     isPublic: boolean,
     actor: AppActor & { personAtKeyboard: boolean },
   ): Promise<PublishedApp>;
   setAppConnectors(
+    tenant: Tenant,
     idOrName: string,
     connectors: string[],
     actor: { createdBy: string; context?: PrivateContext },
@@ -161,6 +168,7 @@ export interface DeployService {
   gitRepoPath(idOrName: string): Promise<string | null>;
   readApp<T>(id: string, read: (app: PublishedApp | null) => Promise<T>): Promise<T>;
   pushGit<T>(
+    tenant: Tenant,
     id: string,
     runReceivePack: () => Promise<{ result: T; ok: boolean }>,
     actor?: string | PrivateContext,
@@ -168,12 +176,13 @@ export interface DeployService {
   source(idOrName: string, paths?: string[], commit?: string): Promise<AppSource | null>;
   sourceReader(idOrName: string, caller: PrivateContext, actingScopeId?: ScopeId): Promise<AppSourceReader | null>;
   editSource(
+    tenant: Tenant,
     idOrName: string,
     actor: string | PrivateContext,
     edit: (read: (paths: string[]) => Promise<AppSource>) => Promise<SourceEdit>,
   ): Promise<SourceSaved>;
   reapIdleApps(ttlMs: number, now?: number): Promise<number>;
-  deployOrUpdate(input: DeployOrUpdateInput): Promise<PublishedAppWithLiveEdit>;
+  deployOrUpdate(tenant: Tenant, input: DeployOrUpdateInput): Promise<PublishedAppWithLiveEdit>;
   appGrantees(idOrName: string): Promise<AppGrantee[]>;
   canManageApp(idOrName: string, caller: PrivateContext, actingScopeId?: ScopeId): Promise<boolean>;
   releasePrivateApp(tenant: Tenant, grant: Grant, revision: string, context: PrivateContext): Promise<void>;
@@ -382,7 +391,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return context;
   }
 
-  async function recordOutputContext(app: PublishedApp, incoming?: PrivateContext): Promise<void> {
+  async function recordOutputContext(tenant: Tenant, app: PublishedApp, incoming?: PrivateContext): Promise<void> {
     if (!incoming) return;
     await inheritAppContext(app, incoming);
     const context = incoming;
@@ -393,7 +402,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         app.ownerScopeId !== owner ||
         (app.createdInScope !== undefined && app.createdInScope !== owner) ||
         app.public ||
-        (await grantsOn(ambientTenant(), app)).length)
+        (await grantsOn(tenant, app)).length)
     )
       throw new DeployAccessError(
         "forbidden",
@@ -406,7 +415,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const audiences = new Set([
         app.ownerScopeId,
         ...(app.createdInScope ? [app.createdInScope] : []),
-        ...(await grantsOn(ambientTenant(), app)).map((grant) => grant.granteeScopeId),
+        ...(await grantsOn(tenant, app)).map((grant) => grant.granteeScopeId),
       ]);
       audiences.delete(owner);
       for (const audience of audiences) await discloseApp({ sourceProvenance: provenance }, audience, context.actorId);
@@ -662,11 +671,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
-    async redeploy(id, input) {
+    async redeploy(tenant, id, input) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
         if (!before) throw new Error(`unknown app: ${id}`);
-        await recordOutputContext(before, input.context);
+        await recordOutputContext(tenant, before, input.context);
         await withdrawLoanUnlessPublisher(before, input.actor);
         const current = currentVersionOf(before);
         assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
@@ -712,11 +721,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return deps.deployStore.list();
     },
 
-    async rollbackApp(id, version, options) {
+    async rollbackApp(tenant, id, version, options) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
         if (before) {
-          await recordOutputContext(before, options?.context);
+          await recordOutputContext(tenant, before, options?.context);
           await withdrawLoanUnlessPublisher(before, options?.actor);
         }
         await deps.deployStore.deleteDraft(id);
@@ -736,22 +745,22 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async archiveApp(id, context) {
+    async archiveApp(tenant, id, context) {
       return withDeployLock(id, async () => {
         const d = await deps.deployStore.get(id);
         if (!d) return;
-        await recordOutputContext(d, context);
+        await recordOutputContext(tenant, d, context);
         await deps.provider.destroy(d);
         await deps.deployStore.setStatus(id, "archived");
         await deps.deployStore.setEndpoint(id, null);
       });
     },
 
-    async restoreApp(id, actorId, context) {
+    async restoreApp(tenant, id, actorId, context) {
       return withDeployLock(id, async () => {
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown app: ${id}`);
-        await recordOutputContext(d, context);
+        await recordOutputContext(tenant, d, context);
         if (d.status === "running") return d;
         if (d.status !== "archived") throw new Error(`app is not archived: ${id}`);
         const version = currentVersionOf(d);
@@ -783,12 +792,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async renameApp(id, name, context) {
+    async renameApp(tenant, id, name, context) {
       return withDeployLock(id, async () => {
         validateName(name);
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown app: ${id}`);
-        await recordOutputContext(d, context);
+        await recordOutputContext(tenant, d, context);
         const clash = await deps.deployStore.getByName(name);
         if (clash && clash.id !== id) throw new Error(`app name taken: ${name}`);
         await deps.deployStore.setName(id, name);
@@ -803,12 +812,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async setAppDisplayName(id, displayName, context) {
+    async setAppDisplayName(tenant, id, displayName, context) {
       return withDeployLock(id, async () => {
         if (displayName) validateDisplayName(displayName);
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown app: ${id}`);
-        await recordOutputContext(d, context);
+        await recordOutputContext(tenant, d, context);
         await deps.deployStore.setDisplayName(id, displayName || undefined);
         recordAudit({
           at: Date.now(),
@@ -821,11 +830,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async setAppAlwaysOn(id, alwaysOn, context) {
+    async setAppAlwaysOn(tenant, id, alwaysOn, context) {
       return withDeployLock(id, async () => {
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown app: ${id}`);
-        await recordOutputContext(d, context);
+        await recordOutputContext(tenant, d, context);
         if (d.status === "running" && Boolean(d.alwaysOn) !== alwaysOn) await deps.provider.setAlwaysOn?.(d, alwaysOn);
         await deps.deployStore.setAlwaysOn(id, alwaysOn);
         recordAudit({
@@ -839,13 +848,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async setAppEmbedAncestors(id, embedAncestors, context) {
+    async setAppEmbedAncestors(tenant, id, embedAncestors, context) {
       const ancestors = parseEmbedAncestors(embedAncestors);
       if (!ancestors) throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
       return withDeployLock(id, async () => {
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown app: ${id}`);
-        await recordOutputContext(d, context);
+        await recordOutputContext(tenant, d, context);
         await deps.deployStore.setEmbedAncestors(id, ancestors);
         recordAudit({
           at: Date.now(),
@@ -858,7 +867,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async setAppConnectors(idOrName, connectors, actor) {
+    async setAppConnectors(tenant, idOrName, connectors, actor) {
       const found = await getApp(idOrName);
       if (!found) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       return withDeployLock(found.id, async () => {
@@ -866,7 +875,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
         if (!samePerson(d.createdBy, actor.createdBy))
           throw new DeployAccessError("forbidden", "only the publisher can lend an app their connectors");
-        await recordOutputContext(d, actor.context);
+        await recordOutputContext(tenant, d, actor.context);
         const hosts = [...new Set(connectors.map((host) => host.toLowerCase()))].sort();
         const unknown = hosts.filter((host) => !CONNECTOR_HOSTS.includes(host));
         if (unknown.length)
@@ -980,13 +989,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return withDeployLock(found.id, async () => read(await getApp(found.id)));
     },
 
-    async pushGit(id, runReceivePack, actor) {
+    async pushGit(tenant, id, runReceivePack, actor) {
       const context = typeof actor === "string" ? undefined : actor;
       const actorId = typeof actor === "string" ? actor : actor?.actorId;
       return withDeployLock(id, async () => {
         const current = await deps.deployStore.get(id);
         if (!current) throw new DeployAccessError("not_found", `no such app: ${id}`);
-        await recordOutputContext(current, context);
+        await recordOutputContext(tenant, current, context);
         const { result, ok } = await runReceivePack();
         if (!ok) return result;
         let ownerScopeId = "unknown";
@@ -1049,7 +1058,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async editSource(idOrName, actor, edit) {
+    async editSource(tenant, idOrName, actor, edit) {
       const context = typeof actor === "string" ? undefined : actor;
       const actorId = typeof actor === "string" ? actor : actor.actorId;
       const found = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
@@ -1058,9 +1067,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const before = await deps.deployStore.get(found.id);
         const saved = before ? await liveEdits.savedOf(before) : null;
         if (!before || !saved) throw new Error(`${idOrName} has no saved source; publish it again first`);
-        await recordOutputContext(before, context);
+        await recordOutputContext(tenant, before, context);
         const wanted = await edit((paths) => sourceOf(before.id, saved, paths));
-        await recordOutputContext(before, context);
+        await recordOutputContext(tenant, before, context);
         const written = wanted.files.map((f) => ({ path: normalizeRelPath(f.path), data: bytes(f.data) }));
         const change = await liveEdits.changeOf(before.id, saved, {
           written,
@@ -1105,7 +1114,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return result ?? 0;
     },
 
-    async deployOrUpdate(input) {
+    async deployOrUpdate(tenant, input) {
       const { ownerScopeId, createdBy } = input;
       const caller = { ...input.context, actorId: createdBy, botActor: input.botActor };
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
@@ -1123,7 +1132,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await withDeployLock(existing.id, async () => {
           const current = await deps.deployStore.get(existing.id);
           if (!current) throw new Error(`unknown app: ${existing.id}`);
-          await recordOutputContext(current, input.context);
+          await recordOutputContext(tenant, current, input.context);
           await deps.deployStore.setName(existing.id, input.name!);
         });
         recordAudit({
@@ -1136,7 +1145,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         let liveEdit: LiveEditSaved | undefined;
         if (input.files?.length) {
           const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-          ({ liveEdit } = await this.redeploy(existing.id, {
+          ({ liveEdit } = await this.redeploy(tenant, existing.id, {
             actor: createdBy,
             context: input.context,
             entrypoint,
@@ -1146,9 +1155,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             ...(input.env ? { env: input.env } : {}),
             ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
           }));
-        } else if (input.alwaysOn !== undefined) await this.setAppAlwaysOn(existing.id, input.alwaysOn, input.context);
+        } else if (input.alwaysOn !== undefined)
+          await this.setAppAlwaysOn(tenant, existing.id, input.alwaysOn, input.context);
         if (input.embedAncestors !== undefined)
-          await this.setAppEmbedAncestors(existing.id, input.embedAncestors, input.context);
+          await this.setAppEmbedAncestors(tenant, existing.id, input.embedAncestors, input.context);
         return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
       }
 
@@ -1158,13 +1168,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!existing) throw new Error(`no app named: ${input.name}`);
         if (!(await canManage(existing, caller, input.createdInScope)))
           throw new Error(`not authorized to manage app: ${input.name}`);
-        await this.rollbackApp(existing.id, input.rollbackTo, {
+        await this.rollbackApp(tenant, existing.id, input.rollbackTo, {
           context: input.context,
           actor: createdBy,
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
         });
         if (input.embedAncestors !== undefined)
-          await this.setAppEmbedAncestors(existing.id, input.embedAncestors, input.context);
+          await this.setAppEmbedAncestors(tenant, existing.id, input.embedAncestors, input.context);
         return (await deps.deployStore.get(existing.id))!;
       }
 
@@ -1177,7 +1187,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!(await personOrOwningBot(caller, async () => samePerson(existing.createdBy, caller.actorId))))
           throw new Error(`not authorized to manage app: ${input.name}`);
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-        const { liveEdit } = await this.redeploy(existing.id, {
+        const { liveEdit } = await this.redeploy(tenant, existing.id, {
           actor: createdBy,
           context: input.context,
           entrypoint,
@@ -1188,7 +1198,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
         });
         if (input.embedAncestors !== undefined)
-          await this.setAppEmbedAncestors(existing.id, input.embedAncestors, input.context);
+          await this.setAppEmbedAncestors(tenant, existing.id, input.embedAncestors, input.context);
         return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
       }
       const d = await this.deploy({
@@ -1205,7 +1215,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
       });
       if (input.embedAncestors !== undefined)
-        await this.setAppEmbedAncestors(d.id, input.embedAncestors, input.context);
+        await this.setAppEmbedAncestors(tenant, d.id, input.embedAncestors, input.context);
       return (await deps.deployStore.get(d.id))!;
     },
 
