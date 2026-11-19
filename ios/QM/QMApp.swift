@@ -306,7 +306,7 @@ struct RootView: View {
         let empty = ConversationEmptyState(filter: model.filter)
         ContentUnavailableView(
           empty.title, systemImage: empty.systemImage, description: Text(empty.description))
-        if model.filter == .active, model.client != nil {
+        if model.filter == .active, model.client != nil, !model.exploringDemo {
           NavigationLink("Set up QM", value: Page.setup)
         }
       }
@@ -351,14 +351,14 @@ struct RootView: View {
       wordmark
     }
     ToolbarItem(placement: .topBarTrailing) {
-      if model.client != nil {
+      if model.client != nil, !model.exploringDemo {
         NavigationLink(value: Page.search) {
           Image(systemName: "magnifyingglass")
         }.accessibilityLabel("Search workspace")
       }
     }
     ToolbarItem(placement: .topBarTrailing) {
-      if model.client != nil {
+      if model.client != nil, !model.exploringDemo {
         NavigationLink(value: Page.workspace) {
           Image(systemName: "square.grid.2x2")
         }.accessibilityLabel("Browse workspace")

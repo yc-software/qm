@@ -36,6 +36,8 @@ final class AppModel {
   private let signIn = SignIn()
   private var cleanedAccount: String?
   private let defaults: UserDefaults
+  private let configuredURL: String?
+  private let configuration: URLSessionConfiguration
   private var loadRevision = UUID()
   private var pageRevision = UUID()
   private var paged = false
@@ -46,14 +48,34 @@ final class AppModel {
     configuration: URLSessionConfiguration = .ephemeral
   ) {
     self.defaults = defaults
+    self.configuredURL = configuredURL
+    self.configuration = configuration
+    client = savedWorkspace()
+  }
+
+  private func savedWorkspace() -> APIClient? {
     let raw =
       defaults.string(forKey: "workspaceOrigin") ?? configuredURL
       ?? (Bundle.main.object(forInfoDictionaryKey: "QMBaseURL") as? String ?? "")
-    if let url = Self.workspaceURL(raw) {
-      client = APIClient(baseURL: url, configuration: configuration)
-    } else {
-      client = nil
+    return Self.workspaceURL(raw).map { APIClient(baseURL: $0, configuration: configuration) }
+  }
+
+  var exploringDemo: Bool { client?.baseURL == DemoWorkspace.origin }
+
+  func exploreDemo() async {
+    guard !loading else { return }
+    signIn.cancel()
+    DemoWorkspace.reset()
+    DraftStore.removeAccount(DemoWorkspace.origin.absoluteString + DemoWorkspace.user)
+    let demo = APIClient(
+      baseURL: DemoWorkspace.origin, configuration: DemoWorkspace.configuration)
+    do { try demo.saveSession(DemoWorkspace.user) } catch {
+      self.error = error.localizedDescription
+      return
     }
+    client = demo
+    error = nil
+    await load()
   }
 
   func selectWorkspace(_ raw: String) throws {
@@ -85,7 +107,8 @@ final class AppModel {
 
   static func allowedURL(_ url: URL) -> Bool {
     guard url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-      url.path.isEmpty || url.path == "/", let host = url.host, !host.isEmpty
+      url.path.isEmpty || url.path == "/", let host = url.host, !host.isEmpty,
+      host != DemoWorkspace.origin.host
     else { return false }
     if url.scheme == "https" { return true }
     #if DEBUG
@@ -409,6 +432,7 @@ final class AppModel {
     }
     client?.signOut()
     resetAfterSessionLoss()
+    if exploringDemo { client = savedWorkspace() }
     error = nil
   }
 
