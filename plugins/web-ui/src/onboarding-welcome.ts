@@ -8,10 +8,11 @@ import {
   type ConnectionAttempt,
   ACCOUNT_ID,
 } from "./connection-return";
-import { LitElement, html, nothing } from "lit";
+import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
+import { connectionCard, type ConnectionCardView } from "./connection-card";
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
 
@@ -64,6 +65,7 @@ export class OnboardingWelcome extends LitElement {
     authorizationError: { state: true },
     connectionOutcome: { state: true },
     connections: { state: true },
+    connectionsChecked: { state: true },
     connectionError: { state: true },
     workspaceConnected: { state: true },
     slackLinked: { state: true },
@@ -86,6 +88,7 @@ export class OnboardingWelcome extends LitElement {
   declare authorizing: string;
   declare authorizationError: string;
   private connections: ConnectedAccount[] = [];
+  private connectionsChecked = false;
   private disconnecting = "";
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
@@ -250,14 +253,12 @@ export class OnboardingWelcome extends LitElement {
       connected: connected.includes(service.id),
       stale: stale.has(service.id),
     }));
-    const requested = services.find((service) => service.id === this.requestedToolkit());
     if (target && !this.error && !this.loading)
       mountConnectionPicker(
         target,
-        requested ? [requested] : services,
+        services,
         (service) => this.authorize(service, this.staleAccount(service.id)),
-        requested ? { query: "", expanded: false } : this.pickerState,
-        requested,
+        this.pickerState,
         !this.seeded,
       );
   }
@@ -305,12 +306,67 @@ export class OnboardingWelcome extends LitElement {
       this.drawPicker();
     }
   }
-  private confirmDisconnect(account: ConnectedAccount, name: string): void {
-    if (window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`))
-      void this.disconnect(account, name);
+  private async confirmDisconnect(accounts: ConnectedAccount[], name: string): Promise<void> {
+    if (!window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`)) return;
+    for (const account of accounts) if (!(await this.disconnect(account, name))) return;
   }
-  private requestedToolkit(): string {
-    return this.services.some((service) => service.id === this.toolkit) ? this.toolkit : "";
+  /** The card for the one app this widget was asked to connect; undefined when it shows the whole picker. */
+  private card(): TemplateResult | undefined {
+    if (this.widget !== "apps" || !this.toolkit || this.error) return undefined;
+    const service = this.services.find((item) => item.id === this.toolkit);
+    if (!service)
+      return this.loading
+        ? connectionCard({ id: this.toolkit, logoUrl: `https://logos.composio.dev/api/${this.toolkit}` })
+        : undefined;
+    const accounts = this.preview
+      ? previewConnections(this.previewUser())
+          .filter((toolkit) => toolkit === service.id)
+          .map((toolkit) => ({ id: "", toolkit }))
+      : this.connections.filter((account) => account.toolkit === service.id);
+    const act = (label: string, run: () => void) => ({ label, name: `${label} ${service.name}`, run });
+    const connect = (label: string) => act(label, () => void this.authorize(service, this.staleAccount(service.id)));
+    const view: ConnectionCardView = {
+      status: "Not connected",
+      tone: "muted",
+      mark: "idle",
+      primary: connect("Connect"),
+    };
+    if (this.connectionOutcome === "checking")
+      Object.assign(view, { status: "Confirming access…", mark: "spinner", primary: undefined });
+    else if (!this.preview && !this.connectionsChecked) Object.assign(view, { status: "", primary: undefined });
+    else if (accounts.length && !this.staleToolkits().has(service.id))
+      Object.assign(view, {
+        status: "Connected",
+        tone: "success",
+        mark: "check",
+        fresh: this.connectionOutcome === "success",
+        primary: undefined,
+      });
+    else if (accounts.length)
+      Object.assign(view, {
+        status: "Needs new permissions",
+        tone: "warning",
+        mark: "alert",
+        primary: connect("Reconnect"),
+      });
+    else if (this.connectionOutcome === "cancelled") view.status = "Sign-in cancelled";
+    else if (this.connectionOutcome === "expired") view.status = "That sign-in expired";
+    if (this.connectionOutcome === "failed" && view.primary)
+      Object.assign(view, {
+        status: "Couldn’t confirm the connection",
+        tone: "error",
+        mark: "error",
+        primary: connect("Try again"),
+      });
+    const problem = this.connectionError || this.authorizationError;
+    if (problem && view.status) Object.assign(view, { status: problem, tone: "error", mark: "error", fresh: false });
+    const removable = accounts.filter((account) => account.id);
+    if (removable.length) view.quiet = act("Disconnect", () => void this.confirmDisconnect(removable, service.name));
+    else if (this.connectionError && !accounts.length)
+      view.quiet = act("Check again", () => void this.loadConnections());
+    const working = this.authorizing ? `Opening ${service.name}…` : this.disconnecting ? "Disconnecting…" : "";
+    if (working) Object.assign(view, { status: working, tone: "muted", mark: "spinner", fresh: false, busy: true });
+    return connectionCard(service, view);
   }
   private async loadConnections(): Promise<void> {
     this.connectionsController?.abort();
@@ -334,6 +390,7 @@ export class OnboardingWelcome extends LitElement {
       } while (cursor);
       if (!this.isConnected || controller.signal.aborted) return;
       this.connections = accounts;
+      this.connectionsChecked = true;
       if (this.realReturn) {
         const attempt = this.realReturn;
         const verified = accounts.some(
@@ -350,7 +407,7 @@ export class OnboardingWelcome extends LitElement {
             (account) => account.id === attempt.replaces && account.id !== attempt.accountId,
           );
           if (replaced && !(await this.disconnect(replaced, attempt.service.name)))
-            this.connectionError = `${attempt.service.name} is reconnected, but the old connection is still there. Disconnect it below.`;
+            this.connectionError = `${attempt.service.name} is reconnected, but the old connection is still there.`;
           if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
             continuedAttempts.add(attempt.state);
             this.onConnected?.(attempt.service.name);
@@ -362,6 +419,7 @@ export class OnboardingWelcome extends LitElement {
     } catch (error) {
       if (controller.signal.aborted || !this.isConnected) return;
       this.connections = [];
+      this.connectionsChecked = true;
       this.connectionOutcome = "";
       this.connectionError = error instanceof Error ? error.message : "Could not check connected apps.";
       await this.updateComplete;
@@ -373,16 +431,16 @@ export class OnboardingWelcome extends LitElement {
     const controller = (this.controller = new AbortController());
     this.loading = true;
     this.error = "";
-    const services: ConnectionService[] = [];
-    const cursors = new Set<string>();
-    let cursor = "";
-    try {
+    // A card for one app asks for that app alone: the whole catalog is thousands of apps over several requests.
+    const load = async (toolkit: string): Promise<ConnectionService[]> => {
+      const services: ConnectionService[] = [];
+      const cursors = new Set<string>();
+      let cursor = "";
       do {
         if (cursors.has(cursor)) throw new Error("Could not finish loading apps. Please try again.");
         cursors.add(cursor);
-        const response = await fetch(`${this.base}api/composio/toolkits?${new URLSearchParams({ cursor })}`, {
-          signal: controller.signal,
-        });
+        const query = new URLSearchParams({ cursor, ...(toolkit ? { toolkit } : {}) });
+        const response = await fetch(`${this.base}api/composio/toolkits?${query}`, { signal: controller.signal });
         const result = await response.json();
         if (!response.ok)
           throw new Error(result.message ?? "App connections are unavailable right now. Please try again.");
@@ -393,6 +451,12 @@ export class OnboardingWelcome extends LitElement {
         cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
         if (cursors.size > 100) throw new Error("Could not finish loading apps. Please try again.");
       } while (cursor);
+      return services;
+    };
+    try {
+      const asked = this.widget === "apps" ? this.toolkit : "";
+      let services = asked ? await load(asked) : [];
+      if (!services.some((service) => service.id === asked)) services = await load("");
       this.services = services;
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -578,10 +642,12 @@ export class OnboardingWelcome extends LitElement {
     const connected = this.preview
       ? previewConnections(this.previewUser())
       : this.connections.map((account) => account.toolkit);
-    const requested = this.requestedToolkit();
-    const connectedAccounts = (
-      this.preview ? connected.map((toolkit) => ({ id: "", toolkit }) as ConnectedAccount) : this.connections
-    ).filter((account) => !requested || account.toolkit === requested);
+    const card = this.card();
+    // Connected apps are listed by name, so not before the catalog that holds the names has arrived.
+    const listed = this.preview
+      ? connected.map((toolkit) => ({ id: "", toolkit }) as ConnectedAccount)
+      : this.connections;
+    const connectedAccounts = this.services.length ? listed : [];
     const serviceFor = (id: string) =>
       this.services.find((service) => service.id === id) ?? { id, name: id, description: "", popularity: 0 };
     const outcome = {
@@ -624,8 +690,8 @@ export class OnboardingWelcome extends LitElement {
         ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()} @slack-linked=${() => void this.refreshWorkspace()}></qm-slack-account>` : nothing}
       </div>
       ${
-        ["slack", "slack-account"].includes(this.widget)
-          ? nothing
+        card || ["slack", "slack-account"].includes(this.widget)
+          ? (card ?? nothing)
           : html`<div class="welcome-beat" style=${`--welcome-delay:${paced ? 3450 : 1300}ms`}>
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
@@ -686,7 +752,7 @@ export class OnboardingWelcome extends LitElement {
                                     type="button"
                                     class="kc-text-action danger"
                                     ?disabled=${Boolean(this.authorizing || this.disconnecting)}
-                                    @click=${() => this.confirmDisconnect(account, service.name)}
+                                    @click=${() => void this.confirmDisconnect([account], service.name)}
                                   >
                                     Disconnect
                                   </button>`
