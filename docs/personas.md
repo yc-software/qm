@@ -79,8 +79,20 @@ if the sender holds a role on the persona (counting the conversation's channel),
 - offers keychain grants to `persona:<id>` alongside the conversation's own;
 - adds a `## Persona` block after the organization and conversation instructions.
 
-If the sender has no role, the persona is skipped and the block says so. Writes (memory,
-files, crons) stay in the conversation's scope.
+If the sender has no role, the persona is skipped and the block says so. Files and crons
+stay in the conversation's scope, and so does memory in a DM or in a conversation that only
+picked the persona.
+
+A channel or group that pins a persona shares one notebook with every other place that pins
+it. A conversation there saves what it remembers to the persona's notebook, by automatic
+capture and by the `memory` tool alike, instead of the channel's own. Every conversation
+that uses the persona reads that notebook, whichever pinned room a fact came from, so a
+correction made in one room holds in the others and in the DMs of the people who use the
+persona. Pinning a persona in a room therefore shares what that room remembers from then on
+with everyone who can use the persona, including people who are not in the room. Facts the
+channel remembered before it pinned the persona stay in the channel's notebook, which its
+conversations still read. Unpinning returns the channel to its own notebook and leaves what
+it saved with the persona.
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates

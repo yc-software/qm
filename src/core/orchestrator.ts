@@ -875,6 +875,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botActor: input.botActor === true,
         ownScopeBotWork,
         notebookOnly,
+        ...(persona?.pinned ? { sharedNotebook: persona.scope } : {}),
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -882,7 +883,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         directory: deps.directory,
         projects: deps.projects,
       });
-      const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
+      const { sharingSources, memoryScopeId, notebookScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
@@ -1782,7 +1783,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
-          memoryScopeId,
+          memoryScopeId: notebookScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
           ...(audienceScopeId ? { audienceScopeId } : {}),
@@ -2625,7 +2626,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           actor,
           session,
           scopeId,
-          memoryScopeId,
+          memoryScopeId: notebookScopeId,
           audienceScopeId,
           memoryPolicy,
           pendingCaptures,

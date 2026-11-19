@@ -584,7 +584,7 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
     "Channels and groups",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}; in Slack it posts under its name and icon.`,
+    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}; in Slack it posts under its name and icon. Pinned channels and groups share one memory: what QM remembers in one, it recalls wherever ${persona.name} is used.`,
   );
 }
 

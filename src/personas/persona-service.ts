@@ -313,11 +313,9 @@ export function createPersonaService(deps: {
     async forTurn(personaId, actorId, contextScope) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
-      let pinned = false;
-      if (!personaId && isSharedScope(contextScope)) {
-        personaId = (await store.pinnedIn(contextScope)) ?? undefined;
-        pinned = Boolean(personaId);
-      }
+      const pinnedHere = isSharedScope(contextScope) ? ((await store.pinnedIn(contextScope)) ?? undefined) : undefined;
+      personaId ??= pinnedHere;
+      const pinned = personaId !== undefined && personaId === pinnedHere;
       if (!personaId) return PERSONAS_HINT;
       const persona = await store.get(personaId);
       if (!persona) return "This conversation's persona was deleted, so this turn runs without one.";
@@ -336,7 +334,7 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): strin
   ];
   if (pinned)
     lines.push(
-      `This channel or group pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+      `This channel or group pinned ${persona.name}, so memory you save here goes to its notebook, which every conversation using it reads. An owner can unpin it on the persona page; one conversation can pick another persona.`,
     );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
