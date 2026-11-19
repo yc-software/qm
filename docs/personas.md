@@ -88,12 +88,15 @@ automatic capture and the `memory` tool save there, and the room's own notebook 
 not read by those turns. Every conversation that uses the persona reads the persona's
 notebook, so what one pinned room remembers is shown in the others and to everyone who can
 use the persona, including people who are not in that room. A turn in a pinned room keeps
-to the room's own notebook when anyone from outside the organization is among the room's
-members, when it arrives without the room's member list (as a web conversation opened in a
-Slack channel does), when the `personas` flag does not reach its sender, and when its
-conversation picked a different persona. The persona's notebook gets its own nightly memory
-tidy, like a room's. With `MEMORY_PROVIDER_CONFIG` set, a route has to serve the `persona`
-kind ([memory providers](./memory-providers.md)).
+to the room's own notebook when its member list is missing or names anyone from outside
+the organization, when the `personas` flag does not reach its sender, and when its
+conversation picked a different persona. A person's message in a Slack channel with a
+guest carries no member list, and neither does a web conversation opened in a Slack
+channel. A cron or other automation fire takes its member list from the stored roster,
+which leaves workspace guests out, so in a channel with a guest it uses the persona's
+notebook. The room's own nightly memory tidy keeps to the room's notebook, and the
+persona's notebook gets a nightly tidy of its own. With `MEMORY_PROVIDER_CONFIG` set, the
+`default` route has to serve the `persona` kind ([memory providers](./memory-providers.md)).
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates

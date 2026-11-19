@@ -338,7 +338,7 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn, shares
     );
   if (sharesNotebook)
     lines.push(
-      `Memory is the exception to where writes land: what you save here goes to ${persona.name}'s notebook, which every conversation using ${persona.name} reads, so leave out where a fact was said unless the fact is about that place.`,
+      `Memory is the exception to where writes land: what you save here goes to ${persona.name}'s notebook, which every conversation using ${persona.name} reads.`,
     );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());

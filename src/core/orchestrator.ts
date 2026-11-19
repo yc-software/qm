@@ -839,7 +839,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               scopeId,
             );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
-      if (persona) resolution.readOnlyScopeIds.push(persona.scope);
+      if (persona && !notebookOnly) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
       const scopeKeychainGrants = async () => {
         const rows = (
