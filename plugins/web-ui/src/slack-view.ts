@@ -11,7 +11,7 @@ export function continuedSpeakers(rows: readonly AgentMessage[]): Set<AgentMessa
   let previous: string | undefined;
   for (const message of rows) {
     const { role, speaker, speakerId } = message as { role?: string; speaker?: string; speakerId?: string };
-    const key = role === "user" ? speakerId || speaker : undefined;
+    const key = role === "user" ? speakerId || speaker : role;
     if (key && key === previous) continued.add(message);
     previous = key;
   }

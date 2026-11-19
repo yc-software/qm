@@ -72,6 +72,8 @@ import {
   Wrench,
   X,
   type IconNode,
+  ExternalLink,
+  Lock,
 } from "lucide";
 import {
   APPROVAL_GONE_MESSAGE,
@@ -163,9 +165,19 @@ import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
-import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import {
+  FORWARD_PREFIX,
+  REACTION_PREFIX,
+  slackPreviewText,
+  slackWireToPlain,
+  splitOnce,
+  splitSlackWire,
+  stripSlackDirectives,
+  withEmoji,
+} from "./slack-text";
 import { continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
+import { slackMark } from "./slack-mark";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
@@ -202,6 +214,7 @@ import {
   renderList,
   sessionsState,
   sessionSlackUrl,
+  defaultSessionTitle,
   openSession,
   syncWorkingPulse,
 } from "./sessions";
@@ -398,7 +411,7 @@ export function createChatSurface(
     }
     const viewer = appState.me?.displayName?.trim().toLowerCase();
     chatState.labelSpeakers =
-      isSideChatSurface() || names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
+      isSideChatSurface() || isReadOnlySlackView() || names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
     chatState.assistantSpeakerLabel = chatState.labelSpeakers ? brandName() : "";
   }
 
@@ -420,9 +433,41 @@ export function createChatSurface(
 
   function speakerTime(message: AgentMessage): TemplateResult | typeof nothing {
     const ts = (message as { timestamp?: number }).timestamp;
-    return isSideChatSurface() && ts !== undefined
+    return (isSideChatSurface() || isReadOnlySlackView()) && ts !== undefined
       ? html`<time class="speaker-time">${formatMessageTime(ts)}</time>`
       : nothing;
+  }
+
+  function slackRow(message: AgentMessage, index: number, body: TemplateResult): TemplateResult {
+    const agent = (message as { role?: string }).role === "assistant";
+    const name = agent ? brandName() : speakerLabelFor(message) || appState.me?.displayName || "You";
+    const member = agent ? undefined : speakerMember(message);
+    const avatar = agent
+      ? brandMark(slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl))
+      : avatarTpl({ key: member?.principalId ?? name, name, avatarUrl: member?.avatarUrl });
+    const ts = (message as { timestamp?: number }).timestamp;
+    const continued = continuedSpeakerRows.has(message);
+    return html`<article
+      class="message-row slack-m ${continued ? "slack-m-continued" : ""}"
+      data-index=${index}
+      data-entry-seqs=${messageEntrySeqs(message)
+        .filter((seq) => !inlineSteers.has(seq))
+        .join(" ")}
+    >
+      <div class="slack-m-avatar">${continued ? nothing : avatar}</div>
+      <div class="slack-m-main">
+        ${
+          continued
+            ? nothing
+            : html`<div class="slack-m-head">
+                <b>${name}</b>${agent ? html`<span class="slack-app-tag">APP</span>` : nothing}${
+                  ts === undefined ? nothing : html`<time>${formatMessageTime(ts)}</time>`
+                }
+              </div>`
+        }
+        <div class="slack-m-body">${body}</div>
+      </div>
+    </article>`;
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
@@ -431,7 +476,7 @@ export function createChatSurface(
     return html`<div class="speaker-label">
       ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}<span
         title=${speaker}
-        >${isSideChatSurface() ? speaker : speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
+        >${isSideChatSurface() || isReadOnlySlackView() ? speaker : speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
       >${speakerTime(message)}
     </div>`;
   }
@@ -1366,25 +1411,11 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)}
-            <div class="readonly-banner">
-              ${
-                slackReply
-                  ? html`Replies are sent to this Slack conversation as
-                    you.${
-                      sessionSlackUrl(s)
-                        ? html` <a
-                            class="readonly-banner-link"
-                            href=${sessionSlackUrl(s)!}
-                            target="_blank"
-                            rel="noreferrer"
-                            >Open in Slack</a
-                          >`
-                        : nothing
-                    }`
-                  : `This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}`
-              }
-            </div>
+            ${
+              s.surface === "slack"
+                ? slackBar(s, chatSurface?.label, shownMessages)
+                : chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)
+            }
             ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
             <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
               ${pinnedStrip()}
@@ -1968,6 +1999,40 @@ export function createChatSurface(
     `;
   }
 
+  function slackBar(s: CoreSession, label: string | undefined, messages: AgentMessage[]): TemplateResult {
+    const people = conversationParticipants(messages);
+    const viewer = appState.me?.user;
+    const names = people.slice(0, 3).map((person) => (person.key === viewer ? "you" : person.name));
+    const leaf = s.title?.trim();
+    return html`<header class="chat-topbar slack-bar">
+      <div class="slack-where">
+        <span class="slack-where-chan">${defaultSessionTitle(s)}</span>${
+          leaf
+            ? html`<span class="slack-where-slash">/</span><span class="slack-where-leaf" dir="auto">${leaf}</span>`
+            : nothing
+        }
+      </div>
+      ${
+        people.length
+          ? html`<div class="slack-people">
+              ${people.slice(0, 3).map((person) => avatarTpl(person))}<span
+                >${names.join(", ")}${people.length > 3 ? ` +${people.length - 3}` : ""}</span
+              >
+            </div>`
+          : nothing
+      }
+      ${openInSurface(s, label)}
+    </header>`;
+  }
+
+  function openInSurface(s: CoreSession, label: string | undefined): TemplateResult | typeof nothing {
+    const href = sessionSlackUrl(s);
+    if (!href || !label) return nothing;
+    return html`<a class="open-in-surface" href=${href} target="_blank" rel="noreferrer"
+      >${slackMark(12)}Open in ${label}${icon(ExternalLink, 12)}</a
+    >`;
+  }
+
   async function retryFailedSend(message: AgentMessage, index: number): Promise<void> {
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming || agent.state.messages[index] !== message) return;
@@ -2113,6 +2178,14 @@ export function createChatSurface(
             : nothing,
           meta: messageMeta(message, index),
         });
+      if (isReadOnlySlackView())
+        return slackRow(
+          message,
+          index,
+          html`${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
+          ${slackWireBubble(displayText)}
+          ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}`,
+        );
       return html`
         <article
           class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
@@ -2246,6 +2319,21 @@ export function createChatSurface(
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
+      if (isReadOnlySlackView())
+        return slackRow(
+          message,
+          index,
+          html`${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+          ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
+          ${
+            workView === nothing
+              ? nothing
+              : html`<div class="slack-work">
+                  <div class="slack-work-label">${icon(Lock, 10)}Only visible here</div>
+                  ${workView}
+                </div>`
+          }`,
+        );
       const via = (msg as AssistantWork).via;
       const labeled = chatState.labelSpeakers || Boolean(via);
       return html`
@@ -2434,6 +2522,25 @@ export function createChatSurface(
   }
 
   function slackWireBubble(text: string): TemplateResult {
+    if (text.startsWith(REACTION_PREFIX)) {
+      const said = text.slice(REACTION_PREFIX.length);
+      const settled = said.lastIndexOf(" (it now has ");
+      return html`<div class="slack-reaction-line">${withEmoji(settled < 0 ? said : said.slice(0, settled), charForName)}</div>`;
+    }
+    const at = text.indexOf(FORWARD_PREFIX);
+    if (at < 0) return slackWireText(text);
+    const rest = text.slice(at + FORWARD_PREFIX.length);
+    const close = rest.indexOf("] ");
+    const origin = close < 0 ? rest : rest.slice(0, close);
+    const [author, where] = splitOnce(origin, " in ");
+    return html`${text.slice(0, at).trim() ? slackWireText(text.slice(0, at).trim()) : nothing}
+      <div class="slack-forward">
+        <div class="slack-forward-head"><b>${author}</b>${where ? html`<span>${where}</span>` : nothing}</div>
+        ${slackWireBubble(close < 0 ? "" : rest.slice(close + 2))}
+      </div>`;
+  }
+
+  function slackWireText(text: string): TemplateResult {
     const self = (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
     const chip = (handle: string): TemplateResult =>
       html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
@@ -2443,7 +2550,7 @@ export function createChatSurface(
         return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
           >${seg.label}</a
         >`;
-      return seg.text;
+      return withEmoji(seg.text, charForName);
     });
     return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
   }
