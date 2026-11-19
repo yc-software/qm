@@ -2470,6 +2470,7 @@ export function buildApp(
     ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
     acl,
     admin,
+    isOrgAdmin,
     skills,
     skillPacks,
     skillFetcher,

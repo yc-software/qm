@@ -786,6 +786,7 @@ export interface AppDeps {
   refreshCustomProviders?: () => Promise<void>;
   acl: AclStore;
   admin?: AdminService;
+  isOrgAdmin?: (principalId: string) => Promise<boolean>;
   skills: SkillStore;
   skillPacks?: SkillPackStore;
   skillFetcher?: SkillPackFetcher;

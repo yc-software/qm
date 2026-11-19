@@ -1,7 +1,6 @@
 import type { App, AppDeps } from "./app-types.ts";
 import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
-import { ambientTenant } from "../tenants/context.ts";
 import { samePersonInDirectory } from "../directory/person.ts";
 import {
   createMembershipControlsScope,
@@ -29,12 +28,7 @@ export async function loopAdministration(
 ) {
   if (!loops.length) return [];
   const { actorId } = actor;
-  if (
-    actor.botActor !== true &&
-    deps.admin &&
-    (await deps.admin.adminStatusOf(ambientTenant(), deps.identity.classify(actorId))).isAdmin
-  )
-    return loops.map(() => true);
+  if (actor.botActor !== true && (await deps.isOrgAdmin?.(actorId)) === true) return loops.map(() => true);
   const snapshot = await scopeMembershipSnapshot(
     {
       directory: deps.directory,

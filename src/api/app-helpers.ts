@@ -478,12 +478,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ...(deps.identity ? { identity: deps.identity } : {}),
     ...(deps.teams ? { teams: deps.teams } : {}),
     ...(deps.personas ? { personas: deps.personas } : {}),
-    ...(deps.admin ? { isOrgAdmin } : {}),
+    ...(deps.isOrgAdmin ? { isOrgAdmin: deps.isOrgAdmin } : {}),
   };
 
   async function isOrgAdmin(principalId: string): Promise<boolean> {
-    if (!deps.admin) return false;
-    return (await deps.admin.adminStatusOf(ambientTenant(), deps.identity.classify(principalId))).isAdmin;
+    return (await deps.isOrgAdmin?.(principalId)) === true;
   }
 
   function scopeRules(membership: ScopeMembershipDeps) {
