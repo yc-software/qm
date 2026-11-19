@@ -209,7 +209,8 @@ struct RootView: View {
     .modifier(
       ConversationDrawerEffects(
         isOpen: $showingConversations, selected: selectedConversation,
-        listVisible: homePath.isEmpty, phase: phase, model: model))
+        listVisible: homePath.isEmpty, phase: phase, model: model)
+    )
     .task(id: [searchTerm, String(webOnly)]) {
       if !searchTerm.isEmpty {
         do { try await Task.sleep(for: .milliseconds(250)) } catch { return }

@@ -119,13 +119,14 @@ struct ChatView: View {
           // offset, instead of scrolling down after laying out from the top.
           transcriptScroll(width: geometry.size.width, proxy: proxy)
             .transition(
-              .asymmetric(insertion: .opacity.combined(with: .offset(y: 16)), removal: .opacity))
+              .asymmetric(insertion: .opacity.combined(with: .offset(y: 16)), removal: .opacity)
+            )
             .id(model.hasLoadedTranscript)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar(proxy)
-          }
+          bottomBar(proxy)
+        }
       }
     }
     .background(QMTheme.paper)
