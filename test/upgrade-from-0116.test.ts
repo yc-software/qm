@@ -1,3 +1,4 @@
+import { PgBoss } from "pg-boss";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -37,7 +38,7 @@ const SCHEMA_SNAPSHOT = `
   SELECT DISTINCT entry FROM (
     SELECT format('rel %s %s rls=%s/%s', name, relkind, relrowsecurity, relforcerowsecurity) AS entry FROM rels
     UNION ALL
-    SELECT format('col %s %s %s %s %s %s', r.name, row_number() OVER (PARTITION BY r.oid ORDER BY a.attnum), a.attname, format_type(a.atttypid, a.atttypmod),
+    SELECT format('col %s %s %s %s %s %s', r.name, row_number() OVER (PARTITION BY r.oid ORDER BY CASE WHEN r.name LIKE 'pgboss.%' THEN a.attname END, a.attnum), a.attname, format_type(a.atttypid, a.atttypmod),
                   a.attnotnull, pg_get_expr(d.adbin, d.adrelid))
       FROM rels r JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped
       LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -56,7 +57,8 @@ const SCHEMA_SNAPSHOT = `
     SELECT format('trg %s', pg_get_triggerdef(t.oid))
       FROM rels r JOIN pg_trigger t ON t.tgrelid = r.oid AND NOT t.tgisinternal
     UNION ALL
-    SELECT format('fn %s', pg_get_functiondef(p.oid))
+    SELECT format('fn %s', CASE WHEN n.nspname = 'pgboss' THEN split_part(pg_get_functiondef(p.oid), 'AS $function$', 1)
+                              ELSE pg_get_functiondef(p.oid) END)
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname IN ('public', 'pgboss') AND p.prokind = 'f'
        AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
@@ -67,7 +69,7 @@ const ROW_COUNTS = `
          query_to_xml(format('SELECT count(*) AS n FROM %I.%I', schemaname, relname), false, true, '')))[1]::text::int AS n
     FROM pg_stat_user_tables WHERE schemaname = 'public'`;
 
-async function migrate(url: string, dataDir: string): Promise<void> {
+async function migrate(url: string, dataDir: string, db: pg.Pool): Promise<void> {
   const { stdout } = await promisify(execFile)(process.execPath, ["src/migrate-main.ts"], {
     cwd: root,
     env: {
@@ -84,6 +86,9 @@ async function migrate(url: string, dataDir: string): Promise<void> {
     maxBuffer: 64 * 1024 * 1024,
   });
   assert.match(stdout, /\[qm:migrate\] database migrations applied/);
+  const boss = new PgBoss({ db: { executeSql: (text, values) => db.query(text, values) } });
+  const drift = await boss.detectSchemaDrift();
+  assert.ok(drift.ok, JSON.stringify(drift));
 }
 
 async function withDatabase<T>(admin: pg.Pool, run: (url: string, db: pg.Pool) => Promise<T>): Promise<T> {
@@ -123,7 +128,7 @@ for (const [fixture, baseline] of [
       try {
         const fresh = await withDatabase(admin, async (url, db) => {
           if (baseline) await load(db, baseline);
-          await migrate(url, dataDir);
+          await migrate(url, dataDir, db);
           return (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
         });
         await withDatabase(admin, async (url, db) => {
@@ -135,13 +140,9 @@ for (const [fixture, baseline] of [
             );
             before.set("public.participants", before.get("public.participants")! - closed.rows[0]!.n);
           }
-          await migrate(url, dataDir);
-          await migrate(url, dataDir);
+          await migrate(url, dataDir, db);
+          await migrate(url, dataDir, db);
           const upgraded = (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
-          assert.deepEqual(
-            upgraded.filter((entry) => !fresh.includes(entry)),
-            fresh.filter((entry) => !upgraded.includes(entry)),
-          );
           assert.deepEqual(upgraded, fresh);
 
           const after = await rowCounts(db);

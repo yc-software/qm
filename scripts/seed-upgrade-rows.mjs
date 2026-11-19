@@ -21,6 +21,7 @@ for (const column of columns) {
 }
 
 function value(column) {
+  if (column.table_name === "pgboss.bam" && column.column_name === "command") return "'SELECT 1'";
   const type = column.udt_name;
   if (column.data_type === "ARRAY") return "'{}'";
   if (type === "uuid") return "gen_random_uuid()";

@@ -251,3 +251,22 @@ No production upgrade is implied by this change. The existing development databa
 - All9 background commands complete; no invalid indexes remain. Existing default grants allow new app-role operations; delivery/retry succeeds. The real custom adapter registers, heartbeats and marks its instance stopped without recording connection credentials. The old exact-schema validator rejects45.
 - The committed installer regression fails with the previous helper because index builds remain absent; the new helper waits for both builds. Its same fixture also exercises an invalid DDL command, requiring a rejected installation and persisted failure while preserving cleanup.
 - Run the affected cron-queue, delivery-job, recovery and startup tests, plus typecheck/lint. Live agent/native qualification and full CI remain separate gates; no credentialed integration coverage is inferred from isolated queue tests.
+
+The generic upgrade-row seeder and the synthetic v0.1.16 fixture now use executable
+no-op SQL (`SELECT 1`) for `pgboss.bam.command`, replacing the fixture's arbitrary
+`upgrade-check` text. Pending BAM is executed by the installer, so arbitrary text
+is invalid test data. Only that cell changes in the compressed historical-schema
+fixture; its schema and all other row values remain intact. Runtime rejection of
+invalid migration commands remains covered by the installer regression. This is
+not a production data backfill or a command-skipping compatibility path.
+
+Release-upgrade tests retain the complete relation, named-column/type/default,
+constraint, index, policy and trigger snapshots. Application column order and
+function definitions remain exact. Only pg-boss column order is canonicalized by
+name; its function definition headers remain in the snapshot, preserving return
+types, arguments, language, volatility, security and per-function settings. Its
+body semantics are additionally checked through the pinned SDK's
+`detectSchemaDrift()` after each migration/restart. This accommodates the SDK's
+intentional fresh-construction versus incremental-migration ordering/formatting,
+without dropping structural or function-attribute coverage. The stronger ordered
+snapshot equality remains; only a redundant set-difference equality is removed.
