@@ -146,6 +146,7 @@ export function ensureDeliveryStream(): void {
     if (document.visibilityState === "visible") catchUpAll();
   });
   window.addEventListener("focus", catchUpAll);
+  window.addEventListener("online", catchUpAll);
 }
 
 function catchUpAll(): void {

@@ -114,17 +114,19 @@ test("the mounted conversation recovers a saved answer after a local polling tim
       items.splice(0, items.length, user, answer);
     });
 
-    await t.test("genuine failures and user cancellation remain visible", async () => {
+    await t.test("genuine failures remain visible", async () => {
       const backendFailure = timeout();
       delete backendFailure.interruptedRunId;
       backendFailure.errorMessage = "The backend failed.";
       reset(backendFailure);
       await refresh();
       assert.equal(agent.state.messages.at(-1), backendFailure);
-      const aborted = { ...timeout(), stopReason: "aborted" as const };
-      reset(aborted);
+    });
+
+    await t.test("a stopped reply gives way to the saved transcript", async () => {
+      reset({ ...timeout(), stopReason: "aborted" as const });
       await refresh();
-      assert.equal(agent.state.messages.at(-1), aborted);
+      assert.equal((agent.state.messages.at(-1) as AssistantWork)?.stopReason, "stop");
     });
 
     await t.test("a failed history read keeps the error and a later delivery can recover", async () => {
