@@ -341,7 +341,7 @@ export class OnboardingWelcome extends LitElement {
     const service = this.services.find((item) => item.id === this.toolkit);
     if (!service) return this.loading ? connectionCard({ id: this.toolkit }) : undefined;
     const accounts = listed.filter((account) => account.toolkit === service.id);
-    const removable = accounts.filter((account) => account.id && account.id !== this.disconnecting);
+    const removable = accounts.filter((account) => account.id);
     const sole = removable.length === 1 ? removable[0] : undefined;
     const stale = this.staleToolkits().has(service.id);
     const checked = this.preview || this.connectionsChecked;
@@ -365,7 +365,7 @@ export class OnboardingWelcome extends LitElement {
         (!checked && problem) || (!this.preview && this.connectionOutcome === "failed")
           ? () => void this.loadConnections()
           : undefined,
-    })}${removable.length > 1 ? this.accountRows(removable) : nothing}`;
+    })}${removable.length > 1 && !this.disconnecting ? this.accountRows(removable) : nothing}`;
   }
   private async loadConnections(): Promise<void> {
     this.connectionsController?.abort();
