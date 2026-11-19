@@ -90,7 +90,6 @@ export class OnboardingWelcome extends LitElement {
   declare authorizationError: string;
   private connections: ConnectedAccount[] = [];
   private connectionsChecked = false;
-  private leftover = "";
   private disconnecting = "";
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
@@ -308,9 +307,12 @@ export class OnboardingWelcome extends LitElement {
       this.drawPicker();
     }
   }
-  private async confirmDisconnect(accounts: ConnectedAccount[], name: string): Promise<void> {
-    if (!window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`)) return;
+  private async removeAll(accounts: ConnectedAccount[], name: string): Promise<void> {
     for (const account of accounts) if (!(await this.disconnect(account, name))) return;
+  }
+  private async confirmDisconnect(accounts: ConnectedAccount[], name: string): Promise<void> {
+    if (window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`))
+      await this.removeAll(accounts, name);
   }
   private card(notice: string): TemplateResult | undefined {
     if (this.widget !== "apps" || !this.toolkit || this.error) return undefined;
@@ -323,20 +325,21 @@ export class OnboardingWelcome extends LitElement {
       : this.connections.filter((account) => account.toolkit === service.id);
     const removable = accounts.filter((account) => account.id);
     const stale = this.staleToolkits().has(service.id);
-    const old = removable.find((account) => account.id === this.leftover);
+    const outdated = stale ? [] : removable.filter((account) => account.missingScopes?.length);
     const checked = this.preview || this.connectionsChecked;
-    const problem = this.connectionError || this.authorizationError || (old ? stillThere(service.name) : "");
+    const problem =
+      this.connectionError || this.authorizationError || (outdated.length ? stillThere(service.name) : "");
     let working = "";
     if (this.authorizing) working = `Opening ${service.name}…`;
     else if (this.disconnecting) working = "Disconnecting…";
     let fix;
     if ((!checked && problem) || (!this.preview && this.connectionOutcome === "failed" && (stale || !accounts.length)))
       fix = { label: "Check again", name: `Check ${service.name} again`, run: () => void this.loadConnections() };
-    else if (old)
+    else if (outdated.length)
       fix = {
         label: "Remove it",
         name: `Remove the old ${service.name} connection`,
-        run: () => void this.disconnect(old, service.name),
+        run: () => void this.removeAll(outdated, service.name),
       };
     return connectionCard(service, {
       outcome: this.connectionOutcome,
@@ -389,10 +392,8 @@ export class OnboardingWelcome extends LitElement {
           const replaced = accounts.find(
             (account) => account.id === attempt.replaces && account.id !== attempt.accountId,
           );
-          if (replaced && !(await this.disconnect(replaced, attempt.service.name))) {
-            this.leftover = replaced.id;
+          if (replaced && !(await this.disconnect(replaced, attempt.service.name)))
             this.connectionError = stillThere(attempt.service.name);
-          }
           if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
             continuedAttempts.add(attempt.state);
             this.onConnected?.(attempt.service.name);
