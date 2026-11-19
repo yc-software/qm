@@ -15,20 +15,9 @@ import { mountConnectionPicker, type ConnectionService } from "./connection-pick
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
 
-export interface AppConnection {
-  id: string;
-  toolkit: string;
-  name: string;
-  label?: string;
-  connector?: string;
-  logoUrl?: string;
-  state: "working" | "reconnect" | "permissions";
-}
 interface ConnectedAccount {
   id: string;
   toolkit: string;
-  label?: string;
-  connector?: string;
   missingScopes?: string[];
   status?: string;
 }
@@ -70,7 +59,6 @@ export class OnboardingWelcome extends LitElement {
     toolkit: {},
     returnKey: {},
     embedded: { type: Boolean },
-    picking: { type: Boolean },
     base: {},
     loading: { state: true },
     error: { state: true },
@@ -95,7 +83,6 @@ export class OnboardingWelcome extends LitElement {
   declare toolkit: string;
   declare returnKey: string;
   declare embedded: boolean;
-  declare picking: boolean;
   declare base: string;
   declare loading: boolean;
   declare error: string;
@@ -137,7 +124,6 @@ export class OnboardingWelcome extends LitElement {
     this.toolkit = "";
     this.returnKey = "welcome";
     this.embedded = false;
-    this.picking = false;
     this.base = "/";
     this.loading = true;
     this.error = "";
@@ -325,33 +311,8 @@ export class OnboardingWelcome extends LitElement {
       this.drawPicker();
     }
   }
-  private appState(account: ConnectedAccount): AppConnection["state"] {
-    if (account.status) return "reconnect";
-    return account.missingScopes?.length ? "permissions" : "working";
-  }
-  private sentApps = "";
-  protected updated(): void {
-    if (!this.embedded) return;
-    const apps: AppConnection[] = this.connections.map((account) => {
-      const service = this.services.find((candidate) => candidate.id === account.toolkit);
-      return {
-        id: account.id,
-        toolkit: account.toolkit,
-        name: service?.name ?? account.toolkit,
-        ...(account.label ? { label: account.label } : {}),
-        ...(account.connector ? { connector: account.connector } : {}),
-        ...(service?.logoUrl ? { logoUrl: service.logoUrl } : {}),
-        state: this.appState(account),
-      };
-    });
-    const detail = { apps, loading: this.loading, busy: Boolean(this.authorizing || this.disconnecting) };
-    const sent = JSON.stringify(detail);
-    if (sent === this.sentApps) return;
-    this.sentApps = sent;
-    this.dispatchEvent(new CustomEvent("app-connections", { detail }));
-  }
-  reconnectApp(app: AppConnection): void {
-    void this.authorize({ id: app.toolkit, name: app.name, description: "", popularity: 0 }, app.id);
+  reconnectApp(toolkit: string, name: string, accountId: string): void {
+    void this.authorize({ id: toolkit, name, description: "", popularity: 0 }, accountId);
   }
   private confirmDisconnect(account: ConnectedAccount, name: string): void {
     if (window.confirm(`Disconnect ${name}? QM will lose access to it until you connect it again.`))
@@ -399,6 +360,7 @@ export class OnboardingWelcome extends LitElement {
           );
           if (replaced && !(await this.disconnect(replaced, attempt.service.name)))
             this.connectionError = `${attempt.service.name} is reconnected, but the old connection is still there. Disconnect it below.`;
+          this.dispatchEvent(new Event("app-connected"));
           if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
             continuedAttempts.add(attempt.state);
             this.onConnected?.(attempt.service.name);
@@ -675,7 +637,7 @@ export class OnboardingWelcome extends LitElement {
         ["slack", "slack-account"].includes(this.widget)
           ? nothing
           : html`<div class="welcome-beat" style=${`--welcome-delay:${paced ? 3450 : 1300}ms`}>
-              ${this.loading && (!this.embedded || this.picking) ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
+              ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error
                   ? html`<div class="welcome-load">
@@ -711,11 +673,7 @@ export class OnboardingWelcome extends LitElement {
               }
               ${this.connectionError && !this.error && !this.loading ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
               ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
-              <div
-                class="welcome-picker"
-                ?hidden=${this.embedded && !this.picking}
-                ?inert=${Boolean(this.authorizing)}
-              ></div>
+              <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
               ${
                 connectedAccounts.length && !this.embedded
                   ? html`<div class="connection-connected" role="status" aria-live="polite">

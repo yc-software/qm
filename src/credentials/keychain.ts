@@ -1544,9 +1544,7 @@ export function createKeychain(deps: {
         connected: true,
         ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
         ...(hasRefresh ? { hasRefreshToken: true } : {}),
-        ...((tokenExpired && (!hasRefresh || refreshFailed)) || rec.check?.ok === false
-          ? { needsReconnect: true }
-          : {}),
+        ...(connectorNeedsReconnect(rec, tokenExpired) ? { needsReconnect: true } : {}),
         ...(refreshFailed ? { refreshFailedAt } : {}),
         ...(refreshFailed && rec.refresh?.refreshError ? { refreshError: rec.refresh.refreshError } : {}),
         ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
@@ -1750,7 +1748,7 @@ export function storedCredentialError(e: unknown): string {
 
 export const credentialLineText = (line: CredentialLine): string => {
   if (line.failedCheck)
-    return `${line.label}; ${line.use}; last check failed${line.failedCheck.detail ? ` (${line.failedCheck.detail})` : ""}`;
+    return `${line.label}; ${line.use}; last check failed${line.failedCheck.detail ? ` (${line.failedCheck.detail.slice(0, 80)})` : ""}`;
   if (!line.expired) return `${line.label}; ${line.use}`;
   return `${line.label}; expired${line.refreshError ? ` (refresh failed: ${line.refreshError})` : ""}`;
 };
@@ -1799,8 +1797,12 @@ function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine 
 const oauthExpired = (rec: KeychainCredentialMeta, t: number, oauthSkew: number) =>
   rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
 
+function connectorNeedsReconnect(rec: KeychainCredentialMeta, tokenExpired: boolean): boolean {
+  const refreshFailed = typeof rec.refresh?.refreshFailedAt === "number";
+  return (tokenExpired && (!rec.refresh?.refreshTokenEnc || refreshFailed)) || rec.check?.ok === false;
+}
+
 function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_000): ConnectorMeta {
-  const hasRefresh = !!rec.refresh?.refreshTokenEnc;
   const refreshFailed = typeof rec.refresh?.refreshFailedAt === "number";
   const tokenExpired = oauthExpired(rec, t, oauthSkew);
   const refreshError =
@@ -1814,7 +1816,7 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
     ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
     ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
     connected: true,
-    ...((tokenExpired && (!hasRefresh || refreshFailed)) || rec.check?.ok === false ? { needsReconnect: true } : {}),
+    ...(connectorNeedsReconnect(rec, tokenExpired) ? { needsReconnect: true } : {}),
     ...(refreshError ? { refreshError } : {}),
   };
 }
@@ -1885,7 +1887,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       add(entry.ownerId, `- \`${entry.handle}\` — ${entry.description}`);
   const lines = [
     "## Credentials",
-    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill. When one of your own fails as signed out or revoked, record it (POST /v1/keychain/credentials/:id/check).",
+    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill.",
   ];
   const owners = [...groups.keys()].sort(
     (a, b) => Number(b === ORGANIZATION_OWNER_KEY) - Number(a === ORGANIZATION_OWNER_KEY) || a.localeCompare(b),

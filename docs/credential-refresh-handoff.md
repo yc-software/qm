@@ -88,15 +88,16 @@ remove each other's files.
 
 ## Status and keep-alive
 
-Saving a file login or storing a connector token (an OAuth connection or an AI-account
-subscription login) arms one managed task per person, "Keep logins alive", in their personal
-conversation, nightly at about 4 AM local. Before each fire the scheduler refreshes every
-connector token that is due through the keychain's locked refresh, with no model turn. The fire
-then runs only if the person has a saved file login or a connector that needs reconnecting. The
-model runs each saved CLI login's own read-only status command, skipping browser profiles, files
-with no status command and logins whose refresh would land outside the declared token caches,
-and records the result with `POST /v1/keychain/credentials/:id/check`. The check is shown on the Keychain page and in every
+Saving a file login that holds a token cache a run saves back (the AWS SSO and CLI caches in
+`file-merge.ts`) or storing an OAuth connector token arms one managed task per person, "Keep
+logins alive", in their personal conversation, nightly at about 4 AM local. AI-account
+subscription logins and third-party app connections do not arm it. Before each fire the scheduler
+refreshes every connector token that is due through the keychain's locked refresh, with no model
+turn. The fire then runs only if the person has such a file login or a connector that needs
+reconnecting. The model runs `aws sts get-caller-identity` for those logins, which refreshes and
+saves their token cache, and records the result with `POST /v1/keychain/credentials/:id/check`. The check is shown on the Keychain page and in every
 conversation's credential list until the next check or a fresh sign-in, and the task tells the
 person once when something stops working or recovers. A connector's state comes from its
 refresh: a failed refresh shows as "Reconnect needed". Apps connected through Composio that
-Composio reports as expired or failed are listed with that status instead of disappearing.
+Composio reports as expired or failed are listed with that status instead of disappearing; a sign-in
+the person never finished is not listed.

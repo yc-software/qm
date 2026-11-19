@@ -11,7 +11,18 @@ import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog
 import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keychain-state";
 import { listPageTpl } from "./list-page";
 import "./onboarding-welcome";
-import type { AppConnection, OnboardingWelcome } from "./onboarding-welcome";
+import type { OnboardingWelcome } from "./onboarding-welcome";
+import { isConnectionReturn } from "./connection-return";
+
+interface AppConnection {
+  id: string;
+  toolkit: string;
+  name: string;
+  label?: string;
+  connector?: string;
+  missingScopes?: string[];
+  status?: string;
+}
 
 interface ConnectorProvider {
   mcpLabel?: string;
@@ -72,7 +83,7 @@ let keychainAsks: KeychainAsk[] = [];
 let keychainScopeNames: Record<string, string> = {};
 let composioAvailable = false;
 let apps: AppConnection[] = [];
-let pickingApp = false;
+let pickingApp = isConnectionReturn();
 let connectorNotice = "";
 let loadNotice = "";
 let addingCredential: { service: string; envKey: string; purpose: string } | null = null;
@@ -516,18 +527,14 @@ function drawConnectors(): void {
         composioAvailable
           ? html`<qm-onboarding-welcome
               class="kc-app-picker"
+              ?hidden=${!pickingApp}
               .me=${appState.me}
               .setupOnly=${true}
               .embedded=${true}
-              .picking=${pickingApp}
               .widget=${"apps"}
               .returnKey=${"keychain"}
               .base=${withBase("")}
-              @app-connections=${(event: CustomEvent<{ apps: AppConnection[]; loading: boolean }>) => {
-                if (event.detail.loading || JSON.stringify(event.detail.apps) === JSON.stringify(apps)) return;
-                apps = event.detail.apps;
-                drawConnectors();
-              }}
+              @app-connected=${() => void refreshApps()}
             ></qm-onboarding-welcome>`
           : ""
       }${accountsContent}`,
@@ -643,21 +650,23 @@ export async function renderConnectors(): Promise<void> {
       drawConnectors();
     },
   );
-  const appsDone = composioAvailable
-    ? undefined
-    : api("/api/composio/connections").then(
-        () => {
-          if (!fresh()) return;
-          composioAvailable = true;
-          drawConnectors();
-        },
-        (reason) => {
-          if (!fresh() || (reason instanceof ApiError && reason.status === 403)) return;
-          notices.push(errMessage(reason, "Failed to load connected apps."));
-          applyNotices();
-          drawConnectors();
-        },
-      );
+  const appsDone = loadApps().then(
+    (loaded) => {
+      if (!fresh()) return;
+      composioAvailable = true;
+      apps = loaded;
+      drawConnectors();
+    },
+    (reason) => {
+      if (!fresh()) return;
+      composioAvailable = false;
+      apps = [];
+      if (!(reason instanceof ApiError && reason.status === 403))
+        notices.push(errMessage(reason, "Failed to load connected apps."));
+      applyNotices();
+      drawConnectors();
+    },
+  );
   await Promise.all([connDone, keysDone, appsDone]);
 }
 
@@ -791,24 +800,47 @@ async function startConnector(provider: string): Promise<void> {
   drawConnectors();
 }
 
-const APP_STATES: Record<AppConnection["state"], TemplateResult> = {
-  working: html`<span class="kc-state ok">Working</span>`,
-  reconnect: html`<span class="kc-state warning">Reconnect needed</span>`,
-  permissions: html`<span class="kc-state warning">Needs new permissions</span>`,
-};
+async function loadApps(): Promise<AppConnection[]> {
+  const loaded: AppConnection[] = [];
+  let cursor = "";
+  do {
+    const page = await api<{ items?: AppConnection[]; nextCursor?: string | null }>(
+      `/api/composio/connections${cursor ? `?${new URLSearchParams({ cursor })}` : ""}`,
+    );
+    loaded.push(...(page.items ?? []));
+    cursor = page.nextCursor ?? "";
+  } while (cursor);
+  return loaded;
+}
 
-function appPicker(): OnboardingWelcome | null {
-  return appState.mainEl?.querySelector<OnboardingWelcome>("qm-onboarding-welcome.kc-app-picker") ?? null;
+async function refreshApps(): Promise<void> {
+  try {
+    apps = await loadApps();
+  } catch (e) {
+    connectorNotice = errMessage(e, "Failed to load connected apps.");
+  }
+  if (appState.currentView === "keychain") drawConnectors();
+}
+
+function reconnectApp(app: AppConnection): void {
+  pickingApp = true;
+  drawConnectors();
+  appState.mainEl
+    ?.querySelector<OnboardingWelcome>("qm-onboarding-welcome.kc-app-picker")
+    ?.reconnectApp(app.toolkit, app.name, app.id);
 }
 
 function appCard(app: AppConnection): TemplateResult {
+  let state = html`<span class="kc-state ok">Working</span>`;
+  if (app.status) state = html`<span class="kc-state warning">Reconnect needed</span>`;
+  else if (app.missingScopes?.length) state = html`<span class="kc-state warning">Needs new permissions</span>`;
   return html`<article class="kc-resource kc-account">
     <div class="kc-resource-main">
-      ${connectorLogo(app.toolkit, app.logoUrl)}
+      ${connectorLogo(app.toolkit, `https://logos.composio.dev/api/${app.toolkit}`)}
       <div class="kc-resource-copy">
         <div class="kc-resource-title-row">
           <h3>${app.name}</h3>
-          ${APP_STATES[app.state]}
+          ${state}
         </div>
         ${
           app.label || app.connector
@@ -817,7 +849,7 @@ function appCard(app: AppConnection): TemplateResult {
         }
       </div>
       <div class="kc-resource-actions" ?hidden=${Boolean(app.connector)}>
-        <button class="btn" type="button" @click=${() => appPicker()?.reconnectApp(app)}>Reconnect</button>
+        <button class="btn" type="button" @click=${() => reconnectApp(app)}>Reconnect</button>
         <button
           class="kc-text-action danger"
           type="button"
@@ -829,14 +861,14 @@ function appCard(app: AppConnection): TemplateResult {
       </div>
     </div>
     ${
-      app.state === "reconnect"
+      app.status
         ? html`<div class="kc-inline-warning" role="status">
             ${app.name} stopped working. Reconnect it to keep using it.
           </div>`
         : ""
     }
     ${
-      app.state === "permissions"
+      !app.status && app.missingScopes?.length
         ? html`<div class="kc-inline-warning" role="status">
             QM needs more access to ${app.name} than it was given. Reconnect to grant it.
           </div>`

@@ -46,7 +46,7 @@ function fixture() {
       return { status: "silent" };
     },
   });
-  const saved = { kind: "file", ownerId: "alice" } as KeychainCredentialMeta;
+  const saved = { kind: "file", ownerId: "alice", targets: [".aws/sso/cache/a.json"] } as KeychainCredentialMeta;
   const keychain = withLoginKeepAlive(
     { save: async () => saved, setConnectorToken: async () => {} } as unknown as Keychain,
     (ownerId) => service.ensure(ownerId),
@@ -64,6 +64,7 @@ test("saving a login or connecting an account arms one nightly keep-alive that r
   assert.match(cron.schedule.cron!, /^\d+ 4 \* \* \*$/);
 
   await f.crons.update(cron.id, { schedule: { everyMs: 60_000 } });
+  f.logins.push({ ...f.saved, targets: [".config/gh/hosts.yml"] });
   await f.scheduler.tick(Date.now() + 120_000);
   assert.equal(f.calls.length, 0);
 

@@ -5044,17 +5044,11 @@ a.connector-widget:focus-visible {
   margin: 0 0 0 auto;
   align-self: center;
 }
-.kc-app-picker:has(.welcome-content:empty) {
-  display: none;
-}
-.kc-app-picker .welcome-picker[hidden] {
-  display: none;
-}
 .kc-app-picker .welcome-content,
 .kc-app-picker .connection-picker {
   max-width: none;
 }
-.kc-app-picker .welcome-picker:not([hidden]) {
+.kc-app-picker .welcome-picker {
   padding: 0 12px 12px;
 }
 .kc-section-title {
