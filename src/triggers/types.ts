@@ -68,6 +68,11 @@ export interface Cron extends TriggerBase {
   lastFireNote?: CronFireNote;
 }
 
+export interface CronOrigin {
+  personaId?: string;
+  project?: { id: string; name: string };
+}
+
 interface WebhookVerification {
   scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear" | "token" | "standard-webhooks";
   secret?: string;

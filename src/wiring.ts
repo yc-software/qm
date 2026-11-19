@@ -2974,6 +2974,7 @@ export function buildApp(
     notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id, { actorId: "system" }),
+    cronOrigin: (cron) => app.cronOrigin(cron),
     advisoryLock,
     crons,
     deliveries,

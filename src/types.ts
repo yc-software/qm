@@ -230,6 +230,7 @@ export interface Destination {
   onBehalfOf?: string;
   relaySender?: string;
   persona?: WornPersona;
+  project?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;

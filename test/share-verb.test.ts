@@ -87,7 +87,7 @@ function fakeApp(state: FakeState): App {
     async revokeGrant(t: Tenant, ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string) {
       await state.acl.revoke(t, ownerScopeId, ref, granteeScopeId, revokedBy, authorOfGrant(state, ownerScopeId, ref));
     },
-    async moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string) {
+    async moveArtifactHome(_tenant: Tenant, type: ArtifactType, id: string, toScope: ScopeId, movedBy: string) {
       if (type !== "skill" && type !== "deploy")
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       state.moves.push({ type, id, toScope, movedBy });
@@ -200,6 +200,24 @@ test("share resolves a teammate by name → a frictionless person grant (the per
   assert.equal(r.target.scope, scopeId("personal", "U-carol"));
   assert.equal(r.target.label, "Carol");
   assert.equal((await grantsOf(state))[0]!.granteeScopeId, scopeId("personal", "U-carol"));
+});
+
+test("a cron that posts to a channel stays one cron: sharing it with a person grants access, with no copy", async () => {
+  const state = await ownerState();
+  const app = fakeApp(state);
+  const getCron = app.getCron.bind(app);
+  app.getCron = async (id) => {
+    const cron = await getCron(id);
+    return cron && { ...cron, destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } };
+  };
+  app.shareCron = async () => assert.fail("a channel cron is not copied");
+  const r = await createControlService(app).shareArtifact({ type: "cron", id: "K1", recipient: "carol" }, cap("U1"));
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.equal(r.copy, undefined);
+  assert.deepEqual(
+    (await grantsOf(state)).map((g) => [g.ref, g.granteeScopeId]),
+    [["cron:K1", scopeId("personal", "U-carol")]],
+  );
 });
 
 test("share into a scope you belong to is frictionless; permission:write is honored", async () => {

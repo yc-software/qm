@@ -37,6 +37,7 @@ import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { projectScopeId } from "../projects/project-store.ts";
 import { SLACK_DELIVERY_CLAIM_MS } from "./delivery-jobs.ts";
 import { slackRetryAfterMs } from "./delivery.ts";
 
@@ -104,11 +105,18 @@ export function createSlackDeliverer(deps: {
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
       ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
     ];
-    const persona = d.destination.persona;
-    const personaName = persona ? escapeSlackText(persona.name.trim() || "Persona") : "";
-    const parts = persona
-      ? [`Persona: ${base ? `<${base}/personas/${encodeURIComponent(persona.id)}|${personaName}>` : personaName}`]
-      : [];
+    const { persona, project } = d.destination;
+    const linked = (name: string, path: string) => {
+      const label = escapeSlackText(name);
+      return base ? `<${base}/${path}|${label}>` : label;
+    };
+    const origin = [
+      ...(persona ? [linked(persona.name.trim() || "Persona", `personas/${encodeURIComponent(persona.id)}`)] : []),
+      ...(project
+        ? [linked(project.name.trim() || "Project", `contexts?scope=${encodeURIComponent(projectScopeId(project.id))}`)]
+        : []),
+    ];
+    const parts = origin.length ? [`From ${origin.join(" in ")}`] : [];
     if (base && id) {
       const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
       parts.push(`${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`);

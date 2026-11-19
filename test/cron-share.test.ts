@@ -11,6 +11,8 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenant } from "./support/test-tenant.ts";
+import { projectScopeId } from "../src/projects/project-store.ts";
+import { principalDestination } from "../src/reach/reach.ts";
 
 test("a cron shared with a person becomes their paused linked copy until they edit it", async () => {
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-share-")) }));
@@ -265,4 +267,30 @@ test("shared cron invitations and recipient preparation retain the selected sour
     ),
   );
   assert.equal((await deliveries.get(invitation.id))!.deliveredAt, null);
+});
+
+test("a copy of a project cron keeps its persona and project, and the persona's owner lends it to the recipient", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-share-origin-")) }));
+  const { app } = built;
+  for (const who of ["U1", "U2"]) await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+  const project = (await app.createProject("U1", "Launch"))!;
+  const persona = await app.personas!.create("U1", { name: "Ada" });
+  assert.equal(persona.status, "ok");
+  const personaId = (persona as { value: { id: string } }).value.id;
+  const { session } = (await app.spawnSession("U1", { scopeId: projectScopeId(project.id), title: "Launch" }))!;
+  await built.sessions.setPersona(session.id, personaId);
+  const source = await app.createCron({
+    ownerScopeId: projectScopeId(project.id),
+    owner: "U1",
+    createdBy: "U1",
+    sessionRef: session.threadRef,
+    destination: principalDestination("U1", "U1"),
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "launch status",
+  });
+
+  const { copy, note } = await app.shareCron(testTenant, source.id, "U2", "U1");
+  assert.match(note ?? "", /posts as the persona Ada: they now have read access/);
+  assert.equal(await app.personas!.role("U2", personaId), "read");
+  assert.deepEqual(await app.cronOrigin(copy), { personaId, project: { id: project.id, name: "Launch" } });
 });

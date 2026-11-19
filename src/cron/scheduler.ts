@@ -3,7 +3,7 @@ import { ownerAuthored, cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin } from "../triggers/types.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
@@ -85,9 +85,8 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
-  sessions?: NonNullable<TriggerDeps["sessions"]> & {
-    getByThread(threadRef: string): Promise<{ personaId?: string } | null>;
-  };
+  sessions?: NonNullable<TriggerDeps["sessions"]>;
+  cronOrigin?: (cron: Cron) => Promise<CronOrigin>;
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   notebookOnlyMemory?: (cron: Cron) => Promise<boolean>;
@@ -297,7 +296,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
-      const personaId = cron.sessionRef ? (await deps.sessions?.getByThread(cron.sessionRef))?.personaId : undefined;
+      const { personaId, project } = (await deps.cronOrigin?.(cron)) ?? {};
+      const destination = cron.destination && project ? { ...cron.destination, project } : cron.destination;
       const refusedDelivery =
         previous && cron.destination
           ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
@@ -335,7 +335,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             await deps.crons.beginFire(cron.id, runningEntry);
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
-          ...(cron.destination ? { destination: cron.destination } : {}),
+          ...(destination ? { destination } : {}),
           ...(failingAlready
             ? {}
             : {

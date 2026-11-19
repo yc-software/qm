@@ -54,7 +54,7 @@ Some apps are served by one of the workspace's connectors instead of Composio. I
 
 ## Reconnect or disconnect an app
 
-Each account in `connections` lists `missingScopes`: permissions the app's configuration now requests that this connection never got. Providers like X can't upgrade a token in place, so only a fresh consent fixes it.
+Each account in `connections` lists `missingScopes`: permissions the app's configuration now requests that this connection was never asked for. Providers like X can't upgrade a token in place, so only a fresh consent fixes it.
 
 - When a tool fails with 403 or an insufficient-scope error and that account's `missingScopes` is non-empty, say so in one sentence and offer to reconnect instead of retrying.
 - In web chat, show `::connect-apps{toolkit="twitter"}`. For a connected app it offers Reconnect and Disconnect, and removes the replaced account itself after a verified reconnect.
