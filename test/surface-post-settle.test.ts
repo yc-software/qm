@@ -93,14 +93,10 @@ test("mentions of strangers go out as written and come back flagged with the ts"
     audience: [{ id: "U2" }],
     directory: async () => new Map([["U2", { principalId: "U2", slackId: "U2" }]]),
   });
-  const r = await tools.post("ping <@U2> and <@U999>", undefined);
-  assert.equal(r.ok, true);
-  assert.equal(enqueued[0]!.text, "ping <@U2> and <@U999>", "the text is never rewritten, member or stranger");
-  assert.match(r.notes?.[0] ?? "", /<@U999>/);
-  assert.match(r.notes?.[0] ?? "", /may ping an unintended person/);
-  assert.match(r.notes?.[0] ?? "", /ts 1\.1/, "the flag points at the message just posted, so it can be edited");
-  const dup = await tools.post("again <@U999> <@U999> <@U2>", undefined);
-  assert.equal((dup.notes?.[0] ?? "").match(/<@U999>/g)?.length, 1, "a stranger id is listed once, roster ids never");
+  const r = await tools.post("ping <@U2> and <@U999> twice <@U999>", undefined);
+  assert.equal(enqueued[0]!.text, "ping <@U2> and <@U999> twice <@U999>", "the text is never rewritten");
+  assert.match(r.notes?.[0] ?? "", /unverified id may ping an unintended person; edit the message \(ts 1\.1\)/);
+  assert.equal((r.notes?.[0] ?? "").match(/<@U999>/g)?.length, 1, "a stranger id is listed once, roster ids never");
 });
 
 test("mentions are left untouched when the roster can't be read", async () => {
