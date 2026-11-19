@@ -429,96 +429,117 @@ function methodRow(title: string, detail: string, selected: boolean, onPick: () 
   `;
 }
 
-function claudeSteps(): TemplateResult {
-  if (s.flow.kind !== "claude") return html``;
-  const flow = s.flow;
-  return html`
-    <ol class="mc-steps">
-      <li>
-        <a class="btn" href=${flow.authorizeUrl} target="_blank" rel="noopener">Continue to Claude ↗</a>
-      </li>
-      <li>
-        <label class="mc-field">
-          <span>Authorization code</span>
-          <input
-            ?disabled=${s.busy || s.saving}
-            .value=${flow.code}
-            placeholder="Paste the code from Claude"
-            autocomplete="off"
-            spellcheck="false"
-            @input=${(e: Event) => {
-              flow.code = (e.target as HTMLInputElement).value;
-              paint();
-            }}
-            @keydown=${(e: KeyboardEvent) => e.key === "Enter" && finishClaude()}
-          />
-        </label>
-      </li>
-      <li>
-        <button class="btn primary" ?disabled=${!flow.code.trim() || s.busy} @click=${finishClaude}>
-          ${s.busy ? "Connecting…" : "Connect account"}
-        </button>
-      </li>
-    </ol>
-  `;
+function field(label: string, help: TemplateResult | string, control: TemplateResult): TemplateResult {
+  return html`<label class="mc-field">
+    <span class="mc-field-label">${label}</span>
+    ${control}
+    <span class="mc-field-help">${help}</span>
+  </label>`;
 }
 
-function chatgptSteps(): TemplateResult {
-  if (s.flow.kind !== "chatgpt") return html``;
-  const device = s.flow.device;
+function claudeFields(flow: Extract<Flow, { kind: "claude" }>): TemplateResult {
   return html`
-    <ol class="mc-steps">
-      <li>
-        <button
-          type="button"
-          class="mc-code-btn ${s.copied ? "copied" : ""}"
-          title="Copy code to clipboard"
-          @click=${() => copyCode(device.userCode)}
-        >
-          <span class="mc-code">${device.userCode}</span>
-          <span class="mc-copy-hint">${s.copied ? "Copied ✓" : "Click to copy"}</span>
-        </button>
-      </li>
-      <li>
-        <a class="btn" href=${device.verificationUrl} target="_blank" rel="noopener">Open chatgpt.com and paste it ↗</a>
-      </li>
-      <li>
-        <span class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Waiting for your approval…</span>
-      </li>
-    </ol>
-  `;
-}
-
-function apikeySteps(p: ProviderMeta): TemplateResult {
-  if (s.flow.kind !== "apikey") return html``;
-  const flow = s.flow;
-  return html`
-    <div class="mc-keyform">
-      <label class="mc-field">
-        <span>API key · from <a href=${p.keyConsoleUrl} target="_blank" rel="noopener">${p.keyConsole}</a></span>
-        <input
-          type="password"
-          ?disabled=${s.busy || s.saving}
-          .value=${flow.value}
-          placeholder=${p.keyPlaceholder}
-          autocomplete="off"
-          @input=${(e: Event) => {
-            flow.value = (e.target as HTMLInputElement).value;
-            paint();
-          }}
-          @keydown=${(e: KeyboardEvent) => e.key === "Enter" && saveKey(p)}
-        />
-      </label>
-      <button class="btn primary" ?disabled=${!flow.value.trim() || s.busy} @click=${() => saveKey(p)}>
-        ${s.busy ? "Checking…" : "Connect"}
-      </button>
+    <div class="mc-step">
+      <span class="mc-step-text"
+        ><strong>Sign in to Claude</strong><small>Approve access, then copy the code Claude shows.</small></span
+      >
+      <a class="btn" href=${flow.authorizeUrl} target="_blank" rel="noopener">Open Claude ↗</a>
     </div>
+    ${field(
+      "Authorization code",
+      "Paste the code here to finish connecting.",
+      html`<input
+        ?disabled=${s.busy || s.saving}
+        .value=${flow.code}
+        placeholder="Paste code"
+        autocomplete="off"
+        spellcheck="false"
+        @input=${(e: Event) => {
+          flow.code = (e.target as HTMLInputElement).value;
+          paint();
+        }}
+        @keydown=${(e: KeyboardEvent) => e.key === "Enter" && finishClaude()}
+      />`,
+    )}
   `;
 }
+
+function claudeConnect(flow: Extract<Flow, { kind: "claude" }>): TemplateResult {
+  return html`<button class="btn primary" ?disabled=${!flow.code.trim() || s.busy} @click=${finishClaude}>
+    ${s.busy ? "Connecting…" : "Connect"}
+  </button>`;
+}
+
+function deviceCodeField(device: DevicePrompt): TemplateResult {
+  return html`<div class="mc-field">
+    <span class="mc-field-label">Code</span>
+    <button type="button" class="mc-code-btn" @click=${() => copyCode(device.userCode)}>
+      <span class="mc-code">${device.userCode}</span>
+      <span class="mc-copy-hint">${s.copied ? "Copied" : "Copy"}</span>
+    </button>
+    <span class="mc-field-help">Open ChatGPT, sign in, and enter this code to approve access.</span>
+  </div>`;
+}
+
+function chatgptOpen(device: DevicePrompt): TemplateResult {
+  return html`<a class="btn primary" href=${device.verificationUrl} target="_blank" rel="noopener">Open ChatGPT ↗</a>`;
+}
+
+const waiting = html`<span class="mc-waiting" role="status"
+  ><span class="mc-spinner" aria-hidden="true"></span>Waiting for approval…</span
+>`;
+
+function keyField(p: ProviderMeta, flow: Extract<Flow, { kind: "apikey" }>): TemplateResult {
+  return field(
+    "API key",
+    html`Create one at <a href=${p.keyConsoleUrl} target="_blank" rel="noopener">${p.keyConsole}</a>. Usage is billed to
+      the key.`,
+    html`<input
+      type="password"
+      ?disabled=${s.busy || s.saving}
+      .value=${flow.value}
+      placeholder=${p.keyPlaceholder}
+      autocomplete="off"
+      @input=${(e: Event) => {
+        flow.value = (e.target as HTMLInputElement).value;
+        paint();
+      }}
+      @keydown=${(e: KeyboardEvent) => e.key === "Enter" && saveKey(p)}
+    />`,
+  );
+}
+
+function keyConnect(p: ProviderMeta, flow: Extract<Flow, { kind: "apikey" }>): TemplateResult {
+  return html`<button class="btn primary" ?disabled=${!flow.value.trim() || s.busy} @click=${() => saveKey(p)}>
+    ${s.busy ? "Checking…" : "Connect"}
+  </button>`;
+}
+
+function inlineSteps(fields: TemplateResult, action: TemplateResult): TemplateResult {
+  return html`<div class="mc-steps">
+    ${fields}
+    <div class="mc-steps-actions">${action}</div>
+  </div>`;
+}
+
+function flowSteps(p: ProviderMeta): TemplateResult | typeof nothing {
+  const flow = s.flow;
+  if (flow.kind === "claude") return inlineSteps(claudeFields(flow), claudeConnect(flow));
+  if (flow.kind === "chatgpt")
+    return inlineSteps(deviceCodeField(flow.device), html`${waiting}${chatgptOpen(flow.device)}`);
+  if (flow.kind === "apikey") return inlineSteps(keyField(p, flow), keyConnect(p, flow));
+  return nothing;
+}
+
+function statusBlock(): TemplateResult {
+  return html`${s.error ? html`<div class="mc-error" role="alert">${s.error}</div>` : nothing}
+  ${s.saving || s.notice ? html`<p class="mc-notice" role="status">${s.saving ? "Saving changes…" : s.notice}</p>` : nothing}`;
+}
+
+const loadingBlock = html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Loading…</div>`;
 
 function connectBody(p: ProviderMeta): TemplateResult {
-  let subscriptionSteps: TemplateResult | typeof nothing = nothing;
-  if (s.method === "subscription") subscriptionSteps = p.key === "claude" ? claudeSteps() : chatgptSteps();
+  const steps = flowSteps(p);
   return html`
     <div class="mc-connect">
       ${methodRow(
@@ -527,14 +548,14 @@ function connectBody(p: ProviderMeta): TemplateResult {
         s.method === "subscription",
         () => void pickSubscription(p),
       )}
-      ${subscriptionSteps}
+      ${s.method === "subscription" ? steps : nothing}
       ${methodRow(
         "Use an API key",
         `Paste a key from ${p.keyConsole} — usage is billed to the key.`,
         s.method === "apikey",
         pickApiKey,
       )}
-      ${s.method === "apikey" ? apikeySteps(p) : nothing}
+      ${s.method === "apikey" ? steps : nothing}
     </div>
   `;
 }
@@ -627,78 +648,24 @@ async function switchAccount(account: "personal" | "company", provider?: "anthro
   paint();
 }
 
-function sheetField(label: string, help: TemplateResult | string, control: TemplateResult): TemplateResult {
-  return html`<label class="mc-sheet-field">
-    <span class="mc-sheet-label">${label}</span>
-    ${control}
-    <span class="mc-sheet-help">${help}</span>
-  </label>`;
-}
-
 function sheetBody(p: ProviderMeta): TemplateResult {
   if (s.connections[p.apiName]) return providerRow(p);
   const flow = s.flow;
-  if (s.method === "apikey" && flow.kind === "apikey")
-    return sheetField(
-      "API key",
-      html`Create one at <a href=${p.keyConsoleUrl} target="_blank" rel="noopener">${p.keyConsole}</a>. Usage is billed
-        to the key.`,
-      html`<input
-        type="password"
-        ?disabled=${s.busy || s.saving}
-        .value=${flow.value}
-        placeholder=${p.keyPlaceholder}
-        autocomplete="off"
-        @input=${(e: Event) => {
-          flow.value = (e.target as HTMLInputElement).value;
-          paint();
-        }}
-        @keydown=${(e: KeyboardEvent) => e.key === "Enter" && saveKey(p)}
-      />`,
-    );
-  if (flow.kind === "claude")
-    return html`
-      <div class="mc-sheet-step">
-        <span class="mc-sheet-step-text"
-          ><strong>Sign in to Claude</strong><small>Approve access, then copy the code Claude shows.</small></span
-        >
-        <a class="btn" href=${flow.authorizeUrl} target="_blank" rel="noopener">Open Claude ↗</a>
-      </div>
-      ${sheetField(
-        "Authorization code",
-        "Paste the code here to finish connecting.",
-        html`<input
-          ?disabled=${s.busy || s.saving}
-          .value=${flow.code}
-          placeholder="Paste code"
-          autocomplete="off"
-          spellcheck="false"
-          @input=${(e: Event) => {
-            flow.code = (e.target as HTMLInputElement).value;
-            paint();
-          }}
-          @keydown=${(e: KeyboardEvent) => e.key === "Enter" && finishClaude()}
-        />`,
-      )}
-    `;
-  if (flow.kind === "chatgpt")
-    return html`<div class="mc-sheet-field">
-      <span class="mc-sheet-label">Code</span>
-      <button type="button" class="mc-sheet-code" @click=${() => copyCode(flow.device.userCode)}>
-        <span class="mc-code">${flow.device.userCode}</span>
-        <span class="mc-copy-hint">${s.copied ? "Copied" : "Copy"}</span>
-      </button>
-      <span class="mc-sheet-help">Open ChatGPT, sign in, and enter this code to approve access.</span>
-    </div>`;
+  if (flow.kind === "claude") return claudeFields(flow);
+  if (flow.kind === "chatgpt") return deviceCodeField(flow.device);
+  if (flow.kind === "apikey") return keyField(p, flow);
   return html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Preparing sign-in…</div>`;
 }
 
 function sheetFoot(p: ProviderMeta): TemplateResult {
   const flow = s.flow;
-  const cancel = html`<button type="button" class="btn" ?disabled=${s.saving} @click=${closeManager}>Cancel</button>`;
+  const spacer = html`<span class="mc-sheet-spacer"></span>`;
   if (s.connections[p.apiName])
-    return html`<span class="mc-sheet-spacer"></span
-      ><button type="button" class="btn primary" ?disabled=${s.saving} @click=${closeManager}>Done</button>`;
+    return html`${spacer}<button type="button" class="btn primary" ?disabled=${s.saving} @click=${closeManager}>
+        Done
+      </button>`;
+  const cancel = html`<button type="button" class="btn" ?disabled=${s.saving} @click=${closeManager}>Cancel</button>`;
+  if (s.loading) return html`${spacer}${cancel}`;
   const apikey = s.method === "apikey";
   const swap = html`<button
     type="button"
@@ -708,28 +675,17 @@ function sheetFoot(p: ProviderMeta): TemplateResult {
   >
     ${apikey ? "Use subscription" : "Use API key"}
   </button>`;
-  let status: TemplateResult | typeof nothing = nothing;
-  let primary: TemplateResult;
-  if (apikey && flow.kind === "apikey")
-    primary = html`<button class="btn primary" ?disabled=${!flow.value.trim() || s.busy} @click=${() => saveKey(p)}>
-      ${s.busy ? "Checking…" : "Connect"}
-    </button>`;
-  else if (flow.kind === "claude")
-    primary = html`<button class="btn primary" ?disabled=${!flow.code.trim() || s.busy} @click=${finishClaude}>
-      ${s.busy ? "Connecting…" : "Connect"}
-    </button>`;
-  else if (flow.kind === "chatgpt") {
-    status = html`<span class="mc-sheet-status" role="status"
-      ><span class="mc-spinner" aria-hidden="true"></span>Waiting for approval…</span
-    >`;
-    primary = html`<a class="btn primary" href=${flow.device.verificationUrl} target="_blank" rel="noopener"
-      >Open ChatGPT ↗</a
-    >`;
-  } else
-    primary = html`<button class="btn primary" ?disabled=${s.saving || s.busy} @click=${() => void pickSubscription(p)}>
-      Sign in
-    </button>`;
-  return html`${swap}<span class="mc-sheet-spacer"></span>${status}${cancel}${primary}`;
+  let primary: TemplateResult = html`<button
+    class="btn primary"
+    ?disabled=${s.saving || s.busy}
+    @click=${() => void pickSubscription(p)}
+  >
+    Sign in
+  </button>`;
+  if (flow.kind === "apikey") primary = keyConnect(p, flow);
+  else if (flow.kind === "claude") primary = claudeConnect(flow);
+  else if (flow.kind === "chatgpt") primary = chatgptOpen(flow.device);
+  return html`${swap}${spacer}${flow.kind === "chatgpt" ? waiting : nothing}${cancel}${primary}`;
 }
 
 function sheetView(p: ProviderMeta): TemplateResult {
@@ -751,14 +707,8 @@ function sheetView(p: ProviderMeta): TemplateResult {
           <h2 id="mc-title">Connect ${p.name}</h2>
           <p id="mc-sub">${sub}</p>
         </header>
-        <div class="mc-sheet-body">
-          ${s.error ? html`<div class="mc-error" role="alert">${s.error}</div>` : nothing}
-          ${s.saving || s.notice ? html`<p class="mc-notice" role="status">${s.saving ? "Saving changes…" : s.notice}</p>` : nothing}
-          ${s.loading ? html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Loading…</div>` : sheetBody(p)}
-        </div>
-        <footer class="mc-sheet-foot">
-          ${s.loading ? html`<span class="mc-sheet-spacer"></span>${html`<button type="button" class="btn" @click=${closeManager}>Cancel</button>`}` : sheetFoot(p)}
-        </footer>
+        <div class="mc-sheet-body">${statusBlock()} ${s.loading ? loadingBlock : sheetBody(p)}</div>
+        <footer class="mc-sheet-foot">${sheetFoot(p)}</footer>
       </div>
     </div>
   `;
@@ -796,13 +746,7 @@ function view(): TemplateResult {
       ${PROVIDERS.map((p) => providerRow(p))}
     </div>`;
   const title = s.mode === "gate" ? "Connect your AI account" : "AI accounts";
-  const body = s.loading
-    ? html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Loading…</div>`
-    : html`
-        ${s.error ? html`<div class="mc-error" role="alert">${s.error}</div>` : nothing}
-        ${s.saving || s.notice ? html`<p class="mc-notice" role="status">${s.saving ? "Saving changes…" : s.notice}</p>` : nothing}
-        ${choices} ${cta}
-      `;
+  const body = s.loading ? loadingBlock : html`${statusBlock()} ${choices} ${cta}`;
   const subCopy =
     "Choose who provides access for your chats on the web and in Slack. Background tasks continue using company access.";
   return html`
