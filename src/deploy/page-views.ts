@@ -2,6 +2,7 @@ import { durableMapTenancy } from "../persistence/durable-map.ts";
 import { inboundIndexes } from "../tenants/lookup.ts";
 import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import type { Tenant } from "../tenants/context.ts";
+import { APP_HOSTS } from "../tenants/app-handle.ts";
 
 export const NAME_INDEX = "deployments_name_unique";
 
@@ -84,6 +85,7 @@ export const APP_TABLES: PgMigrationDefinition[] = [
       `CREATE INDEX CONCURRENTLY IF NOT EXISTS app_page_views_by_viewer ON app_page_views(tenant_id, viewer, deployment_id, at DESC)`,
     ],
   },
+  APP_HOSTS,
 ];
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";

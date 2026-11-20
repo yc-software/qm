@@ -167,12 +167,12 @@ test("the app handle saves only a well-formed handle and shows the server's refu
   });
   await admin.settle();
   assert.equal(admin.document.querySelector<HTMLInputElement>("#app-handle")!.value, "nitroduck");
-  type(admin, "#app-handle", "nitro-duck");
+  type(admin, "#app-handle", "nitro-duck-");
   click(admin, '[data-save="app-handle"]');
   await admin.settle();
   assert.equal(
     admin.document.getElementById("st-app-handle")!.textContent,
-    "Use 2–61 lowercase letters or digits, with no hyphens.",
+    "Use 2–61 lowercase letters, digits or hyphens, not starting or ending with a hyphen.",
   );
   assert.deepEqual(saves, []);
   type(admin, "#app-handle", "taken1");
@@ -182,10 +182,10 @@ test("the app handle saves only a well-formed handle and shows the server's refu
     admin.document.getElementById("st-app-handle")!.textContent,
     "another workspace already uses that handle",
   );
-  type(admin, "#app-handle", " duck2 ");
+  type(admin, "#app-handle", " nitro-duck2 ");
   click(admin, '[data-save="app-handle"]');
   await admin.settle();
-  assert.deepEqual(saves, [{ handle: "taken1" }, { handle: "duck2" }]);
+  assert.deepEqual(saves, [{ handle: "taken1" }, { handle: "nitro-duck2" }]);
   admin.close();
 });
 
