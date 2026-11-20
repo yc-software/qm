@@ -51,7 +51,7 @@ window.addEventListener("DOMContentLoaded", () => {
     @media (min-width: 861px) {
       html[data-qm-desktop="darwin"]:has(.layout:not(.bannered)) body { padding-top: 0; }
       html[data-qm-desktop="darwin"]:has(.layout:not(.bannered)) body::before { display: none; }
-      html[data-qm-desktop="darwin"] .layout:not(.bannered) { height: 100dvh; --rail-w: 100px; }
+      html[data-qm-desktop="darwin"] .layout:not(.bannered) { height: 100dvh; }
       html[data-qm-desktop="darwin"] .layout:not(.bannered) .sidebar { padding-top: 0; }
       html[data-qm-desktop="darwin"] .layout:not(.bannered) .brand {
         height: 56px; min-height: 56px; box-sizing: border-box; padding: 0 8px 0 92px;
@@ -59,8 +59,13 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       html[data-qm-desktop="darwin"] .layout:not(.bannered) .brand-lockup { display: none; }
       html[data-qm-desktop="darwin"] .layout:not(.bannered).sidebar-closed .brand {
-        height: 96px; min-height: 96px; padding: 48px 0 8px; justify-content: center;
+        height: 56px; min-height: 56px; padding: 0;
       }
+      html[data-qm-desktop="darwin"] .layout:not(.bannered).sidebar-closed .sidebar-collapse-toggle {
+        position: fixed; top: 11px; left: 82px; z-index: 101;
+      }
+      html[data-qm-desktop="darwin"] .layout:not(.bannered).sidebar-closed
+        .dv-tabs-and-actions-container:not(.dv-view:not(:first-child) *) { padding-left: 74px; }
       html[data-qm-desktop="darwin"] .brand button { -webkit-app-region: no-drag; }
       html[data-qm-desktop="darwin"] .single-pane .dv-tabs-and-actions-container,
       html[data-qm-desktop="darwin"] .chat-topbar { -webkit-app-region: drag; }
