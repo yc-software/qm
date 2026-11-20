@@ -107,7 +107,8 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   );
   for (const [alias, person] of Object.entries({ [bot]: pat, U0PAT: pat, [bot2]: sam, [app2]: app }))
     await users.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "U0ADM", createdAt: 1 });
-  await users.markApps([pat, sam, app]);
+  const pg = createPgPool(url);
+  await pg.q("UPDATE users SET kind = 'app' WHERE primary_alias = ANY($1::text[])", [[pat, sam, app]]);
   for (const who of [kim, lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
   await built.directory.replace([
     { principalId: pat, displayName: "Pat", type: "internal", slackId: "U0PAT" },
@@ -128,7 +129,6 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
     said(app2, app, true),
     said(lee, lee),
   ]);
-  const pg = createPgPool(url);
   const rerun = async (id: string) => {
     await pg.q("DELETE FROM qm_schema_migrations WHERE id = $1", [id]);
     await migrateRegisteredPgSchemas(url);

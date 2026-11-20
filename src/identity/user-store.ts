@@ -10,6 +10,8 @@ import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { markBotWork, unlessSlackListsAPerson } from "../triggers/trigger-store.ts";
+import { holdBotLoopShips } from "../loops/loop-store.ts";
 
 export { fold };
 
@@ -450,7 +452,19 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
   return winner;
 }
 
-const MARK_APPS = `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`;
+const MARKED = "string_to_array(current_setting('qm.marked_apps'), ',')::uuid[]";
+const BOT_WORK = [markBotWork(unlessSlackListsAPerson("l"), MARKED), holdBotLoopShips("system", MARKED)];
+
+async function markAppsIn(client: PoolClient, aliases: readonly string[]): Promise<number> {
+  const { rows } = await client.query(
+    `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`,
+    [aliases],
+  );
+  if (!rows.length) return 0;
+  await client.query(`SELECT set_config('qm.marked_apps', $1, true)`, [rows.map((row) => row.id).join(",")]);
+  for (const statement of BOT_WORK) await client.query(statement);
+  return rows.length;
+}
 
 async function findBotSignIns(q: Query, aliases: readonly string[]): Promise<string[]> {
   const rows = await q(
@@ -575,7 +589,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     },
     async markApps(ids) {
       if (!ids.length) return 0;
-      return (await q(MARK_APPS, [ids.map((id) => foldPrincipalId(id))])).length;
+      return transaction((client) => markAppsIn(client, ids.map(foldPrincipalId)));
     },
     async applyDirectoryBots(members) {
       const signIns = (isBot: boolean | undefined) =>
@@ -589,7 +603,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
              SELECT l.alias_id, l.user_id, l.evidence, l.linked_by FROM user_links l JOIN users u ON u.id = l.user_id
               WHERE l.alias_id = ANY($1::text[]) AND u.primary_alias <> l.alias_id
            ), created AS (
-             INSERT INTO users(primary_alias, kind) SELECT alias_id, 'app' FROM moving RETURNING id, primary_alias
+             INSERT INTO users(primary_alias) SELECT alias_id FROM moving RETURNING id, primary_alias
            ), moved AS (
              UPDATE user_links l SET user_id = c.id, evidence = 'primary', linked_by = NULL
                FROM moving m JOIN created c ON c.primary_alias = m.alias_id
@@ -604,7 +618,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
              FROM moved GROUP BY from_user`,
           [bots, Date.now()],
         );
-        await client.query(MARK_APPS, [bots]);
+        await markAppsIn(client, bots);
         await client.query(
           `WITH app_sign_ins AS (
              SELECT l.user_id, l.alias_id, l.evidence, l.alias_id = u.primary_alias AS is_primary,
