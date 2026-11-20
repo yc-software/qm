@@ -29,7 +29,7 @@ test("text-block expansion is local and preserves rendered code nodes", () => {
   </main>`);
   const root = dom.window.document.querySelector("main")!;
   const blocks = Array.from(root.querySelectorAll<HTMLElement>("code-block"));
-  for (const pre of root.querySelectorAll("pre")) Object.defineProperty(pre, "scrollHeight", { value: 120 });
+  for (const pre of root.querySelectorAll("pre")) Object.defineProperty(pre, "scrollHeight", { value: 400 });
   const renderedCode = blocks[0]!.querySelector("code")!.innerHTML;
 
   decorateTextCodeBlocks(root);
@@ -41,10 +41,22 @@ test("text-block expansion is local and preserves rendered code nodes", () => {
   assert.equal(blocks[0]!.dataset.expanded, "false");
   assert.equal(blocks[1]!.dataset.expanded, "false");
 
+  assert.equal(firstButton.previousElementSibling, blocks[0]!.querySelector(".text-code-body"));
   firstButton.click();
 
   assert.equal(blocks[0]!.dataset.expanded, "true");
   assert.equal(blocks[1]!.dataset.expanded, "false");
   assert.equal(firstButton.textContent, "Show less");
   assert.equal(firstButton.getAttribute("aria-expanded"), "true");
+});
+
+test("short text blocks stay whole", () => {
+  const dom = new JSDOM(
+    `<main><code-block language="text"><div><div><span>text</span><copy-button></copy-button></div><div><pre><code>short</code></pre></div></div></code-block></main>`,
+  );
+  const root = dom.window.document.querySelector("main")!;
+  Object.defineProperty(root.querySelector("pre")!, "scrollHeight", { value: 120 });
+  decorateTextCodeBlocks(root);
+  assert.equal(root.querySelector(".text-code-toggle"), null);
+  assert.ok(root.querySelector(".text-code-footer"));
 });
