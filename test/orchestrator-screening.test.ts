@@ -809,19 +809,19 @@ test("allowing held input lets in only the attachments the hold's screen classif
   const overheard = said("1700000000.000100", "y".repeat(MAX_DOCUMENT_TEXT_CHARS + 1));
   const tooLong = await hold(channel("summarize", { ...(await file("long.txt")), overheard }));
   await hold(channel("thanks", { overheard })).then((allow) => allow());
-  assert.doesNotMatch(await tooLong(), /inbox\/long\.txt/);
+  assert.doesNotMatch(await tooLong(), /shared long\.txt \(Files ID/);
   const partial = said("1700000000.000200", "y".repeat(40_000));
   const partly = await hold(channel("summarize", { ...(await file("partly.txt")), overheard: partial }));
-  assert.doesNotMatch(await partly(), /inbox\/partly\.txt/);
+  assert.doesNotMatch(await partly(), /shared partly\.txt \(Files ID/);
   mock.method(built.blobTransfer, "open").mock.mockImplementationOnce(async () => {
     throw new Error("blob store unavailable");
   });
   const unopened = await hold(dm("summarize", await file("SCREENING_FIXTURE_BLOCK.txt")));
-  assert.doesNotMatch(await unopened(), /inbox\/SCREENING_FIXTURE_BLOCK\.txt/);
+  assert.doesNotMatch(await unopened(), /shared SCREENING_FIXTURE_BLOCK\.txt \(Files ID/);
   for (const scope of ["once", "session", "always"] as const) {
     const conversation = { kind: "dm" as const, threadRef: "dm:U1:" + scope };
     const classified = await hold(dm("summarize", { conversation, ...(await file(scope + ".txt")) }), scope);
-    assert.match(await classified(), new RegExp("inbox/" + scope + "\\.txt"));
+    assert.match(await classified(), new RegExp("shared " + scope + "\\.txt \\(Files ID"));
   }
 });
 
