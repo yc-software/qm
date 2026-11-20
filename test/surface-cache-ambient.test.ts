@@ -436,6 +436,44 @@ test("the ambient watermark advances so a batch is judged once, not re-judged ev
   }
 });
 
+test("overlapping judge passes for one channel judge a batch once", async () => {
+  const built = freshApp();
+  try {
+    const container = "C-overlap";
+    await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
+    await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "not a match", createdAt: 1 }]);
+    await Promise.all([
+      built.app.judgeAmbientContainer("slack", container),
+      built.app.judgeAmbientContainer("slack", container),
+      built.app.judgeAmbientContainer("slack", container),
+    ]);
+    await sleep(200);
+    assert.equal((await listFull(built.ambientJudgments!, { container })).length, 1);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("two core instances on separate pools judge a channel batch once", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
+  const config = testConfig({ dataDir });
+  const a = buildApp(config);
+  const b = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-surfcache-")), databaseUrl: config.databaseUrl }),
+  );
+  try {
+    const container = "C-two-cores";
+    await a.app.setChannelPolicy(container, "flag launch talk", "U-admin");
+    await a.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "not a match", createdAt: 1 }]);
+    for (let i = 0; i < 3; i++)
+      await Promise.all([a, b, a, b].map((x) => x.app.judgeAmbientContainer("slack", container)));
+    await sleep(200);
+    assert.equal((await listFull(a.ambientJudgments!, { container })).length, 1);
+  } finally {
+    await Promise.all([a.runtime.stop(), b.runtime.stop()]);
+  }
+});
+
 test("mirror read interface: ingest is queryable by search + readMessages + activeThreads", async () => {
   const built = freshApp();
   try {
