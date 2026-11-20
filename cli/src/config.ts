@@ -224,14 +224,11 @@ export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
-const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
+export const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
   config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
 
 export const localSandboxActive = (config: QmConfig): boolean =>
-  config.target === "docker" &&
-  (config.sandbox?.backend === "superserve"
-    ? effectiveSandboxBackend(config) === "local"
-    : config.sandbox?.backend === "local" && effectiveSandboxBackend(config) !== "superserve");
+  config.target === "docker" && effectiveSandboxBackend(config) === "local";
 
 export function sandboxCoreEnv(
   config: QmConfig,
@@ -240,16 +237,13 @@ export function sandboxCoreEnv(
   const env: Record<string, string> = {};
   const missingSecrets: string[] = [];
   const sb = config.sandbox;
-  if (!sb) return { env, missingSecrets };
   if (localSandboxActive(config)) {
     env.SANDBOX_BACKEND = "local";
-    if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
+    if (sb?.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
     return { env, missingSecrets };
   }
-  const backend =
-    sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
-      ? effectiveSandboxBackend(config)
-      : sb.backend;
+  if (!sb) return { env, missingSecrets };
+  const backend = effectiveSandboxBackend(config);
   if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
     env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
@@ -976,7 +970,7 @@ export function requiresAwsMicrovmImage(config: QmConfig): boolean {
   if (config.target !== "aws") return false;
   const core = config.env.core;
   if ((core?.DEPLOY_PROVIDER?.trim() || "aws") === "aws") return true;
-  return (core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws";
+  return (effectiveSandboxBackend(config) ?? "aws") === "aws";
 }
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {

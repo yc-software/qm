@@ -1007,16 +1007,29 @@ test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
   );
 });
 
-test("Superserve configuration preserves existing backend selection and validation", () => {
-  for (const override of ["agent37", "sprites", "", "   "]) {
+test("an env.core.SANDBOX_BACKEND override is the backend every reader sees", () => {
+  for (const [override, expected] of [
+    ["agent37", "agent37"],
+    ["", "local"],
+    ["   ", "local"],
+  ] as const) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: override } } }, ({ path }) => {
       const { config } = loadConfigAt(path);
-      assert.equal(localSandboxActive(config), true);
-      assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "local");
+      assert.equal(localSandboxActive(config), expected === "local");
+      assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, expected);
     });
   }
-  withConfig({ sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "sprites" } } }, ({ path }) =>
-    assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "agent37"),
+  withConfig({ sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "e2b" } } }, ({ path }) =>
+    assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "e2b"),
+  );
+  withConfig({ env: { core: { SANDBOX_BACKEND: "local" } } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.equal(localSandboxActive(config), true);
+    assert.deepEqual(sandboxCoreEnv(config).env, { SANDBOX_BACKEND: "local" });
+  });
+  withConfig(
+    { target: "fly", sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "sprites" } } },
+    ({ path }) => assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, undefined),
   );
   for (const scopes of ["invalid", "[]", "null", "42"]) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_SCOPE_BACKENDS: scopes } } }, ({ path }) =>
