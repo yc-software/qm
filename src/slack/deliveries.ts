@@ -37,6 +37,7 @@ import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { projectScopeId } from "../projects/project-store.ts";
 import { SLACK_DELIVERY_CLAIM_MS } from "./delivery-jobs.ts";
 import { slackRetryAfterMs } from "./delivery.ts";
 
@@ -94,7 +95,7 @@ export function createSlackDeliverer(deps: {
   const { inFlightRuns } = flow;
 
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
-    core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
+    core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
     const base = trimTrailingSlashes(deps.webUiPublicUrl?.trim() ?? "");
@@ -104,11 +105,18 @@ export function createSlackDeliverer(deps: {
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
       ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
     ];
-    const persona = d.destination.persona;
-    const personaName = persona ? escapeSlackText(persona.name.trim() || "Persona") : "";
-    const parts = persona
-      ? [`Persona: ${base ? `<${base}/personas/${encodeURIComponent(persona.id)}|${personaName}>` : personaName}`]
-      : [];
+    const { persona, project } = d.destination;
+    const linked = (name: string, path: string) => {
+      const label = escapeSlackText(name);
+      return base ? `<${base}/${path}|${label}>` : label;
+    };
+    const origin = [
+      ...(persona ? [linked(persona.name.trim() || "Persona", `personas/${encodeURIComponent(persona.id)}`)] : []),
+      ...(project
+        ? [linked(project.name.trim() || "Project", `contexts?scope=${encodeURIComponent(projectScopeId(project.id))}`)]
+        : []),
+    ];
+    const parts = origin.length ? [`From ${origin.join(" in ")}`] : [];
     if (base && id) {
       const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
       parts.push(`${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`);
@@ -255,7 +263,7 @@ export function createSlackDeliverer(deps: {
                   data: { error: "edit_target_not_found" },
                 });
               });
-            return undefined;
+            return { messageTs: d.destination.edit.messageTs };
           }
           let editRef = d.destination.editRef;
           if (!editRef && runId) {
@@ -323,7 +331,7 @@ export function createSlackDeliverer(deps: {
               });
               if (threadTs) threads.mark(channel, threadTs, true);
               if (!alreadyDelivered) await replayAttachments(threadTs);
-              return undefined;
+              return { messageTs: editRef };
             } catch (e) {
               throwIfRateLimited(e);
               swallow("slack: finalize recovered reply in place", e);
@@ -344,7 +352,7 @@ export function createSlackDeliverer(deps: {
           const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
           if (root) threads.mark(channel, root, true);
           if (!res.reused) await replayAttachments(root);
-          return undefined;
+          return res.ts === undefined ? undefined : { messageTs: String(res.ts) };
         } finally {
           slackApiMs = Math.round(performance.now() - tPost);
         }

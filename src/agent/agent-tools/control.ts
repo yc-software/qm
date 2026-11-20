@@ -333,6 +333,9 @@ export function controlPlaneTools(kit: ToolKit) {
   function sharingTool(type: "file" | "skill" | "deploy" | "cron"): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
+    if (type === "cron")
+      description =
+        "Share a cron you own. If it posts to your own DM, a teammate (a name or personal:<id>) gets their own linked copy that runs as them, posts to their DM and keeps its persona and project: an admin's share starts it; anyone else's waits paused until they turn it on (accept) or delete it (decline). Your later edits reach every copy its owner hasn't edited. A cron that posts to a channel or group stays one cron, so sharing it, like permission=write or any other scope, gets access to this cron itself instead.";
     if (type === "file")
       description =
         "Share a Files record by ID (upload a sandbox path with the helper from GET /v1/files/upload-client first).";
@@ -442,6 +445,9 @@ export function controlPlaneTools(kit: ToolKit) {
         else if (r.invitation)
           invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
         if (r.invitation?.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
+        if (r.copy?.existed) invitationNote = ` They already have linked copy ${r.copy.id}.`;
+        else if (r.copy)
+          invitationNote = ` Their linked copy ${r.copy.id} ${r.copy.enabled ? "is on and runs as them" : "waits, paused, until they accept it"}; they were told in their DM.${r.copy.note ? ` ${r.copy.note}` : ""}`;
         return recordResult(
           callId,
           { tool, action: "share", verb: r.verb, type: r.type, id: r.id, target: r.target.scope },

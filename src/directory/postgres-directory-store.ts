@@ -22,6 +22,7 @@ import {
 } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
+import { APP_HOSTS_KEY } from "../tenants/app-handle.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -214,6 +215,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
+  async function tenantFrom(lookup: "qm_tenant_for_app_handle" | "qm_tenant_for_app_host", key: string) {
+    const rows = await q(`SELECT ${lookup}($1)::text AS id`, [key]);
+    return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+  }
+
   async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
     if (!principalIds.length) return new Map();
     const emails = principalIds.map(foldPrincipalId).filter((id) => id.includes("@"));
@@ -392,17 +398,17 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return branded(rows);
     },
 
-    async tenantForAppHandle(handle) {
-      const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
-      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
-    },
+    tenantForAppHandle: (handle) => tenantFrom("qm_tenant_for_app_handle", handle),
+
+    tenantForAppHost: (label) => tenantFrom("qm_tenant_for_app_host", label),
 
     async setAppHandle(handle) {
       try {
         await q("SELECT qm_set_tenant_handle($1)", [handle]);
         return "ok";
       } catch (error) {
-        if ((error as { code?: string }).code === "23505") return "taken";
+        const { code, constraint } = error as { code?: string; constraint?: string };
+        if (code === "23505") return constraint === APP_HOSTS_KEY ? "app_taken" : "taken";
         throw error;
       }
     },

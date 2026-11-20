@@ -126,7 +126,6 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
-  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
   memoryNotebookOnly?: boolean;
@@ -211,13 +210,7 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
-export interface DeliveryWebhook {
-  binding: string;
-  url: string;
-}
-
 export interface Destination {
-  webhook?: DeliveryWebhook;
   account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
@@ -228,6 +221,7 @@ export interface Destination {
   onBehalfOf?: string;
   relaySender?: string;
   persona?: WornPersona;
+  project?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -252,8 +246,6 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
-  sourceRequestId?: string;
-  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -280,6 +272,7 @@ export interface Delivery {
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
+  messageTs?: string;
 }
 
 export interface EgressPolicy {
@@ -394,7 +387,6 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
-  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {
@@ -488,7 +480,6 @@ export interface PendingApprovalRecord {
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
   homeChannel?: string;
-  people?: string[];
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

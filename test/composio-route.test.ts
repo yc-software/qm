@@ -180,6 +180,45 @@ test("catalog preserves provider usage order, pagination, and strips raw fields"
   assert.equal(url.searchParams.get("cursor"), "page+1");
 });
 
+test("the catalog can be asked for one app, which costs one small request", async () => {
+  const f = fixture();
+  await f.own();
+  f.deps.mcpServers = {
+    list: async () => [
+      {
+        id: "host",
+        enabled: true,
+        apps: [{ toolkit: "granola", name: "Granola", connectUrl: "https://host.example/x" }],
+      },
+    ],
+  } as unknown as ServerDeps["mcpServers"];
+  const app = (slug: string, name: string, scheme: string) => ({
+    items: [{ slug, name, meta: { description: "Files" }, auth_schemes: [scheme], no_auth: scheme === "NO_AUTH" }],
+    next_cursor: "more",
+  });
+  f.replies.push(app("dropbox", "Dropbox", "OAUTH2"));
+  const one = await f.invoke("/v1/composio/toolkits?toolkit=dropbox");
+  assert.deepEqual(one.data, {
+    items: [
+      { id: "dropbox", logoUrl: "https://logos.composio.dev/api/dropbox", name: "Dropbox", description: "Files" },
+    ],
+    nextCursor: null,
+  });
+  assert.equal(new URL(f.calls[0]!.url).pathname, "/api/v3.1/toolkits/multi");
+  assert.deepEqual(JSON.parse(String(f.calls[0]!.init?.body)), { toolkits: ["dropbox"] });
+  f.replies.push(app("hackernews", "Hacker News", "NO_AUTH"));
+  assert.deepEqual((await f.invoke("/v1/composio/toolkits?toolkit=hackernews")).data.items, []);
+  f.replies.push({ items: [] });
+  assert.deepEqual(
+    (await f.invoke("/v1/composio/toolkits?toolkit=granola")).data.items.map((x: { id: string }) => x.id),
+    ["granola"],
+  );
+  f.replies.push(new Response("down", { status: 500 }));
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=dropbox")).status, 502);
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=../auth_configs")).status, 400);
+  assert.equal(f.calls.length, 4);
+});
+
 test("ambiguous personal keys fail closed rather than switching to the company key", async () => {
   const f = fixture();
   await f.own();
@@ -287,78 +326,61 @@ test("connections return only this actor's active accounts and strip credentials
   assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
 });
 
-test("connections report scopes the app's configuration grants that an older connection lacks", async () => {
+test("connections report the scopes an app's configuration asks for that the connection was never asked for", async () => {
   const f = fixture();
   await f.own();
-  const account = (id: string, scope: string | undefined, config = "ac_x") => ({
+  const account = (id: string, created: string, config = "ac_x") => ({
     id,
     user_id: composioUserId(orgId(), "alice"),
     status: "ACTIVE",
     toolkit: { slug: "twitter" },
     auth_config: { id: config },
-    state: { authScheme: "OAUTH2", val: { scope, access_token: "secret-token" } },
+    created_at: created,
+    state: { authScheme: "OAUTH2", val: { scope: "tweet.read", access_token: "secret-token" } },
   });
-  f.replies.push(
-    {
+  const bodies: Record<string, unknown> = {
+    connected_accounts: {
       items: [
-        account("ca_old", "tweet.read users.read offline.access"),
-        account("ca_new", "tweet.read users.read offline.access dm.read dm.write"),
-        account("ca_unknown", undefined),
-        account("ca_unreadable", "tweet.read", "ac_gone"),
+        account("ca_old", "2026-01-01T00:00:00Z"),
+        account("ca_new", "2026-03-01T00:00:00Z"),
+        account("ca_unrecorded", "2026-01-01T00:00:00Z"),
+        account("ca_unreadable", "2026-01-01T00:00:00Z", "ac_gone"),
       ],
     },
-    {
-      credentials: {
-        scopes: ["tweet.read", "users.read", "offline.access", "dm.read", "dm.write"],
-        client_secret: "s3",
-      },
+    ac_x: {
+      last_updated_at: "2026-02-01T00:00:00Z",
+      credentials: { scopes: ["tweet.read", "users.read", "offline.access", "dm.read"], client_secret: "s3" },
     },
-    new Response("missing", { status: 404 }),
-  );
-  const r = await f.invoke("/v1/composio/connections");
+    ca_old: {
+      requested_scopes: ["tweet.read", "users.read", "https://graph.microsoft.com/offline.access"],
+      state: { val: { access_token: "secret-token" } },
+    },
+    ca_unrecorded: {},
+  };
+  const reads = (id: string) => f.calls.filter((call) => new URL(call.url).pathname.endsWith(`/${id}`)).length;
+  f.deps.composioFetch = (async (input) => {
+    f.calls.push({ url: String(input) });
+    const body = bodies[new URL(String(input)).pathname.split("/").at(-1)!];
+    return body ? Response.json(body) : new Response("missing", { status: 404 });
+  }) as typeof fetch;
+  const [r, same] = await Promise.all([f.invoke("/v1/composio/connections"), f.invoke("/v1/composio/connections")]);
   assert.equal(r.status, 200);
   assert.deepEqual(
     r.data.items.map((item: { id: string; missingScopes: string[] }) => [item.id, item.missingScopes]),
     [
-      ["ca_old", ["dm.read", "dm.write"]],
+      ["ca_old", ["dm.read"]],
       ["ca_new", []],
-      ["ca_unknown", []],
+      ["ca_unrecorded", []],
       ["ca_unreadable", []],
     ],
   );
-  assert.deepEqual(
-    f.calls.slice(1).map((call) => new URL(call.url).pathname),
-    ["/api/v3.1/auth_configs/ac_x", "/api/v3.1/auth_configs/ac_gone"],
-  );
+  assert.deepEqual(same.data, r.data);
   assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
-  f.replies.push({ items: [account("ca_old", "tweet.read"), account("ca_unreadable", "tweet.read", "ac_gone")] }, {});
-  await f.invoke("/v1/composio/connections");
-  assert.deepEqual(
-    f.calls.slice(3).map((call) => new URL(call.url).pathname),
-    ["/api/v3.1/connected_accounts", "/api/v3.1/auth_configs/ac_gone"],
-  );
-});
-
-test("scopes granted in URL form match their short configured names", async () => {
-  const f = fixture();
-  await f.own();
-  f.replies.push(
-    {
-      items: [
-        {
-          id: "ca_outlook",
-          user_id: composioUserId(orgId(), "alice"),
-          status: "ACTIVE",
-          toolkit: { slug: "outlook" },
-          auth_config: { id: "ac_outlook" },
-          state: { val: { scope: "https://graph.microsoft.com/Mail.Read offline_access https://mail.google.com/" } },
-        },
-      ],
-    },
-    { credentials: { scopes: ["Mail.Read", "offline_access", "https://mail.google.com/", "Mail.Send"] } },
-  );
-  const r = await f.invoke("/v1/composio/connections");
-  assert.deepEqual(r.data.items[0].missingScopes, ["Mail.Send"]);
+  const failed = reads("ac_gone");
+  const again = await f.invoke("/v1/composio/connections");
+  assert.deepEqual(again.data, r.data);
+  assert.deepEqual(["ac_x", "ca_old", "ca_unrecorded", "ca_new", "ca_unreadable"].map(reads), [1, 1, 1, 0, 0]);
+  assert.equal(reads("ac_gone"), failed + 1);
 });
 
 test("people can disconnect only their own connections, on a turn they started", async () => {

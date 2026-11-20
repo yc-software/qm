@@ -773,12 +773,12 @@ test("asynchronous growth leaves a reader in place", () => {
   }
 });
 
-test("opening a thought at the bottom grows below the clicked row instead of following", () => {
+test("opening a work log at the bottom grows below the clicked row instead of following", () => {
   const f = fixture();
   try {
     const doc = f.s.ownerDocument;
     const row = doc.createElement("details");
-    row.className = "thinking-row";
+    row.className = "work work-fold";
     const summary = doc.createElement("summary");
     row.append(summary);
     f.s.querySelector(".message-stack")!.append(row);

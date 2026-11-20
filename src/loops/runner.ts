@@ -67,10 +67,10 @@ function emptySummary(loop: Loop, ran: boolean): FireSummary {
   };
 }
 
-function recordFailure(summary: FireSummary, label: string, error: unknown): void {
+function recordFailure(summary: FireSummary, label: string, error: unknown, parked = false): void {
   console.error("%s", `[loops] ${summary.loopId} ${label} failed:`, errMessage(error));
   summary.failures.push(`${label}: ${errText(error)}`);
-  if (!isTransientFailure(error)) summary.persistentFailures += 1;
+  if (parked || !isTransientFailure(error)) summary.persistentFailures += 1;
 }
 
 export function fireOutcome(summary: FireSummary): FireOutcome {
@@ -284,7 +284,8 @@ export async function runLoopFire(
         } catch (error) {
           if (!shipStarted) openedOutputs = 0;
           const reason = errText(error);
-          recordFailure(summary, item.sourceKey, error);
+          const exhausted = item.attempts >= effectiveMaxAttempts;
+          recordFailure(summary, item.sourceKey, error, shipStarted || exhausted);
           if (shipStarted) {
             await stores.items.park(
               item.id,
@@ -295,7 +296,6 @@ export async function runLoopFire(
           }
           const latestRunId = (await stores.items.get(item.id))?.runIds.at(-1);
           if (latestRunId) await stores.outputs.supersedeAttempt(item.id, latestRunId);
-          const exhausted = item.attempts >= effectiveMaxAttempts;
           if (exhausted) {
             await stores.items.park(item.id, reason, claimToken);
             summary.parked.push(item.id);

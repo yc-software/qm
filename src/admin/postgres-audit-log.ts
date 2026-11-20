@@ -14,10 +14,11 @@ function rowToEvent(r: Record<string, unknown>): AuditEvent {
     scopeLabel: r.scope_label as ScopeId,
     ...(r.status == null ? {} : { status: String(r.status) }),
     ...(r.detail == null ? {} : { detail: String(r.detail) }),
+    ...(r.impersonated_by == null ? {} : { impersonatedBy: String(r.impersonated_by) }),
   };
 }
 
-const COLS = "at, principal_id, action, resource, scope_label, status, detail";
+const COLS = "at, principal_id, action, resource, scope_label, status, detail, impersonated_by";
 const MAX = 50000;
 
 export function createPostgresAuditLog(connectionString: string): AuditLog {
@@ -68,6 +69,10 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         ],
       },
     ]),
+    {
+      id: "admin/audit-log/0004-impersonated-by",
+      statements: [`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS impersonated_by TEXT`],
+    },
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
@@ -75,7 +80,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     record(tenant, e) {
       const write = pg
         .forTenant(tenant)
-        .q(`INSERT INTO audit_log(${COLS}, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [
+        .q(`INSERT INTO audit_log(${COLS}, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [
           e.at,
           e.principalId,
           e.action,
@@ -83,6 +88,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
           e.scopeLabel,
           e.status ?? null,
           e.detail ?? null,
+          e.impersonatedBy ?? null,
           tenant.id,
         ])
         .then(() => undefined)
@@ -92,9 +98,20 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     },
     async recordOnce(tenant, key, e) {
       await pg.forTenant(tenant).q(
-        `INSERT INTO audit_log(${COLS}, idempotency_key, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `INSERT INTO audit_log(${COLS}, idempotency_key, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-        [e.at, e.principalId, e.action, e.resource, e.scopeLabel, e.status ?? null, e.detail ?? null, key, tenant.id],
+        [
+          e.at,
+          e.principalId,
+          e.action,
+          e.resource,
+          e.scopeLabel,
+          e.status ?? null,
+          e.detail ?? null,
+          e.impersonatedBy ?? null,
+          key,
+          tenant.id,
+        ],
       );
     },
     async events(tenant) {

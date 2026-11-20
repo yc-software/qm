@@ -8,7 +8,6 @@ import {
   renderStandingObligations,
 } from "../src/core/orchestrator/prompt-blocks.ts";
 import { type Item, storedItem } from "../src/sessions/items.ts";
-import { personKey } from "../src/directory/person.ts";
 import type { Cron } from "../src/triggers/types.ts";
 
 const member = (principalId: string, displayName = principalId.toLowerCase(), slackId?: string) => ({
@@ -16,15 +15,9 @@ const member = (principalId: string, displayName = principalId.toLowerCase(), sl
   displayName,
   ...(slackId ? { slackId } : {}),
 });
-const named = new Map(
-  [member("U1"), member("U2"), member("U3"), member("u3@example.com", "Cy")].map((m) => [
-    personKey(m.principalId),
-    m.displayName,
-  ]),
-);
 
 function entry(seq: number, members: ReturnType<typeof member>[], history: Item[]): Item {
-  const event = membershipEvent(members, history, "s", named);
+  const event = membershipEvent(members, history, "s");
   return storedItem(
     { kind: "UserMessage", text: "hello", body: { environment: event.text, rosterSnapshot: event.record } },
     { sessionId: "s", seq, createdAt: seq },
@@ -35,11 +28,11 @@ test("membership changes are reported once, after the turn that first saw the ro
   const first = entry(1, [member("U1"), member("U2")], []);
   assert.equal(first.body.environment, "");
   const history: Item[] = JSON.parse(JSON.stringify([first]));
-  assert.equal(membershipEvent([member("U2"), member("U1")], history, "s", named).text, "");
+  assert.equal(membershipEvent([member("U2"), member("U1")], history, "s").text, "");
   const second = entry(2, [member("U1"), member("u3@example.com", "Cy", "U3")], history);
   assert.equal(second.body.environment, "Joined: Cy (u3@example.com, U3). Left: u2.");
   assert.equal(
-    membershipEvent([member("U1"), member("u3@example.com", "Cy", "U3")], [...history, second], "s", named).text,
+    membershipEvent([member("U1"), member("u3@example.com", "Cy", "U3")], [...history, second], "s").text,
     "",
   );
 });
@@ -47,13 +40,12 @@ test("membership changes are reported once, after the turn that first saw the ro
 test("membership is compared with the last recorded roster, and turns without a roster record none", () => {
   const first = entry(1, [member("U1")], []);
   const joined = [member("U1"), member("U2")];
-  assert.equal(membershipEvent(joined, [first], "s", named).text, "Joined: u2 (U2).");
-  assert.equal(membershipEvent(joined, [first], "s", new Map()).text, "Joined: U2.");
+  assert.equal(membershipEvent(joined, [first], "s").text, "Joined: u2 (U2).");
   assert.match(
-    membershipEvent(joined, [first, entry(2, [member("U3")], [first])], "s", named).text,
+    membershipEvent(joined, [first, entry(2, [member("U3")], [first])], "s").text,
     /^Joined: u1 \(U1\), u2 \(U2\)\. Left: u3\.$/,
   );
-  assert.deepEqual(membershipEvent(undefined, [first], "s", named), { text: "" });
+  assert.deepEqual(membershipEvent(undefined, [first], "s"), { text: "" });
 });
 
 test("sandbox providers render the default first, and point at sandbox list only where it exists", () => {
@@ -125,6 +117,7 @@ test("schedules the short form can't express fall back to cronstrue's wording", 
   assert.match(renderStandingObligations([cron("0 8 * * 1-5")], [], []), /- T — 8:00 AM Mon\/Tue\/Wed\/Thu\/Fri$/m);
   assert.match(renderStandingObligations([cron("0 8 * * 1#2")], [], []), /second Monday/);
   assert.match(renderStandingObligations([cron("0 8 1 * *")], [], []), /day 1 of the month/);
+  assert.match(renderStandingObligations([cron("17 * * * *")], [], []), /- T — At 17 minutes past the hour$/m);
 });
 
 const revision = (version: number, content: string, sessionId?: string) => ({

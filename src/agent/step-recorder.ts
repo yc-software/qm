@@ -80,6 +80,8 @@ export type StepRecorder = ReturnType<typeof createStepRecorder>;
 
 export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown">, persist: Persist) {
   const calls = new Map<string, { step: ReplayStep; block: ToolCall }>();
+  const synthesizedIds: string[] = [];
+  const resolveCallId = (callId: string): string => callId || synthesizedIds[0] || callId;
   const called = new Set<string>();
   const executing = new Map<string, NewItem>();
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
@@ -105,9 +107,11 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     }
     pending = null;
   };
-  const recordResult = (callId: string, content: ToolResultMessage["content"], isError: boolean): void => {
+  const recordResult = (rawCallId: string, content: ToolResultMessage["content"], isError: boolean): void => {
+    const callId = resolveCallId(rawCallId);
     const call = calls.get(callId);
     if (!call) return;
+    if (synthesizedIds[0] === callId) synthesizedIds.shift();
     calls.delete(callId);
     if (!called.has(callId)) write(steppedCall({ kind: "ToolCall", tool: call.block.name, callId }, call));
     called.delete(callId);
@@ -124,14 +128,14 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
   };
   return {
     emit: async (item: NewItem): Promise<Item | undefined> => {
-      const callId = item.callId ?? "";
+      const callId = resolveCallId(item.callId ?? "");
       const call = calls.get(callId);
       if (call && item.kind === "ToolCall") {
         called.add(callId);
-        return turn.emit(steppedCall(item, call));
+        return turn.emit(steppedCall({ ...item, callId }, call));
       }
       if (call && item.kind === "ToolResult") {
-        executing.set(callId, item);
+        executing.set(callId, { ...item, callId });
         return undefined;
       }
       return turn.emit(item);
@@ -151,7 +155,17 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
           write({ kind: "Reasoning", text: thinking, step: fields.step, body: { ...rest, ...fields.body } });
         } else if (block.type === "text") {
           if (block.text || block.textSignature !== undefined) parts.push({ index, block });
-        } else calls.set(block.id, { step: { ...step, index }, block });
+        } else {
+          let stored = block;
+          if (!stored.id) {
+            stored = { ...block, id: `call_${randomUUID()}` };
+            synthesizedIds.push(stored.id);
+            console.warn(
+              `[agent] ${provider} ${model} sent tool call ${block.name} without an id; synthesized ${stored.id}`,
+            );
+          }
+          calls.set(stored.id, { step: { ...step, index }, block: stored });
+        }
       });
       pending = { step, parts };
       if (stopReason !== "aborted" && message.content.some((block) => block.type === "toolCall")) flush();

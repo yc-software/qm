@@ -244,6 +244,7 @@ export function createSkillMethods(
   | "archiveSkill"
   | "listVisibleSkills"
   | "canManageSkill"
+  | "manageableSkills"
   | "updateOwnedSkill"
   | "restoreOwnedSkill"
   | "listSkillPacks"
@@ -257,7 +258,7 @@ export function createSkillMethods(
   | "createOwnedSkill"
   | "deleteOwnedSkill"
 > {
-  const { canManageSkill, republishIfShared } = h;
+  const { canManageSkill, manageableSkills, republishIfShared } = h;
   return {
     listSkills() {
       return deps.skills.list();
@@ -281,6 +282,7 @@ export function createSkillMethods(
     canManageSkill(skill, principalId, botWork) {
       return canManageSkill(skill, principalId, botWork);
     },
+    manageableSkills,
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
       if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;

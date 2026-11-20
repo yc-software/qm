@@ -51,11 +51,12 @@ export type EmojiUploadResult = { ok: true; name: string; workspace: string } | 
 const EMOJI_UPLOAD_NO_WORKSPACE =
   "Can't tell which Slack workspace to target — there's no connected Slack workspace. Pass `workspace` (e.g. acme.slack.com).";
 
-const EMOJI_UPLOAD_NO_SESSION =
-  "No Slack session for you, and no fallback account is configured/seeded. Sign in to Slack in the browser first (or have an operator set SLACK_EMOJI_FALLBACK_PRINCIPAL to a seeded account).";
+const SIGN_IN_AGAIN =
+  "To fix it, have the person you're helping sign in to Slack in a live browser (the browse skill), then save that browser's Slack cookies with PUT /v1/emoji/session and retry. Their own session is used for their uploads from then on.";
 
-export const EMOJI_UPLOAD_SESSION_EXPIRED =
-  "The Slack session for the emoji uploader has expired — an operator needs to sign in to Slack again to refresh it.";
+const EMOJI_UPLOAD_NO_SESSION = `There's no saved Slack session for you, and no fallback account has one either. ${SIGN_IN_AGAIN}`;
+
+export const EMOJI_UPLOAD_SESSION_EXPIRED = `The Slack session the emoji uploader uses has expired. ${SIGN_IN_AGAIN}`;
 
 const PERMISSION_ERRORS = new Set(["no_permission", "missing_scope", "restricted_action", "user_is_restricted"]);
 const TOO_BIG_ERRORS = new Set(["resized_but_still_too_large", "error_too_big", "too_large"]);
@@ -93,24 +94,30 @@ function imageExt(buf: Buffer): "gif" | "png" {
   return buf.length >= 4 && buf.toString("ascii", 0, 4) === "GIF8" ? "gif" : "png";
 }
 
-export function slackCookieHeader(storageStateJson: string): string | null {
+type SlackCookie = { name: string; value: string; domain?: string };
+
+function slackCookies(storageStateJson: string): SlackCookie[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(storageStateJson);
   } catch {
     return null;
   }
-  const cookies = (parsed as { cookies?: unknown }).cookies;
+  const cookies = (parsed as { cookies?: unknown } | null)?.cookies;
   if (!Array.isArray(cookies)) return null;
   const slack = cookies.filter(
-    (c): c is { name: string; value: string; domain?: string } =>
+    (c): c is SlackCookie =>
       !!c &&
       typeof c.name === "string" &&
       typeof c.value === "string" &&
-      /(^|\.)slack\.com$/.test(String(c.domain ?? "")),
+      (c.domain === "slack.com" || String(c.domain ?? "").endsWith(".slack.com")),
   );
-  if (!slack.some((c) => c.name === "d")) return null;
-  return slack.map((c) => `${c.name}=${c.value}`).join("; ");
+  return slack.some((c) => c.name === "d") ? slack : null;
+}
+
+export function slackCookieHeader(storageStateJson: string): string | null {
+  const slack = slackCookies(storageStateJson);
+  return slack ? slack.map((c) => `${c.name}=${c.value}`).join("; ") : null;
 }
 
 async function mintApiToken(
@@ -118,16 +125,17 @@ async function mintApiToken(
   cookie: string,
   fetchImpl: typeof fetch,
   timeoutMs: number,
-): Promise<string | null> {
+): Promise<{ token: string | null; status: number }> {
   const r = await fetchImpl(`https://${workspace}/`, {
     headers: { Cookie: cookie, "User-Agent": "Mozilla/5.0" },
     redirect: "manual",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!r.ok) return null;
   const html = await r.text();
-  const m = html.match(/"api_token":"(xoxc-[A-Za-z0-9-]+)"/);
-  return m ? m[1]! : null;
+  const key = '"api_token":"';
+  const start = html.indexOf(`${key}xoxc-`);
+  const end = start < 0 ? -1 : html.indexOf('"', start + key.length);
+  return { token: end < 0 ? null : html.slice(start + key.length, end), status: r.status };
 }
 
 async function callEmojiAdd(
@@ -180,13 +188,19 @@ export async function runEmojiUpload(deps: EmojiUploadDeps, req: EmojiUploadRequ
   const cookie = state ? slackCookieHeader(state) : null;
   if (!cookie) return { ok: false, error: EMOJI_UPLOAD_SESSION_EXPIRED };
 
-  let token: string | null;
+  let minted: { token: string | null; status: number };
   try {
-    token = await mintApiToken(workspace, cookie, fetchImpl, timeoutMs);
+    minted = await mintApiToken(workspace, cookie, fetchImpl, timeoutMs);
   } catch (e) {
     return { ok: false, error: `couldn't reach ${workspace} to start the upload: ${errMessage(e)}` };
   }
-  if (!token) return { ok: false, error: EMOJI_UPLOAD_SESSION_EXPIRED };
+  const token = minted.token;
+  if (!token) {
+    return {
+      ok: false,
+      error: `${EMOJI_UPLOAD_SESSION_EXPIRED} (${workspace} answered HTTP ${minted.status} without a session token.)`,
+    };
+  }
 
   let resp: { ok?: boolean; error?: string };
   try {
@@ -196,4 +210,39 @@ export async function runEmojiUpload(deps: EmojiUploadDeps, req: EmojiUploadRequ
   }
   if (resp.ok || resp.error === "error_name_taken") return { ok: true, name: req.name, workspace };
   return { ok: false, error: humanizeEmojiError(resp.error) };
+}
+
+export type SlackSessionSaveResult = { ok: true; workspace: string } | { ok: false; error: string };
+
+export async function saveSlackSession(
+  deps: EmojiUploadDeps & { sessionStore: BrowserSessionStore },
+  req: { storageStateJson: string; workspace?: string },
+): Promise<SlackSessionSaveResult> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const timeoutMs = deps.timeoutMs ?? 30_000;
+  const workspace = normalizeWorkspace(req.workspace) || normalizeWorkspace(deps.connectorWorkspace);
+  if (!workspace) return { ok: false, error: EMOJI_UPLOAD_NO_WORKSPACE };
+  const cookies = slackCookies(req.storageStateJson);
+  if (!cookies) {
+    return {
+      ok: false,
+      error:
+        "No Slack sign-in cookie (`d` on .slack.com) in those cookies — the browser isn't signed in to Slack yet. Have the person finish signing in on the live view, then export again.",
+    };
+  }
+  const state = JSON.stringify({ cookies });
+  let minted: { token: string | null; status: number };
+  try {
+    minted = await mintApiToken(workspace, slackCookieHeader(state)!, fetchImpl, timeoutMs);
+  } catch (e) {
+    return { ok: false, error: `couldn't reach ${workspace} to check the session: ${errMessage(e)}` };
+  }
+  if (!minted.token) {
+    return {
+      ok: false,
+      error: `Those cookies aren't signed in to ${workspace} (it answered HTTP ${minted.status} without a session token) — nothing was saved. Make sure the person signed in to that workspace (not another one) on the live view, then export again.`,
+    };
+  }
+  await deps.sessionStore.put(deps.principalId, state);
+  return { ok: true, workspace };
 }

@@ -8,7 +8,13 @@ import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { connectorApps, type ConnectorApp } from "./connector-apps.ts";
-import { attestsInAudience, attestedPerson, OutsideAudience, type AttestingTurn } from "../directory/person.ts";
+import {
+  attestsInAudience,
+  attestedPerson,
+  attestedActorHeaders,
+  OutsideAudience,
+  type AttestingTurn,
+} from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -181,7 +187,7 @@ function refuseOutsideAudience(
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
   const actor = attestedPerson(principalId, `MCP server ${server.id}`);
-  return { "x-qm-actor": actor, ...(approval ? { "x-qm-approval": approval } : {}) };
+  return { ...attestedActorHeaders(actor), ...(approval ? { "x-qm-approval": approval } : {}) };
 }
 
 function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {
