@@ -622,14 +622,22 @@ const BACKFILL_NULL_CALL_IDS: PgMigrationDefinition = {
          SELECT 1 FROM null_call_items c
           WHERE c.kind = 'ToolCall' AND c.tenant_id = r.tenant_id AND c.session_id = r.session_id
             AND c.turn_id IS NOT DISTINCT FROM r.turn_id AND c.rn = r.rn)`,
-    `ALTER TABLE items DISABLE TRIGGER items_append_only`,
+    `DO $backfill_null_call_ids$ BEGIN
+       IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN
+         ALTER TABLE items DISABLE TRIGGER items_append_only;
+       END IF;
+     END $backfill_null_call_ids$`,
     `UPDATE items i SET call_id = b.call_id
        FROM null_call_items n
        JOIN backfilled_call_ids b
          ON b.tenant_id = n.tenant_id AND b.session_id = n.session_id
         AND b.turn_id IS NOT DISTINCT FROM n.turn_id AND b.rn = n.rn
       WHERE i.tenant_id = n.tenant_id AND i.session_id = n.session_id AND i.seq = n.seq`,
-    `ALTER TABLE items ENABLE TRIGGER items_append_only`,
+    `DO $backfill_null_call_ids$ BEGIN
+       IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN
+         ALTER TABLE items ENABLE TRIGGER items_append_only;
+       END IF;
+     END $backfill_null_call_ids$`,
     `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_tool_call_id_present`,
     `ALTER TABLE items ADD CONSTRAINT items_tool_call_id_present
        CHECK (call_id IS NOT NULL OR kind NOT IN ('ToolCall', 'ToolResult'))`,
