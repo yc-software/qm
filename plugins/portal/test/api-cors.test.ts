@@ -154,6 +154,8 @@ test("the chat API route set is exact on method and shape", () => {
   assert.ok(isChatApiRoute("GET", "/api/files/f1/content/report.pdf"));
   assert.ok(isChatApiRoute("POST", "/api/blobs"));
   assert.ok(isChatApiRoute("GET", "/api/sessions"));
+  assert.ok(isChatApiRoute("GET", "/api/runtime-config"));
+  assert.ok(!isChatApiRoute("PUT", "/api/runtime-config"));
   assert.ok(!isChatApiRoute("POST", "/api/files/upload"));
   assert.ok(!isChatApiRoute("GET", "/api/files/by-name/content"));
   assert.ok(isChatApiRoute("GET", "/api/files/by-name-x/content"));
