@@ -106,7 +106,7 @@ import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
-import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
+import { createGitFetcher, packFetcherByKind, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import {
   createPostgresMap,
@@ -222,7 +222,9 @@ import {
 } from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpToolService, mcpServerAuth, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpClient } from "./mcp/mcp-client.ts";
+import { createMcpPackFetcher } from "./skills/mcp-pack-fetcher.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -2345,7 +2347,7 @@ export function buildApp(
     genericChatRunNotice,
   );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
-  const skillFetcher = createGitFetcher(
+  const gitSkillFetcher = createGitFetcher(
     keychain
       ? {
           allowLocalRepos: !config.production,
@@ -2366,6 +2368,13 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
+  const skillFetcher = packFetcherByKind({
+    git: gitSkillFetcher,
+    mcp: createMcpPackFetcher({
+      servers: mcpServers,
+      clientFor: (server) => createMcpClient({ url: server.url, auth: mcpServerAuth(server) }),
+    }),
+  });
   const reaper: Reaper = createReaper(runs, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,

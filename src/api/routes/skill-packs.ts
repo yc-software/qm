@@ -68,8 +68,10 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
   const subset = asSubset(b.subset);
   if (subset === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "subset must be 'all' or string[]" });
+  if (b.kind !== undefined && b.kind !== "git" && b.kind !== "mcp")
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "kind must be 'git' or 'mcp'" });
   const input: NewSkillPack = {
-    kind: "git",
+    kind: b.kind === "mcp" ? "mcp" : "git",
     url: b.url.trim(),
     ref: typeof b.ref === "string" ? b.ref.trim() : "",
 

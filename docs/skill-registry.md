@@ -73,6 +73,33 @@ commit.
 The skills are governed store records, visible and auditable on the admin Skills page, rather than
 ungoverned files on each box.
 
+## Packs from an MCP server
+
+A pack can also come from a registered MCP server that implements the MCP skills extension
+(`skills/list`, with each `SKILL.md` served through `resources/read`). Register it with
+`"kind": "mcp"` and the server's exact URL; everything after fetching (catalog, import,
+screening, sync, removal) is the same as for a git pack.
+
+```json
+{ "kind": "mcp", "url": "https://skills.example.com/mcp", "trustTier": "internal" }
+```
+
+- The pack's version is a hash of the listing's skill URIs and digests, so tracked sync
+  re-imports when any listed skill changes. Each `SKILL.md` is checked against its listed
+  digest and size, and a mismatch fails the import.
+- The server must be enabled, with shared credentials (`credentialScope: "shared"`, not
+  `oauth-user`); there is exactly one per URL. QM calls it as itself, without attesting a
+  person, so a server that answers per person should answer that call with what everyone
+  in the org may see.
+- This is opt-in twice over. Registering an MCP server never turns it into a skill
+  source; only an admin registering a pack does. And the import reads every listed skill
+  when the pack is fetched, ahead of any skill being used, which the extension otherwise
+  asks hosts not to do; an admin chooses that by registering the pack.
+- Packs register as `pinned`. `PATCH` `{ "syncMode": "tracked" }` keeps imported skills
+  current, and the background sync runs only when `SKILL_SYNC_POLL_MS` is set (default
+  `0`, off); `POST /v1/admin/skill-packs/:id/sync` runs it on demand. As for git packs,
+  sync refreshes the skills already imported; import again to add new ones.
+
 ## Loading published skills
 
 The skill index lists each visible skill. The agent's `skills` tool resolves the currently

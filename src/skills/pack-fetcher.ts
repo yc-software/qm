@@ -11,11 +11,18 @@ import { commitShaPrefixSchema } from "../util/ids.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";
 import { isProbablyBinary } from "./seed.ts";
 import type { FetchedRepo, RepoFile } from "./ingest.ts";
-import type { SkillPack } from "./skill-pack-store.ts";
+import type { PackKind, SkillPack } from "./skill-pack-store.ts";
 
 export interface SkillPackFetcher {
   fetch(pack: SkillPack): Promise<FetchedRepo>;
   resolveRef(pack: SkillPack): Promise<string>;
+}
+
+export function packFetcherByKind(fetchers: Record<PackKind, SkillPackFetcher>): SkillPackFetcher {
+  return {
+    fetch: (pack) => fetchers[pack.kind].fetch(pack),
+    resolveRef: (pack) => fetchers[pack.kind].resolveRef(pack),
+  };
 }
 
 export interface GitFetcherOptions {
