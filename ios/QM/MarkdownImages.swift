@@ -150,6 +150,9 @@ struct WorkspaceInlineImages: InlineImageProvider {
   let files: [DeliveredFile]
 
   func image(with url: URL, label: String) async throws -> Image {
+    if url.scheme == GitHubLinkMark.scheme {
+      return Image("GitHubLinkMark")
+    }
     guard let path = MarkdownImageResource.path(url, baseURL: client.baseURL, files: files) else {
       return Image(systemName: "photo")
     }
