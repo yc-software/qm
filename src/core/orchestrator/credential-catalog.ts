@@ -135,7 +135,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   };
   const placeCredential = (credential: CommandCredential): CommandCredential => ({
     ...credential,
-    scratchOnly: sharedScope && credential.scratchOnly !== false,
+    scratchOnly: credential.scratchOnly ?? sharedScope,
   });
   const addCredentialToCatalog = (
     credential: CommandCredential,
@@ -203,6 +203,7 @@ export async function registerKeychainCredentials(
     addCredential(
       {
         handle: credentialHandle(credential),
+        ...(credential.kind === "file" ? { scratchOnly: true } : {}),
         resolve: async () => {
           const prepared = await keychain.prepareMaterialize(grant.id, grantScope, actor.id);
           return {
@@ -224,6 +225,7 @@ export async function registerKeychainCredentials(
       addCredential(
         {
           handle: credentialHandle(credential),
+          ...(credential.kind === "file" ? { scratchOnly: true } : {}),
           resolve: async () => {
             await authorizeOwnerCredentials();
             return resolvedCredential(

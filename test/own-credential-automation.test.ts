@@ -52,6 +52,10 @@ test("a scheduled turn in the owner's DM uses the owner's credential without a g
   } as TurnRequest);
   assert.equal(fired.status, "ok", fired.reason);
   assert.match(fired.reply ?? "", /own-login/);
+  assert.ok(
+    ff.calls.some((call) => call.path.includes("/sprites/qm-scratch-") && call.path.endsWith("/exec")),
+    "a saved file login runs on the turn's scratch computer",
+  );
   assert.equal((await built.keychain!.listGrants({ ownerId: "U1" })).length, 0);
 });
 
