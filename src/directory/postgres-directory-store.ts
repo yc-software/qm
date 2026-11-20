@@ -215,6 +215,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
+  async function tenantFrom(lookup: "qm_tenant_for_app_handle" | "qm_tenant_for_app_host", key: string) {
+    const rows = await q(`SELECT ${lookup}($1)::text AS id`, [key]);
+    return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+  }
+
   async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
     if (!principalIds.length) return new Map();
     const emails = principalIds.map(foldPrincipalId).filter((id) => id.includes("@"));
@@ -393,15 +398,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return branded(rows);
     },
 
-    async tenantForAppHandle(handle) {
-      const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
-      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
-    },
+    tenantForAppHandle: (handle) => tenantFrom("qm_tenant_for_app_handle", handle),
 
-    async tenantForAppHost(label) {
-      const rows = await q("SELECT qm_tenant_for_app_host($1)::text AS id", [label]);
-      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
-    },
+    tenantForAppHost: (label) => tenantFrom("qm_tenant_for_app_host", label),
 
     async setAppHandle(handle) {
       try {
