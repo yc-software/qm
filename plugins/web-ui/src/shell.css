@@ -4169,84 +4169,78 @@ qm-draft .draft-card-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.assistant-body code-block[language="text"] pre,
-.user-bubble code-block[language="text"] pre {
+.assistant-body code-block,
+.user-bubble code-block {
+  margin: 12px 0;
+}
+:is(.assistant-body, .user-bubble) code-block > div {
+  position: relative;
+  border-radius: 12px;
+}
+:is(.assistant-body, .user-bubble) code-block pre {
   margin: 0;
-  padding: 4px 8px 8px;
+  padding: 12px 48px 12px 16px;
+}
+:is(.assistant-body, .user-bubble) code-block[language="text"] pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 10px;
-  line-height: 1.4;
 }
-.assistant-body code-block[language="text"] pre code,
-.user-bubble code-block[language="text"] pre code {
-  font-size: 10px;
-  line-height: 1.4;
-}
-.assistant-body code-block[language="text"] > div,
-.user-bubble code-block[language="text"] > div {
-  display: flex;
-  flex-direction: column;
-}
-.assistant-body code-block[language="text"] .text-code-body,
-.user-bubble code-block[language="text"] .text-code-body {
-  order: 1;
-}
-.assistant-body code-block[language="text"] .text-code-footer,
-.user-bubble code-block[language="text"] .text-code-footer {
-  order: 2;
-  height: var(--meta-lane);
-  justify-content: flex-end;
-  gap: 2px;
-  padding: 0 2px;
-  font-size: 10px;
+:is(.assistant-body, .user-bubble) code-block .code-block-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  gap: 4px;
+  padding: 0;
   opacity: 0;
-  pointer-events: none;
   transition: opacity 0.12s ease;
 }
-.assistant-body code-block[language="text"] .text-code-footer > span,
-.user-bubble code-block[language="text"] .text-code-footer > span {
+:is(.assistant-body, .user-bubble) code-block .code-block-toolbar > span {
+  font-family: inherit;
+  font-size: max(min(11px, var(--chat-font-size)), calc((var(--chat-font-size) - 2px) * var(--text-scale)));
+}
+:is(.assistant-body, .user-bubble) code-block[language="text"] .code-block-toolbar > span {
   display: none;
 }
-.assistant-body code-block[language="text"]:hover .text-code-footer,
-.user-bubble code-block[language="text"]:hover .text-code-footer,
-.assistant-body code-block[language="text"] .text-code-footer:focus-within,
-.user-bubble code-block[language="text"] .text-code-footer:focus-within {
+:is(.assistant-body, .user-bubble) code-block:hover .code-block-toolbar,
+:is(.assistant-body, .user-bubble) code-block .code-block-toolbar:focus-within {
   opacity: 1;
-  pointer-events: auto;
 }
-.assistant-body code-block[language="text"] copy-button button,
-.user-bubble code-block[language="text"] copy-button button {
+:is(.assistant-body, .user-bubble) code-block copy-button button {
+  width: var(--meta-lane);
   min-width: var(--meta-lane);
   height: var(--meta-lane);
   padding: 0;
+  border-radius: 7px;
 }
-.assistant-body code-block.text-code-collapsible[data-expanded="false"] .text-code-body,
-.user-bubble code-block.text-code-collapsible[data-expanded="false"] .text-code-body {
-  max-height: 76px;
+:is(.assistant-body, .user-bubble) code-block copy-button button:hover {
+  color: var(--foreground);
+}
+:is(.assistant-body, .user-bubble) code-block.code-block-collapsible[data-expanded="false"] .code-block-body {
+  max-height: 120px;
   overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 40%, transparent);
 }
-.text-code-toggle {
-  margin-left: auto;
-  min-height: var(--meta-lane);
-  padding: 0 6px;
+.code-block-toggle {
+  display: block;
+  margin: 0 8px 8px;
+  padding: 4px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted-foreground);
   font: inherit;
-  font-size: 10px;
+  font-size: max(min(12px, var(--chat-font-size)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
+  line-height: 1.4;
   cursor: pointer;
 }
-.text-code-toggle:hover {
+.code-block-toggle:hover {
   background: var(--secondary);
   color: var(--foreground);
 }
 @media (hover: none) {
-  .assistant-body code-block[language="text"] .text-code-footer,
-  .user-bubble code-block[language="text"] .text-code-footer {
+  :is(.assistant-body, .user-bubble) code-block .code-block-toolbar {
     opacity: 1;
-    pointer-events: auto;
   }
 }
 

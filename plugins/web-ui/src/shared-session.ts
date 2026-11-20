@@ -5,7 +5,7 @@ import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { html, render } from "lit";
 import { Lock, ArrowUpRight, Check, ChevronDown, Copy, File } from "lucide";
 import { createTranscriptViewport } from "./transcript-viewport";
-import { decorateTextCodeBlocks } from "./text-code";
+import { decorateCodeBlocks } from "./text-code";
 import { markdown } from "./message-markdown";
 import { sharedImagePolicy } from "./shared-image-policy";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
@@ -103,6 +103,6 @@ render(
 
 const viewport = createTranscriptViewport();
 requestAnimationFrame(() => {
-  decorateTextCodeBlocks(document.getElementById("app"));
+  decorateCodeBlocks(document.getElementById("app"));
   viewport.sync(document.querySelector<HTMLElement>(".chat-scroll"));
 });
