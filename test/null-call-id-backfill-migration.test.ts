@@ -32,13 +32,12 @@ test("the backfill pairs legacy NULL call ids in order and forbids new NULL tool
       "SELECT kind, call_id FROM items WHERE session_id = $1 AND kind IN ('ToolCall', 'ToolResult') ORDER BY seq",
       [session.id],
     );
-    assert.equal(rows.length, 5);
     for (const row of rows) assert.match(row.call_id, /^call_backfill_/);
-    assert.equal(rows[0]!.call_id, rows[1]!.call_id);
-    assert.equal(rows[2]!.call_id, rows[3]!.call_id);
-    assert.notEqual(rows[0]!.call_id, rows[2]!.call_id);
-    assert.notEqual(rows[4]!.call_id, rows[2]!.call_id);
-    assert.notEqual(rows[4]!.call_id, rows[0]!.call_id);
+    assert.deepEqual(
+      rows.map((row) => row.call_id),
+      [rows[0]!.call_id, rows[0]!.call_id, rows[2]!.call_id, rows[2]!.call_id, rows[4]!.call_id],
+    );
+    assert.equal(new Set(rows.map((row) => row.call_id)).size, 3);
     await raw.query("ALTER TABLE items DISABLE TRIGGER items_append_only");
     await assert.rejects(
       raw.query("UPDATE items SET call_id = NULL WHERE session_id = $1 AND kind = 'ToolCall'", [session.id]),
