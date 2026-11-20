@@ -84,8 +84,10 @@ test("an attachment name over the file name limit is saved at 255 bytes and the 
   };
   const reply = (await app.turn(dm("read these", { attachments: [file, file] }))).reply ?? "";
   const note = "saved under a shortened name to fit the 255-byte file name limit (the shared name was 304 bytes).";
-  assert.ok(reply.includes(`${"a".repeat(251)}.txt), ${note}`), reply);
-  assert.ok(reply.includes(`${"a".repeat(249)}-2.txt), ${note}`), reply);
+  for (const name of [`${"a".repeat(251)}.txt`, `${"a".repeat(249)}-2.txt`]) {
+    const line = reply.split("\n").find((l) => l.includes(` shared ${name} (Files ID `));
+    assert.ok(line?.endsWith(`), ${note}`), reply);
+  }
 });
 
 test("concurrent conversations sharing one computer attach only their own file", async () => {
