@@ -86,9 +86,11 @@ screening, sync, removal) is the same as for a git pack.
 
 - The pack's version is a hash of the listing's skill URIs and digests, so tracked sync
   re-imports when any listed skill changes. Each `SKILL.md` is checked against its listed
-  digest and size, and a mismatch fails the import.
-- The server must be enabled, with shared credentials (`credentialScope: "shared"`, not
-  `oauth-user`); there is exactly one per URL. QM calls it as itself, without attesting a
+  digest and size, and a mismatch fails the import, as does a skill listed without a `SKILL.md`
+  digest (`"resources": "dynamic"`), whose content cannot be verified.
+- The server must be enabled and use shared credentials: `credentialScope: "shared"` with auth
+  `none`, `bearer` or `client-credentials`. A `per-user` server or an `oauth-user` one signs in as each
+  person, so it cannot supply an org-wide pack. Exactly one enabled server may have the pack's URL. QM calls it as itself, without attesting a
   person, so a server that answers per person should answer that call with what everyone
   in the org may see.
 - This is opt-in twice over. Registering an MCP server never turns it into a skill

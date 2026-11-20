@@ -134,7 +134,8 @@ async function listSkillEntries(client: Client): Promise<McpSkillEntry[]> {
     );
     for (const skill of page.skills) {
       const file = Array.isArray(skill.resources) ? skill.resources.find((r) => r.uri === skill.uri) : undefined;
-      if (file) entries.push({ uri: skill.uri, name: skill.frontmatter.name, digest: file.digest, size: file.size });
+      if (!file) throw new Error(`mcp skills/list gave ${skill.uri} no digest for its SKILL.md, so it cannot be verified`);
+      entries.push({ uri: skill.uri, name: skill.frontmatter.name, digest: file.digest, size: file.size });
     }
     cursor = page.nextCursor;
   } while (cursor);
@@ -275,16 +276,16 @@ export function createMcpClient(opts: {
       ),
     listSkills: () => session("skills/list", listSkillEntries),
     readSkills: () =>
-      session("skills/list", async (client) => {
-        const skills: McpSkill[] = [];
-        for (const entry of await listSkillEntries(client)) {
-          const { contents } = await client.readResource({ uri: entry.uri });
-          const file = contents.find((content) => content.uri === entry.uri && "text" in content);
-          if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
-          skills.push({ ...entry, text: file.text });
-        }
-        return skills;
-      }),
+      session("skills/list", async (client) =>
+        Promise.all(
+          (await listSkillEntries(client)).map(async (entry) => {
+            const { contents } = await client.readResource({ uri: entry.uri });
+            const file = contents.find((content) => content.uri === entry.uri && "text" in content);
+            if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
+            return { ...entry, text: file.text };
+          }),
+        ),
+      ),
     async callTool(name, args, headers, signal) {
       const result = (await session(
         "tools/call",
