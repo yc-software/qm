@@ -109,18 +109,23 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     const call = calls.get(callId);
     if (!call) return;
     calls.delete(callId);
-    if (!called.has(callId)) write(steppedCall({ kind: "ToolCall", tool: call.block.name, callId }, call));
+    if (!called.has(callId))
+      write(steppedCall({ kind: "ToolCall", tool: call.block.name, callId: call.block.id }, call));
     called.delete(callId);
     const logged = executing.get(callId);
     executing.delete(callId);
     const result: NewItem = logged ?? {
       kind: "ToolResult",
       tool: call.block.name,
-      callId,
+      callId: call.block.id,
       isError,
       text: resultText(content),
     };
-    write({ ...result, body: { ...result.body, ...toolResultWire(result, content, isError) } });
+    write({
+      ...result,
+      callId: call.block.id,
+      body: { ...result.body, ...toolResultWire(result, content, isError) },
+    });
   };
   return {
     emit: async (item: NewItem): Promise<Item | undefined> => {
@@ -128,7 +133,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
       const call = calls.get(callId);
       if (call && item.kind === "ToolCall") {
         called.add(callId);
-        return turn.emit(steppedCall(item, call));
+        return turn.emit(steppedCall({ ...item, callId: call.block.id }, call));
       }
       if (call && item.kind === "ToolResult") {
         executing.set(callId, item);
@@ -151,7 +156,11 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
           write({ kind: "Reasoning", text: thinking, step: fields.step, body: { ...rest, ...fields.body } });
         } else if (block.type === "text") {
           if (block.text || block.textSignature !== undefined) parts.push({ index, block });
-        } else calls.set(block.id, { step: { ...step, index }, block });
+        } else {
+          // Some providers emit an empty tool-call id; synthesize one so it is never stored as NULL.
+          const stored = block.id ? block : { ...block, id: `call_${randomUUID()}` };
+          calls.set(block.id, { step: { ...step, index }, block: stored });
+        }
       });
       pending = { step, parts };
       if (stopReason !== "aborted" && message.content.some((block) => block.type === "toolCall")) flush();

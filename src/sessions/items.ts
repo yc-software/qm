@@ -82,7 +82,10 @@ export function storedItem<K extends ItemKind>(
   const columns: ItemColumns = {
     turnId: turnId && UUID.test(turnId) ? turnId.toLowerCase() : null,
     author: AUTHORED_KINDS.has(item.kind) ? str(item.author) : null,
-    callId: str(item.callId),
+    // ToolCall/ToolResult must never persist a NULL call id (an empty provider id would
+    // otherwise be coerced to NULL and break strict transcript decoders, e.g. iOS).
+    callId:
+      str(item.callId) ?? (item.kind === "ToolCall" || item.kind === "ToolResult" ? `call_missing_${at.seq}` : null),
     elicitId: str(item.elicitId),
     wakeCause: item.wakeCause ?? null,
     errorCode: str(item.errorCode),

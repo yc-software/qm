@@ -37,7 +37,12 @@ struct Item: Decodable, Identifiable {
     seq = try c.decodeIfPresent(Int.self, forKey: .seq)
     truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated)
     turnId = try c.decodeIfPresent(String.self, forKey: .turnId)
-    callId = try c.decodeIfPresent(String.self, forKey: .callId)
+    // Tolerate a missing/null callId (a server bug once stored NULL); synthesize a stable
+    // placeholder for tool items instead of failing the whole transcript decode.
+    callId =
+      ((try? c.decodeIfPresent(String.self, forKey: .callId)) ?? nil)
+      ?? (["ToolCall", "ToolResult"].contains(kind)
+        ? "missing:\(seq ?? -1)" : nil)
     text = try c.decodeIfPresent(String.self, forKey: .text)
     tool = try c.decodeIfPresent(String.self, forKey: .tool)
     variant = try c.decodeIfPresent(String.self, forKey: .variant)
@@ -49,7 +54,6 @@ struct Item: Decodable, Identifiable {
     step = try c.decodeIfPresent(Int.self, forKey: .step)
     errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
     body = try c.decodeIfPresent(ItemBody.self, forKey: .body)
-    if kind == "ToolCall" || kind == "ToolResult" { _ = try c.decode(String.self, forKey: .callId) }
     if kind == "Elicitation" || kind == "ElicitationResponse" {
       _ = try c.decode(String.self, forKey: .elicitId)
     }

@@ -161,6 +161,25 @@ struct Transcript: Decodable {
   let pins: [NativeConversationPin]?
   let session: Conversation?
   let goal: Conversation.Goal?
+
+  private enum CodingKeys: String, CodingKey {
+    case latestPromptAt, items, earlierItems, pins, session, goal
+  }
+  /// One undecodable item should not blank the whole conversation.
+  private struct LossyItem: Decodable {
+    let item: Item?
+    init(from decoder: Decoder) throws { item = try? Item(from: decoder) }
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    latestPromptAt = try c.decodeIfPresent(Double.self, forKey: .latestPromptAt)
+    items = try c.decode([LossyItem].self, forKey: .items).compactMap(\.item)
+    earlierItems = try c.decodeIfPresent(Int.self, forKey: .earlierItems)
+    pins = try c.decodeIfPresent([NativeConversationPin].self, forKey: .pins)
+    session = try c.decodeIfPresent(Conversation.self, forKey: .session)
+    goal = try c.decodeIfPresent(Conversation.Goal.self, forKey: .goal)
+  }
 }
 
 struct NativeConversationPin: Decodable, Identifiable {
