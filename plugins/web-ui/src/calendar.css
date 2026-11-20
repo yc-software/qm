@@ -182,11 +182,11 @@
   justify-content: center;
   gap: 5px;
   padding: 8px 0;
-  font-size: var(--font-13);
   border: 0;
   background: transparent;
   color: var(--foreground);
   font: inherit;
+  font-size: var(--font-13);
   cursor: pointer;
 }
 .cal-day .cal-day-head {
