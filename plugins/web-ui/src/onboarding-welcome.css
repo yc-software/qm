@@ -228,6 +228,66 @@ qm-onboarding-welcome {
   padding: 0 2px;
   font-size: inherit;
 }
+.connector-widget.connection-card {
+  flex-wrap: wrap;
+  min-width: min(100%, 300px);
+  max-width: min(100%, 480px);
+  margin: 0;
+}
+.connection-card:not(.compact) .connector-widget-text {
+  max-width: calc(100% - 52px);
+}
+.connector-widget.connection-card.compact {
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px 6px 6px;
+  border-radius: 10px;
+}
+.connection-card.compact .kc-text-action {
+  padding: 0 2px;
+}
+.connection-card.compact .connector-logo {
+  flex-basis: 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+.connection-card.compact .connector-logo :is(svg, img) {
+  width: 14px;
+  height: 14px;
+}
+.connection-card.compact .connector-widget-text {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.connection-card-status,
+.connection-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.connection-card-actions {
+  gap: 8px;
+  margin-left: auto;
+}
+.connection-card-status :is(svg, .mc-spinner) {
+  flex: none;
+}
+.connection-card-status .mc-spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+.connection-card[data-tone="success"] .connection-card-status svg {
+  color: var(--success);
+}
+.connection-card[data-tone="warning"] .connection-card-status {
+  color: var(--warning);
+}
+.connection-card[data-tone="error"] .connection-card-status {
+  color: var(--destructive);
+}
 .connection-result strong {
   font-weight: 550;
 }

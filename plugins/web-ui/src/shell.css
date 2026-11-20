@@ -304,11 +304,22 @@ html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
   flex: 0 0 22px;
   overflow: hidden;
   border-radius: 5px;
-  background: var(--brand-accent) var(--brand-mark-image, url("./assets/brand-mark.svg")) center / cover no-repeat;
+  background: var(--brand-accent) var(--brand-mark-image, none) center / cover no-repeat;
   color: white;
   font-size: var(--font-16);
   font-weight: 500;
   line-height: 1;
+}
+:root:not([data-brand-mark]) .brand-mark:not(:has(> img)) {
+  display: none;
+}
+:root[data-brand-mark] :is(.brand-lockup, .signin-brand, .shared-brand) > .brand-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .brand-mark > img {
   position: absolute;
@@ -1173,8 +1184,6 @@ a.chat-row-open {
   align-items: start;
 }
 .settings-nav {
-  position: sticky;
-  top: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -1201,11 +1210,17 @@ a.chat-row-open {
 .settings-content {
   min-width: 0;
 }
+.settings-side {
+  position: sticky;
+  top: 0;
+}
 .settings-tip {
-  max-width: 1180px;
-  margin: 0 auto;
+  max-width: 200px;
+  margin: 24px 8px 0;
   color: var(--muted-foreground);
-  font-size: var(--font-13);
+  font-size: var(--font-12-5);
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 .settings-page-title {
   position: absolute;
@@ -1217,16 +1232,26 @@ a.chat-row-open {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.settings-content > .settings-group {
-  margin-top: 0;
-}
 @media (max-width: 720px) {
   .settings-layout.with-nav {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
-  .settings-nav {
+  .settings-side {
     position: static;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .settings-tip {
+    order: -1;
+    max-width: none;
+    margin: 0;
+    font-size: var(--font-13);
+    line-height: inherit;
+  }
+  .settings-nav {
     flex-direction: row;
     overflow-x: auto;
   }
@@ -1236,13 +1261,6 @@ a.chat-row-open {
   .settings-nav-item {
     flex: none;
   }
-}
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-width: 960px;
-  margin: 12px auto 0;
 }
 .settings-row {
   display: flex;
@@ -3018,6 +3036,23 @@ qm-markdown .tok-in {
 .work-fold[open] > summary > .activity-chevron,
 .tool-expandable[open] > summary > .activity-chevron {
   transform: rotate(90deg);
+}
+.work-fold > summary > .activity-chevron,
+.stopped-work > summary > .activity-chevron,
+.tool-expandable > summary > .activity-chevron {
+  transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.work-fold[data-closing] > summary > .activity-chevron,
+.stopped-work[data-closing] > summary > .activity-chevron,
+.tool-expandable[data-closing] > summary > .activity-chevron {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-fold > summary > .activity-chevron,
+  .stopped-work > summary > .activity-chevron,
+  .tool-expandable > summary > .activity-chevron {
+    transition: none;
+  }
 }
 .work-divider {
   height: 1px;
@@ -11707,7 +11742,6 @@ h3.ambient-field-label {
   .shared-brand {
     margin-right: 4px;
   }
-  .shared-brand > span:not(.brand-mark),
   .shared-view-badge,
   .share-access-label {
     display: none;
@@ -13996,4 +14030,164 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 html.app-share-embed,
 html.app-share-embed body {
   background: transparent;
+}
+
+/* Titled settings sections (settings-layout.ts): a heading with an optional note and action, over a
+   rounded card of rows. General and Credentials use them. */
+.settings-sections {
+  display: grid;
+  gap: 28px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+.settings-stack {
+  display: grid;
+  gap: 28px;
+}
+.settings-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  margin: 0 0 10px;
+}
+.settings-section-head h3 {
+  margin: 0;
+  font-size: var(--font-14);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.settings-section-head span {
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+.settings-section-head > a {
+  margin-left: auto;
+}
+.settings-card {
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
+  border-radius: 14px;
+  background: var(--background);
+}
+html.dark .settings-card {
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+.settings-card > .settings-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 7%, var(--background));
+}
+.settings-card > .settings-row:last-child {
+  border-bottom: 0;
+}
+
+/* The one switch (switch.ts): white knob on a quiet track, the accent colour when on. */
+.qm-switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  transition: background-color 160ms ease;
+}
+.qm-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.24),
+    0 0 0 0.5px rgb(0 0 0 / 0.06);
+  transition: transform 180ms cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+.qm-switch.on,
+input:checked + .qm-switch {
+  background: var(--cta);
+}
+.qm-switch.on::after,
+input:checked + .qm-switch::after {
+  transform: translateX(14px);
+}
+input:focus-visible + .qm-switch,
+button:focus-visible .qm-switch {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+input:disabled + .qm-switch,
+button:disabled .qm-switch {
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qm-switch,
+  .qm-switch::after {
+    transition: none;
+  }
+}
+
+/* Settings page title, and General's sections. Desktop only: narrow screens keep General as a flat
+   list of rows, in the same order. */
+@media (min-width: 721px) {
+  .settings-general {
+    display: grid;
+    gap: 28px;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  .settings-page-head {
+    max-width: 960px;
+    margin: 0 auto 28px;
+    font-size: var(--font-24);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .settings-connections {
+    display: grid;
+    gap: 12px;
+  }
+  .settings-connections .welcome-slack,
+  .settings-connections .welcome-content {
+    max-width: none;
+  }
+  .settings-connections .welcome-content {
+    padding: 0;
+  }
+  .settings-connections .welcome-slack,
+  .settings-connections .welcome-load,
+  .settings-connections .connection-picker {
+    border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
+  }
+  html.dark .settings-connections .welcome-slack,
+  html.dark .settings-connections .welcome-load,
+  html.dark .settings-connections .connection-picker {
+    background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+  }
+}
+@media (max-width: 720px) {
+  .settings-page-head,
+  .settings-general .settings-section-head {
+    display: none;
+  }
+  .settings-general .settings-card {
+    display: contents;
+  }
+  .settings-general .settings-card > .settings-row {
+    padding: 16px 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-general .settings-card > .settings-row:last-child {
+    border-bottom: 0;
+  }
+  .settings-general .settings-section:not(:last-child) .settings-row:last-child,
+  .settings-connections > .settings-slack-account {
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-connections > * {
+    padding: 16px 2px;
+  }
 }

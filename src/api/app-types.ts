@@ -72,7 +72,7 @@ import type {
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type { Delivery, Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, TriggerBase, Webhook } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin, TriggerBase, Webhook } from "../triggers/types.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -520,7 +520,13 @@ export interface App {
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
-  shareCron(tenant: Tenant, id: string, recipient: string, by: string): Promise<{ copy: Cron; existed: boolean }>;
+  shareCron(
+    tenant: Tenant,
+    id: string,
+    recipient: string,
+    by: string,
+  ): Promise<{ copy: Cron; existed: boolean; note?: string }>;
+  cronOrigin(cron: Cron): Promise<CronOrigin>;
   cronCopies(id: string): Promise<CronCopy[]>;
   cronSharing(cron: VisibleCron): Promise<VisibleCron>;
   unshareCron(id: string, recipient: string): Promise<void>;
@@ -577,7 +583,7 @@ export interface App {
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
-  ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  ackDelivery(id: string, slackApiMs?: number, messageTs?: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
@@ -635,6 +641,12 @@ export interface App {
   archiveSkill(id: string): Promise<Skill>;
   listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
+  manageableSkills(
+    tenant: Tenant,
+    skills: readonly Skill[],
+    principalId: string,
+    botWork: boolean,
+  ): Promise<Set<string>>;
   updateOwnedSkill(
     id: string,
     principalId: string,

@@ -707,7 +707,7 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
 
 export function createInboundFileScreen(turn: Parameters<typeof createDocumentScreen>[0]) {
   const { session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit, released } = turn;
-  return (requestText: string): Parameters<typeof materializeInbound>[6] =>
+  return (requestText: string): Parameters<typeof materializeInbound>[3] =>
     securityPolicy.screening === "off"
       ? undefined
       : async ({ content, name, mimetype, bytes }) => {

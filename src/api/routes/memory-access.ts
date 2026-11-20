@@ -17,7 +17,10 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
       )
     : [personalScope(id)];
   const nativeScopes = claimed.filter(
-    (scope) => scope === targetScope || scope === orgScope(ctx.deps) || parseScopeId(scope).kind === "team",
+    (scope) =>
+      scope === targetScope ||
+      scope === orgScope(ctx.deps) ||
+      ["team", "persona"].includes(parseScopeId(scope).kind ?? ""),
   );
   return disclosedMemory(ctx.deps.memory, {
     actor,

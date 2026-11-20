@@ -125,6 +125,7 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
     target: r.target,
     access,
     ...(r.invitation ? { invitation: r.invitation } : {}),
+    ...(r.copy ? { copy: r.copy } : {}),
   });
 }
 

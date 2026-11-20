@@ -5,7 +5,7 @@ import { approvalDeliveryKey } from "../surfaces/approval-cards.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalDeliveryRecipient, approvalMessage, type ApprovalRequester } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, errText, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
@@ -37,6 +37,7 @@ import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { projectScopeId } from "../projects/project-store.ts";
 import { SLACK_DELIVERY_CLAIM_MS } from "./delivery-jobs.ts";
 import { slackRetryAfterMs } from "./delivery.ts";
 
@@ -94,7 +95,7 @@ export function createSlackDeliverer(deps: {
   const { inFlightRuns } = flow;
 
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
-    core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
+    core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
     const base = trimTrailingSlashes(deps.webUiPublicUrl?.trim() ?? "");
@@ -104,11 +105,18 @@ export function createSlackDeliverer(deps: {
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
       ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
     ];
-    const persona = d.destination.persona;
-    const personaName = persona ? escapeSlackText(persona.name.trim() || "Persona") : "";
-    const parts = persona
-      ? [`Persona: ${base ? `<${base}/personas/${encodeURIComponent(persona.id)}|${personaName}>` : personaName}`]
-      : [];
+    const { persona, project } = d.destination;
+    const linked = (name: string, path: string) => {
+      const label = escapeSlackText(name);
+      return base ? `<${base}/${path}|${label}>` : label;
+    };
+    const origin = [
+      ...(persona ? [linked(persona.name.trim() || "Persona", `personas/${encodeURIComponent(persona.id)}`)] : []),
+      ...(project
+        ? [linked(project.name.trim() || "Project", `contexts?scope=${encodeURIComponent(projectScopeId(project.id))}`)]
+        : []),
+    ];
+    const parts = origin.length ? [`From ${origin.join(" in ")}`] : [];
     if (base && id) {
       const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
       parts.push(`${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`);
@@ -127,7 +135,7 @@ export function createSlackDeliverer(deps: {
         deliveryTracker.clear(id);
         console.error(
           `[slack-plugin] delivery ${id} post refused permanently (${code}) — failing it, no retry:`,
-          (err as Error).message,
+          errMessage(err),
         );
         void core.failDelivery(id, code).catch(swallowAs("slack-plugin: fail delivery", undefined));
         return;
@@ -139,10 +147,7 @@ export function createSlackDeliverer(deps: {
           .reportDeliveryUndeliverable?.(id, code)
           .catch(swallowAs("slack-plugin: undeliverable report", undefined));
       }
-      console.error(
-        `[slack-plugin] delivery ${id} ${stage} failed${gaveUp ? " (giving up)" : ""}:`,
-        (err as Error).message,
-      );
+      console.error(`[slack-plugin] delivery ${id} ${stage} failed${gaveUp ? " (giving up)" : ""}:`, errMessage(err));
     };
 
   function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
@@ -210,7 +215,7 @@ export function createSlackDeliverer(deps: {
               const code = slackErrorCode(err);
               if (!code || !SETTLED_PIN_ERRORS.has(code))
                 console.error(
-                  `[slack-plugin] delivery ${d.id} native ${remove ? "unpin" : "pin"} failed: ${code ?? (err as Error).message}`,
+                  `[slack-plugin] delivery ${d.id} native ${remove ? "unpin" : "pin"} failed: ${code ?? errMessage(err)}`,
                 );
             }
             return undefined;
@@ -224,7 +229,7 @@ export function createSlackDeliverer(deps: {
               const code = slackErrorCode(err);
               if (code !== "message_not_found")
                 console.error(
-                  `[slack-plugin] delivery ${d.id} delete failed: ${code ?? (err as Error).message} (own messages only)`,
+                  `[slack-plugin] delivery ${d.id} delete failed: ${code ?? errMessage(err)} (own messages only)`,
                 );
             }
             return undefined;
@@ -254,11 +259,11 @@ export function createSlackDeliverer(deps: {
               })
               .catch((err: unknown) => {
                 if (slackErrorCode(err) !== "message_not_found") throw err;
-                throw Object.assign(new Error(`edit target not found: ${(err as Error).message}`, { cause: err }), {
+                throw Object.assign(new Error(`edit target not found: ${errText(err)}`, { cause: err }), {
                   data: { error: "edit_target_not_found" },
                 });
               });
-            return undefined;
+            return { messageTs: d.destination.edit.messageTs };
           }
           let editRef = d.destination.editRef;
           if (!editRef && runId) {
@@ -280,7 +285,7 @@ export function createSlackDeliverer(deps: {
               await uploadAttachments(client, channel, root, d.attachments, core);
             } catch (err) {
               throwIfRateLimited(err);
-              console.error("%s", `[slack-plugin] delivery ${d.id} attachment upload failed:`, (err as Error).message);
+              console.error("%s", `[slack-plugin] delivery ${d.id} attachment upload failed:`, errMessage(err));
               await client.chat
                 .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root, { persona: d.destination.persona }))
                 .catch(swallowAs("slack: post upload-failure note", undefined));
@@ -326,7 +331,7 @@ export function createSlackDeliverer(deps: {
               });
               if (threadTs) threads.mark(channel, threadTs, true);
               if (!alreadyDelivered) await replayAttachments(threadTs);
-              return undefined;
+              return { messageTs: editRef };
             } catch (e) {
               throwIfRateLimited(e);
               swallow("slack: finalize recovered reply in place", e);
@@ -347,7 +352,7 @@ export function createSlackDeliverer(deps: {
           const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
           if (root) threads.mark(channel, root, true);
           if (!res.reused) await replayAttachments(root);
-          return undefined;
+          return res.ts === undefined ? undefined : { messageTs: String(res.ts) };
         } finally {
           slackApiMs = Math.round(performance.now() - tPost);
         }

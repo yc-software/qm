@@ -2,6 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MemoryFactsMissing, MemoryForgetRefused } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
+import { RECALL_CHECKED } from "../../memory/cross-scope.ts";
 import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
 import { text, type ToolKit } from "./kit.ts";
@@ -94,7 +95,10 @@ export function recallTools(kit: ToolKit) {
             const found = await tc.memorySearch(query, params.limit, params.scope);
             if (found === null) return unavailable();
             const { hits, problems } = found;
-            const lines = [...problems.map(problemLine), ...(hits.length ? [quotedData(hits.join("\n"))] : [])];
+            const lines = [
+              ...problems.map(problemLine),
+              ...(hits.length ? [RECALL_CHECKED, quotedData(hits.join("\n"))] : []),
+            ];
             return recordResult(
               callId,
               { tool: "memory", action, query, count: hits.length, ...(problems.length ? { problems } : {}) },
@@ -107,7 +111,7 @@ export function recallTools(kit: ToolKit) {
             return recordResult(
               callId,
               { tool: "memory", action, chars: body.length },
-              text(body.trim() ? body : "(you have nothing remembered here yet)"),
+              text(body.trim() ? `${RECALL_CHECKED}\n${body}` : "(you have nothing remembered here yet)"),
             );
           }
           case "add": {

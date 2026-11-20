@@ -5,6 +5,7 @@ import { api } from "./core-bridge";
 import { listBackLink } from "./list-page";
 import { initials, relTime } from "./ui";
 import { icon } from "./icons";
+import { errMessage } from "../../chassis/src/errors";
 
 interface SentThreadMessage {
   from: string;
@@ -89,8 +90,7 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
       await loadSentChat(draw, current);
     }
   } catch (cause) {
-    if (current === detailGeneration)
-      detailError = cause instanceof Error ? cause.message : "Couldn't load this email.";
+    if (current === detailGeneration) detailError = errMessage(cause, "Couldn't load this email.");
   } finally {
     if (current === detailGeneration) draw();
   }
@@ -123,7 +123,7 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
       updateSentChat(result.item);
     }
   } catch (cause) {
-    if (current === detailGeneration) chatError = cause instanceof Error ? cause.message : "Couldn't load chat.";
+    if (current === detailGeneration) chatError = errMessage(cause, "Couldn't load chat.");
   } finally {
     if (current === detailGeneration) draw();
   }
@@ -210,7 +210,7 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
     loaded = true;
   } catch (cause) {
     if (current !== generation) return;
-    error = cause instanceof Error ? cause.message : "Couldn't load sent mail. Try again.";
+    error = errMessage(cause, "Couldn't load sent mail. Try again.");
   } finally {
     if (current === generation) {
       loading = false;

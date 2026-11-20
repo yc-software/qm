@@ -82,35 +82,41 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { surface, limit: 60, noFallback: true });
-    const rawDelta = (after ? all.filter((m) => m.ts > after) : all).filter((m) => !m.self);
+    const unclaimed = all.filter((m) => !m.self && !m.ambientClaimed);
     const ledger = new Map<string, BotPolicy>();
     for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);
     const botModeOf = (m: CachedMessage): BotPolicy["mode"] | undefined =>
       m.bot && m.authorName ? ledger.get(m.authorName.toLowerCase())?.mode : undefined;
     const asPolicy = (ms: CachedMessage[]): CachedMessage[] =>
       ms.filter((m) => botModeOf(m) !== "ignore").map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
-    const delta = asPolicy(rawDelta.filter((m) => !m.handled));
-    const rawLatestTs = rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? "");
-    const advanceCursor = async (): Promise<void> => {
-      if (deps.ambientCursors && rawDelta.length && rawLatestTs)
-        await deps.ambientCursors
-          .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
-          .catch(() => undefined);
-    };
-    if (!delta.length && !scheduled) {
-      await advanceCursor();
-      return { act: false };
-    }
-    if (!scheduled && delta.length && delta.every((m) => botModeOf(m) === "rollup")) {
+    const pending = asPolicy(unclaimed.filter((m) => !m.handled));
+    if (!scheduled && pending.length && pending.every((m) => botModeOf(m) === "rollup")) {
       const lastAt = cursor?.lastJudgedAt;
       const held =
         lastAt !== undefined &&
-        delta.every((m) => {
+        pending.every((m) => {
           const hours = ledger.get((m.authorName ?? "").toLowerCase())?.rollupHours ?? DEFAULT_ROLLUP_HOURS;
           return Date.now() - lastAt < hours * 3_600_000;
         });
       if (held) return { act: false };
     }
+    const won = new Set(
+      await deps.surfaceCache.claimForAmbient(
+        container,
+        unclaimed.map((m) => m.ts),
+        { surface },
+      ),
+    );
+    const rawDelta = unclaimed.filter((m) => won.has(m.ts));
+    const delta = pending.filter((m) => won.has(m.ts));
+    if (deps.ambientCursors && rawDelta.length)
+      await deps.ambientCursors
+        .put(cursorKey, {
+          lastJudgedTs: rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? ""),
+          lastJudgedAt: Date.now(),
+        })
+        .catch(swallowAs("ambient: cursor write", undefined));
+    if (!delta.length && !scheduled) return { act: false };
     const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
     const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const watchReason =
@@ -134,7 +140,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         ...(tsTo ? { tsTo } : {}),
         createdAt: Date.now(),
       });
-      await advanceCursor();
       return { act: false };
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
@@ -236,7 +241,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         createdAt: Date.now(),
       });
     }
-    await advanceCursor();
     return decision;
   }
 

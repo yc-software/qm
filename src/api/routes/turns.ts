@@ -111,26 +111,6 @@ function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
 }
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
-  if (body.deliveryWebhook !== undefined) {
-    const parsed = z
-      .object({
-        binding: z.uuid(),
-        url: z
-          .url({ protocol: /^https?$/ })
-          .refine((u) => u.startsWith("https:") || ["localhost", "127.0.0.1", "[::1]"].includes(new URL(u).hostname)),
-      })
-      .strict()
-      .safeParse(body.deliveryWebhook);
-    if (
-      !parsed.success ||
-      body.surfaceTools ||
-      body.surface !== "web" ||
-      body.conversation.kind !== "dm" ||
-      body.deliveryCandidates?.length ||
-      body.deliveryTarget !== body.conversation.threadRef
-    )
-      return { error: "invalid delivery webhook" };
-  }
   const {
     surfaceOrigin: _surfaceOrigin,
     spawned: _spawned,
@@ -327,8 +307,10 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
     isObj(body) && typeof body.slackApiMs === "number" && Number.isFinite(body.slackApiMs) && body.slackApiMs >= 0
       ? body.slackApiMs
       : undefined;
+  const messageTs =
+    isObj(body) && typeof body.messageTs === "string" && body.messageTs.trim() ? body.messageTs : undefined;
   if (recipientThreadRef) await app.recordPrincipalDelivery(id, recipientThreadRef);
-  await app.ackDelivery(id, slackApiMs);
+  await app.ackDelivery(id, slackApiMs, messageTs);
   return sendJson(res, 200, { ok: true });
 }
 

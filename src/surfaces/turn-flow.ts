@@ -1,4 +1,4 @@
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalNoticeView } from "./turn-presenters.ts";
 import type { Delivery, TurnRequest, TurnResult } from "../types.ts";
@@ -89,7 +89,7 @@ export function createTurnFlow(core: TurnCore, label: string): TurnFlow {
           if (attempt >= ACK_RETRY_DELAYS_MS.length) {
             console.error(
               `[${label}] delivery ack failed for run ${runId} (giving up — the poller re-delivers unacked runs):`,
-              (err as Error).message,
+              errMessage(err),
             );
             return;
           }

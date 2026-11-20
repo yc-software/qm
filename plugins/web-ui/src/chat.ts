@@ -836,6 +836,23 @@ export function createChatSurface(
     void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork);
   }
 
+  let catchingUp = false;
+
+  function catchUp(): void {
+    if (readOnlyView) return onDelivery(readOnlyView.threadRef);
+    const { agent, threadRef, normalStreamFn, onWork } = chatState;
+    if (!agent || agent.state.isStreaming || !threadRef || catchingUp) return;
+    catchingUp = true;
+    const resumed = normalStreamFn && onWork ? resumeTrackedRun(agent, threadRef, normalStreamFn, onWork) : false;
+    void Promise.resolve(resumed)
+      .then((ok) =>
+        ok || agent !== chatState.agent || agent.state.isStreaming ? undefined : refreshTranscriptFromItems(agent),
+      )
+      .finally(() => {
+        catchingUp = false;
+      });
+  }
+
   function syncLocation(): void {
     if (ctx.ownsUrl) syncUrlFromState();
     else postCurrentPaneState();
@@ -866,8 +883,7 @@ export function createChatSurface(
     try {
       await resolveApproval(decision);
     } catch (err) {
-      if (agent === chatState.agent)
-        ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
+      if (agent === chatState.agent) ctx.composer.state.error = errMessage(err, "Could not send the approval.");
     } finally {
       if (agent === chatState.agent) {
         chatState.resolvingApprovals.delete(decision.requestId);
@@ -905,7 +921,7 @@ export function createChatSurface(
         });
     } catch (err) {
       if (agent === chatState.agent) {
-        ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
+        ctx.composer.state.error = errMessage(err, "Could not send the approval.");
         drawActiveChat(agent);
       }
     } finally {
@@ -1074,7 +1090,6 @@ export function createChatSurface(
       agent.state.messages === originalMessages &&
       agent.state.messages.at(-1) === last;
     if (last?.stopReason === "error" && !last.interruptedRunId) return drawActiveChat(agent);
-    if (last?.stopReason === "aborted") return drawActiveChat(agent);
     try {
       if (last?.stopReason === "error" && last.interruptedRunId) {
         const run = await api<RunPoll>(`/api/runs/${encodeURIComponent(last.interruptedRunId)}`, {
@@ -1094,6 +1109,8 @@ export function createChatSurface(
       if (last?.stopReason === "error" && !hasRecordedRunReply(page.items, last.interruptedRunId!))
         return drawActiveChat(agent);
       const messages = pageMessages(page);
+      if (last?.stopReason === "aborted" && !savedStopOrNewerTurn(originalMessages, messages))
+        return drawActiveChat(agent);
       await syncPendingApprovals(agent, messages);
       if (!isCurrent()) return;
       commitTranscriptPage(agent, page, messages);
@@ -1102,6 +1119,11 @@ export function createChatSurface(
       reportHandledError("web:transcript_refresh", error);
     }
     drawActiveChat(agent);
+  }
+
+  function savedStopOrNewerTurn(local: AgentMessage[], saved: AgentMessage[]): boolean {
+    const turns = (messages: AgentMessage[]) => messages.filter((message) => message.role === "user").length;
+    return (saved.at(-1) as AssistantWork | undefined)?.stopReason === "aborted" || turns(saved) > turns(local);
   }
 
   function observeLiveWork(agent: Agent): (work: WorkBlock) => void {
@@ -1226,7 +1248,7 @@ export function createChatSurface(
       await completion;
     } catch (err) {
       if (agent === chatState.agent)
-        ctx.composer.state.error = err instanceof Error ? err.message : "Could not reconnect to the running task.";
+        ctx.composer.state.error = errMessage(err, "Could not reconnect to the running task.");
     } finally {
       if (agent === chatState.agent) {
         agent.streamFn = normalStreamFn;
@@ -2448,6 +2470,37 @@ export function createChatSurface(
     return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
   }
 
+  function assistantText(
+    text: string,
+    returnKey: string | null,
+    body: (text: string) => TemplateResult,
+  ): TemplateResult[] {
+    const parts: TemplateResult[] = [];
+    for (const [partIndex, part] of setupContent(text).entries()) {
+      if (part.type !== "text") {
+        if (returnKey !== null)
+          parts.push(
+            html`<qm-onboarding-welcome
+              .me=${appState.me}
+              .base=${withBase("")}
+              .widget=${part.type === "setup" ? "apps" : part.type}
+              .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
+              .onConnected=${continueAfterConnection}
+              .returnKey=${`${returnKey}:${partIndex}`}
+              .setupOnly=${true}
+              .animateWelcome=${false}
+            ></qm-onboarding-welcome>`,
+          );
+        continue;
+      }
+      const links = part.text.trim() ? connectorLinksIn(part.text, location.origin) : [];
+      const shown = links.length ? stripConnectorLinks(part.text, links) : part.text;
+      if (shown.trim()) parts.push(body(shown));
+      for (const link of links) parts.push(connectorWidget(link));
+    }
+    return parts;
+  }
+
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
@@ -2463,34 +2516,17 @@ export function createChatSurface(
         const workActive =
           hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
         const text = isStreaming && work ? streamedAnswer(chunk.text, work) : chunk.text;
-        for (const [partIndex, part] of setupContent(assistantDisplayText(workActive ? "" : text)).entries()) {
-          if (part.type !== "text") {
-            if (!(message as AssistantWork).persisted) continue;
-            parts.push(
-              html`<qm-onboarding-welcome
-                .me=${appState.me}
-                .base=${withBase("")}
-                .widget=${part.type === "setup" ? "apps" : part.type}
-                .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
-                .onConnected=${continueAfterConnection}
-                .returnKey=${`reply:${message.timestamp}:${chunkIndex}:${partIndex}`}
-                .setupOnly=${true}
-                .animateWelcome=${false}
-              ></qm-onboarding-welcome>`,
-            );
-            continue;
-          }
-          const shown = part.text;
-          const links = shown.trim() ? connectorLinksIn(shown, location.origin) : [];
-          const body = links.length ? stripConnectorLinks(shown, links) : shown;
-          if (body.trim())
-            parts.push(
+        const baseline = (message as AssistantWork).streamingBaseline ?? "";
+        parts.push(
+          ...assistantText(
+            assistantDisplayText(workActive ? "" : text),
+            (message as AssistantWork).persisted ? `reply:${message.timestamp}:${chunkIndex}` : null,
+            (body) =>
               html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
-                ${markdown(body, animating, isStreaming && work ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work) : ((message as AssistantWork).streamingBaseline ?? ""))}
+                ${markdown(body, animating, isStreaming && work ? streamedAnswer(baseline, work) : baseline)}
               </div>`,
-            );
-          for (const link of links) parts.push(connectorWidget(link));
-        }
+          ),
+        );
       }
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
         const live = animating && chunkIndex === message.content.length - 1;
@@ -2909,7 +2945,7 @@ export function createChatSurface(
         );
       })
       .catch((err: unknown) => {
-        ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
+        ctx.composer.state.error = errMessage(err, "Could not send the approval.");
       })
       .finally(() => {
         chatState.resolvingApprovals.delete(decision.requestId);
@@ -3227,11 +3263,12 @@ export function createChatSurface(
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
       if (steer?.kind === "text") return renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
-      const replies: string[] = [];
+      const replies: TemplateResult[] = [];
       const timeline = segment.filter((item) => {
-        const speech = item.kind === "tool" ? postSpeechText(item.row) : null;
+        if (item.kind !== "tool") return true;
+        const speech = postSpeechText(item.row);
         if (speech === null) return true;
-        replies.push(speech);
+        replies.push(spokenText(speech, `reply:${item.row.result?.createdAt}:0`, "streaming-text"));
         return false;
       });
       const tail = active && last ? streamedAnswer(text, work) : "";
@@ -3258,7 +3295,7 @@ export function createChatSurface(
         !oneStep &&
         !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
-        return html`${renderTimelineItem(timeline[0]!, work, liveItem)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+        return html`${renderTimelineItem(timeline[0]!, work, liveItem)}${replies}`;
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
@@ -3268,7 +3305,7 @@ export function createChatSurface(
                 if (live) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
               }}
             >
-              <summary class=${ending ? "stopped-head" : "work-head"}>
+              <summary class=${ending ? "stopped-head" : "work-head"} @click=${animateDetailsToggle}>
                 ${liveStepLine.line(step && last ? step : null, label, animating, elapsed)}
               </summary>
               ${ending ? nothing : html`<div class="work-divider"></div>`}
@@ -3302,7 +3339,7 @@ export function createChatSurface(
                           class="activity-group work-fold"
                           ?open=${(active && last) || summary.attention}
                         >
-                          <summary class="work-head">
+                          <summary class="work-head" @click=${animateDetailsToggle}>
                             ${icon(groupIcon, 15)}<span>${summary.label}</span
                             ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
                           </summary>
@@ -3318,11 +3355,16 @@ export function createChatSurface(
           : nothing;
       if (ending && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
       const said = tail.trim()
-        ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
-            ${markdown(tail, animating, streamedAnswer(baseline, work))}
-          </div>`
+        ? assistantText(
+            tail,
+            null,
+            (body) =>
+              html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+                ${markdown(body, animating, streamedAnswer(baseline, work))}
+              </div>`,
+          )
         : nothing;
-      return html`${fold}${said}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      return html`${fold}${said}${replies}`;
     })}`;
   }
 
@@ -3432,8 +3474,15 @@ export function createChatSurface(
   }
 
   function interimReply(item: Item): TemplateResult {
-    const text = item.text ?? "";
-    return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
+    return spokenText(item.text ?? "", `said:text:${item.seq}`, "work-said streaming-text");
+  }
+
+  function spokenText(text: string, returnKey: string, className: string): TemplateResult {
+    return html`${assistantText(
+      text,
+      returnKey,
+      (body) => html`<div class=${className} dir="auto">${markdown(body)}</div>`,
+    )}`;
   }
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; attempted: string }> = {
@@ -3679,7 +3728,9 @@ export function createChatSurface(
       class="${classes} tool-expandable"
       @toggle=${(event: Event) => renderDisclosure(event.currentTarget as HTMLDetailsElement)}
     >
-      <summary class="tool-summary">${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span></summary>
+      <summary class="tool-summary" @click=${(event: MouseEvent) => animateDetailsToggle(event, renderDisclosure)}>
+        ${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+      </summary>
       <div
         class="tool-disclosure-host"
         ${ref((element) => {
@@ -3917,6 +3968,7 @@ export function createChatSurface(
     mountReadOnlyPage,
     transcriptAnchor,
     resumeIfIdle,
+    catchUp,
     redraw: () => drawActiveChat(),
     dispose,
   };

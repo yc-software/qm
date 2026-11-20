@@ -26,7 +26,7 @@ export function renderSandboxProviders(
   ];
   const behindProxy = names.filter((name) => proxied.includes(name)).toSorted();
   const network = behindProxy.length
-    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node with NODE_USE_ENV_PROXY=1.`
+    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node's fetch.`
     : "";
   return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}${network}`;
 }
@@ -123,11 +123,6 @@ function guidanceOf(item: Item): GuidanceSnapshot | undefined {
   return typeof snapshot?.version === "number" && typeof snapshot.sessionId === "string"
     ? (snapshot as GuidanceSnapshot)
     : undefined;
-}
-
-export function webSurfaceLabel(botName: string, relayed: boolean): string {
-  if (!relayed) return `the ${botName} web app`;
-  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so skills' non-web paths apply, such as an ordinary authorization link`;
 }
 
 function trimmedEntries(record: Record<string, string> | undefined) {
@@ -227,8 +222,11 @@ function shortCron(expression: string): string {
   const pattern = new CronPattern(expression);
   const [minute, ...moreMinutes] = setIndexes(pattern.minute);
   const weekdays = setIndexes(pattern.dayOfWeek);
+  const hours = setIndexes(pattern.hour);
+  const listedHours = expression.trim().split(" ")[1]?.split(",").length;
   const plain =
     minute !== undefined &&
+    hours.length === listedHours &&
     !moreMinutes.length &&
     setIndexes(pattern.second).join() === "0" &&
     pattern.starDOM &&
@@ -239,9 +237,7 @@ function shortCron(expression: string): string {
     weekdays.every((day) => pattern.dayOfWeek[day] === EVERY_WEEKDAY_OCCURRENCE);
   if (!plain) return cronstrue.toString(expression.replaceAll("#L", "L"));
   const days = pattern.starDOW ? "daily" : weekdays.map((day) => WEEKDAYS[day]).join("/");
-  return `${setIndexes(pattern.hour)
-    .map((hour) => clockTime(hour, minute))
-    .join(", ")} ${days}`;
+  return `${hours.map((hour) => clockTime(hour, minute)).join(", ")} ${days}`;
 }
 
 function shortInterval(everyMs: number): string {

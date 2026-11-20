@@ -121,6 +121,7 @@ export interface ChatSurface {
   mountReadOnlyPage(s: CoreSession, page: import("./core-bridge").TranscriptPage): void;
   transcriptAnchor(): number | null;
   resumeIfIdle(): void;
+  catchUp(): void;
   redraw(): void;
   dispose(): void;
 }

@@ -36,7 +36,8 @@ auto-extracts facts after you reply. This skill is for what the automatic path m
   remember.
 
 The notebook you write is this conversation's own (your personal one in a DM, the
-channel's in a channel). Other authorized notebooks can be searched/read, not rewritten here.
+channel's in a channel), unless the persona block says a pinned persona's notebook takes
+its place. Other authorized notebooks can be searched/read, not rewritten here.
 
 The org-admin write path uses the self-API instead, called with
 `$AGENT_API_URL` and `$AGENT_API_TOKEN` (both already in your environment on every turn —

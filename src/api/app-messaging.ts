@@ -46,6 +46,8 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
     }
   }
   for (const project of await h.projectsForViewer(principalId)) scopeNames.set(project.scopeId, project.name);
+  const personas = await deps.personas?.list(principalId);
+  if (personas?.status === "ok") for (const p of personas.value) scopeNames.set(scopeId("persona", p.id), p.name);
   const allowed = (ownerScopeId: ScopeId): boolean => {
     const { kind, ref } = parseScopeId(ownerScopeId);
     return kind !== "group" || deps.projects?.recognizes(ref) !== true || scopeNames.has(ownerScopeId);
@@ -398,8 +400,8 @@ export function createMessagingMethods(
       );
       return merged != null;
     },
-    async ackDelivery(id, slackApiMs) {
-      await deps.deliveries.ack(id, Date.now(), slackApiMs);
+    async ackDelivery(id, slackApiMs, messageTs) {
+      await deps.deliveries.ack(id, Date.now(), slackApiMs, messageTs);
     },
     async failDelivery(id, reason) {
       const approvalId = (await deps.deliveries.get(id))?.destination.commandApprovalId;
@@ -601,8 +603,9 @@ export function createMessagingMethods(
         baseDestination = withThread(baseDestination, input.threadTs);
       }
       const sender = await deps.directory.get(input.senderId).catch(() => null);
-      const persona = input.currentDestination?.persona;
-      if (persona && !input.react && !input.delete) baseDestination = { ...baseDestination, persona };
+      const { persona, project } = input.currentDestination ?? {};
+      if (!input.react && !input.delete)
+        baseDestination = { ...baseDestination, ...(persona ? { persona } : {}), ...(project ? { project } : {}) };
       const delivery = await reachEnqueue({
         deliveries: deps.deliveries,
         destination: withEdit(

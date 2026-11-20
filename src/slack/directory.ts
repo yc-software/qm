@@ -242,11 +242,7 @@ export function createDirectory(deps: {
             memberIds = await fetchChannelMemberIds(client, ref.id);
           } catch (err) {
             if (kind.requireComplete) throw err;
-            console.error(
-              "%s",
-              `[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`,
-              (err as Error).message,
-            );
+            console.error("%s", `[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`, errMessage(err));
             continue;
           }
           const actors: ActorAssertion[] = [];
@@ -357,7 +353,7 @@ export function createDirectory(deps: {
     try {
       listed = await listBotChannels(client);
     } catch (err) {
-      console.error("[slack-plugin] channel list failed:", (err as Error).message);
+      console.error("[slack-plugin] channel list failed:", errMessage(err));
       return null;
     }
     const channels = [...listed.publicChannels, ...listed.privateChannels].map((channel) => ({
@@ -390,7 +386,7 @@ export function createDirectory(deps: {
         for (const id of groupIds) seenGroupIds.add(id);
         groups = { ...(await computeGroupMembership(client, groupIds)), groupIds, groupsFetchedAt };
       } catch (err) {
-        console.error("[slack-plugin] group-DM list failed:", (err as Error).message);
+        console.error("[slack-plugin] group-DM list failed:", errMessage(err));
       }
     }
     return { channels, ...computed, fetchedAt, ...groups, fullRosterFetchedAt: fullRefresh ? fetchedAt : undefined };
@@ -483,7 +479,7 @@ export function createDirectory(deps: {
       if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");
       return fetched !== null && applied;
     } catch (err) {
-      console.error("[slack-plugin] directory push failed:", (err as Error).message);
+      console.error("[slack-plugin] directory push failed:", errMessage(err));
       return false;
     }
   }

@@ -221,18 +221,3 @@ test("a burst of nudges for a cached chat refreshes its tail once, a second late
     [0, 1, 2, 3],
   );
 });
-
-test("a stream resync drops the cache and refetches only the open chat", async () => {
-  transcripts.set("a", [entry(0, "first question"), entry(1, "first answer")]);
-  await visitThenLeave("a");
-
-  cache.resyncTranscriptCache(["other"]);
-  assert.equal(cache.cachedTranscript("a"), undefined);
-  await settle();
-
-  assert.deepEqual(
-    requests.filter((path) => path.startsWith("/api/sessions/")),
-    ["/api/sessions/other?tailTurns=25"],
-  );
-  assert.ok(cache.cachedTranscript("other"));
-});

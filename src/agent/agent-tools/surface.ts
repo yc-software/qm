@@ -89,7 +89,8 @@ export function surfaceTool(kit: ToolKit) {
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       ref: Type.Optional(
         Type.String({
-          description: "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread).",
+          description:
+            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread, or the ts your own post/edit result returned).",
         }),
       ),
       limit: Type.Optional(
@@ -158,6 +159,10 @@ export function surfaceTool(kit: ToolKit) {
             ...(params.files?.length ? { files: params.files } : {}),
           });
           const r = await tc.post(params.text, opts, params.files, params.sandbox_id);
+          const sent = [
+            r.ok ? `[sent${r.ts ? ` ts=${r.ts}` : ""}]` : `[not sent] ${r.message ?? "delivery failed"}`,
+            ...(r.ok ? (r.notes ?? []) : []),
+          ].join(" ");
           return recordResult(
             callId,
             {
@@ -165,9 +170,10 @@ export function surfaceTool(kit: ToolKit) {
               action: "post",
               ok: r.ok,
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
+              ...(r.ok && r.ts ? { ts: r.ts } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
-            text(r.ok ? "[sent]" : `[not sent] ${r.message ?? "delivery failed"}`),
+            text(sent),
             !r.ok,
           );
         }
@@ -208,11 +214,12 @@ export function surfaceTool(kit: ToolKit) {
               action: "reach",
               ok: r.ok,
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
+              ...(r.ok && r.ts ? { ts: r.ts } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
             text(
               r.ok
-                ? `[sent to ${r.matched ?? "the named destination"}]`
+                ? `[sent to ${r.matched ?? "the named destination"}${r.ts ? ` ts=${r.ts}` : ""}]`
                 : `[not sent] ${r.message ?? "delivery failed"}`,
             ),
             !r.ok,
@@ -249,8 +256,17 @@ export function surfaceTool(kit: ToolKit) {
           const r = await tc.edit({ ref: params.ref, text: params.text, ...routing });
           return recordResult(
             callId,
-            { tool: surfaceName, action: "edit", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            text(r.ok ? "[edited]" : `[not edited] ${r.message ?? "edit failed"}`),
+            {
+              tool: surfaceName,
+              action: "edit",
+              ok: r.ok,
+              ref: params.ref,
+              ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
+              ...(r.ts ? { ts: r.ts } : {}),
+            },
+            text(
+              r.ok ? `[edited ref=${params.ref}]` : `[not edited] ${r.message ?? "edit failed"} (ref ${params.ref})`,
+            ),
             !r.ok,
           );
         }

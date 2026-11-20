@@ -18,7 +18,6 @@ function fixture(
   const provisions: Array<ProvisionOptions | undefined> = [];
   const teardowns: Array<[string, TeardownOptions]> = [];
   const tornDown: SandboxHandle[] = [];
-  const removed: Array<[string, string]> = [];
   const failNext: Array<Error> = [];
   const gates: Array<Promise<void>> = [];
   const teardownGates: Array<Promise<void>> = [];
@@ -45,13 +44,8 @@ function fixture(
       await teardownGates.shift();
       if (over.teardownFails?.includes(handle.id)) throw new Error(`teardown failed: ${handle.id}`);
     },
-    async removeDir(handle, dir) {
-      removed.push([handle.id, dir]);
-    },
+    async removeDir() {},
     async listDir() {
-      return [];
-    },
-    async removeDirAndList() {
       return [];
     },
   };
@@ -114,15 +108,13 @@ function fixture(
     scopeId: OWN,
     memoryScopeId: OWN,
     transferId: "t",
-    turnSessionDir: "turn/s",
-    turnFilesDir: "turn/s/t",
+    turnSessionKey: "s",
     connectorEnv: {},
     egressTokenForPolicy: async () => undefined,
     openResourceAccess: true,
     visibleSkillsForTurn: async () => [],
   } as unknown as TurnSandboxContext);
   const released = () => Object.fromEntries(teardowns);
-  const clearedTurnFiles = () => removed.filter(([, dir]) => dir === "turn/s/t").map(([id]) => id);
   return {
     turn,
     resource,
@@ -131,7 +123,6 @@ function fixture(
     teardowns,
     tornDown,
     released,
-    clearedTurnFiles,
     failNext,
     gates,
     teardownGates,
@@ -150,16 +141,12 @@ test("each computer a turn touched is released exactly once, the default box wit
   await f.turn.reclaimBox();
   assert.deepEqual(f.teardowns.map(([id]) => id).sort(), [scoped.id, "other"].sort());
   assert.ok(f.teardowns.every(([, opts]) => !opts.keepWarm && !opts.homeUnchanged));
-  assert.deepEqual(f.clearedTurnFiles().sort(), [scoped.id, "other"].sort());
   assert.equal(f.liveLookups(), 1);
 });
 
 test("an eagerly warmed default box the turn never used is released as unchanged", async () => {
   const f = fixture();
-  f.notePersonUse.mock.mockImplementation(async (id: string) => {
-    assert.deepEqual(f.clearedTurnFiles(), []);
-    return f.resource(id);
-  });
+  f.notePersonUse.mock.mockImplementation(async (id: string) => f.resource(id));
   const box = await f.turn.provision(true);
   await f.turn.reclaimBox();
   assert.deepEqual(f.released(), { [box.id]: { homeUnchanged: true } });
@@ -294,19 +281,6 @@ test("a computer opened while reclaim is tearing down another is released too", 
   tearing.resolve();
   await reclaim;
   assert.deepEqual(Object.keys(f.released()).sort(), ["job-box", "other"]);
-});
-
-test("another scope's computer is released without touching this turn's files", async () => {
-  const f = fixture();
-  await f.turn.provisionResource({
-    resource: { id: "theirs", ownerScopeId: "personal:bob" } as never,
-    crossScope: true,
-    egress: undefined as never,
-    commandPolicy: null,
-  });
-  await f.turn.reclaimBox();
-  assert.deepEqual(Object.keys(f.released()), ["theirs"]);
-  assert.deepEqual(f.clearedTurnFiles(), []);
 });
 
 test("a failed release does not stop the others, and only scratch failures fail the turn", async () => {

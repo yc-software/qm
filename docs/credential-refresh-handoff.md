@@ -26,10 +26,9 @@ replace of that service and survives a save that fails before then.
 
 ## Execution
 
-In a shared conversation, every command that names a saved login runs on the turn's
-scratch computer, so the bundle is staged there and never on the conversation's computer;
-in the owner's personal conversation it is staged on their own computer unless another
-conversation shares that computer through an environment.
+Every command that names a saved login runs on the turn's scratch computer, in shared and
+personal conversations alike, so the bundle is staged there and never on the conversation's
+computer. A background job that names one runs on its own job computer.
 
 `src/credentials/execute-files.ts` stages requested bundles in a private
 `/tmp/qm-credentials.<random>/home`, points the CLI at it, captures changed files after the
@@ -53,8 +52,8 @@ A token refresh is recognised only by which fields changed. QM doesn't ask the p
 the new token belongs to the same account, so a run that can write the staged files can put
 another valid token in place of the stored one, keep every other byte, and have it saved as a
 refresh. A cache file that holds nothing but tokens, with no client or account fields beside
-them, has nothing else to compare. This is a known limit: treat any run that can reach the
-owner's computer as able to change these tokens.
+them, has nothing else to compare. This is a known limit: treat any run that can name the
+login in a command as able to change these tokens.
 
 Background jobs accept the same `credentials` handles. The staging plan, credential ids,
 grant ids and baseline fingerprints (no secrets) are stored on the job's `process_sessions`

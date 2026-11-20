@@ -106,7 +106,7 @@ export async function runSurfaceTurn(
         escape: transport.escape ?? String,
         post: (text) => transport.post(text, { notice: true }),
         update: (ref, text) => transport.edit(ref, text),
-        onError: (error) => console.error(`[${label}] goal notice update failed:`, (error as Error).message),
+        onError: (error) => console.error(`[${label}] goal notice update failed:`, errMessage(error)),
       });
   const settleAck = async (): Promise<void> => {
     await ack?.settle().catch(swallowAs(`${label}: ack settle`, undefined));
@@ -163,7 +163,7 @@ export async function runSurfaceTurn(
     await settleAck();
     if (unprompted) {
       if (!accepted) turn.onRejected?.(errMessage(err));
-      console.error(`[${label}] unprompted turn errored (staying quiet) ${turn.where}: ${(err as Error).message}`);
+      console.error(`[${label}] unprompted turn errored (staying quiet) ${turn.where}: ${errMessage(err)}`);
     } else {
       console.error(`[${label}] turn errored ${turn.where}: ${errMessage(err)}`);
       const note = `⚠️ ${turnFailureText(err)}`;
@@ -234,7 +234,7 @@ export async function runSurfaceTurn(
       await settleAck();
       if (!queuedRunId) throw err;
       console.error(
-        `[${label}] reply post failed after run ${queuedRunId} finished (${turn.where}): ${(err as Error).message} — leaving delivery run:${queuedRunId} for the recovery poller`,
+        `[${label}] reply post failed after run ${queuedRunId} finished (${turn.where}): ${errMessage(err)} — leaving delivery run:${queuedRunId} for the recovery poller`,
       );
       return;
     }

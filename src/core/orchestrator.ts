@@ -1,4 +1,4 @@
-import { personaPrompt, personaRoutedNote } from "../personas/persona-service.ts";
+import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
@@ -14,6 +14,7 @@ import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
+import { RECALL_CHECKED } from "../memory/cross-scope.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
@@ -55,9 +56,9 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
-import { resolveTurnFastMode } from "./turn-options.ts";
+import { actsAsScope, scopeId as toScopeId, personalScope } from "../types.ts";
+import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
@@ -120,8 +121,6 @@ import { artifactImageLoader } from "../agent/replay-images.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import {
-  INBOX_DIR,
-  TURN_FILES_DIR,
   inboundIssuesNote,
   materializeInbound,
   turnFileId,
@@ -133,10 +132,12 @@ import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
   recordedMessageTimestamps,
+  seedPriorTurns,
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { turnStartOnce } from "../decisions/hooks.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
@@ -177,7 +178,6 @@ import {
   renderSandboxProviders,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
-  webSurfaceLabel,
   type SystemContextBlocks,
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
@@ -790,31 +790,58 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
-      const personaTurn =
+      const surfaceName =
+        automationDestination === undefined
+          ? (input.surface ?? "slack")
+          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
+      const turnDecisions = deps.decide
+        ? turnStartOnce(
+            (...args) => tracePhase("turn.decision", () => deps.decide!(...args)),
+            async () => ({
+              input: input.text,
+              surfaceName,
+              runtimePurpose: turnRuntimePurpose(
+                { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+                !!storedSession?.parentSessionId || !!swarmBinding?.member.parentId,
+              ),
+              ...(input.model ? { runtime: { modelId: input.model } } : {}),
+              runtimePinned:
+                !external &&
+                humanInput &&
+                !!deps.userModelCredentials &&
+                (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company") !== "company",
+              continueTurn: (input.attempt ?? 1) > 1,
+              scopeLabel: scopeId,
+              conversation: conversation.kind,
+              context: [input.conversationHeader?.trim(), ...seedPriorTurns(input.priorTurns ?? []).map((m) => m.text)]
+                .filter(Boolean)
+                .join("\n\n"),
+            }),
+            {
+              tenant,
+              actorId: actor.id,
+              scopeLabel: scopeId,
+              ...(storedSession ? { sessionId: storedSession.id } : {}),
+              ...(input.runId ? { runId: input.runId } : {}),
+            },
+          )
+        : undefined;
+      const routed =
+        external || ambientTurn || !deps.personas || !turnDecisions
+          ? undefined
+          : (await turnDecisions()).find((r) => r.persona);
+      const { turn: personaTurn, note: personaNote } =
         external || !deps.personas
-          ? null
-          : await deps.personas.forTurn(
+          ? { turn: null }
+          : await routedPersonaTurn(
+              deps.personas,
+              routed,
               storedSession?.personaId ?? input.personaId,
               actor.id,
               scopeId,
-              personConversationTurn && deps.routePersona
-                ? () =>
-                    tracePhase("turn.decision", () =>
-                      deps.routePersona!({
-                        tenant,
-                        actorId: actor.id,
-                        scopeLabel: scopeId,
-                        ...(storedSession ? { sessionId: storedSession.id } : {}),
-                        ...(input.runId ? { runId: input.runId } : {}),
-                        input: input.text,
-                        surfaceName: input.surface ?? "slack",
-                        conversation: conversation.kind,
-                      }).catch(swallowAs("orchestrator: persona routing", undefined)),
-                    )
-                : undefined,
             );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
-      if (persona) resolution.readOnlyScopeIds.push(persona.scope);
+      if (persona && !notebookOnly) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
       const scopeKeychainGrants = async () => {
         const rows = (
@@ -851,6 +878,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botActor: input.botActor === true,
         ownScopeBotWork,
         notebookOnly,
+        ...(persona && (actsAsScope(actor.id, persona.scope) || (persona.pinned && allInternal && !notebookOnly))
+          ? { sharedNotebook: persona.scope }
+          : {}),
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -858,14 +888,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         directory: deps.directory,
         projects: deps.projects,
       });
-      const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
+      const { sharingSources, memoryScopeId, notebookScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
-      const surfaceName =
-        automationDestination === undefined
-          ? (input.surface ?? "slack")
-          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
@@ -879,7 +905,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botName,
         orgName,
         surfaceTool,
-        surfaceLabel: isWeb ? webSurfaceLabel(botName, Boolean(boundWebhook(input))) : (toolSurface?.label ?? "Slack"),
+        surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -910,7 +936,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      const personaBlock = persona ? personaPrompt(persona) : "";
+      const personaBlock = persona ? personaPrompt(persona, memoryAccess?.write === persona.scope) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
       let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
       if (external && surfaceOrigin.guests)
@@ -923,7 +949,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (typeof personaTurn === "string") turnContextBlocks["Personas"] = `## Personas\n${personaTurn}`;
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
-      if (persona?.routedBy) turnEvents.push(personaRoutedNote(persona.persona.name, persona.routedBy));
+      if (personaNote) turnEvents.push(personaNote);
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
@@ -1004,9 +1030,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
-      const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
-      const turnFilesDir = `${turnSessionDir}/${transferId}`;
-      const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
+      const turnSessionKey = hashId([conversation.threadRef], 24);
 
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
@@ -1023,7 +1047,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (sharedFilesBlock) turnContextBlocks["Files"] = sharedFilesBlock;
 
       const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
-      const memoryHeading = "## What you remember\n";
+      const memoryHeading = `## What you remember\n${RECALL_CHECKED}\n`;
 
       const onboardingBlock = isIdeasConversation(input)
         ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."
@@ -1327,8 +1351,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryScopeId,
         transferId,
         swarmSandboxId: swarmBinding?.sandboxId,
-        turnSessionDir,
-        turnFilesDir,
+        turnSessionKey,
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
@@ -1762,7 +1785,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
-          memoryScopeId,
+          memoryScopeId: notebookScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
           ...(audienceScopeId ? { audienceScopeId } : {}),
@@ -1830,22 +1853,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,
           registration: ArtifactRegistration,
-          inboxDir: string,
           requestText: string,
         ): ReturnType<typeof materializeInbound> =>
           attachments?.length && !strictReadOnly
-            ? materializeInbound(
-                deps.sandbox,
-                provision,
-                attachments,
-                blobTransfer,
-                registration,
-                inboxDir,
-                screenInboundFile(requestText),
-              )
-            : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
-        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
-          intakeOf(await receiveInbound(message.attachments, registration, inboxDir, message.text), message, inboxDir, {
+            ? materializeInbound(attachments, blobTransfer, registration, screenInboundFile(requestText))
+            : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unsaved: [], unscreened: [] };
+        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration) =>
+          intakeOf(await receiveInbound(message.attachments, registration, message.text), message, {
             strictReadOnly,
             enforceScreen,
           });
@@ -1862,7 +1876,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.inboundNotes ? { notes: input.inboundNotes } : {}),
           },
           fileRegistration,
-          turnInboxDir,
         );
 
         const importedOverheard: OverheardEntryPayload[] = [];
@@ -2347,7 +2360,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               recordScreenRequest,
               takeIn,
               fileRegistration,
-              turnInboxDir,
               ingestDocuments,
               initialDocuments,
               documentInputs,
@@ -2357,6 +2369,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { runtimePinned: true }
               : {}),
             runtimeActorId: actor.id,
+            ...(turnDecisions ? { turnStart: turnDecisions } : {}),
             onRuntime: (reported: TurnRuntime) => {
               const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
               turnRuntime = runtime;
@@ -2613,7 +2626,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           actor,
           session,
           scopeId,
-          memoryScopeId,
+          memoryScopeId: notebookScopeId,
           audienceScopeId,
           memoryPolicy,
           pendingCaptures,

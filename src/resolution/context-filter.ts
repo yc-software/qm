@@ -28,3 +28,10 @@ export function principalEntitledToScope(
 ): boolean {
   return entitledScopes(ownScopeBotWork)(p, sessionScopeId, orgScopeId).includes(label);
 }
+
+export function entitledOrgWide(audience: readonly Principal[], sessionScopeId: ScopeId, orgScopeId: ScopeId): boolean {
+  return (
+    audience.length > 0 &&
+    audience.every((p) => principalEntitledToScope(p, orgScopeId, sessionScopeId, orgScopeId, false))
+  );
+}

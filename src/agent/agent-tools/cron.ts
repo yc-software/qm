@@ -232,6 +232,12 @@ export function cronTools(kit: ToolKit) {
           { description: "create/patch: the task cron's script (patch replaces; null removes)." },
         ),
       ),
+      persona: Type.Optional(
+        Type.String({
+          description:
+            "create: a persona (name or id) that owns the cron and runs it as itself; works from any conversation for the persona's owners and write holders.",
+        }),
+      ),
       enabled: Type.Optional(Type.Boolean({ description: "patch: false pauses, true resumes." })),
       archived: Type.Optional(Type.Boolean({ description: "patch: true archives the cron." })),
       limit: Type.Optional(
@@ -285,6 +291,7 @@ export function cronTools(kit: ToolKit) {
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.script ? { script: params.script } : {}),
+            ...(params.persona ? { persona: params.persona } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { loadConfig } from "../src/config.ts";
 import { startQm } from "../src/start.ts";
 import { scopeId } from "../src/types.ts";
+import { errMessage } from "../src/util/errors.ts";
 
 if (!process.env.ANTHROPIC_API_KEY) {
   console.error("ANTHROPIC_API_KEY not set — cannot run live battery.");
@@ -276,7 +277,7 @@ for (const [i, c] of cases.entries()) {
     if (ok) pass++;
     console.log(`${ok ? "PASS" : "FAIL"} ${String(i + 1).padStart(2)}. ${c.name}\n       → ${detail.slice(0, 160)}`);
   } catch (e) {
-    console.log(`FAIL ${String(i + 1).padStart(2)}. ${c.name}\n       → ERROR ${(e as Error).message}`);
+    console.log(`FAIL ${String(i + 1).padStart(2)}. ${c.name}\n       → ERROR ${errMessage(e)}`);
   }
 }
 console.log(`\n${pass}/${cases.length} passed`);

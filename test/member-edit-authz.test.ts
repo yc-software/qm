@@ -18,6 +18,8 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { encodeRef, skillRef } from "../src/acl/resource-ref.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const OWNER = "owner";
@@ -422,4 +424,23 @@ test("skills: an archive landing mid-edit is not overwritten by the edit", async
   const after = await get(planted.id);
   assert.equal(after!.status, "archived");
   assert.equal(after!.manifest.description, "d");
+});
+
+test("skills: a person granted write on someone's skill may edit it", async () => {
+  const deps = makeDeps();
+  const planted = await deps.skills.create({
+    scopeId: scopeId("personal", OWNER),
+    manifest: { name: "mine", description: "d", requiredCapabilities: [], body: "# b" },
+    createdBy: OWNER,
+  });
+  const app = createApp(deps as unknown as AppDeps);
+  await deps.acl.grant(testTenant, {
+    ownerScopeId: planted.scopeId,
+    ref: encodeRef(skillRef(planted.id)),
+    granteeScopeId: scopeId("personal", OUTSIDER),
+    grantedBy: OWNER,
+    permission: "write",
+  });
+  const edited = await app.updateOwnedSkill(planted.id, OUTSIDER, { description: "d2" }, { liveActor: true });
+  assert.equal(typeof edited === "object" && edited?.manifest.description, "d2");
 });
