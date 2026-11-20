@@ -45,7 +45,7 @@ error naming the entry. Errors never include secret values.
 
 - **Who can use them:** every conversation whose participants all belong to the org, as if the credential
   had an org-wide grant. Admins can't narrow that. Published apps can't use them.
-- **Delivery:** broker only (except the Composio key below). They are never injected into sandbox environments.
+- **Delivery:** broker only, except the Composio key below. They are never injected into sandbox environments.
 - **Precedence:** a deployment slug is reserved. Lookups return the deployment credential even if the
   settings database still holds one with the same slug, and admins can't create, edit or delete a stored
   credential with that slug.
@@ -54,30 +54,14 @@ error naming the entry. Errors never include secret values.
 
 ## The Composio key
 
-One entry may instead supply the deployment's Composio key, so every org gets app connections without storing
-a key of its own. Give it `"delivery": "env"` and `"envKey": "COMPOSIO_API_KEY"`, and no `host` or other broker
-field:
+An entry with `"composio": true` and no `host` or other broker field supplies the deployment's Composio key,
+so orgs get app connections without storing a key:
+`{ "slug": "composio", "displayName": "Composio", "secretEnv": "COMPOSIO_API_KEY", "composio": true }`.
 
-```json
-{
-  "slug": "composio",
-  "displayName": "Composio",
-  "secretEnv": "COMPOSIO_API_KEY",
-  "delivery": "env",
-  "envKey": "COMPOSIO_API_KEY"
-}
-```
-
-It differs from broker entries:
-
-- **Core only:** the core uses it to reach Composio. Like any stored Composio key, it never reaches a sandbox or
-  the broker. Env delivery accepts no other `envKey`.
-- **A default, not a reservation:** an org that stores a credential with the same slug uses its own, and admins
-  can still edit or delete that stored one (deleting it falls back to the deployment key). An org that stores a
-  Composio key under any other slug uses that one instead, so it is never ambiguous.
-- **Grant required:** unlike broker entries, it is not shared org-wide automatically. An org uses it only once
-  the operator gives the org a `service-cred` read grant on its slug, as for a stored key.
-- At most one entry may set `delivery`.
+- Core uses it only to call Composio. Like a stored Composio key, it never reaches a sandbox or the broker.
+- It is a default, not a reservation: an org that stores a Composio key of its own, under any slug, uses that
+  one, and admins can create, edit or delete it.
+- An org uses it only with a `service-cred` read grant on its slug, as for a stored key.
 
 ## Operating
 

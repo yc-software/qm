@@ -1,6 +1,7 @@
 import { errMessage } from "../util/errors.ts";
 import { credentialInjectionError, type CredentialInjection } from "./credential-injection.ts";
 import {
+  COMPOSIO_ENV_KEY,
   isBackendCredential,
   isComposioHost,
   isValidBrokerHost,
@@ -19,8 +20,7 @@ export interface DeploymentBrokerCredential {
   name: string;
   secret: string;
   host: string;
-  delivery?: "env";
-  envKey?: string;
+  composio?: true;
   injection?: CredentialInjection;
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
@@ -36,8 +36,7 @@ const FIELDS = new Set([
   "allowedMethods",
   "allowedPathPrefixes",
   "maxRequestsPerDay",
-  "delivery",
-  "envKey",
+  "composio",
 ]);
 
 const BROKER_ONLY_FIELDS = ["host", "injection", "allowedMethods", "allowedPathPrefixes", "maxRequestsPerDay"];
@@ -67,14 +66,11 @@ function parseEntry(raw: unknown, index: number, env: NodeJS.ProcessEnv): Deploy
   const name = entry.displayName ?? slug;
   if (typeof name !== "string" || !name.trim() || name.length > 100)
     throw new Error(`${at}: displayName must be 1-100 characters`);
-  if (entry.delivery !== undefined || entry.envKey !== undefined) {
-    if (entry.delivery !== "env") throw new Error(`${at}: delivery must be "env" when set`);
-    const envKey = entry.envKey;
-    if (typeof envKey !== "string" || !isBackendCredential({ envKey }))
-      throw new Error(`${at}: env delivery is only for the Composio key; set envKey to COMPOSIO_API_KEY`);
+  if (entry.composio !== undefined) {
+    if (entry.composio !== true) throw new Error(`${at}: composio must be true when set`);
     const brokerField = BROKER_ONLY_FIELDS.find((key) => entry[key] !== undefined);
-    if (brokerField) throw new Error(`${at}: ${brokerField} only applies to broker delivery`);
-    return { slug, name: name.trim(), secret, host: "", delivery: "env", envKey };
+    if (brokerField) throw new Error(`${at}: ${brokerField} does not apply to the Composio key`);
+    return { slug, name: name.trim(), secret, host: "", composio: true };
   }
   const host = entry.host;
   if (typeof host !== "string" || !isValidBrokerHost(host))
@@ -119,13 +115,11 @@ export function deploymentBrokerCredentialsFromEnv(env: NodeJS.ProcessEnv): Depl
     if (seen.has(slug)) throw new Error(`BROKER_CREDENTIALS lists slug "${slug}" more than once`);
     seen.add(slug);
   }
-  if (credentials.filter(isDeploymentDefault).length > 1)
-    throw new Error("BROKER_CREDENTIALS lists more than one env-delivered Composio key");
   return credentials;
 }
 
-function isDeploymentDefault(c: DeploymentBrokerCredential): boolean {
-  return c.delivery === "env";
+export function isDeploymentDefault(c: { source?: "deployment"; delivery: "broker" | "env" }): boolean {
+  return c.source === "deployment" && c.delivery === "env";
 }
 
 function decrypted(c: DeploymentBrokerCredential): DecryptedServiceCredential {
@@ -133,8 +127,7 @@ function decrypted(c: DeploymentBrokerCredential): DecryptedServiceCredential {
     slug: c.slug,
     name: c.name,
     secret: c.secret,
-    delivery: c.delivery ?? "broker",
-    ...(c.envKey ? { envKey: c.envKey } : {}),
+    ...(c.composio ? { delivery: "env" as const, envKey: COMPOSIO_ENV_KEY } : { delivery: "broker" as const }),
     host: c.host,
     ...(c.injection ? { injection: c.injection } : {}),
     ...(c.allowedMethods ? { allowedMethods: c.allowedMethods } : {}),
@@ -168,7 +161,7 @@ export function withDeploymentCredentials(
   const bySlug = new Map(credentials.map((c) => [c.slug, c]));
   const reserved = (scope: ScopeId, slug: string) => {
     const own = scope === orgScopeId ? bySlug.get(slug) : undefined;
-    return Boolean(own && !isDeploymentDefault(own));
+    return Boolean(own && !own.composio);
   };
   const guard = (scope: ScopeId, slug: string) => {
     if (reserved(scope, slug)) throw reservedSlugError(slug);
@@ -177,14 +170,14 @@ export function withDeploymentCredentials(
     async getServiceCredentialSecret(scope, slug) {
       const own = scope === orgScopeId ? bySlug.get(slug) : undefined;
       if (!own) return store.getServiceCredentialSecret(scope, slug);
-      if (!isDeploymentDefault(own)) return decrypted(own);
+      if (!own.composio) return decrypted(own);
       return (await store.getServiceCredentialSecret(scope, slug)) ?? decrypted(own);
     },
     async listServiceCredentials(scope) {
       const stored = await store.listServiceCredentials(scope);
       if (scope !== orgScopeId) return stored;
-      const storedSlugs = new Set(stored.map((c) => c.slug));
-      const supplied = credentials.filter((c) => !isDeploymentDefault(c) || !storedSlugs.has(c.slug));
+      const ownComposio = stored.some(isBackendCredential);
+      const supplied = credentials.filter((c) => !c.composio || !ownComposio);
       return [...supplied.map(projected), ...stored.filter((c) => !reserved(scope, c.slug))];
     },
     async setServiceCredential(scope, input) {

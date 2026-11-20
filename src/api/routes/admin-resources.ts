@@ -25,6 +25,7 @@ import { APP_EDIT_DEFAULT_RUNTIME } from "../runtime-config.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import { credentialInjectionError, type CredentialInjection } from "../../credentials/credential-injection.ts";
+import { isDeploymentDefault } from "../../credentials/deployment-credentials.ts";
 import {
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
@@ -811,7 +812,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const slug = typeof b.slug === "string" ? b.slug : "";
       if (!isValidCredentialSlug(slug)) return { error: "slug must be lowercase kebab-case (a-z, 0-9, -)" };
       const ref = encodeRef(serviceCredRef(slug));
-      const allCreds = await deps.serviceCreds.listServiceCredentials(scope);
+      const allCreds = (await deps.serviceCreds.listServiceCredentials(scope)).filter((c) => !isDeploymentDefault(c));
       const existing = allCreds.find((c) => c.slug === slug);
       if (existing?.source === "deployment")
         return {

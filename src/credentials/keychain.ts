@@ -18,7 +18,7 @@ import { credentialInjectionError, type CredentialInjection } from "./credential
 import { claimThenBind } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
 
-const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
+export const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
 export function isBackendCredential(c: { envKey?: string; fields?: ReadonlyArray<{ envKey: string }> }): boolean {
   return c.envKey === COMPOSIO_ENV_KEY || c.fields?.some((f) => f.envKey === COMPOSIO_ENV_KEY) === true;

@@ -114,11 +114,9 @@ export async function credential(
       entitledScopes(false),
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
-  const usable = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
+  const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
     (c) => c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY" && allowed.has(c.slug),
   );
-  const stored = usable.filter((c) => c.source !== "deployment");
-  const records = stored.length ? stored : usable;
   if (!records.length && optional) return { key: null, principal };
   if (records.length !== 1) {
     composioUnavailable(ctx, records.length ? 409 : 403);

@@ -67,13 +67,7 @@ test("BROKER_CREDENTIALS parses each entry and reads the secret from the named e
     envWith([{ slug: "news", host: "news.example.com", secretEnv: "SEARCH_KEY" }]),
   );
   assert.deepEqual(minimal, [{ slug: "news", name: "news", secret: KEY, host: "news.example.com" }]);
-  const composio = deploymentBrokerCredentialsFromEnv(envWith([composioEntry]));
-  assert.deepEqual(composio, [
-    { slug: "c", name: "c", secret: KEY, host: "", delivery: "env", envKey: "COMPOSIO_API_KEY" },
-  ]);
 });
-
-const composioEntry = { slug: "c", secretEnv: "SEARCH_KEY", delivery: "env", envKey: "COMPOSIO_API_KEY" };
 
 test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secrets", () => {
   const cases: Array<[unknown, RegExp, Record<string, string>?]> = [
@@ -113,9 +107,7 @@ test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secre
     ],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "" } } }], /valid HTTP header value/],
     [[{ ...entry, displayName: "" }], /displayName/],
-    [[{ ...composioEntry, envKey: "OPENAI_API_KEY" }], /only for the Composio key/],
-    [[{ ...composioEntry, host: "backend.composio.dev" }], /host only applies to broker delivery/],
-    [[composioEntry, { ...composioEntry, slug: "d" }], /more than one env-delivered Composio key/],
+    [[{ slug: "c", secretEnv: "SEARCH_KEY", composio: true, host: "x.example" }], /host does not apply/],
   ];
   for (const [list, pattern, extra] of cases) {
     assert.throws(
@@ -229,7 +221,8 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
 }
 
 test("admin settings show a deployment credential read-only and refuse to edit, delete or shadow it", async () => {
-  const srv = start(async () => ({ status: 200, text: async () => "{}" }), true);
+  const composio = { slug: "composio", name: "C", host: "", secret: KEY, composio: true as const };
+  const srv = start(async () => ({ status: 200, text: async () => "{}" }), true, [...deploymentCreds(), composio]);
   try {
     const cfg = (await (await fetch(`${srv.base}/v1/admin/scopes/${ORG}`, { headers: ADMIN })).json()) as {
       serviceCredentials: Array<{ slug: string; source?: string; hasSecret: boolean; maxRequestsPerDay?: number }>;
@@ -255,6 +248,9 @@ test("admin settings show a deployment credential read-only and refuse to edit, 
       assert.equal(json.error, "deployment_credential");
       assert.match(String(json.message), /supplied by this deployment/);
     }
+    const own = { slug: "composio", name: "Own", delivery: "env", envKey: "COMPOSIO_API_KEY", secret: "s" };
+    const put = { method: "PUT", headers: ADMIN, body: JSON.stringify(own) };
+    assert.equal((await fetch(`${srv.base}/v1/admin/scopes/${ORG}/service-credentials`, put)).status, 200);
   } finally {
     await srv.close();
   }
